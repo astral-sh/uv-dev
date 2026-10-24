@@ -25,19 +25,23 @@ use uv_command_support::{
 };
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
-    ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
+    ExtrasSpecification, HashCheckingMode, InstallOptions, Modifications, RequirementsInput,
+    TargetTriple,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::{LoweredExtraBuildDependencies, RegistryWheelIndex};
 use uv_distribution_filename::WheelFilename;
-use uv_distribution_types::NameRequirementSpecification;
+use uv_distribution_types::{
+    ArchiveHashPolicy, BuiltDist, Dist, Hashed, NameRequirementSpecification, Resolution,
+    ResolvedDist,
+};
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
-use uv_environment_operations::malware::MalwareCheckContext;
+use uv_environment_operations::malware::{MalwareCheckContext, maybe_check_malware};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentSpecification, LinkErrorReporting, PreferenceLocation,
-    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, sync_from_lock,
-    update_environment,
+    ProjectEnvironment, ProjectEnvironmentTarget, ScriptEnvironment, resolve_locked_environment,
+    store_credentials_from_target, sync_from_lock, update_environment,
 };
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
@@ -46,7 +50,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -613,7 +617,45 @@ pub async fn run(
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
 
-            let venv = if isolated {
+            let try_cached = preview.is_enabled(PreviewFeature::RunCachedWheels)
+                && !no_sync
+                && requirements.is_empty()
+                && cached_wheels.is_empty()
+                && python_platform.is_none()
+                && settings.reinstall.is_none()
+                && !settings.compile_bytecode
+                && (isolated
+                    || (project
+                        .workspace()
+                        .environment_selection(active)
+                        .is_default()
+                        && fs_err::symlink_metadata(
+                            project.workspace().install_path().join(".venv"),
+                        )
+                        .is_err_and(|err| err.kind() == io::ErrorKind::NotFound)));
+            let project_environment = || async {
+                ProjectEnvironment::get_or_init(
+                    ProjectEnvironmentTarget::from(project.workspace()),
+                    None,
+                    &groups,
+                    python.as_deref().map(PythonRequest::parse),
+                    &install_mirrors,
+                    &client_builder,
+                    python_preference,
+                    python_arch,
+                    python_downloads,
+                    no_sync,
+                    config_discovery,
+                    active,
+                    &cache,
+                    DryRun::Disabled,
+                    LinkErrorReporting::Log,
+                    printer,
+                )
+                .await?
+                .into_environment()
+            };
+            let mut venv = if isolated || try_cached {
                 debug!("Creating isolated virtual environment");
 
                 // If we're isolating the environment, use an ephemeral virtual environment as the
@@ -657,28 +699,7 @@ pub async fn run(
                     UpgradePolicy::Fixed,
                 )?
             } else {
-                // If we're not isolating the environment, reuse the base environment for the
-                // project.
-                ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(project.workspace()),
-                    None,
-                    &groups,
-                    python.as_deref().map(PythonRequest::parse),
-                    &install_mirrors,
-                    &client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    no_sync,
-                    config_discovery,
-                    active,
-                    &cache,
-                    DryRun::Disabled,
-                    LinkErrorReporting::Log,
-                    printer,
-                )
-                .await?
-                .into_environment()?
+                project_environment().await?
             };
 
             if no_sync {
@@ -764,40 +785,92 @@ pub async fn run(
                 );
 
                 let install_options = InstallOptions::default();
-                // Validate that the set of requested extras and development groups are defined in the lockfile.
-                target.validate_extras(&extras)?;
-                target.validate_groups(&groups)?;
-
-                match sync_from_lock(
-                    target,
-                    &venv,
-                    &extras,
-                    &groups,
-                    editable,
-                    install_options,
-                    modifications,
-                    python_platform.as_ref(),
-                    (&settings).into(),
-                    &client_builder,
-                    &sync_state,
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
+                let roots = if try_cached {
+                    let (resolution, _) = resolve_locked_environment(
+                        target,
+                        &venv,
+                        &extras,
+                        &groups,
+                        None,
+                        &settings.resolver.build_options,
+                        &install_options,
+                    )?;
+                    let roots = cached_wheel_roots(
+                        WheelSelection::Locked(&resolution),
+                        venv.interpreter(),
+                        &settings.resolver,
+                        &cache,
+                    )?;
+                    if roots.is_some() {
+                        let client = client_builder
+                            .clone()
+                            .keyring(settings.resolver.keyring_provider);
+                        store_credentials_from_target(target, &client)?;
+                        maybe_check_malware(
+                            &target,
+                            &resolution,
+                            &client,
+                            &concurrency,
+                            &cache,
+                            preview,
+                            &MalwareCheckContext::from(&malware_settings),
+                        )
+                        .await?;
+                    }
+                    roots
+                } else {
+                    None
+                };
+                if let Some(roots) = roots {
+                    debug!("Running from {} cached wheels", roots.len());
+                    let layout = venv.interpreter().layout();
+                    for root in &roots {
+                        uv_install_wheel::install_wheel_entrypoints(&layout, root)?;
+                    }
+                    set_overlay(&venv, &roots, std::iter::empty())?;
+                } else {
+                    let _project_lock = if try_cached && !isolated {
+                        venv = project_environment().await?;
+                        venv.lock()
+                            .await
+                            .inspect_err(|err| {
+                                warn!("Failed to acquire environment lock: {err}");
+                            })
+                            .ok()
                     } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    DryRun::Disabled,
-                    printer,
-                    preview,
-                    MalwareCheckContext::from(&malware_settings),
-                )
-                .await
-                {
-                    Ok(_) => {}
-                    Err(err) => return Err(UvError::from(err).into()),
+                        None
+                    };
+                    match sync_from_lock(
+                        target,
+                        &venv,
+                        &extras,
+                        &groups,
+                        editable,
+                        install_options,
+                        modifications,
+                        python_platform.as_ref(),
+                        (&settings).into(),
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        DryRun::Disabled,
+                        printer,
+                        preview,
+                        MalwareCheckContext::from(&malware_settings),
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(err) => return Err(UvError::from(err).into()),
+                    }
                 }
 
                 base_lock = Some((
@@ -968,11 +1041,12 @@ pub async fn run(
     // isolated environment. Otherwise, modifications to the "active virtual environment" would
     // poison the cache.
     let wheel_roots = cached_wheel_roots(
-        &cached_wheels,
+        WheelSelection::Explicit(&cached_wheels),
         &base_interpreter,
         &settings.resolver,
         &cache,
-    )?;
+    )?
+    .expect("explicit wheel requests return their roots or an error");
     let ephemeral_dir = (requirements_env.is_some() || !wheel_roots.is_empty())
         .then(|| cache.venv_dir())
         .transpose()?;
@@ -1025,26 +1099,13 @@ pub async fn run(
             return Err(anyhow!("Base environment has no site packages directory"));
         }
 
-        let overlay_content = format!(
-            "import site; {}{}",
-            if wheel_roots.is_empty() {
-                ""
-            } else {
-                "import sys; sys.dont_write_bytecode = True; "
-            },
-            wheel_roots
-                .iter()
-                .map(|path| Cow::Borrowed(path.as_path()))
-                .chain(requirements_site_packages)
-                .chain(base_site_packages)
-                .dedup()
-                .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-
-        set_overlay(ephemeral_env, &overlay_content)?;
+        set_overlay(
+            ephemeral_env,
+            &wheel_roots,
+            requirements_site_packages
+                .into_iter()
+                .chain(base_site_packages),
+        )?;
 
         // N.B. The order here matters — earlier interpreters take precedence over the
         // later ones.
@@ -1272,21 +1333,29 @@ pub async fn run(
     run_to_completion(handle).await
 }
 
-/// Look up extracted registry wheels using the same index pointers and interpreter tags as the installer.
+enum WheelSelection<'a> {
+    Explicit(&'a [WheelFilename]),
+    Locked(&'a Resolution),
+}
+
+/// Look up extracted wheels using the installer's cache pointers and interpreter tags.
 fn cached_wheel_roots(
-    wheels: &[WheelFilename],
+    selection: WheelSelection<'_>,
     interpreter: &Interpreter,
     settings: &ResolverSettings,
     cache: &Cache,
-) -> anyhow::Result<Vec<PathBuf>> {
-    if wheels.is_empty() {
-        return Ok(Vec::new());
-    }
-    let tags = interpreter.tags()?;
-    let hasher = HashStrategy::default();
+) -> anyhow::Result<Option<Vec<PathBuf>>> {
+    let hasher = match selection {
+        WheelSelection::Explicit([]) => return Ok(Some(Vec::new())),
+        WheelSelection::Explicit(_) => HashStrategy::default(),
+        WheelSelection::Locked(resolution) => {
+            HashStrategy::from_resolution(resolution, HashCheckingMode::Verify)?
+        }
+    };
     let builds =
         LoweredExtraBuildDependencies::from_non_lowered(settings.extra_build_dependencies.clone())
             .into_inner();
+    let tags = interpreter.tags()?;
     let mut index = RegistryWheelIndex::new(
         cache,
         tags,
@@ -1297,58 +1366,141 @@ fn cached_wheel_roots(
         &builds,
         &settings.extra_build_variables,
     );
-    let mut roots = Vec::with_capacity(wheels.len());
-    let mut names = FxHashSet::default();
-    for wheel in wheels {
-        if !names.insert(&wheel.name) {
-            bail!("Multiple cached wheels requested for `{}`", wheel.name);
-        }
-        if !wheel.tag_compatibility(tags).is_compatible() {
-            bail!("Cached wheel `{wheel}` is incompatible with the selected Python interpreter");
-        }
-        let mut matches = index
-            .get(&wheel.name)
-            .filter(|entry| !entry.is_built() && entry.dist().filename == *wheel);
-        let Some(entry) = matches.next() else {
-            bail!("Wheel `{wheel}` is not cached from a configured index");
-        };
-        if matches.any(|other| other.dist().path != entry.dist().path) {
-            bail!("Wheel `{wheel}` is cached from multiple indexes; select a single index");
-        }
-        let root = entry.dist().path.as_ref();
-        let metadata = uv_metadata::read_flat_wheel_metadata(wheel, root)?;
-        if metadata.name != wheel.name || metadata.version != wheel.version {
-            bail!("Wheel `{wheel}` has inconsistent package metadata");
-        }
-        if let Some(requires) = metadata.requires_python
-            && !requires.contains(interpreter.python_version())
-        {
-            bail!(
-                "Wheel `{wheel}` requires Python `{requires}`, but the selected interpreter is `{}`",
-                interpreter.python_version()
-            );
-        }
-        for child in fs_err::read_dir(root)? {
-            let child = child?;
-            if child.file_type()?.is_dir()
-                && child.path().extension().is_some_and(|ext| ext == "data")
-            {
-                bail!("Wheel `{wheel}` requires installation to relocate its `.data` directory");
+    let mut roots = Vec::new();
+    match selection {
+        WheelSelection::Explicit(wheels) => {
+            let mut names = FxHashSet::default();
+            for wheel in wheels {
+                if !names.insert(&wheel.name) {
+                    bail!("Multiple cached wheels requested for `{}`", wheel.name);
+                }
+                if !wheel.tag_compatibility(tags).is_compatible() {
+                    bail!(
+                        "Cached wheel `{wheel}` is incompatible with the selected Python interpreter"
+                    );
+                }
+                let mut matches = index
+                    .get(&wheel.name)
+                    .filter(|entry| !entry.is_built() && entry.dist().filename == *wheel);
+                let Some(entry) = matches.next() else {
+                    bail!("Wheel `{wheel}` is not cached from a configured index");
+                };
+                if matches.any(|other| other.dist().path != entry.dist().path) {
+                    bail!("Wheel `{wheel}` is cached from multiple indexes; select a single index");
+                }
+                if !wheel_importable(wheel, &entry.dist().path, interpreter, None)? {
+                    bail!(
+                        "Wheel `{wheel}` requires installation to relocate its `.data` directory"
+                    );
+                }
+                roots.push(entry.dist().path.to_path_buf());
             }
         }
-        roots.push(root.to_path_buf());
+        WheelSelection::Locked(resolution) => {
+            let mut top_level = FxHashSet::default();
+            for selected in resolution.distributions() {
+                let ResolvedDist::Installable { dist, .. } = selected else {
+                    return Ok(None);
+                };
+                let Dist::Built(BuiltDist::Registry(registry)) = dist.as_ref() else {
+                    return Ok(None);
+                };
+                let wheel = registry.best_wheel();
+                if cache.must_revalidate_package(&wheel.filename.name) {
+                    return Ok(None);
+                }
+                let Some(cached) = index.wheel(registry, true, false) else {
+                    return Ok(None);
+                };
+                // A lock can record hashes for several wheels of the same version.
+                if !wheel.file.hashes.is_empty()
+                    && !cached.satisfies(ArchiveHashPolicy::Any(wheel.file.hashes.as_slice()))
+                {
+                    bail!(
+                        "Cached wheel `{}` does not match its locked hash",
+                        wheel.filename
+                    );
+                }
+                if !wheel_importable(
+                    &wheel.filename,
+                    &cached.path,
+                    interpreter,
+                    Some(&mut top_level),
+                )? {
+                    return Ok(None);
+                }
+                roots.push(cached.path.to_path_buf());
+            }
+        }
     }
-    Ok(roots)
+    Ok(Some(roots))
 }
 
-/// Add the parent environments' site packages to an ephemeral environment.
-fn set_overlay(environment: &PythonEnvironment, contents: &str) -> anyhow::Result<()> {
+fn wheel_importable(
+    wheel: &WheelFilename,
+    root: &Path,
+    interpreter: &Interpreter,
+    mut top_level: Option<&mut FxHashSet<OsString>>,
+) -> anyhow::Result<bool> {
+    let metadata = uv_metadata::read_flat_wheel_metadata(wheel, root)?;
+    if metadata.name != wheel.name || metadata.version != wheel.version {
+        bail!("Wheel `{wheel}` has inconsistent package metadata");
+    }
+    if let Some(requires) = metadata.requires_python
+        && !requires.contains(interpreter.python_version())
+    {
+        bail!(
+            "Wheel `{wheel}` requires Python `{requires}`, but the selected interpreter is `{}`",
+            interpreter.python_version()
+        );
+    }
+    for child in fs_err::read_dir(root)? {
+        let child = child?;
+        let path = child.path();
+        if child.file_type()?.is_dir() && path.extension().is_some_and(|ext| ext == "data") {
+            return Ok(false);
+        }
+        if let Some(names) = top_level.as_deref_mut() {
+            // An installation merges directories and processes .pth files in one site-packages.
+            if path.extension().is_some_and(|ext| ext == "pth") {
+                return Ok(false);
+            }
+            let name = child.file_name();
+            if name != "__pycache__" && !names.insert(name) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Add unpacked wheel directories and parent site-packages directories to the ephemeral interpreter.
+fn set_overlay<'a>(
+    environment: &PythonEnvironment,
+    wheels: &'a [PathBuf],
+    parents: impl Iterator<Item = Cow<'a, Path>>,
+) -> anyhow::Result<()> {
     let site_packages = environment
         .site_packages()
         .next()
         .context("Failed to find `site-packages` directory for environment")?;
-    let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-    fs_err::write(overlay_path, contents)?;
+    let bytecode = if wheels.is_empty() {
+        ""
+    } else {
+        "import sys; sys.dont_write_bytecode = True; "
+    };
+    let paths = wheels
+        .iter()
+        .map(|p| Cow::Borrowed(p.as_path()))
+        .chain(parents)
+        .dedup()
+        .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
+        .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
+        .join("; ");
+    fs_err::write(
+        site_packages.join("_uv_ephemeral_overlay.pth"),
+        format!("import site; {bytecode}{paths}"),
+    )?;
     Ok(())
 }
 

@@ -102,6 +102,27 @@ in `.ps1`, `.cmd`, and `.bat` in that order of execution on your behalf.
 $ uv run --with nuitka==2.6.7 -- nuitka --version
 ```
 
+## Running from cached wheels
+
+Enable the `run-cached-wheels` preview in a project to let `uv run` import dependencies directly
+from uv's cache:
+
+```toml title="pyproject.toml"
+[tool.uv]
+preview-features = ["run-cached-wheels"]
+```
+
+Run a command as usual, for example, `uv run pytest`. When the default project environment does not exist and all
+selected packages have compatible, unpacked registry wheels in the cache, uv can create a temporary
+environment with those wheels on Python's import path and installs their command-line entry points.
+A cache miss, an editable project, or a wheel that needs file relocation triggers a regular sync.
+uv uses an existing project environment normally. An explicitly isolated run can also use cached
+wheels when the project has a `.venv`.
+
+Lockfile updates, `--locked`, `--frozen`, extras, and dependency groups work as usual. Use a trusted
+cache and keep it available for the command's lifetime. Python's `-S` option skips the wheel paths. Package files are shared and should be
+treated as read-only by the command.
+
 ## Signal handling
 
 uv does not cede control of the process to the spawned command in order to provide better error

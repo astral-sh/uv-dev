@@ -42,6 +42,15 @@ fn wheel_destination<'layout>(
     Ok((dist_info_prefix, site_packages))
 }
 
+/// Install the console and GUI scripts declared by an unpacked wheel into the given environment.
+pub fn install_wheel_entrypoints(layout: &Layout, wheel: &Path) -> Result<(), Error> {
+    let (prefix, site_packages) = wheel_destination(layout, wheel)?;
+    let (console, gui) = parse_scripts(wheel, &prefix, layout.python_version.1)?;
+    let mut record = Vec::new();
+    write_script_entrypoints(layout, false, site_packages, &console, &mut record, false)?;
+    write_script_entrypoints(layout, false, site_packages, &gui, &mut record, true)
+}
+
 /// Install the given wheel to the given venv
 ///
 /// The caller must ensure that the wheel is compatible to the environment.
