@@ -1,4 +1,4 @@
-name: Measure Windows build-script input timestamps
+name: Compare Windows Rust cache actions
 run-name: ${{ inputs.phase }} / ${{ inputs.suite }}
 'on':
   workflow_dispatch:
@@ -8,6 +8,7 @@ run-name: ${{ inputs.phase }} / ${{ inputs.suite }}
         options:
         - seed
         - warm
+        - diagnostic
         default: warm
         required: true
       suite:
@@ -50,9 +51,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-before
+        prefix-key: uv-windows-native-20261024-v1-before
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -61,7 +62,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -83,6 +84,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -111,7 +114,7 @@ jobs:
         path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
         if-no-files-found: ignore
         retention-days: 14
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-1') && inputs.phase == 'warm' }}
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-1') && inputs.phase != 'seed' }}
   windows-1-after:
     timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
@@ -137,9 +140,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-after
+        prefix-key: uv-windows-native-20261024-v1-after
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -148,7 +151,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -170,6 +173,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -198,7 +203,7 @@ jobs:
         path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
         if-no-files-found: ignore
         retention-days: 14
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-1') && inputs.phase == 'warm' }}
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-1') && inputs.phase != 'seed' }}
   windows-2-before:
     timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
@@ -224,9 +229,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-before
+        prefix-key: uv-windows-native-20261024-v1-before
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -235,7 +240,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -257,6 +262,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -311,9 +318,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-after
+        prefix-key: uv-windows-native-20261024-v1-after
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -322,7 +329,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -344,6 +351,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -398,9 +407,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-before
+        prefix-key: uv-windows-native-20261024-v1-before
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -409,7 +418,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -431,6 +440,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -459,7 +470,7 @@ jobs:
         path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
         if-no-files-found: ignore
         retention-days: 14
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-3') && inputs.phase == 'warm' }}
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-3') && inputs.phase != 'seed' }}
   windows-3-after:
     timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
@@ -485,9 +496,9 @@ jobs:
     - name: Install Rust toolchain
       working-directory: ${{ env.UV_WORKSPACE }}
       run: rustup toolchain install --profile minimal
-    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-windows-timestamps-20261024-v1-after
+        prefix-key: uv-windows-native-20261024-v1-after
         key: ${{ hashFiles('Cargo.toml') }}
         workspace: ${{ env.UV_WORKSPACE }}
         profile: fast-build-nightly
@@ -496,7 +507,7 @@ jobs:
       id: rust-cache
       name: Restore Rust cache
     - name: Require an exact Rust cache hit
-      if: ${{ inputs.phase == 'warm' }}
+      if: ${{ inputs.phase != 'seed' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
@@ -518,6 +529,8 @@ jobs:
         UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        CARGO_LOG: ${{ inputs.phase == 'diagnostic' && 'cargo::core::compiler::fingerprint=trace,cargo::compiler::fingerprint=trace'
+          || '' }}
       shell: bash
       run: |
         uv run --only-group test cargo nextest run --locked \
@@ -546,4 +559,4 @@ jobs:
         path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
         if-no-files-found: ignore
         retention-days: 14
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-3') && inputs.phase == 'warm' }}
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'windows-3') && inputs.phase != 'seed' }}
