@@ -281,12 +281,15 @@ jobs:
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
 
+      # Keep the top-level uv executable on the workspace drive for path-sensitive tests.
       - uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9 # v1
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
-            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/.fingerprint
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/build
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/deps
 
       - uses: astral-sh/github-actions/rust-workspace-cache/prune@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
