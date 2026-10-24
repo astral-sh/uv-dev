@@ -1,4 +1,4 @@
-name: Measure dependency-only native Rust cache
+name: Measure pruned dependency caches
 run-name: ${{ inputs.phase }} / ${{ inputs.suite }}
 'on':
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-dev-msrv-before
+        prefix-key: uv-prune-20261024-v1-dev-msrv-before
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -88,11 +88,11 @@ jobs:
         echo "RUSTUP_TOOLCHAIN=${MSRV}" >> "$GITHUB_ENV"
       env:
         MSRV: ${{ steps.msrv.outputs.value }}
-    - uses: astral-sh/github-actions/rust-workspace-cache@ebba56fe7c986140673e8fa55355eae44fa0b4a0
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
         cache-workspace-crates: 'false'
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-dev-msrv-after
+        prefix-key: uv-prune-20261024-v1-dev-msrv-after
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -130,7 +130,7 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-dev-freebsd-before
+        prefix-key: uv-prune-20261024-v1-dev-freebsd-before
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -197,11 +197,11 @@ jobs:
       with:
         persist-credentials: false
         ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
-    - uses: astral-sh/github-actions/rust-workspace-cache@ebba56fe7c986140673e8fa55355eae44fa0b4a0
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
         cache-workspace-crates: 'false'
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-dev-freebsd-after
+        prefix-key: uv-prune-20261024-v1-dev-freebsd-after
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -273,7 +273,7 @@ jobs:
         workspaces: . -> target/hawk
         cache-workspace-crates: 'false'
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-hawk-before
+        prefix-key: uv-prune-20261024-v1-hawk-before
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -324,12 +324,12 @@ jobs:
         ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
     - name: Install Rust toolchain
       run: rustup toolchain install 1.99.0
-    - uses: astral-sh/github-actions/rust-workspace-cache@ebba56fe7c986140673e8fa55355eae44fa0b4a0
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
         target-directory: target/hawk
         cache-workspace-crates: 'false'
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-hawk-after
+        prefix-key: uv-prune-20261024-v1-hawk-after
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -362,7 +362,7 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-publish-before
+        prefix-key: uv-prune-20261024-v1-publish-before
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
@@ -394,11 +394,11 @@ jobs:
       with:
         persist-credentials: false
         ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
-    - uses: astral-sh/github-actions/rust-workspace-cache@ebba56fe7c986140673e8fa55355eae44fa0b4a0
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
         cache-workspace-crates: 'false'
         save-if: ${{ inputs.phase == 'seed' }}
-        prefix-key: uv-deps-20261024-v1-publish-after
+        prefix-key: uv-prune-20261024-v1-publish-after
       name: Restore Rust cache
       id: rust-cache
     - name: Record Rust cache availability
