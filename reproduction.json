@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with Rust/Cargo 1.99.0, a minimal crate depending on mea = \"=0.6.7\" fails under `cargo check --target powerpc-unknown-linux-gnu` with exit 101: E0432, unresolved import std::sync::atomic::AtomicU64 in mea's broadcast/overflow/mod.rs:67. An equivalent crate using asyncband = \"=0.7.1\" with features = [\"mutex\"] passes the same check. The checkout locks reqsign-core 3.3.1 with mea 0.6.7; published reqsign-core 3.3.2 uses the tested replacement. This reproduces the dependency-level PPC32 blocker; a complete uv build and the reporter's exact target remain unverified. Installed uv is 0.13.5; Python is 3.12.3. Updated $RUNNER_TEMP/issue-context/README.md with fixtures, commands, diagnostics, and limitations. No checkout files or GitHub state were changed."
+}

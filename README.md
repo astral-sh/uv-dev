@@ -11,34 +11,164 @@ depends on `mea`, which is broken on PPC32. They report that development moved
 to `asyncband` and that the replacement removed the problematic code.
 
 The checkout locks `reqsign` 0.20.6, `reqsign-core` 3.3.1, and `mea` 0.6.7.
-Published source confirms an unconditional `AtomicU64` import in `mea`; the
-32-bit PowerPC Linux Rust target only supports atomics through 32 bits.
-`reqsign-core` 3.3.2 replaces `mea` with `asyncband` 0.7.1, whose published
-source no longer contains that import or the overflow broadcast module.
+A minimal dependency check reproduces a compilation failure in `mea` 0.6.7
+for `powerpc-unknown-linux-gnu`: its unconditional `AtomicU64` import fails
+with Rust error E0432. An equivalent check using `asyncband` 0.7.1 with the
+`mutex` feature succeeds for the same target. Published `reqsign-core` 3.3.2
+uses that replacement and feature. A complete uv build was not attempted.
 
-apache/reqsign#868 supplies the fix released in reqsign-core 3.3.2; astral-sh/uv#2658 queues a broader reqsign update that includes it. No existing uv issue or PR tracks this specific PPC32 failure.
+apache/reqsign#868 supplies the dependency replacement released in reqsign-core 3.3.2; astral-sh/uv#2658 queues a broader reqsign update that includes it. No other uv issue or PR for this specific PPC32 failure was found in the issue-context search.
 
 The issue was opened on October 24, 2026, and has no comments. It does not
 provide an exact target triple, build command, diagnostic, uv version, or a
-before-and-after build result.
+before-and-after build result. `powerpc-unknown-linux-gnu` was selected as a
+representative PPC32 target, not supplied by the reporter.
 
 ## Draft response
 
-The lockfile still selects reqsign-core 3.3.1 and mea 0.6.7. mea unconditionally uses AtomicU64, which is unavailable on 32-bit PowerPC Linux. reqsign-core 3.3.2 replaces it with asyncband via apache/reqsign#868 and removes that dependency blocker. The next step is a targeted lockfile update and PPC32 build verification. Please share your exact Rust target triple and whether updating to 3.3.2 resolves the failure for you.
+Reproduced the dependency-level PPC32 failure with Rust 1.99.0: checking mea 0.6.7 for powerpc-unknown-linux-gnu fails with E0432 because std::sync::atomic::AtomicU64 is unavailable. Checking asyncband 0.7.1 with its mutex feature succeeds for the same target. reqsign-core 3.3.2 uses that replacement via apache/reqsign#868, while uv still locks reqsign-core 3.3.1 and mea 0.6.7. This supports the requested update; a complete uv build still needs verification for the reporter's exact target and build configuration.
 
 ## Classification
 
-The requested update addresses a source-confirmed build incompatibility: uv locks mea 0.6.7 through reqsign-core 3.3.1, and mea unconditionally imports AtomicU64 while the 32-bit PowerPC Linux target supports atomics only through 32 bits. The upstream replacement is released but not adopted in this checkout. The general dependency dashboard and unrelated historical PowerPC fixes do not make this a duplicate or an established regression.
+Bug: a dependency-level PPC32 compilation incompatibility is reproduced,
+not merely inferred from source. The published `mea` 0.6.7 archive matches
+the checkout lockfile checksum and fails to compile on the selected PPC32
+target. Its replacement compiles with the feature used by `reqsign-core`.
 
-The missing reproduction does not change the correctness classification.
-Source inspection establishes a dependency-level compile incompatibility for
-`powerpc-unknown-linux-gnu`; it does not establish that a complete uv build
-passes after the update, or identify the reporter's exact target. No
-reproduction or build was run.
+The report does not establish a regression between particular uv releases.
+The observed checks establish the dependency blocker and the replacement's
+compatibility for this target; they do not establish that a complete uv
+build passes after updating `reqsign-core`.
 
 The dashboard is a general dependency queue, not a canonical discussion of
 this failure. The merged upstream change is available for uv to consume;
 it does not update uv's lockfile.
+
+## Reproduction
+
+**Outcome: reproducible**, at the dependency-compilation level.
+
+### Environment and scope
+
+- Host: Linux x86_64; cross-check target: `powerpc-unknown-linux-gnu`
+  (32-bit, big-endian GNU/Linux).
+- Rust: `rustc 1.99.0 (b940084d7 2026-09-28)`;
+  Cargo: `1.99.0 (5f94df478 2026-08-27)`.
+- Installed uv on PATH: `uv 0.13.5 (x86_64-unknown-linux-gnu)`;
+  Python: `3.12.3`. Neither is involved in this Rust compilation failure.
+- A separate minimal Rust toolchain and PPC32 standard library were installed
+  under the temporary reproduction directory. Cargo caches, manifests,
+  lockfiles, downloaded sources, logs, and build outputs are all there.
+- No release build, target execution, or complete uv build was performed.
+  `cargo check` is sufficient to observe the import failure and requires no
+  PPC32 linker or emulator.
+
+### Minimal fixture and commands
+
+Initialize an isolated temporary directory and toolchain:
+
+```sh
+repro_dir=$(mktemp -d /tmp/uv-22906-XXXXXX)
+cd "$repro_dir"
+export RUSTUP_HOME="$repro_dir/rustup-home"
+export CARGO_HOME="$repro_dir/cargo-home"
+export CARGO_TARGET_DIR="$repro_dir/target"
+rustup toolchain install 1.99.0 --profile minimal --target powerpc-unknown-linux-gnu --no-self-update
+mkdir -p mea-check/src asyncband-check/src
+```
+
+Create `mea-check/Cargo.toml`:
+
+```toml
+[package]
+name = "mea-ppc32-check"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+mea = "=0.6.7"
+```
+
+Create `mea-check/src/lib.rs` containing:
+
+```rust
+pub use mea::mutex::Mutex;
+```
+
+Run:
+
+```sh
+cargo +1.99.0 check --manifest-path mea-check/Cargo.toml --target powerpc-unknown-linux-gnu
+```
+
+Observed exit status: **101**. Cargo resolved `mea` 0.6.7, `hashbrown`
+0.17.1, and `slab` 0.4.12. The diagnostic is:
+
+```text
+error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
+  --> .../mea-0.6.7/src/broadcast/overflow/mod.rs:67:5
+67 | use std::sync::atomic::AtomicU64;
+   |     ^^^^^^^^^^^^^^^^^^^---------
+   |                        |
+   |                        no `AtomicU64` in `sync::atomic`
+error: could not compile `mea` (lib) due to 1 previous error
+```
+
+Even a consumer of only the mutex triggers this failure because `mea`
+unconditionally compiles the broadcast overflow module. `reqsign-core`
+3.3.1 imports `mea::mutex::Mutex` in `src/signer.rs`.
+
+For the replacement comparison, create `asyncband-check/Cargo.toml`:
+
+```toml
+[package]
+name = "asyncband-ppc32-check"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+asyncband = { version = "=0.7.1", features = ["mutex"] }
+```
+
+Create `asyncband-check/src/lib.rs` containing:
+
+```rust
+pub use asyncband::mutex::Mutex;
+```
+
+Run:
+
+```sh
+cargo +1.99.0 check --manifest-path asyncband-check/Cargo.toml --target powerpc-unknown-linux-gnu
+```
+
+Observed exit status: **0**; both `asyncband` 0.7.1 and the fixture finish
+checking successfully in the dev profile. Published `reqsign-core` 3.3.2
+declares `asyncband` version `0.7.1` with `features = ["mutex"]` and imports
+`asyncband::mutex::Mutex` instead of `mea::mutex::Mutex`.
+
+`rustc --print cfg --target powerpc-unknown-linux-gnu` reports
+`target_pointer_width="32"` and atomic widths 8, 16, 32, and pointer-sized;
+it does not report 64-bit atomic support. This agrees with the actual
+compiler diagnostic.
+
+### Existing test coverage and remaining verification
+
+Searched `crates/uv/tests/`, `crates/uv-client/tests/it/`, and
+`crates/uv-auth/` for PPC32/PowerPC, `AtomicU64`, `reqsign`, `mea`, and
+`asyncband` coverage. No test covering this dependency's PPC32 compilation
+was found. No repository tests were added or run; the isolated cross-target
+checks directly exercise the reported build blocker.
+
+The exact reporter target triple, Rust version, uv revision, build command,
+and features remain unspecified. They are needed to verify the full uv
+build in the reporter's environment, but not to reproduce this dependency
+failure. A successful `asyncband` check does not prove that updating the
+complete uv dependency graph resolves every PPC32 build issue.
+
+Artifacts are retained at `/tmp/uv-22906-flgmniia`, including both fixtures,
+their lockfiles, `mea-check.log`, `asyncband-check.log`, published crate
+sources, and isolated toolchain/cache/output directories.
 
 ## Related
 
@@ -105,10 +235,11 @@ and JWT decoding exposure, not compilation.
 Prepare a focused lockfile update using
 `cargo update -p reqsign-core --precise 3.3.2`, review the resulting
 dependency changes, and verify that `mea` leaves the dependency graph.
-Check a build for the reporter's exact PPC32 target and run the relevant
-repository checks before claiming the issue is resolved. The broader
-`reqsign` 0.20.7 update queued in astral-sh/uv#2658 is another route to
-the required core version.
+The isolated checks confirm the reported blocker and show that the replacement
+mutex dependency compiles for `powerpc-unknown-linux-gnu`. Verify a complete
+uv build for the reporter's exact PPC32 target and configuration before
+claiming the issue is fully resolved. The broader `reqsign` 0.20.7 update
+queued in astral-sh/uv#2658 is another route to the required core version.
 
-This handoff is based on read-only repository and upstream inspection.
-Only this README was updated; no checkout files or GitHub state were changed.
+Only this README and isolated temporary reproduction artifacts were written.
+No checkout files or GitHub state were changed.
