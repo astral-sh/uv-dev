@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -44,6 +44,7 @@ impl ValidatedLock {
         install_path: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        workspace_members: Option<&BTreeSet<PackageName>>,
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
@@ -201,6 +202,15 @@ impl ValidatedLock {
                 conflicts,
                 lock.conflicts(),
             );
+            return Ok(Self::Versions(lock));
+        }
+
+        let workspace_members_match = workspace_members.map_or_else(
+            || lock.workspace_members().iter().eq(members),
+            |members| lock.workspace_members() == members,
+        );
+        if !workspace_members_match {
+            debug!("Resolving despite existing lockfile due to change in workspace membership");
             return Ok(Self::Versions(lock));
         }
 
@@ -463,6 +473,13 @@ impl ValidatedLock {
                     );
                 }
                 Ok(Self::Preferable(lock))
+            }
+            SatisfiesResult::MismatchedPackageRequiresPython(name, expected, actual) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched Python requirements for: `{name}`\n  Requested: {:?}\n  Existing: {:?}",
+                    expected, actual
+                );
+                Ok(Self::Versions(lock))
             }
             SatisfiesResult::MismatchedPackageDependencies(name, version, expected, actual) => {
                 if let Some(version) = version {

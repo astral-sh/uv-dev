@@ -1339,7 +1339,7 @@ fn single_project_default_groups_in_lockfile() -> Result<()> {
     docs = []
     "#);
     let lock = Lock::from_canonical_toml(&context.read("uv.lock"))?;
-    assert!(lock.members().is_empty());
+    assert!(lock.resolution_roots().is_empty());
     assert_eq!(
         lock.member_default_groups(&"root".parse()?),
         Some(DefaultGroups::List(vec!["docs".parse()?]))

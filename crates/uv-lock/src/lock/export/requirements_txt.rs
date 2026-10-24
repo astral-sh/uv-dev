@@ -5,7 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use owo_colors::OwoColorize;
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, EditableMode, ExportFormat, ExtrasSpecificationWithDefaults,
+    InstallOptions,
 };
 use uv_distribution_filename::{DistExtension, SourceDistExtension};
 use uv_fs::Simplified;
@@ -40,6 +41,7 @@ impl<'lock> RequirementsTxtExport<'lock> {
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,
+            ExportFormat::RequirementsTxt,
             prune,
             extras,
             dev,

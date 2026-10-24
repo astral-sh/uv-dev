@@ -10,12 +10,13 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerExpression, MarkerTree, MarkerValueExtra};
-use uv_pypi_types::{ConflictItem, ConflictSet, Conflicts};
+use uv_pypi_types::{ConflictItem, ConflictKindRef, ConflictSet, Conflicts};
 
+use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
@@ -25,8 +26,8 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::{LockErrorKind, PackageIndex, Source};
-use crate::{Installable, InstallableRootKind, LockError, Package};
+use crate::lock::{Dependency, LockErrorKind, PackageIndex, Source};
+use crate::{Installable, InstallableRootKind, Lock, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
@@ -61,6 +62,7 @@ impl<'lock> ExportableRequirements<'lock> {
     /// Excluded virtual packages still contribute dependencies.
     fn from_lock(
         target: &impl Installable<'lock>,
+        format: ExportFormat,
         prune: &[PackageName],
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
@@ -68,6 +70,17 @@ impl<'lock> ExportableRequirements<'lock> {
         install_options: &'lock InstallOptions,
         virtual_packages: VirtualPackages,
     ) -> Result<Self, LockError> {
+        let dependency_marker = |dependency: &Dependency| {
+            let marker = dependency.simplified_marker.as_simplified_marker_tree();
+            match format {
+                ExportFormat::RequirementsTxt | ExportFormat::PylockToml => target
+                    .lock()
+                    .constrain_conflicts(UniversalMarker::from_combined(marker))
+                    .combined(),
+                // An SBOM can include mutually exclusive package and extra selections.
+                ExportFormat::CycloneDX1_5 => marker,
+            }
+        };
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut node_by_package = vec![None; size_guess];
@@ -156,7 +169,7 @@ impl<'lock> ExportableRequirements<'lock> {
                         root,
                         dep_index,
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dependency_marker(dep),
                             dep_extras: dep.extra.iter().collect(),
                         },
                     );
@@ -287,12 +300,12 @@ impl<'lock> ExportableRequirements<'lock> {
                     if let Some(extra) = extra {
                         Edge::Optional {
                             extra,
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dependency_marker(dep),
                             dep_extras,
                         }
                     } else {
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: dependency_marker(dep),
                             dep_extras,
                         }
                     },
@@ -325,12 +338,13 @@ impl<'lock> ExportableRequirements<'lock> {
                 && install_options.include_package(
                     package.as_install_target(),
                     target.project_name(),
-                    target.lock().members(),
+                    target.lock().workspace_members(),
                 )
         };
 
         // Determine the reachability of each node in the graph.
         let mut reachability = conflict_marker_reachability(
+            target.lock(),
             &graph,
             root,
             &activated_items,
@@ -421,6 +435,7 @@ impl Edge<'_> {
 /// For example, if the only path requesting `foo[ssl]` has marker `sys_platform == 'linux'`,
 /// that condition replaces references to `foo[ssl]` throughout the graph, including on siblings.
 fn conflict_marker_reachability<'lock>(
+    lock: &Lock,
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     root: NodeIndex,
     known_conflicts: &FxHashSet<ConflictItem>,
@@ -461,11 +476,22 @@ fn conflict_marker_reachability<'lock>(
         solver.nodes[source].outgoing.push(edge.id());
     }
 
-    // Link package-local extra nodes to their global facts, and seed the selected root items.
+    // Link reachable workspace projects and package-local extra nodes to their global facts.
+    for index in graph.node_indices() {
+        if let Node::Package(package) = graph[index]
+            && lock
+                .conflicts()
+                .contains(package.name(), ConflictKindRef::Project)
+            && lock.is_workspace_package(package)
+        {
+            let item = ConflictItem::from(package.name().clone());
+            solver.nodes[index.index()].activation_fact = variables.by_item.get(&item).copied();
+        }
+    }
     for ((package_index, extra), extra_index) in extra_nodes {
         if let Node::Package(package) = graph[package_index] {
             let item = ConflictItem::from((package.name().clone(), extra.clone()));
-            solver.nodes[extra_index].extra_fact = variables.by_item.get(&item).copied();
+            solver.nodes[extra_index].activation_fact = variables.by_item.get(&item).copied();
             if known_conflicts.contains(&item) {
                 // Selected extras belong to unique, unconditionally reached production roots.
                 solver.add_reachability(extra_index, MarkerTree::TRUE);
@@ -625,7 +651,7 @@ fn resolve_marker_bindings(
     let mut requests = vec![Vec::new(); variables.len()];
     for (index, edge) in solver.edges.iter().enumerate() {
         for &target in &edge.targets {
-            if let Some(fact) = solver.nodes[target].extra_fact {
+            if let Some(fact) = solver.nodes[target].activation_fact {
                 requests[fact].push(EdgeIndex::new(index));
             }
         }
@@ -728,7 +754,7 @@ struct SymbolicExportReachability {
 struct ReachabilityNode {
     marker: MarkerTree,
     outgoing: Vec<EdgeIndex>,
-    extra_fact: Option<usize>,
+    activation_fact: Option<usize>,
     queued: bool,
 }
 
@@ -738,7 +764,7 @@ impl ReachabilityNode {
         Self {
             marker: MarkerTree::FALSE,
             outgoing: Vec::new(),
-            extra_fact: None,
+            activation_fact: None,
             queued: false,
         }
     }
@@ -785,7 +811,7 @@ impl SymbolicExportReachability {
             if mem::replace(&mut reached[source], true) {
                 continue;
             }
-            if let Some(fact) = self.nodes[source].extra_fact {
+            if let Some(fact) = self.nodes[source].activation_fact {
                 active[fact] = true;
             }
             for &edge in &self.nodes[source].outgoing {
@@ -821,7 +847,7 @@ impl SymbolicExportReachability {
         }
 
         for node in &self.nodes {
-            if let Some(fact) = node.extra_fact {
+            if let Some(fact) = node.activation_fact {
                 self.activations[fact] = self.activations[fact].or(node.marker);
             }
         }
