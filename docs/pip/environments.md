@@ -136,8 +136,8 @@ dependencies into the environment and (2) build source distributions.
 To copy a prepared environment, create the source with `uv venv --relocatable seed` and install
 packages into it with `uv pip install --python seed --link-mode copy ...`. Then run
 `uv venv --clone seed job`. The destination must be a new directory. Installed package files are
-independent, and compatible bytecode can be reused. The clone uses the same base Python installation.
-Editable packages continue to use the original project sources.
+independent, and compatible bytecode can be reused. The clone uses the same base Python
+installation. Editable packages continue to use the original project sources.
 
 ## Discovery of Python environments
 
