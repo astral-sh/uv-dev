@@ -35,7 +35,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup show
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+      - uses: astral-sh/github-actions/rust-workspace-cache@05b709d1dc87a73f23e546cf38ca45c7bdd3a53c
         with:
           profile: |
             debug
@@ -165,7 +165,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup show
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+      - uses: astral-sh/github-actions/rust-workspace-cache@05b709d1dc87a73f23e546cf38ca45c7bdd3a53c
         with:
           profile: |
             debug
