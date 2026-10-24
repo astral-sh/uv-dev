@@ -13,11 +13,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Virtual environment creation failed' }
     $wheels = Get-ChildItem "$WheelDirectory/*.whl"
     & "$virtualEnvironment/Scripts/python.exe" -m pip install --no-index --no-deps $wheels.FullName
-    if ($LASTEXITCODE -ne 0) { throw 'Signed wheel installation failed' }
+    if ($LASTEXITCODE -ne 0) { throw 'Wheel installation failed' }
+    foreach ($module in @('uv', 'uv_build')) {
+        & "$virtualEnvironment/Scripts/python.exe" -m $module --help
+        if ($LASTEXITCODE -ne 0) { throw "Module entry point failed: $module" }
+    }
     foreach ($binary in @('uv.exe', 'uvx.exe', 'uvw.exe', 'uv-build.exe')) {
         $binaryPath = Join-Path "$virtualEnvironment/Scripts" $binary
         $process = Start-Process -FilePath $binaryPath -ArgumentList '--help' -NoNewWindow -Wait -PassThru
-        if ($process.ExitCode -ne 0) { throw "Signed executable failed: $binary" }
+        if ($process.ExitCode -ne 0) { throw "Executable failed: $binary" }
     }
 }
 finally {

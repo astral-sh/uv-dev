@@ -214,6 +214,10 @@ jobs:
     uses: $/.github/workflows/build-release-binaries.yml
     secrets: inherit
 
+  test-release-artifacts:
+    needs: build-release-artifacts
+    uses: $/.github/workflows/test-release-artifacts.yml
+
   build-docker:
     needs: plan
     if: ${{ needs.plan.outputs.build-docker == 'true' }}
@@ -377,6 +381,7 @@ jobs:
       - test-system
       - build-dev-binaries
       - build-release-artifacts
+      - test-release-artifacts
       - build-docker
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     steps:
@@ -400,6 +405,7 @@ jobs:
           CONDITIONAL_JOBS: >-
             {
               "build-release-artifacts": ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }},
+              "test-release-artifacts": ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }},
               "check-release": ${{ needs.plan.outputs.require-check-release == 'true' }},
               "test-integration": ${{ contains(github.event.pull_request.labels.*.name, 'test:integration') }},
               "test-system": ${{ contains(github.event.pull_request.labels.*.name, 'test:system') }}
