@@ -72,6 +72,7 @@ jobs:
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         env:
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
           ZSTD_CLEVEL: ${{ matrix.level }}
         with:
           prefix-key: v1-bench-windows-zstd-${{ matrix.level }}
