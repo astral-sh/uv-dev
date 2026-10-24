@@ -16,7 +16,7 @@ jobs:
           $before = [DateTimeOffset]::UtcNow
           $monotonicBefore = $timer.Elapsed.TotalSeconds
           $uri = "https://api.github.com/rate_limit?clock_probe=$([Guid]::NewGuid().ToString())"
-          $response = Invoke-WebRequest -Method Head -Uri $uri -Headers @{"Cache-Control"="no-cache"} -UseBasicParsing
+          $response = Invoke-WebRequest -Method Get -Uri $uri -Headers @{"Cache-Control"="no-cache"} -UseBasicParsing
           $after = [DateTimeOffset]::UtcNow
           $monotonicAfter = $timer.Elapsed.TotalSeconds
           [ordered]@{
@@ -41,7 +41,7 @@ jobs:
           $before = [DateTimeOffset]::UtcNow
           $monotonicBefore = $timer.Elapsed.TotalSeconds
           $uri = "https://api.github.com/rate_limit?clock_probe=$([Guid]::NewGuid().ToString())"
-          $response = Invoke-WebRequest -Method Head -Uri $uri -Headers @{"Cache-Control"="no-cache"} -UseBasicParsing
+          $response = Invoke-WebRequest -Method Get -Uri $uri -Headers @{"Cache-Control"="no-cache"} -UseBasicParsing
           $after = [DateTimeOffset]::UtcNow
           $monotonicAfter = $timer.Elapsed.TotalSeconds
           [ordered]@{
