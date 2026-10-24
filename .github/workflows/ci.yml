@@ -5,7 +5,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [seed, warm, edit]
+        options: [seed, warm, edit, probe]
         default: seed
 permissions:
   contents: read
@@ -26,12 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [1]
+        partition: [1,2,3]
     timeout-minutes: 25
     runs-on:
       - nscloud-windows-2022-amd64-16x32-with-cache
       - nscloud-cache-tag-uv-dev-windows-rust-benchmark-20261023
-      - nscloud-cache-allow-commit-from-bench-windows-volume-20261023
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,7 +65,9 @@ jobs:
           path: |
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
-            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/.fingerprint
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/build
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/deps
 
       - uses: astral-sh/github-actions/rust-workspace-cache/prune@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
@@ -112,7 +113,12 @@ jobs:
 
       - name: Mark successfully built cache generation
         run: |
-          Set-Content "$env:UV_WORKSPACE/target/fast-build-nightly/.namespace-benchmark-seed" "uv-windows-20261023-v1"
+          $profile = "$env:UV_WORKSPACE/target/fast-build-nightly"
+          Set-Content "$profile/deps/.namespace-benchmark-seed" "uv-windows-20261023-v2"
+          Set-Content (Join-Path $env:NSC_CACHE_PATH '.uv-benchmark-v2') "uv-windows-20261023-v2"
+          $vol = Get-Volume -DriveLetter K
+          Write-Output "VOLUME_USED_BYTES $($vol.Size - $vol.SizeRemaining) OUT_OF $($vol.Size)"
+          Get-Item "$profile/deps" | Select-Object FullName,LinkType,Target | Format-List
       - name: "Upload pending snapshots"
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -133,7 +139,7 @@ jobs:
           retention-days: 14
   volume:
     name: Windows volume shard ${{ matrix.partition }}
-    if: inputs.phase != 'seed'
+    if: inputs.phase == 'warm' || inputs.phase == 'edit'
     strategy:
       fail-fast: false
       matrix:
@@ -142,7 +148,7 @@ jobs:
     runs-on:
       - nscloud-windows-2022-amd64-16x32-with-cache
       - nscloud-cache-tag-uv-dev-windows-rust-benchmark-20261023
-      - nscloud-cache-exp-do-not-commit
+      - nscloud-cache-allow-commit-from-main
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,7 +183,9 @@ jobs:
           path: |
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
-            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/.fingerprint
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/build
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/deps
 
       - uses: astral-sh/github-actions/rust-workspace-cache/prune@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
@@ -186,14 +194,20 @@ jobs:
           profile: fast-build-nightly
           enabled: 'false'
 
-      - name: Verify the warm volume
+      - name: Observe cached build files
         run: |
           $profile = "$env:UV_WORKSPACE/target/fast-build-nightly"
-          $marker = (Get-Content "$profile/.namespace-benchmark-seed" -Raw).Trim()
-          if ($marker -ne "uv-windows-20261023-v1") { throw "Expected seed marker" }
+          $marker = "$profile/deps/.namespace-benchmark-seed"
+          $rootMarker = Join-Path $env:NSC_CACHE_PATH '.uv-benchmark-v2'
           $rlibs = @(Get-ChildItem "$profile/deps" -Filter "*.rlib").Count
-          if ($rlibs -lt 1) { throw "Missing compiled dependencies" }
-          Write-Output "VOLUME_MARKER $marker RLIBS $rlibs"
+          $state = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { "cold" }
+          $rootState = if (Test-Path $rootMarker) { (Get-Content $rootMarker -Raw).Trim() } else { "cold" }
+          if ($state -ne 'cold' -and ($state -ne 'uv-windows-20261023-v2' -or $rlibs -eq 0)) { throw "Incomplete cached build" }
+          Write-Output "VOLUME_MARKER $state RLIBS $rlibs ROOT $rootState"
+          foreach ($path in "$profile/.fingerprint", "$profile/build", "$profile/deps") {
+            $item = Get-Item -LiteralPath $path -Force
+            Write-Output "VOLUME_LINK $path $($item.LinkType) $($item.Target)"
+          }
       - name: Modify one Rust source input
         if: inputs.phase == 'edit'
         run: |
@@ -253,7 +267,7 @@ jobs:
           retention-days: 14
   github:
     name: Windows github shard ${{ matrix.partition }}
-    if: inputs.phase != 'seed'
+    if: inputs.phase == 'warm' || inputs.phase == 'edit'
     strategy:
       fail-fast: false
       matrix:
@@ -356,3 +370,26 @@ jobs:
           path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  probe:
+    name: Inspect volume visibility ${{ matrix.policy }}
+    if: inputs.phase == 'probe'
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [main-only, no-commit]
+    timeout-minutes: 5
+    runs-on:
+      - nscloud-windows-2022-amd64-16x32-with-cache
+      - nscloud-cache-tag-uv-dev-windows-rust-benchmark-20261023
+      - ${{ matrix.policy == 'main-only' && 'nscloud-cache-allow-commit-from-main' || 'nscloud-cache-exp-do-not-commit' }}
+    steps:
+      - name: Inspect diagnostic markers and original path through the cache
+        run: |
+          if (!$env:NSC_CACHE_PATH) { throw 'No Namespace volume' }
+          $v = Get-Volume -DriveLetter K
+          Write-Output "PROBE_VOLUME $env:NSC_CACHE_PATH USED_BYTES $($v.Size - $v.SizeRemaining) CAPACITY $($v.Size)"
+          foreach ($n in '.uv-benchmark-v2','.namespace-benchmark-seed') {
+            $m = @(Get-ChildItem $env:NSC_CACHE_PATH -Filter $n -Recurse -Force -File -ErrorAction SilentlyContinue)
+            foreach ($hit in $m) { Write-Output "PROBE_MARKER $($hit.FullName) $((Get-Content $hit.FullName -Raw).Trim())" }
+          }
