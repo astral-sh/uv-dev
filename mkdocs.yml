@@ -262,6 +262,7 @@ nav:
       - Environment variables: reference/environment.md
       - Storage: reference/storage.md
       - Installer options: reference/installer.md
+      - Cross-build protocol (draft): reference/cross-builds.md
       - Troubleshooting:
           - reference/troubleshooting/index.md
           - Build failures: reference/troubleshooting/build-failures.md

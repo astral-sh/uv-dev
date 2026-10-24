@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "base_prefix": ".",
+  "platform": "linux-aarch64",
+  "language": { "version": "3.14" },
+  "implementation": {
+    "name": "cpython",
+    "version": {
+      "major": 3,
+      "minor": 14,
+      "micro": 0,
+      "releaselevel": "final",
+      "serial": 0
+    }
+  },
+  "abi": { "flags": [] }
+}

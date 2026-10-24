@@ -15,7 +15,8 @@ use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::WheelBuilder;
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, capture_uv_snapshot, get_bin, uv_snapshot,
+    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, capture_uv_snapshot, copy_dir_ignore,
+    get_bin, uv_snapshot,
 };
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
@@ -4278,5 +4279,548 @@ fn build_workspace_constraint_hashes() -> Result<()> {
       cause: No solution found when resolving: `build-dependency==1.0.0`, `dynamic-dependency @ file://[TEMP_DIR]/wheels/dynamic_dependency-1.0.0-py3-none-any.whl#sha256=[DYNAMIC_HASH]`
       cause: Hash-checking is required, but no trusted hash was provided for: `dynamic-dependency`
     ");
+    Ok(())
+}
+
+/// Executable requirements use the build interpreter, while static, dynamic, and transitive
+/// target requirements use the target markers, Python version, and wheel compatibility tags.
+#[test]
+fn cross_build_target_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "cross-build-poc"
+        version = "0.1.0"
+        [build-system]
+        requires = ["cross-library==1.0.0; python_version < '3.13'"]
+        target-requires = [
+            "cross-library==2.0.0; python_version >= '3.14'",
+            "missing-target-dependency; sys_platform == 'win32'",
+        ]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?)
+        .requires_python(Some(&"<3.13".parse()?))
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-tool".parse()?, &"1.0.0".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"2.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_aarch64")
+        .requires_python(Some(&">=3.14".parse()?))
+        .requires(&["cross-runtime==1.0.0; sys_platform == 'linux'".parse()?])
+        .files(&[("cross_library/target.h", "#define ANSWER 42\n")])
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-runtime".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_aarch64")
+        .entry_points(&["target-runtime".to_string()])
+        .files(&[(
+            "cross_target.pth",
+            "import pathlib; pathlib.Path('target-pth-executed').touch()\n",
+        )])
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-extra".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_aarch64")
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--find-links", "wheels",
+        "-C", "check-roles=true",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    insta::assert_json_snapshot!(serde_json::from_str::<serde_json::Value>(
+        &fs_err::read_to_string(context.temp_dir.child("protocol.json"))?
+    )?, @r#"
+    {
+      "build_library": "1.0.0",
+      "build_python": "3.12",
+      "target_python": "3.14",
+      "target_wheels": [
+        "cross_extra-1.0.0-cp314-cp314-manylinux_2_28_aarch64.whl",
+        "cross_library-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl",
+        "cross_runtime-1.0.0-cp314-cp314-manylinux_2_28_aarch64.whl"
+      ]
+    }
+    "#);
+    context
+        .temp_dir
+        .child("target-pth-executed")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
+#[test]
+fn cross_build_native_protocol() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--no-index",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    insta::assert_json_snapshot!(serde_json::from_str::<serde_json::Value>(
+        &fs_err::read_to_string(context.temp_dir.child("protocol.json"))?
+    )?, @r#"
+    {
+      "build_python": "3.12",
+      "target_python": null,
+      "target_wheels": []
+    }
+    "#);
+    Ok(())
+}
+
+/// A legacy hook keeps its original signature during native builds, but cannot accept a target.
+#[test]
+fn cross_build_unsupported_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import shutil
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            source = Path("wheel/cross_build_poc-0.1.0-py3-none-any.whl")
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    let (filename, wheel) =
+        WheelBuilder::new(&"cross-build-poc".parse()?, &"0.1.0".parse()?).build();
+    context
+        .temp_dir
+        .child("wheel")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--no-index",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--out-dir", "rejected",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: The build backend does not support cross-builds: missing `get_requires_for_target_wheel`
+    ");
+    context
+        .temp_dir
+        .child("rejected/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Direct wheel requirements bypass index filtering but still need target tag validation.
+#[test]
+fn cross_build_target_wheel_incompatible_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_x86_64")
+        .requires_python(Some(&">=3.14".parse()?))
+        .build();
+    let path = context.temp_dir.child("wheels").child(filename);
+    path.write_binary(&wheel)?;
+    let requirement = format!(
+        "target-requirement=cross-library @ {}",
+        SafeUrl::from_file_path(path.path()).map_err(|()| anyhow!("invalid wheel path"))?
+    );
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &requirement,
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Target wheel `cross_library-1.0.0-cp314-cp314-manylinux_2_28_x86_64.whl` is incompatible with the target
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// By default, target wheel URL hashes are checked even when the archive was cached without
+/// verification.
+#[test]
+fn cross_build_target_wheel_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?).build();
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let context = context.with_filter((hash.clone(), "[WHEEL_HASH]"));
+    let path = context.temp_dir.child("wheels").child(filename);
+    path.write_binary(&wheel)?;
+    let url = SafeUrl::from_file_path(path.path()).map_err(|()| anyhow!("invalid wheel path"))?;
+    let incorrect_hash = "0".repeat(64);
+    let requirement = format!("cross-library @ {url}#sha256={incorrect_hash}");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&requirement)?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .args(["--generate-hashes", "--no-index", "--quiet"])
+        .args(["--output-file", "requirements.txt"]), @"exit_code: 0 (success)");
+
+    let setting = format!("target-requirement={requirement}");
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &setting,
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `cross-library @ file://[TEMP_DIR]/wheels/cross_library-1.0.0-py3-none-any.whl#sha256=0000000000000000000000000000000000000000000000000000000000000000`
+      cause: Hash mismatch for `cross-library @ file://[TEMP_DIR]/wheels/cross_library-1.0.0-py3-none-any.whl#sha256=0000000000000000000000000000000000000000000000000000000000000000`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:[WHEEL_HASH]
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--no-verify-hashes",
+        "-C", &setting,
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+
+    let setting = format!("target-requirement=cross-library @ {url}#sha256={hash}");
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &setting,
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
+#[test]
+fn cross_build_rejects_malformed_metadata_tag() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index",
+        "-C", "metadata-tag=1-py3-none-any",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: The wheel tag "1-py3-none-any" contains too many segments
+    "#);
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_rejects_incompatible_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index",
+        "-C", "wheel-tag=cp314-cp314-manylinux_2_28_x86_64",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Built wheel `cross_build_poc-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl` is incompatible with the target
+    ");
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// uv checks `Requires-Python` for target dependencies and the built wheel against the target's
+/// release version, so `3.14.0rc1` satisfies `>=3.14`.
+#[test]
+fn cross_build_prerelease_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let path = context.temp_dir.child("build-details.json");
+    let mut details: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(&path)?)?;
+    details["implementation"]["version"]["releaselevel"] = "candidate".into();
+    details["implementation"]["version"]["serial"] = 1.into();
+    path.write_str(&serde_json::to_string(&details)?)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_aarch64")
+        .requires_python(Some(&">=3.14".parse()?))
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--find-links", "wheels",
+        "-C", "target-requirement=cross-library==1.0.0", "-C", "requires-python=>=3.14",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
+/// The bundled uv-build fast path must validate the target's Requires-Python, too.
+#[test]
+fn cross_build_uv_backend_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("build-details.json")
+        .write_str(&fs_err::read_to_string(
+            context
+                .workspace_root
+                .join("test/packages/cross-build/build-details.json"),
+        )?)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.15"
+        [build-system]
+        requires = ["uv_build=={}"]
+        build-backend = "uv_build"
+    "#, uv_version::version()})?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Built wheel requires Python `>=3.15`, but the target is Python 3.14.0
+    ");
+    context
+        .temp_dir
+        .child("dist/project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_metadata_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", "change-metadata=true",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Built wheel metadata differs from prepared metadata
+    ");
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_target_changed() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", "mutate-target=true",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Target `build-details.json` changed during the build
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_platform_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "x86_64-unknown-linux-gnu", "--no-index",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Target platform `linux-aarch64` disagrees with `--python-platform` (Linux x86_64)
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_target_source_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "target-source"
+        version = "1.0.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/backend.py")
+        .write_str(indoc! {r#"
+        from pathlib import Path
+        Path("target-backend-executed").touch()
+        raise RuntimeError("A target source dependency must not run on the build interpreter")
+    "#})?;
+    let requirement = format!(
+        "target-requirement=target-source @ {}",
+        SafeUrl::from_file_path(context.temp_dir.child("dependency").path())
+            .map_err(|()| anyhow!("invalid dependency path"))?
+    );
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &requirement,
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Target requirement `target-source @ file://[TEMP_DIR]/dependency` needs a source build; only target wheels are supported
+    ");
+    context
+        .temp_dir
+        .child("dependency/target-backend-executed")
+        .assert(predicate::path::missing());
     Ok(())
 }

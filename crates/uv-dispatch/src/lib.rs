@@ -5,8 +5,9 @@
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
+use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail, ensure};
 use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
@@ -19,18 +20,21 @@ use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
     BuildKind, BuildOptions, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
-    NoSources, Reinstall,
+    NoBinary, NoBuild, NoSources, Reinstall,
 };
 use uv_configuration::{BuildOutput, Concurrency};
 use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
+    CachedDist, ConfigSettings, DependencyMetadata, Dist, ExtraBuildRequires, ExtraBuildVariables,
     Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
-    PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
+    PackageConfigSettings, Requirement, RequiresPython, Resolution, ResolvedDist, SourceDist,
+    VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -67,7 +71,7 @@ pub enum BuildDispatchError {
     ResolveRequirements {
         requirements: Vec<Requirement>,
         #[source]
-        source: uv_resolver::ResolveError,
+        source: Box<uv_resolver::ResolveError>,
     },
 
     #[error(transparent)]
@@ -97,7 +101,8 @@ impl uv_errors::Hinted for BuildDispatchError {
         match self {
             Self::BuildFrontend(err) => err.hints(),
             Self::Plan(error) => error.hints(),
-            Self::Resolve(err) | Self::ResolveRequirements { source: err, .. } => err.hints(),
+            Self::Resolve(err) => err.hints(),
+            Self::ResolveRequirements { source, .. } => source.hints(),
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
@@ -114,9 +119,8 @@ impl IsBuildBackendError for BuildDispatchError {
     fn is_user_failure(&self) -> bool {
         match self {
             Self::BuildFrontend(error) => error.is_user_failure(),
-            Self::Resolve(error) | Self::ResolveRequirements { source: error, .. } => {
-                error.is_user_failure()
-            }
+            Self::Resolve(error) => error.is_user_failure(),
+            Self::ResolveRequirements { source, .. } => source.is_user_failure(),
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
             Self::BuildBackend(_)
@@ -283,8 +287,207 @@ impl<'a> BuildDispatch<'a> {
         self
     }
 
+    async fn resolve_in_environment(
+        &self,
+        requirements: &[Requirement],
+        hash_override: Option<&HashStrategy>,
+        build_stack: &BuildStack,
+        python_requirement: PythonRequirement,
+        marker_env: &MarkerEnvironment,
+        tags: &Tags,
+    ) -> Result<ResolvedRequirements, BuildDispatchError> {
+        let resolver_env = ResolverEnvironment::specific(marker_env.clone().into());
+
+        let active_requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.evaluate_markers(Some(marker_env), &[]));
+        let previous_hasher = hash_override;
+        let hasher = match previous_hasher {
+            Some(hasher) if self.require_build_hashes() => hasher
+                .clone()
+                .augment_with_metadata_requirements(active_requirements),
+            previous_hasher => previous_hasher
+                .unwrap_or(self.base_hasher)
+                .clone()
+                .augment_with_requirements(active_requirements),
+        }
+        .map_err(uv_requirements::Error::from)?;
+
+        // Walk any URL requirements transitively so their sub-URLs (for example, a workspace
+        // member that depends on another workspace member) are known before the resolver runs
+        // its URL allow-list check. This mirrors what the project resolver does in
+        // `uv_requirements::LookaheadResolver` and prevents a `DisallowedUrl` error when one
+        // `build-system.requires` entry pulls in another URL dependency.
+        let modifiers = DependencyModifiers::default();
+        let (lookaheads, hasher) = LookaheadResolver::new(
+            requirements,
+            self.constraints,
+            &modifiers,
+            &hasher,
+            &self.shared_state.index,
+            DistributionDatabase::new(
+                self.client,
+                self,
+                self.concurrency.downloads_semaphore.clone(),
+            )
+            .with_build_stack(build_stack),
+        )
+        .resolve(&resolver_env)
+        .await?;
+
+        let manifest = Manifest::simple(requirements.to_vec())
+            .with_constraints(self.constraints.clone())
+            .with_lookaheads(lookaheads);
+
+        let resolver = Resolver::new(
+            manifest,
+            OptionsBuilder::new()
+                .exclude_newer(self.exclude_newer.clone())
+                .index_strategy(self.index_strategy)
+                .build_options(self.build_options.clone())
+                .flexibility(Flexibility::Fixed)
+                .build(),
+            &python_requirement,
+            resolver_env,
+            marker_env,
+            // Conflicting groups only make sense when doing universal resolution.
+            Conflicts::empty(),
+            Some(tags),
+            self.flat_index,
+            &self.shared_state.index,
+            &hasher,
+            self,
+            EmptyInstalledPackages,
+            DistributionDatabase::new(
+                self.client,
+                self,
+                self.concurrency.downloads_semaphore.clone(),
+            )
+            .with_build_stack(build_stack),
+        )?;
+        let resolution = Resolution::from(resolver.resolve().await.map_err(|source| {
+            BuildDispatchError::ResolveRequirements {
+                requirements: requirements.to_vec(),
+                source: Box::new(source),
+            }
+        })?);
+        Ok(ResolvedRequirements::new(resolution, hasher))
+    }
+
     fn require_build_hashes(&self) -> bool {
         self.build_hash_checking.is_require()
+    }
+
+    /// Resolve and fetch wheels for a target without installing or executing their contents.
+    ///
+    /// Target source builds are deliberately disabled until recursive cross-builds have an
+    /// explicit configuration and cache contract.
+    pub async fn target_wheels(
+        &self,
+        requirements: &[Requirement],
+        markers: &MarkerEnvironment,
+        tags: &Tags,
+    ) -> Result<Vec<CachedDist>> {
+        if !requirements
+            .iter()
+            .any(|requirement| requirement.evaluate_markers(Some(markers), &[]))
+        {
+            return Ok(Vec::new());
+        }
+        if self.require_build_hashes() {
+            bail!("Target requirements do not yet support required hashes");
+        }
+        let verification = match self.base_hasher.verification() {
+            HashVerification::None => HashVerification::None,
+            HashVerification::IfPresent(_) => HashVerification::IfPresent(Arc::default()),
+            HashVerification::Required(_) => {
+                bail!("Target requirements do not yet support required hashes");
+            }
+        };
+        let build_options = BuildOptions::new(NoBinary::None, NoBuild::All);
+        let constraints = Constraints::default();
+        let hasher =
+            HashStrategy::collect(self.base_hasher.collection()).with_verification(verification);
+        let dispatch = BuildDispatch {
+            build_options: &build_options,
+            constraints: &constraints,
+            base_hasher: &hasher,
+            shared_state: self.shared_state.fork(),
+            ..self.clone()
+        };
+        let build_stack = BuildStack::default();
+        let python_requirement = PythonRequirement::from_marker_environment(
+            markers,
+            RequiresPython::greater_than_equal_version(&markers.python_full_version().version),
+        );
+        let requirements = dispatch
+            .resolve_in_environment(
+                requirements,
+                None,
+                &build_stack,
+                python_requirement,
+                markers,
+                tags,
+            )
+            .await?;
+        let database = DistributionDatabase::new(
+            self.client,
+            &dispatch,
+            self.concurrency.downloads_semaphore.clone(),
+        );
+        let mut distributions = Vec::new();
+        for distribution in requirements.resolution().distributions() {
+            if self.build_options.no_binary_package(distribution.name()) {
+                bail!(
+                    "Target requirement `{distribution}` needs a wheel, but binary distributions are disabled"
+                );
+            }
+            let ResolvedDist::Installable { dist, .. } = distribution else {
+                bail!("Target requirements must resolve to wheel artifacts");
+            };
+            let Dist::Built(built) = dist.as_ref() else {
+                bail!(
+                    "Target requirement `{dist}` needs a source build; only target wheels are supported"
+                );
+            };
+            ensure!(
+                built.wheel_filename().is_compatible(tags),
+                "Target wheel `{}` is incompatible with the target",
+                built.wheel_filename()
+            );
+            distributions.push(Arc::clone(dist));
+        }
+        let preparer = Preparer::new(
+            self.cache,
+            tags,
+            requirements.hasher(),
+            &build_options,
+            database,
+        );
+        Ok(preparer
+            .prepare(
+                distributions,
+                &dispatch.shared_state.in_flight,
+                requirements.resolution(),
+            )
+            .await?)
+    }
+
+    /// Query target requirements using the same source and credential configuration as the build.
+    pub async fn target_requirements(
+        &self,
+        builder: &SourceBuild,
+        install_path: &Path,
+        sources: NoSources,
+    ) -> Result<Option<Vec<Requirement>>, uv_build_frontend::Error> {
+        builder
+            .get_requires_for_target_wheel(
+                self,
+                install_path,
+                sources,
+                self.client.credentials_cache(),
+            )
+            .await
     }
 }
 
@@ -366,85 +569,15 @@ impl BuildContext for BuildDispatch<'_> {
         hash_override: Option<&'data HashStrategy>,
         build_stack: &'data BuildStack,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
-        let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
-        let marker_env = self.interpreter.to_resolver_marker_environment();
-        let resolver_env = ResolverEnvironment::specific(marker_env);
-        let tags = self.interpreter.tags()?;
-
-        let active_requirements = requirements.iter().filter(|requirement| {
-            requirement.evaluate_markers(Some(self.interpreter.markers()), &[])
-        });
-        let previous_hasher = hash_override;
-        let hasher = match previous_hasher {
-            Some(hasher) if self.require_build_hashes() => hasher
-                .clone()
-                .augment_with_metadata_requirements(active_requirements),
-            previous_hasher => previous_hasher
-                .unwrap_or(self.base_hasher)
-                .clone()
-                .augment_with_requirements(active_requirements),
-        }
-        .map_err(uv_requirements::Error::from)?;
-
-        // Walk any URL requirements transitively so their sub-URLs (for example, a workspace
-        // member that depends on another workspace member) are known before the resolver runs
-        // its URL allow-list check. This mirrors what the project resolver does in
-        // `uv_requirements::LookaheadResolver` and prevents a `DisallowedUrl` error when one
-        // `build-system.requires` entry pulls in another URL dependency.
-        let modifiers = DependencyModifiers::default();
-        let (lookaheads, hasher) = LookaheadResolver::new(
+        self.resolve_in_environment(
             requirements,
-            self.constraints,
-            &modifiers,
-            &hasher,
-            &self.shared_state.index,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
-        )
-        .resolve(&resolver_env)
-        .await?;
-
-        let manifest = Manifest::simple(requirements.to_vec())
-            .with_constraints(self.constraints.clone())
-            .with_lookaheads(lookaheads);
-
-        let resolver = Resolver::new(
-            manifest,
-            OptionsBuilder::new()
-                .exclude_newer(self.exclude_newer.clone())
-                .index_strategy(self.index_strategy)
-                .build_options(self.build_options.clone())
-                .flexibility(Flexibility::Fixed)
-                .build(),
-            &python_requirement,
-            resolver_env,
+            hash_override,
+            build_stack,
+            PythonRequirement::from_interpreter(self.interpreter),
             self.interpreter.markers(),
-            // Conflicting groups only make sense when doing universal resolution.
-            Conflicts::empty(),
-            Some(tags),
-            self.flat_index,
-            &self.shared_state.index,
-            &hasher,
-            self,
-            EmptyInstalledPackages,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
-        )?;
-        let resolution = Resolution::from(resolver.resolve().await.map_err(|source| {
-            BuildDispatchError::ResolveRequirements {
-                requirements: requirements.to_vec(),
-                source,
-            }
-        })?);
-        Ok(ResolvedRequirements::new(resolution, hasher))
+            self.interpreter.tags()?,
+        )
+        .await
     }
 
     #[instrument(

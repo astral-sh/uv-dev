@@ -2752,6 +2752,16 @@ pub struct PipDebugArgs {
 
 #[derive(Args)]
 pub struct BuildArgs {
+    /// Build for the Python installation described by this `build-details.json` file.
+    ///
+    /// Requires the `cross-builds` preview feature. The build interpreter remains native.
+    #[arg(long, hide = true, requires_all = ["wheel", "python_platform"], conflicts_with_all = ["sdist", "list"], value_parser = parse_file_path, value_hint = ValueHint::FilePath)]
+    target: Option<PathBuf>,
+
+    /// Platform used to resolve target requirements and validate the built wheel.
+    #[arg(long, hide = true, requires = "target")]
+    python_platform: Option<TargetTriple>,
+
     /// Skip checking if build dependencies are satisfied when building without isolation.
     ///
     /// Only affects builds with the `build-dependency-check` preview feature enabled. By

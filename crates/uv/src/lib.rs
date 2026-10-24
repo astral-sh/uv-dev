@@ -1335,6 +1335,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
             commands::build_frontend(
                 &project_dir,
+                args.target,
+                args.python_platform,
                 args.skip_dependency_check,
                 args.src,
                 args.package,
