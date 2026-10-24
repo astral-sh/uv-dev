@@ -3,17 +3,20 @@ use std::str::FromStr;
 
 use uv_cache::CacheShard;
 use uv_cache_info::CacheInfo;
+use uv_checksum_authority::Sha256Digest;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{BuildInfo, Hashed};
-use uv_fs::files;
+use uv_fs::{LockedFile, files};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashDigest, HashDigests};
 
 /// The information about the wheel we either just built or got from the cache.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct BuiltWheelMetadata {
+    /// Keep verified wheel bytes stable until extraction finishes.
+    pub(super) _source_lock: LockedFile,
     /// The path to the built wheel.
     pub(crate) path: Box<Path>,
     /// The expected path to the downloaded wheel's entry in the cache.
@@ -26,6 +29,8 @@ pub(crate) struct BuiltWheelMetadata {
     pub(crate) cache_info: CacheInfo,
     /// The build information for the wheel.
     pub(crate) build_info: BuildInfo,
+    /// Reuse the digest computed while checking or writing this build's authority receipt.
+    pub(super) authority_digest: Option<Sha256Digest>,
 }
 
 impl BuiltWheelMetadata {
@@ -35,15 +40,23 @@ impl BuiltWheelMetadata {
         hashes: HashDigests,
         cache_info: CacheInfo,
         build_info: BuildInfo,
+        source_lock: LockedFile,
     ) -> Self {
         Self {
+            _source_lock: source_lock,
             path: file.path,
             target: file.target,
             filename: file.filename,
             hashes,
             cache_info,
             build_info,
+            authority_digest: None,
         }
+    }
+
+    pub(super) fn with_authority_digest(mut self, digest: Option<Sha256Digest>) -> Self {
+        self.authority_digest = digest;
+        self
     }
 }
 
@@ -65,6 +78,10 @@ pub(crate) struct BuiltWheelFile {
 }
 
 impl BuiltWheelFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Find a compatible wheel in the cache.
     pub(crate) fn find_in_cache(
         tags: &Tags,

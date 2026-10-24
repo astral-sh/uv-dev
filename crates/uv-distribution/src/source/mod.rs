@@ -9,6 +9,7 @@
 #![expect(clippy::redundant_closure_for_method_calls)]
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::ops::Bound;
 use std::path::Path;
 use std::str::FromStr;
@@ -23,6 +24,7 @@ use tracing::{Instrument, debug, info_span, instrument, warn};
 use uv_auth::CredentialsCache;
 use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
+use uv_checksum_authority::VerifiedRecord;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
     RegistryClient, RetryState,
@@ -49,12 +51,17 @@ use uv_workspace::pyproject::ToolUvSources;
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
+use crate::hash::matches_authority;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
+use crate::source::authority::{
+    authority_build_shard, authority_wheel_target, read_authority_receipt, write_authority_receipt,
+};
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
 use crate::{FirstPartyPackages, Reporter, RequiresDist};
 
+mod authority;
 mod built_wheel_metadata;
 mod revision;
 mod validated_archive;
@@ -287,7 +294,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let built_wheel_metadata = match &source {
+        let mut built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
@@ -302,38 +309,42 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
+                    if client.unmanaged.has_checksum_authority()
+                        && matches!(dist.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
-                    return self
-                        .archive(
-                            source,
-                            &PathSourceUrl {
-                                url: &url,
-                                path: Cow::Owned(path),
-                                ext: dist.ext,
-                            },
-                            &cache_shard,
-                            tags,
-                            hashes,
-                        )
-                        .boxed_local()
-                        .await;
+                    self.archive(
+                        source,
+                        &PathSourceUrl {
+                            url: &url,
+                            path: Cow::Owned(path),
+                            ext: dist.ext,
+                        },
+                        &cache_shard,
+                        tags,
+                        hashes,
+                    )
+                    .boxed_local()
+                    .await?
+                } else {
+                    self.url(
+                        source,
+                        &url,
+                        Some(&dist.index),
+                        &cache_shard,
+                        None,
+                        dist.ext,
+                        tags,
+                        hashes,
+                        client,
+                    )
+                    .boxed_local()
+                    .await?
                 }
-
-                self.url(
-                    source,
-                    &url,
-                    Some(&dist.index),
-                    &cache_shard,
-                    None,
-                    dist.ext,
-                    tags,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
             }
             BuildableSource::Dist(SourceDist::DirectUrl(dist)) => {
                 // For direct URLs, cache directly under the hash of the URL itself.
@@ -439,6 +450,14 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         };
 
+        if let Some(digest) = built_wheel_metadata.authority_digest.take() {
+            built_wheel_metadata.target = authority_wheel_target(
+                &built_wheel_metadata.target,
+                &built_wheel_metadata.filename,
+                digest,
+            );
+        }
+
         Ok(built_wheel_metadata)
     }
 
@@ -465,6 +484,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
+                    if client.unmanaged.has_checksum_authority()
+                        && matches!(dist.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -650,32 +674,35 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'data>,
         url: &'data SafeUrl,
         index: Option<&'data IndexUrl>,
-        cache_shard: &CacheShard,
+        source_cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
         tags: &Tags,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+        let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
-        let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+        let source_revision = self
+            .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
         // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
+        if !source_revision.revision.satisfies(hashes) {
             return Err(Error::hash_mismatch(
                 source.to_string(),
                 hashes.digests(),
-                revision.hashes(),
+                source_revision.revision.hashes(),
             ));
         }
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
-        let cache_shard = cache_shard.shard(revision.id());
+        let cache_shard = authority_build_shard(
+            client.unmanaged,
+            source_cache_shard.shard(source_revision.revision.id()),
+        );
         let source_dist_entry = cache_shard.entry(SOURCE);
 
         // We don't track any cache information for URL-based source distributions; they're assumed
@@ -701,31 +728,35 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .ok()
             .flatten()
             .filter(|file| file.matches(source.name(), source.version()))
+            && let Some(authorization) =
+                read_authority_receipt(client.unmanaged, &CacheEntry::from_path(file.path()))
+                    .await?
         {
             return Ok(BuiltWheelMetadata::from_file(
                 file,
-                revision.into_hashes(),
+                source_revision.revision.into_hashes(),
                 cache_info,
                 build_info,
-            ));
+                _lock,
+            )
+            .with_authority_digest(authorization.digest()));
         }
 
-        // Otherwise, we need to build a wheel. Before building, ensure that the source is present.
-        let revision = if source_dist_entry.path().is_dir() {
-            revision
-        } else {
-            self.heal_url_revision(
+        // Otherwise, prepare verified source before invoking the backend.
+        let revision = self
+            .prepare_url_source(
                 source,
                 ext,
                 url,
                 index,
+                &source_cache_shard.entry(HTTP_REVISION),
                 &source_dist_entry,
-                revision,
+                source_revision,
                 hashes,
                 client,
             )
             .await?
-        };
+            .revision;
 
         // Validate that the subdirectory exists.
         if let Some(subdirectory) = subdirectory {
@@ -752,6 +783,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
+        let authority_digest =
+            write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -764,8 +797,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
+        let _ = write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
+            authority_digest,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(wheel_filename.stem()).into_boxed_path(),
             filename: wheel_filename,
@@ -784,45 +820,35 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'data>,
         url: &'data SafeUrl,
         index: Option<&'data IndexUrl>,
-        cache_shard: &CacheShard,
+        source_cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+        let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
-        let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+        let source_revision = self
+            .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
         // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
+        if !source_revision.revision.satisfies(hashes) {
             return Err(Error::hash_mismatch(
                 source.to_string(),
                 hashes.digests(),
-                revision.hashes(),
+                source_revision.revision.hashes(),
             ));
         }
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
-        let cache_shard = cache_shard.shard(revision.id());
+        let cache_shard = authority_build_shard(
+            client.unmanaged,
+            source_cache_shard.shard(source_revision.revision.id()),
+        );
         let source_dist_entry = cache_shard.entry(SOURCE);
-
-        // If the metadata is static, return it.
-        let dynamic =
-            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
-                StaticMetadata::Some(metadata) => {
-                    return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata),
-                        hashes: revision.into_hashes(),
-                    });
-                }
-                StaticMetadata::Dynamic => true,
-                StaticMetadata::None => false,
-            };
 
         // Dynamic metadata and wheels must use the same build settings.
         let config_settings = self.config_settings_for(source.name());
@@ -838,15 +864,44 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        let requires_authorization = client.unmanaged.checksum_authority().is_some();
+
+        // Backends can write source metadata, so only a fresh verified extraction can bypass
+        // build-receipt authorization.
+        let mut dynamic = false;
+        if source_revision.can_reuse_source(client.unmanaged) {
+            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
+                StaticMetadata::Some(metadata) => {
+                    if requires_authorization {
+                        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
+                    }
+                    return Ok(ArchiveMetadata {
+                        metadata: Metadata::from_metadata23(metadata),
+                        hashes: source_revision.revision.into_hashes(),
+                    });
+                }
+                StaticMetadata::Dynamic => dynamic = true,
+                StaticMetadata::None => {}
+            }
+        }
+
+        // If the cache contains compatible metadata, return it.
+        let cached_metadata = if read_authority_receipt(client.unmanaged, &metadata_entry)
+            .await?
+            .is_some()
+        {
+            CachedMetadata::read(&metadata_entry).await
+        } else {
+            Ok(None)
+        };
+        match cached_metadata {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
                         metadata: Metadata::from_metadata23(metadata.into()),
-                        hashes: revision.into_hashes(),
+                        hashes: source_revision.revision.into_hashes(),
                     });
                 }
                 debug!("Cached metadata does not match expected name and version for: {source}");
@@ -857,22 +912,35 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         }
 
-        // Otherwise, we need a wheel.
-        let revision = if source_dist_entry.path().is_dir() {
-            revision
-        } else {
-            self.heal_url_revision(
+        let PreparedUrlSource { revision, restored } = self
+            .prepare_url_source(
                 source,
                 ext,
                 url,
                 index,
+                &source_cache_shard.entry(HTTP_REVISION),
                 &source_dist_entry,
-                revision,
+                source_revision,
                 hashes,
                 client,
             )
-            .await?
-        };
+            .await?;
+        if restored {
+            // Healing can restore complete static metadata without requiring a backend.
+            match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
+                StaticMetadata::Some(metadata) => {
+                    if requires_authorization {
+                        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
+                    }
+                    return Ok(ArchiveMetadata {
+                        metadata: Metadata::from_metadata23(metadata),
+                        hashes: revision.into_hashes(),
+                    });
+                }
+                StaticMetadata::Dynamic => dynamic = true,
+                StaticMetadata::None => {}
+            }
+        }
 
         // Validate that the subdirectory exists.
         if let Some(subdirectory) = subdirectory {
@@ -907,12 +975,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             };
 
             // Store the metadata.
-            fs::create_dir_all(metadata_entry.dir())
-                .await
-                .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
 
             return Ok(ArchiveMetadata {
                 metadata: Metadata::from_metadata23(metadata),
@@ -926,7 +989,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map(|reporter| reporter.on_build_start(source));
 
         // Build the source distribution.
-        let (_disk_filename, _wheel_filename, metadata) = self
+        let (disk_filename, _wheel_filename, metadata) = self
             .build_distribution(
                 source,
                 source_dist_entry.path(),
@@ -935,6 +998,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
+        let _ =
+            write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -953,9 +1018,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(&metadata, &metadata_entry, client.unmanaged).await?;
 
         Ok(ArchiveMetadata {
             metadata: Metadata::from_metadata23(metadata),
@@ -963,7 +1026,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         })
     }
 
-    /// Return the [`Revision`] for a remote URL, refreshing it if necessary.
+    /// Return the [`Revision`] for a remote URL and whether its source was freshly extracted.
     async fn url_revision(
         &self,
         source: &BuildableSource<'_>,
@@ -973,8 +1036,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         cache_shard: &CacheShard,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
-    ) -> Result<Revision, Error> {
+    ) -> Result<UrlRevision, Error> {
         let cache_entry = cache_shard.entry(HTTP_REVISION);
+        let authority = client
+            .unmanaged
+            .checksum_authority_record(
+                index.map_or(url, IndexUrl::url),
+                archive_source(source, url),
+            )
+            .await?;
 
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
@@ -996,6 +1066,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let source_is_pristine = Cell::new(false);
         let download = |response, _: &mut RetryState| {
             async {
                 // At this point, we're seeing a new or updated source distribution. Initialize a
@@ -1004,10 +1075,21 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // Download the source distribution.
                 debug!("Downloading source distribution: {source}");
-                let entry = cache_shard.shard(revision.id()).entry(SOURCE);
+                let entry =
+                    authority_build_shard(client.unmanaged, cache_shard.shard(revision.id()))
+                        .entry(SOURCE);
                 let (hashes, size) = self
-                    .download_archive(response, source, ext, entry.path(), hashes, &[])
+                    .download_archive(
+                        response,
+                        source,
+                        ext,
+                        authority.as_ref(),
+                        entry.path(),
+                        hashes,
+                        &[],
+                    )
                     .await?;
+                source_is_pristine.set(true);
 
                 Ok(revision
                     .with_hashes(HashDigests::from(hashes))
@@ -1050,8 +1132,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // If the archive is missing the required hashes or size, force a refresh.
-        if revision.has_digests(hashes) && (expected_size.is_none() || revision.size().is_some()) {
-            Ok(revision)
+        let revision = if revision.has_digests(hashes)
+            && (expected_size.is_none() || revision.size().is_some())
+            && matches_authority(authority.as_ref(), revision.hashes(), revision.size())
+        {
+            revision
         } else {
             client
                 .managed(async |client| {
@@ -1069,8 +1154,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                             CachedClientError::Client(err) => Error::Client(err),
                         })
                 })
-                .await
-        }
+                .await?
+        };
+        Ok(UrlRevision {
+            revision,
+            source_is_pristine: source_is_pristine.get(),
+        })
     }
 
     /// Build a source distribution from a local archive (e.g., `.tar.gz` or `.zip`).
@@ -1131,6 +1220,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 cache_info,
                 build_info,
+                _lock,
             ));
         }
 
@@ -1170,6 +1260,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -1459,6 +1551,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 cache_info,
                 build_info,
+                _lock,
             ));
         }
 
@@ -1491,6 +1584,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -1904,6 +1999,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
 
+        // Hold the source shard stable while reading or building its wheel.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+
         // Fetch the revision for the source distribution.
         let revision = self
             .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
@@ -1945,6 +2043,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 revision.into_hashes(),
                 CacheInfo::default(),
                 build_info,
+                _lock,
             ));
         }
 
@@ -1977,6 +2076,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -2013,6 +2114,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             CacheBucket::SourceDistributions,
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
+
+        // Hold the source shard stable while reading or building its wheel.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
@@ -2213,7 +2317,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .filter(|file| file.matches(source.name(), source.version()))
         {
             return Ok(BuiltWheelMetadata::from_file(
-                file, hashes, cache_info, build_info,
+                file, hashes, cache_info, build_info, _lock,
             ));
         }
 
@@ -2245,6 +2349,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         Ok(BuiltWheelMetadata {
+            _source_lock: _lock,
+            authority_digest: None,
             path: cache_shard.join(&disk_filename).into_boxed_path(),
             target: cache_shard.join(filename.stem()).into_boxed_path(),
             filename,
@@ -2755,6 +2861,55 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok(revision.with_hashes(HashDigests::from(hashes)))
     }
 
+    /// Prepare source for metadata reads or builds after receipt-backed cache hits are exhausted.
+    async fn prepare_url_source(
+        &self,
+        source: &BuildableSource<'_>,
+        ext: SourceDistExtension,
+        url: &SafeUrl,
+        index: Option<&IndexUrl>,
+        revision_entry: &CacheEntry,
+        source_entry: &CacheEntry,
+        source_revision: UrlRevision,
+        hashes: ArchiveHashPolicy<'_>,
+        client: &ManagedClient<'_>,
+    ) -> Result<PreparedUrlSource, Error> {
+        let can_reuse_source = source_revision.can_reuse_source(client.unmanaged);
+        if can_reuse_source && source_entry.path().is_dir() {
+            return Ok(PreparedUrlSource {
+                revision: source_revision.revision,
+                restored: false,
+            });
+        }
+
+        // A backend can change both source files and subsequent build requirements. A cached
+        // workspace cannot establish its build inputs, so authority mode restores the archive.
+        if !can_reuse_source {
+            match fs::remove_dir_all(source_entry.path()).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::CacheWrite(error)),
+            }
+        }
+        let revision = self
+            .heal_url_revision(
+                source,
+                ext,
+                url,
+                index,
+                revision_entry,
+                source_entry,
+                source_revision.revision,
+                hashes,
+                client,
+            )
+            .await?;
+        Ok(PreparedUrlSource {
+            revision,
+            restored: true,
+        })
+    }
+
     /// Heal a [`Revision`] for a remote archive.
     async fn heal_url_revision(
         &self,
@@ -2762,13 +2917,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         ext: SourceDistExtension,
         url: &SafeUrl,
         index: Option<&IndexUrl>,
-        entry: &CacheEntry,
+        revision_entry: &CacheEntry,
+        source_entry: &CacheEntry,
         revision: Revision,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         warn!("Re-downloading missing source distribution: {source}");
-        let cache_entry = entry.shard().entry(HTTP_REVISION);
+        let authority = client
+            .unmanaged
+            .checksum_authority_record(
+                index.map_or(url, IndexUrl::url),
+                archive_source(source, url),
+            )
+            .await?;
 
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
@@ -2784,7 +2946,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Online => CacheControl::from(
                 self.build_context
                     .cache()
-                    .freshness(&cache_entry, source.name(), source.source_tree())
+                    .freshness(revision_entry, source.name(), source.source_tree())
                     .map_err(Error::CacheRead)?,
             ),
             Connectivity::Offline => CacheControl::AllowStale,
@@ -2797,7 +2959,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         response,
                         source,
                         ext,
-                        entry.path(),
+                        authority.as_ref(),
+                        source_entry.path(),
                         hashes,
                         revision.hashes(),
                     )
@@ -2816,7 +2979,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .cached_client()
                     .skip_cache_with_retry(
                         Self::request(url.clone(), client)?,
-                        &cache_entry,
+                        revision_entry,
                         cache_control.clone(),
                         download,
                     )
@@ -2835,10 +2998,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         response: Response,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
+        authority: Option<&VerifiedRecord>,
         target: &Path,
         hash_policy: ArchiveHashPolicy<'_>,
         existing_hashes: &[HashDigest],
     ) -> Result<(Vec<HashDigest>, u64), Error> {
+        let response = if let Some(authority) = authority {
+            authority
+                .verify_response(response, self.build_context.cache().root(), |_| {})
+                .await?
+                .into_response()
+        } else {
+            response
+        };
         let reader = response
             .bytes_stream()
             .map_err(std::io::Error::other)
@@ -3489,6 +3661,26 @@ fn validate_filename(filename: &WheelFilename, metadata: &ResolutionMetadata) ->
     Ok(())
 }
 
+/// A fetched remote revision and its source extraction state for this invocation.
+#[derive(Debug)]
+struct UrlRevision {
+    revision: Revision,
+    source_is_pristine: bool,
+}
+
+impl UrlRevision {
+    /// Authority mode can reuse source directly only when no backend has had access to it.
+    fn can_reuse_source(&self, client: &RegistryClient) -> bool {
+        client.checksum_authority().is_none() || self.source_is_pristine
+    }
+}
+
+/// A remote source workspace ready for metadata reads or a backend invocation.
+struct PreparedUrlSource {
+    revision: Revision,
+    restored: bool,
+}
+
 /// A pointer to a source distribution revision in the cache, fetched from an HTTP archive.
 ///
 /// Encoded with `MsgPack`, and represented on disk by a `.http` file.
@@ -3652,11 +3844,27 @@ async fn read_pyproject_toml(
     Ok(pyproject_toml)
 }
 
-/// Wheel metadata stored in the source distribution cache.
+/// Resolved metadata stored in the source distribution cache.
 #[derive(Debug, Clone)]
 struct CachedMetadata(ResolutionMetadata);
 
 impl CachedMetadata {
+    /// Store metadata together with the inputs that authorize its reuse.
+    async fn write(
+        metadata: &ResolutionMetadata,
+        cache_entry: &CacheEntry,
+        client: &RegistryClient,
+    ) -> Result<(), Error> {
+        fs::create_dir_all(cache_entry.dir())
+            .await
+            .map_err(Error::CacheWrite)?;
+        write_atomic(cache_entry.path(), rmp_serde::to_vec(metadata)?)
+            .await
+            .map_err(Error::CacheWrite)?;
+        let _ = write_authority_receipt(client, cache_entry).await?;
+        Ok(())
+    }
+
     /// Read an existing cached [`ResolutionMetadata`], if it exists.
     async fn read(cache_entry: &CacheEntry) -> Result<Option<Self>, Error> {
         match fs::read(&cache_entry.path()).await {
@@ -3689,4 +3897,15 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+/// Return the original archive whose filename is used by the checksum authority.
+fn archive_source<'a>(
+    source: &'a BuildableSource<'_>,
+    url: &'a SafeUrl,
+) -> &'a (dyn RemoteSource + Sync) {
+    match source.as_dist() {
+        Some(dist) => dist,
+        None => url,
+    }
 }

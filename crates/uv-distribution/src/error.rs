@@ -44,6 +44,10 @@ pub enum Error {
         label: VariantLabel,
         properties: UnsupportedVariantProperties,
     },
+    #[error(transparent)]
+    ChecksumAuthority(#[from] uv_checksum_authority::Error),
+    #[error("Checksum authority does not support a local archive supplied by a remote index: {0}")]
+    ChecksumAuthorityLocalArchive(SafeUrl),
     #[error("Building source distributions is disabled")]
     NoBuild,
     #[error("Building source distributions for `{0}` is disabled")]
@@ -304,6 +308,8 @@ impl Error {
         match self {
             Self::UnsupportedWheelVariant(_)
             | Self::IncompatibleWheelVariant { .. }
+            | Self::ChecksumAuthority(_)
+            | Self::ChecksumAuthorityLocalArchive(_)
             | Self::NoBuild
             | Self::NoBuildPackage(_)
             | Self::InvalidUrl(_)
