@@ -65,6 +65,7 @@ mod cache_prune;
 mod cache_size;
 pub(crate) mod diagnostics;
 mod help;
+pub(crate) mod vm;
 pub(crate) use uv_pip_commands as pip;
 pub(crate) use uv_project_commands as project;
 pub(crate) use uv_python_commands as python;

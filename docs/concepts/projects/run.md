@@ -98,3 +98,25 @@ process group differs from uv's.
 
 On Windows, these concepts do not apply and uv ignores Ctrl-C events, deferring handling to the
 child process so it can exit cleanly.
+
+## Running a command in a disposable Linux VM
+
+`uv vm run` boots a prepared x86-64 Linux image with QEMU. The command runs as root in `/app` with
+`/app/.venv/bin` first on the guest's `PATH`. Writes to the root disk go to a per-invocation
+overlay. The host receives the command's exit status through a separate block device. Standard
+output and error share the guest's serial console.
+
+```console
+$ uv vm run --image project.ext4 --kernel vmlinuz -- python -c "import sys; print(sys.prefix)"
+/app/.venv
+```
+
+Prepare a raw ext4 root containing the guest's Python installation and its shared libraries. Inside
+that root, run `uv sync --locked --no-editable --link-mode copy` in `/app` to populate `/app/.venv`.
+Include `/dev` as a mount point. Supply a kernel with built-in virtio PCI, virtio block, ext4,
+devtmpfs automount, procfs, sysfs, and serial console support. The host needs `qemu-img` and
+`qemu-system-x86_64` on `PATH`.
+
+The default accelerator is TCG. Use `--accel kvm` on a compatible Linux host with access to
+`/dev/kvm`. The guest runs with its own environment, without networking or host directory mounts,
+and powers off when the command exits.

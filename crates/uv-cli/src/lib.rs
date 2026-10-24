@@ -474,6 +474,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: BuildBackendCommand,
     },
+    /// Run commands in disposable Linux virtual machines.
+    Vm {
+        #[command(subcommand)]
+        command: VmCommand,
+    },
     /// Manage uv's cache.
     #[command(
         after_help = "Use `uv help cache` for more details.",
@@ -679,6 +684,41 @@ pub struct SelfUpdateArgs {
     /// Run without performing the update.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Subcommand)]
+pub enum VmCommand {
+    /// Boot a prepared x86-64 Linux image and run a command inside it.
+    Run(VmRunArgs),
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum VmAccel {
+    Tcg,
+    Kvm,
+}
+
+#[derive(Args, Debug)]
+pub struct VmRunArgs {
+    /// A raw Linux root filesystem with a virtual environment at `/app/.venv`.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub image: PathBuf,
+
+    /// A Linux kernel with built-in virtio block, devtmpfs automount, ext4, and serial support.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub kernel: PathBuf,
+
+    /// The QEMU accelerator. KVM requires a compatible Linux host with access to `/dev/kvm`.
+    #[arg(long, value_enum, default_value = "tcg")]
+    pub accel: VmAccel,
+
+    /// Guest memory in MiB.
+    #[arg(long, default_value_t = 512, value_parser = clap::value_parser!(u32).range(64..))]
+    pub memory: u32,
+
+    /// The command and arguments to execute in the guest project directory.
+    #[arg(last = true, required = true, num_args = 1..)]
+    pub command: Vec<String>,
 }
 
 #[derive(Args)]
