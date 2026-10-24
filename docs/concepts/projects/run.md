@@ -101,10 +101,10 @@ child process so it can exit cleanly.
 
 ## Running a command in a disposable Linux VM
 
-`uv vm run` boots a prepared x86-64 Linux image with QEMU. The command runs as root in `/app` with
-`/app/.venv/bin` first on the guest's `PATH`. Writes to the root disk go to a per-invocation
-overlay. The host receives the command's exit status through a separate block device. Standard
-output and error share the guest's serial console.
+`uv vm run` boots a prepared x86-64 or RISC-V Linux image with QEMU. The command runs as root in
+`/app` with `/app/.venv/bin` first on the guest's `PATH`. Writes to the root disk go to a
+per-invocation overlay. The host receives the command's exit status through a separate block device.
+Standard output and error share the guest's serial console.
 
 ```console
 $ uv vm run --image project.ext4 --kernel vmlinuz -- python -c "import sys; print(sys.prefix)"
@@ -113,10 +113,27 @@ $ uv vm run --image project.ext4 --kernel vmlinuz -- python -c "import sys; prin
 
 Prepare a raw ext4 root containing the guest's Python installation and its shared libraries. Inside
 that root, run `uv sync --locked --no-editable --link-mode copy` in `/app` to populate `/app/.venv`.
-Include `/dev` as a mount point. Supply a kernel with built-in virtio PCI, virtio block, ext4,
-devtmpfs automount, procfs, sysfs, and serial console support. The host needs `qemu-img` and
-`qemu-system-x86_64` on `PATH`.
+Include `/dev` as a mount point. Supply a kernel with virtio PCI, virtio block, ext4, procfs, sysfs,
+and serial console support. Without an initramfs, build the root-disk drivers into the kernel and
+enable devtmpfs automount. The host needs `qemu-img` and the QEMU executable for the guest
+architecture on `PATH`.
 
 The default accelerator is TCG. Use `--accel kvm` on a compatible Linux host with access to
 `/dev/kvm`. The guest runs with its own environment, without networking or host directory mounts,
 and powers off when the command exits.
+
+### RISC-V guests
+
+Use `--arch riscv64` with a RISC-V kernel, a RISC-V `/app/.venv`, and matching native libraries. uv
+starts `qemu-system-riscv64` with the `virt` machine. The host QEMU installation must provide
+OpenSBI firmware for that machine.
+
+```console
+$ uv vm run --arch riscv64 --image project-riscv64.ext4 --kernel Image --initrd initrd.gz -- python -c "import platform; print(platform.machine())"
+riscv64
+```
+
+`--initrd` can also be used with x86-64 guests. Supply it when drivers for the root disk or its
+filesystem must be loaded before the root can be mounted. The initramfs must mount `/dev/vda`,
+provide `/dev` in the new root, and hand off to `/app/.venv/bin/python -IB /dev/vdb` as PID 1. uv
+supplies the same disposable disk and command protocol on both architectures.

@@ -688,8 +688,15 @@ pub struct SelfUpdateArgs {
 
 #[derive(Subcommand)]
 pub enum VmCommand {
-    /// Boot a prepared x86-64 Linux image and run a command inside it.
+    /// Boot a prepared Linux image and run a command inside it.
     Run(VmRunArgs),
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum VmArch {
+    #[value(name = "x86_64")]
+    X86_64,
+    Riscv64,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -704,9 +711,17 @@ pub struct VmRunArgs {
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub image: PathBuf,
 
-    /// A Linux kernel with built-in virtio block, devtmpfs automount, ext4, and serial support.
+    /// A Linux kernel for the guest architecture.
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub kernel: PathBuf,
+
+    /// The architecture of the guest kernel and root image.
+    #[arg(long, value_enum, default_value = "x86_64")]
+    pub arch: VmArch,
+
+    /// An initial ramdisk that loads the root drivers and starts the requested guest init.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub initrd: Option<PathBuf>,
 
     /// The QEMU accelerator. KVM requires a compatible Linux host with access to `/dev/kvm`.
     #[arg(long, value_enum, default_value = "tcg")]

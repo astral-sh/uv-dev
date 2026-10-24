@@ -41,3 +41,16 @@ fn vm_guest_status_and_disposable_root() -> Result<()> {
         .assert().success();
     Ok(())
 }
+
+#[test]
+#[ignore = "requires QEMU and a RISC-V guest with a modular kernel"]
+fn vm_riscv64_guest() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let image = std::env::var("UV_TEST_VM_RISCV64_IMAGE")?;
+    let kernel = std::env::var("UV_TEST_VM_RISCV64_KERNEL")?;
+    let initrd = std::env::var("UV_TEST_VM_RISCV64_INITRD")?;
+    context.command().args(["vm", "run", "--arch", "riscv64", "--image", &image, "--kernel", &kernel, "--initrd", &initrd, "--", "python", "-Ic",
+        "import platform, sys; assert platform.machine() == 'riscv64' and sys.prefix == '/app/.venv'; sys.exit(43)"])
+        .assert().code(43);
+    Ok(())
+}

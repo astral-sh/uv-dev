@@ -5,7 +5,7 @@ use anyhow::{Context, bail, ensure};
 use serde_json::json;
 use tokio::process::Command;
 use uv_cache::Cache;
-use uv_cli::{VmAccel, VmRunArgs};
+use uv_cli::{VmAccel, VmArch, VmRunArgs};
 use uv_command_support::ExitStatus;
 use uv_command_support::child::run_to_completion;
 
@@ -15,6 +15,7 @@ const GUEST_INIT: &str = include_str!("vm_guest.py");
 pub(crate) async fn run(args: VmRunArgs, cache: &Cache) -> anyhow::Result<ExitStatus> {
     let image = fs_err::canonicalize(&args.image)?;
     let kernel = fs_err::canonicalize(&args.kernel)?;
+    let initrd = args.initrd.as_ref().map(fs_err::canonicalize).transpose()?;
     let scratch = cache.venv_dir()?;
     let overlay = scratch.path().join("root.qcow2");
     let status = Command::new("qemu-img")
@@ -48,7 +49,17 @@ pub(crate) async fn run(args: VmRunArgs, cache: &Cache) -> anyhow::Result<ExitSt
     mailbox.set_len((u64::from(length) + 4).next_multiple_of(512))?;
     mailbox.flush()?;
 
-    let mut vm = Command::new("qemu-system-x86_64");
+    let executable = match args.arch {
+        VmArch::X86_64 => "qemu-system-x86_64",
+        VmArch::Riscv64 => "qemu-system-riscv64",
+    };
+    let mut vm = Command::new(executable);
+    if let VmArch::Riscv64 = args.arch {
+        vm.args(["-machine", "virt"]);
+    }
+    if let Some(initrd) = initrd {
+        vm.arg("-initrd").arg(initrd);
+    }
     let accel = match args.accel {
         VmAccel::Kvm => "kvm",
         VmAccel::Tcg => "tcg",
@@ -64,7 +75,7 @@ pub(crate) async fn run(args: VmRunArgs, cache: &Cache) -> anyhow::Result<ExitSt
     let status = run_to_completion(
         vm.kill_on_drop(true)
             .spawn()
-            .context("Failed to start `qemu-system-x86_64`")?,
+            .with_context(|| format!("Failed to start `{executable}`"))?,
     )
     .await?;
     if !matches!(status, ExitStatus::External(0)) {
