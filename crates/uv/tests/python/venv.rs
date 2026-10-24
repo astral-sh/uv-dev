@@ -33,6 +33,13 @@ fn clone_relocatable_environment() -> Result<()> {
     fs_err::write(&source, "value = 1\n")?;
     let modified = filetime::FileTime::from_unix_time(1_700_000_000, 0);
     filetime::set_file_mtime(&source, modified)?;
+    std::process::Command::new(uv_python_interpreter::virtualenv_python_executable(
+        seed.path(),
+    ))
+    .args(["-I", "-m", "py_compile"])
+    .arg(&source)
+    .assert()
+    .success();
 
     uv_snapshot!(context.filters(), context.venv().args(["--clone", "seed", "job"]), @"
     exit_code: 0 (success)
@@ -44,9 +51,24 @@ fn clone_relocatable_environment() -> Result<()> {
         filetime::FileTime::from_last_modification_time(&fs_err::metadata(&cloned)?),
         modified
     );
+    let python = uv_python_interpreter::virtualenv_python_executable(job.path());
+    std::process::Command::new(&python)
+        .args([
+            "-IBc",
+            indoc! {"
+        import sys
+        def check(event, args):
+            if event == 'compile':
+                raise RuntimeError('The cloned module required recompilation')
+        sys.addaudithook(check)
+        import sample
+        assert sample.value == 1
+    "},
+        ])
+        .assert()
+        .success();
     fs_err::write(&cloned, "value = 2\n")?;
     assert_eq!(fs_err::read_to_string(&source)?, "value = 1\n");
-    let python = uv_python_interpreter::virtualenv_python_executable(job.path());
     std::process::Command::new(python)
         .args([
             "-IBc",
@@ -55,6 +77,43 @@ fn clone_relocatable_environment() -> Result<()> {
         .arg(job.path())
         .assert()
         .success();
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn clone_private_directories() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context!("3.12");
+    context
+        .venv()
+        .args(["--relocatable", "--python", "3.12", "seed"])
+        .assert()
+        .success();
+    let seed = context.temp_dir.child("seed");
+    let private = seed.child("private");
+    private.create_dir_all()?;
+    private.child("data").write_str("value")?;
+    fs_err::set_permissions(seed.path(), std::fs::Permissions::from_mode(0o700))?;
+    fs_err::set_permissions(private.path(), std::fs::Permissions::from_mode(0o750))?;
+    context
+        .venv()
+        .args(["--clone", "seed", "job"])
+        .assert()
+        .success();
+    let job = context.temp_dir.child("job");
+    assert_eq!(
+        fs_err::metadata(job.path())?.permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs_err::metadata(job.child("private").path())?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o750
+    );
     Ok(())
 }
 

@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -29,6 +31,12 @@ pub fn clone_venv(source: &Path, destination: &Path) -> Result<()> {
     );
 
     // Reserve the new path before copying so simultaneous clones cannot overwrite one another.
+    #[cfg(unix)]
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&destination)
+        .with_context(|| format!("Failed to create `{}`", destination.user_display()))?;
+    #[cfg(not(unix))]
     fs_err::create_dir(&destination)?;
     let result = copy_tree(&source, &destination, scripts, &base_python);
     if result.is_err() {
@@ -38,12 +46,16 @@ pub fn clone_venv(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn copy_tree(source: &Path, destination: &Path, scripts: &Path, base_python: &Path) -> Result<()> {
+    #[cfg(unix)]
+    let mut directory_permissions = Vec::new();
     for entry in WalkDir::new(source).min_depth(1) {
         let entry = entry?;
         let path = entry.path();
         let target = destination.join(path.strip_prefix(source)?);
         if entry.file_type().is_dir() {
-            fs_err::create_dir(target)?;
+            fs_err::create_dir(&target)?;
+            #[cfg(unix)]
+            directory_permissions.push((target, entry.metadata()?.permissions()));
         } else if entry.file_type().is_file() {
             reflink_copy::reflink_or_copy(path, &target)
                 .with_context(|| format!("Failed to clone `{}`", path.user_display()))?;
@@ -73,6 +85,11 @@ fn copy_tree(source: &Path, destination: &Path, scripts: &Path, base_python: &Pa
         } else {
             bail!("Cannot clone special file `{}`", path.user_display());
         }
+    }
+    // Apply directory modes after populating their children, including read-only directories.
+    #[cfg(unix)]
+    for (path, permissions) in directory_permissions.into_iter().rev() {
+        fs_err::set_permissions(path, permissions)?;
     }
     Ok(())
 }
