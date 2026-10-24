@@ -693,6 +693,7 @@ pub struct RunSettings {
     pub with: Vec<String>,
     pub with_editable: Vec<String>,
     pub with_requirements: Vec<RequirementsInput>,
+    pub with_environment: Option<PathBuf>,
     pub isolated: bool,
     pub show_resolution: bool,
     pub all_packages: bool,
@@ -754,6 +755,7 @@ impl RunSettings {
             with,
             with_editable,
             with_requirements,
+            with_environment,
             isolated,
             active,
             no_active,
@@ -814,6 +816,7 @@ impl RunSettings {
         Ok(Self {
             lock_check: locked,
             frozen,
+            with_environment,
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
                 no_extra,

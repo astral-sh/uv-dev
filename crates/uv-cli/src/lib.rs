@@ -3351,6 +3351,14 @@ pub struct RunArgs {
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
+    /// Run with the packages and entry points from a prepared virtual environment.
+    ///
+    /// The environment must use the same base Python installation as the interpreter selected by
+    /// uv. Its site-packages directory is added before the project's site-packages directory.
+    /// Changes to those package files are visible to other users of the environment.
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::DirPath, conflicts_with_all = ["with", "with_editable", "with_requirements"])]
+    pub with_environment: Option<PathBuf>,
+
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///
     /// Usually, the project environment is reused for performance. This option forces a fresh
