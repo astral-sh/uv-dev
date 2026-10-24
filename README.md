@@ -14,12 +14,16 @@ The closest upstream discussion is aws/aws-lc-rs#1072. The proposed jitter recov
 
 In the supplied discussion, maintainer woodruffw requested additional Windows/VM setup details, including the hypervisor, on 2026-10-23 at 14:43 UTC (comment ID 6367537627 on astral-sh/uv#22830). The maintainer regarded the diagnosis as plausible at a high level, while raising a concern about insufficient entropy in early boot environments. This is a request for clarification and an investigation concern, not confirmation of the precise root cause or approval of an entropy-source change.
 
-The issue body already identifies QEMU/KVM and the environment below. The supplied discussion contains no reporter response to the request. It does not establish the guest's uptime at failure or whether this reproduction depends on early boot. Clarifying those points and any additional VM configuration relevant to entropy availability would help assess the maintainer's concern. Earlier comments in aws/aws-lc-rs#1072 describe failures after boot as well; that evidence does not establish the boot timing of this reporter's runs.
+The reporter's reply on 2026-10-24 at 17:05 UTC (comment ID 6387072669 on astral-sh/uv#22830) clarifies that a self-hosted GitLab Runner creates a fresh Windows VM for each CI job, and jobs often invoke uv immediately after boot. This makes early boot a relevant investigation condition, but does not establish that every failure occurs then or that an entropy shortage causes the abort. Exact guest uptime at failure and a comparison with otherwise equivalent runs after the VM has been running longer remain unavailable. Earlier comments in aws/aws-lc-rs#1072 describe failures after boot as well; those are separate observations.
+
+The reporter did not configure the runner personally and attributes the additional environment table to AI-assisted collection inside a CI guest. Treat these details as reporter-supplied information, not independently verified host configuration. Exact host QEMU/KVM versions were not collected.
 
 ## Reported environment and reproduction
 
-- Windows 11 Pro 10.0.26200, x86-64, QEMU/KVM guest identified as `Standard PC (Q35 + ICH9, 2009)`, with four vCPUs on an AMD Ryzen 5 3600 host and a QEMU virtual disk.
-- uv runs as SYSTEM through a GitLab Runner shell executor. Defender real-time protection is enabled, with the working directory and uv cache excluded. Python is 3.12.15.
+- Windows 11 Pro 10.0.26200, x86-64, QEMU/KVM guest identified as `QEMU`, `Standard PC (Q35 + ICH9, 2009)`. The guest reports AMD Ryzen 5 3600 and four virtual cores / logical processors; the original writeup also describes a QEMU virtual disk. Host hypervisor versions are unknown.
+- The follow-up reports approximately 8 GiB RAM and EDK II firmware.
+- A self-hosted GitLab Runner custom executor reportedly starts a fresh Windows VM for each CI job, with uv often used immediately after boot. The follow-up specifies a custom executor, whereas the original writeup called it a shell executor; the precise executor arrangement has not been independently verified.
+- The original writeup reports uv running as SYSTEM, Defender real-time protection enabled with the working directory and uv cache excluded, and Python 3.12.15.
 - The attached PowerShell reproduction starts from an empty directory, sets isolated cache and managed-Python directories under `uv-abort-repro`, writes an `iniconfig` requirement, and starts one file-churning process per CPU.
 - It repeatedly launches fresh `uv pip compile` processes with the requirement file, managed Python, `--refresh`, and `--no-header`, collecting the exit code and redirecting stdout/stderr. The full script remains in the issue body; it has not been executed here.
 - Under disk load, the reporter observed 16 failures in 1,000 official uv 0.13.4 runs, compared with none in 1,000 runs of a build made with `AWS_LC_SYS_NO_JITTER_ENTROPY=1`. A comparable custom build with jitter enabled also failed. Offline and unloaded controls did not fail in the reported samples.
@@ -30,7 +34,7 @@ The reporter reconstructed the release-binary stack and reports a NULL jitter co
 
 Intermittent termination without diagnostics during HTTPS operations is incorrect behavior, so the classification remains bug. The reported stack and controlled rebuild results align with an existing upstream Windows jitter-initialization abort. Exact attribution and the reason collector initialization fails remain unverified here.
 
-The related uv symbol-publishing request concerns release artifacts, while the closed ARM crash report concerns hardware RNDR failures. Neither establishes that this Windows collector-initialization failure was already fixed and has regressed. The maintainer's request for setup details does not change the classification.
+The related uv symbol-publishing request concerns release artifacts, while the closed ARM crash report concerns hardware RNDR failures. Neither establishes that this Windows collector-initialization failure was already fixed and has regressed. The clarified VM lifecycle does not change the classification or establish the proposed entropy-shortage mechanism.
 
 ## Related
 
@@ -49,7 +53,7 @@ The previously inspected checkout pins aws-lc-rs 1.18.0, aws-lc-sys 0.44.0, and 
 
 `AWS_LC_SYS_NO_JITTER_ENTROPY=1` is an upstream-documented build-time workaround. Setting it when launching an existing uv executable does not change that binary. The reporter's comparison supports investigating this path, but does not establish the suitability of an entropy-source change for every environment. The maintainer has not endorsed a uv build change in the supplied discussion.
 
-Useful next work is to clarify the VM setup and boot timing, then validate a candidate uv build incorporating the upstream recovery change against the reported workload, including collector-allocation failure. The reporter has offered to help verify a candidate build. Dependency uptake through aws-lc-sys remains necessary before the inspected upstream proposal can be treated as an official uv fix.
+Useful next work is to record guest uptime at failing invocations and compare the same workload immediately after boot with runs after the VM has been running longer. Host QEMU/KVM versions and the precise executor arrangement are still unverified. A candidate uv build incorporating the upstream recovery change also needs validation against the reported workload, including collector-allocation failure. The reporter has offered to help verify a candidate build. Dependency uptake through aws-lc-sys remains necessary before the inspected upstream proposal can be treated as an official uv fix.
 
 ## Search coverage and limits
 
@@ -57,4 +61,4 @@ The earlier investigation used authenticated GitHub searches across open and clo
 
 Inspected alternatives excluded as different mechanisms included astral-sh/uv#12612 (SecuPrint injection), astral-sh/uv#17898 (reported Rust panic), astral-sh/uv#18735 (download timeouts), and astral-sh/uv#18890 (certificate validation).
 
-This update incorporates the supplied issue discussion through the maintainer's 2026-10-23 comment. No reproduction, build, or fresh upstream status check was performed for this update.
+This update incorporates the supplied issue discussion through the reporter's 2026-10-24 environment clarification. No reproduction, build, or fresh upstream status check was performed for this update.
