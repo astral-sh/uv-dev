@@ -9,7 +9,7 @@ use nix::sys::stat::Mode;
 use nix::unistd::{chdir, mkdir};
 use tokio::process::Command;
 
-/// Cover the environment at its original path so installed scripts and bytecode remain valid.
+/// Mount at the path used by installed scripts and cached bytecode.
 pub(super) fn configure(process: &mut Command, root: &Path, scratch: &Path) -> Result<()> {
     let root = fs_err::canonicalize(root)?;
     let scratch = fs_err::canonicalize(scratch)?;

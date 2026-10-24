@@ -3353,7 +3353,8 @@ pub struct RunArgs {
 
     /// Run with a temporary writable OverlayFS mount over the selected virtual environment.
     ///
-    /// Requires Linux, OverlayFS, and permission to create a mount namespace. The command sees
+    /// Requires Linux and permission to create a mount namespace and mount `tmpfs` and OverlayFS.
+    /// The command sees
     /// the environment at its normal path. Changes through the mount last for the lifetime of the
     /// namespace. Project synchronization happens before the mount. Use `--no-sync` for an
     /// already prepared environment. Editable sources and external symlink targets remain shared.
