@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 868,
+        "title": "refactor: replace mea with asyncband 0.7.1",
+        "url": "https://github.com/apache/reqsign/pull/868",
+        "state": "merged",
+        "reason": "apache/reqsign#868 replaces mea with asyncband and is included in reqsign-core 3.3.2, published September 25, 2026. This supplies the upstream dependency change needed here; uv still locks reqsign-core 3.3.1."
+      },
+      {
+        "kind": "issue",
+        "number": 2658,
+        "title": "Dependency Dashboard",
+        "url": "https://github.com/astral-sh/uv/issues/2658",
+        "state": "open",
+        "reason": "astral-sh/uv#2658 lists reqsign 0.20.7 under Pending Status Checks. That release requires reqsign-core ^3.3.2, so the queued update would incorporate the requested version. The dashboard does not track the PPC32 failure or link an implementing PR for this update."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh: reqsign-core, reqsign, 3.3.2, mea, asyncband, PPC32, PowerPC, ppc, powerpc-unknown-linux-gnu, 32-bit builds, unmaintained dependencies, Rust dependency updates, and AtomicU64. Inspected candidate bodies, comments, timelines, referenced fixes, and recent PRs. Ruled out astral-sh/uv#3423 and its merged fix astral-sh/uv#7271 (tokio-tar), astral-sh/uv#9793 and astral-sh/uv#9810 (64-bit PowerPC musl linking), astral-sh/uv#22273 (GCS identity fallback), and astral-sh/uv#18287 (JWT advisory). Followed the upstream release comparison to apache/reqsign#868 and checked published crate sources and dependency metadata. No existing uv discussion or PR for this specific failure was found."
+  },
+  "type": "bug",
+  "type_reason": "The requested update addresses a source-confirmed build incompatibility: uv locks mea 0.6.7 through reqsign-core 3.3.1, and mea unconditionally imports AtomicU64 while the 32-bit PowerPC Linux target supports atomics only through 32 bits. The upstream replacement is released but not adopted in this checkout. The general dependency dashboard and unrelated historical PowerPC fixes do not make this a duplicate or an established regression.",
+  "summary": "apache/reqsign#868 supplies the fix released in reqsign-core 3.3.2; astral-sh/uv#2658 queues a broader reqsign update that includes it. No existing uv issue or PR tracks this specific PPC32 failure.",
+  "draft_response": "The lockfile still selects reqsign-core 3.3.1 and mea 0.6.7. mea unconditionally uses AtomicU64, which is unavailable on 32-bit PowerPC Linux. reqsign-core 3.3.2 replaces it with asyncband via apache/reqsign#868 and removes that dependency blocker. The next step is a targeted lockfile update and PPC32 build verification. Please share your exact Rust target triple and whether updating to 3.3.2 resolves the failure for you."
+}
