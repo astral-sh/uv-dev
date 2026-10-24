@@ -1,5 +1,5 @@
 name: CI
-run-name: Isolate elapsed time before the Windows workspace restore
+run-name: Trace disk IO during early and delayed Windows cache restores
 on: workflow_dispatch
 permissions:
   contents: read
@@ -19,11 +19,37 @@ jobs:
       fail-fast: false
       matrix:
         restore_timing: [early, delayed]
-        sample: [1,2,3,4]
+        sample: [1,2,3]
     name: Windows ${{ matrix.restore_timing }} sample ${{ matrix.sample }}
     runs-on: namespace-profile-windows-2022-x86-64-16x32
     timeout-minutes: 18
     steps:
+      - name: Start Windows disk performance counters
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'trace-cache-disk.ps1'
+          @'
+          $out = Join-Path $env:RUNNER_TEMP 'cache-disk.jsonl'
+          $counters = @(
+            '\LogicalDisk(D:)\Avg. Disk sec/Write', '\LogicalDisk(D:)\Avg. Disk sec/Read',
+            '\LogicalDisk(D:)\Current Disk Queue Length', '\LogicalDisk(D:)\Disk Write Bytes/sec',
+            '\LogicalDisk(D:)\Disk Read Bytes/sec', '\Processor(_Total)\% Processor Time',
+            '\Process(*)\IO Data Bytes/sec'
+          )
+          Get-Counter -Counter $counters -SampleInterval 1 -Continuous -ErrorAction SilentlyContinue | ForEach-Object {
+            $r = [ordered]@{utc = [datetime]::UtcNow.ToString('o')}
+            $top = $_.CounterSamples | Where-Object { $_.Path -like '*\process(*)*' -and $_.InstanceName -notin @('_total','idle') } |
+              Sort-Object CookedValue -Descending | Select-Object -First 4
+            foreach ($c in $_.CounterSamples) {
+              if ($c.Path -notlike '*\process(*)*') { $r[$c.Path.Split('\')[-1]] = [math]::Round($c.CookedValue,5) }
+            }
+            $r.top = @($top | ForEach-Object { "$($_.InstanceName)=$([math]::Round($_.CookedValue/1MB,1))" })
+            ($r | ConvertTo-Json -Compress) | Add-Content -Path $out
+          }
+          '@ | Set-Content $script
+          $proc = Start-Process pwsh -ArgumentList '-NoProfile','-File',$script -WindowStyle Hidden -PassThru
+          "UV_TRACE_PID=$($proc.Id)" >> $env:GITHUB_ENV
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -66,3 +92,13 @@ jobs:
           add-job-id-key: false
           save-if: 'false'
 
+
+      - name: Record observations
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:UV_TRACE_PID) { Stop-Process -Id $env:UV_TRACE_PID -ErrorAction SilentlyContinue }
+          $out = Join-Path $env:RUNNER_TEMP 'cache-disk.jsonl'
+          if (!(Test-Path $out)) { throw 'No disk counter samples' }
+          Get-Content $out | ForEach-Object { Write-Output "DISK_TRACE $_" }
+          Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object RealTimeProtectionEnabled | Format-List
