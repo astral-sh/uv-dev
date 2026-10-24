@@ -1663,6 +1663,52 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn run_overlay_requires_virtual_environment() {
+    let context = uv_test::test_context!("3.12");
+    let expected = if cfg!(target_os = "linux") {
+        "`--overlay` requires a virtual environment"
+    } else {
+        "`--overlay` requires Linux"
+    };
+    context
+        .run()
+        .args(["--no-project", "--offline", "--overlay", "--python"])
+        .arg(&context.python_versions[0].1)
+        .args(["python", "-V"])
+        .assert()
+        .failure()
+        .stderr(contains(expected));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "requires permission to mount OverlayFS in a private mount namespace"]
+fn run_overlay_discards_writes_and_deletions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let seed = context.temp_dir.child("seed");
+    context
+        .venv()
+        .args(["--python", "3.12"])
+        .arg(seed.path())
+        .assert()
+        .success();
+    let marker = seed.child("marker");
+    marker.write_str("base")?;
+    let invoke = |program: &str| {
+        context
+            .run()
+            .args(["--no-project", "--offline", "--overlay", "--python"])
+            .arg(seed.child("bin/python").path())
+            .args(["python", "-Ic", program])
+            .assert()
+    };
+    invoke("import pathlib, sys; p = pathlib.Path(sys.prefix) / 'marker'; p.write_text('job'); assert p.read_text() == 'job'; sys.exit(41)").code(41);
+    invoke("import pathlib, sys; p = pathlib.Path(sys.prefix) / 'marker'; assert p.read_text() == 'base'; p.unlink(); assert not p.exists()").success();
+    assert_eq!(fs_err::read_to_string(marker.path())?, "base");
+    Ok(())
+}
+
 /// Test that an ephemeral environment writes the path of its parent environment to the `extends-environment` key
 /// of its `pyvenv.cfg` file. This feature makes it easier for static-analysis tools like ty to resolve which import
 /// search paths are available in these ephemeral environments.

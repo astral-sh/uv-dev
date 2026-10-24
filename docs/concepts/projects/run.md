@@ -22,6 +22,22 @@ $ # Running a `bash` script that requires the project to be available
 $ uv run bash scripts/foo.sh
 ```
 
+## Discarding changes to the environment
+
+On Linux, `uv run --overlay` gives the command and its children a private writable view of the
+selected virtual environment. Installed scripts continue to use their original paths. Files created,
+changed, or deleted inside the environment disappear when the last process leaves the mount
+namespace.
+
+```console
+$ uv run --no-sync --overlay python job.py
+```
+
+uv prepares the environment before starting the command. Use `--no-sync` to reuse a prepared project
+environment. This option requires permission to create a mount namespace and mount `tmpfs` and
+OverlayFS. The project directory, editable sources, and symlink targets outside the environment
+remain shared with the host.
+
 ## Requesting additional dependencies
 
 Additional dependencies or different versions of dependencies can be requested per invocation.

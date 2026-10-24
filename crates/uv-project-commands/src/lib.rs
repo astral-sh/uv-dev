@@ -11,6 +11,8 @@ pub mod audit;
 pub mod check;
 mod edit;
 mod error;
+#[cfg(target_os = "linux")]
+mod overlay;
 pub mod export;
 pub mod format;
 pub mod init;

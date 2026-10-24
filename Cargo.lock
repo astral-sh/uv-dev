@@ -7267,6 +7267,7 @@ dependencies = [
  "indoc",
  "itertools 0.14.0",
  "jiff",
+ "nix 0.31.3",
  "owo-colors",
  "rustc-hash",
  "serde",
