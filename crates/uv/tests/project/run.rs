@@ -1699,7 +1699,7 @@ fn run_with_environment() -> Result<()> {
 }
 
 #[test]
-fn run_with_environment_different_python() -> Result<()> {
+fn run_with_environment_different_python() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
     context
         .venv()
@@ -1713,7 +1713,6 @@ fn run_with_environment_different_python() -> Result<()> {
     ----- stderr -----
     error: `--with-environment` requires the same base Python installation as the command
     ");
-    Ok(())
 }
 
 /// Test that an ephemeral environment writes the path of its parent environment to the `extends-environment` key
