@@ -32,7 +32,7 @@ use uv_extract::{Error as ExtractError, stream};
 use uv_macros::DebugNoInline;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_platform::Platform;
-use uv_redacted::SafeUrl;
+use uv_redacted::{SafeUrl, SafeUrlInput};
 
 /// Binary tools that can be installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -302,7 +302,10 @@ const VERSIONS_MANIFEST_MIRROR_SUFFIX: &str = "/github/versions/main/v1";
 const VERSIONS_MANIFEST_URL: &str = "https://raw.githubusercontent.com/astral-sh/versions/main/v1";
 
 fn parse_url(url: String) -> Result<SafeUrl, Error> {
-    SafeUrl::parse(&url).map_err(|source| Error::UrlParse { url, source })
+    SafeUrl::parse(&url).map_err(|source| Error::UrlParse {
+        url: url.into(),
+        source,
+    })
 }
 
 /// Binary version information from the versions manifest.
@@ -380,7 +383,7 @@ pub enum Error {
 
     #[error("Failed to parse URL: {url}")]
     UrlParse {
-        url: String,
+        url: SafeUrlInput,
         #[source]
         source: uv_redacted::SafeUrlError,
     },
@@ -1002,6 +1005,26 @@ mod tests {
             )
         })
         .await
+    }
+
+    #[test]
+    fn invalid_mirror_url_context_is_redacted() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "https://user:password@example.com:invalid/releases?sig=signature";
+        let error = parse_url(input.to_string()).unwrap_err();
+        assert_eq!(error.to_string(), "Failed to parse URL: [invalid URL]");
+        let Error::UrlParse { url, source } = error else {
+            return Err("expected a mirror URL error".into());
+        };
+        assert_eq!(url.as_ref(), input);
+        match source {
+            uv_redacted::SafeUrlError::Url(source) => {
+                assert_eq!(source.to_string(), "invalid port number");
+            }
+            uv_redacted::SafeUrlError::AmbiguousAuthority(_) => {
+                return Err("expected a URL parse error".into());
+            }
+        }
+        Ok(())
     }
 
     #[test]

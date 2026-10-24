@@ -37,6 +37,43 @@ pub enum SafeUrlError {
     AmbiguousAuthority(String),
 }
 
+/// An unparsed URL retained for error context with safe display and debug formatting.
+///
+/// Valid URLs use [`SafeUrl`]. Invalid inputs are omitted because their credential boundaries
+/// cannot be determined reliably. [`AsRef<str>`] provides explicit access to the original input.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SafeUrlInput(String);
+
+impl From<String> for SafeUrlInput {
+    fn from(input: String) -> Self {
+        Self(input)
+    }
+}
+
+impl AsRef<str> for SafeUrlInput {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for SafeUrlInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match SafeUrl::parse(&self.0) {
+            Ok(url) => Display::fmt(&url, formatter),
+            Err(_) => formatter.write_str("[invalid URL]"),
+        }
+    }
+}
+
+impl Debug for SafeUrlInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("SafeUrlInput")
+            .field(&self.to_string())
+            .finish()
+    }
+}
+
 /// A URL with redacted display output and a type-level serialization policy.
 ///
 /// The complete parsed URL, including credentials, remains available in memory.
@@ -734,6 +771,32 @@ mod tests {
             url::ParseError::EmptyHost
         );
         Ok(())
+    }
+
+    #[test]
+    fn unparsed_url_context_redacts_credentials() {
+        let input = "https://user:password@example.com/file?sig=signature";
+        let safe = SafeUrlInput::from(input.to_string());
+        insta::assert_snapshot!(safe, @"https://user:****@example.com/file?sig=****");
+        insta::assert_debug_snapshot!(safe, @r#"
+        SafeUrlInput(
+            "https://user:****@example.com/file?sig=****",
+        )
+        "#);
+        assert_eq!(safe.as_ref(), input);
+    }
+
+    #[test]
+    fn unparsed_url_context_omits_invalid_input() {
+        let input = "https://user:password@example.com:invalid/file?sig=signature";
+        let safe = SafeUrlInput::from(input.to_string());
+        insta::assert_snapshot!(safe, @"[invalid URL]");
+        insta::assert_debug_snapshot!(safe, @r#"
+        SafeUrlInput(
+            "[invalid URL]",
+        )
+        "#);
+        assert_eq!(safe.as_ref(), input);
     }
 
     #[test]
