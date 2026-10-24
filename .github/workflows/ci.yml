@@ -38,6 +38,16 @@ jobs:
               & $compiler.FullName --version --verbose
           }
 
+      - name: Provision Windows Server 2022 data volume
+        if: matrix.runner == 'github-windows-2022-x86_64-16'
+        run: |
+          if (!(Test-Path 'D:\')) {
+              New-VHD -Path "$env:RUNNER_TEMP/uv-benchmark.vhdx" -SizeBytes 25GB -Dynamic |
+                  Mount-VHD -Passthru | Initialize-Disk -Passthru |
+                  New-Partition -DriveLetter D -UseMaximumSize |
+                  Format-Volume -FileSystem ReFS -Confirm:$false -Force
+          }
+
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
 
