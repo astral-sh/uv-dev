@@ -380,6 +380,11 @@ mod tests {
         For isolated project runs and projects without an existing environment, `uv run` can import locked wheels
         directly from the cache. See [running from cached wheels](./projects/run.md#running-from-cached-wheels).
 
+        ### `run-private-environment` {#run-private-environment}
+
+        Project commands launched by `uv run` use a temporary virtual environment with private
+        installed wheel files. See [private project environments](./projects/run.md#private-project-environments).
+
         ### `s3-endpoint` {#s3-endpoint}
 
         uv can authenticate requests to an S3-compatible storage endpoint using AWS Signature

@@ -4035,6 +4035,7 @@ fn preview_features() {
     +            BuildDependencyHashes,
     +            WheelVariants,
     +            RunCachedWheels,
+    +            RunPrivateEnvironment,
     +        ],
          },
          python_preference: Managed,

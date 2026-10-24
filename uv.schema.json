@@ -1901,7 +1901,8 @@
             "build-lazy-imports",
             "build-dependency-hashes",
             "wheel-variants",
-            "run-cached-wheels"
+            "run-cached-wheels",
+            "run-private-environment"
           ]
         },
         {

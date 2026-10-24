@@ -123,6 +123,28 @@ Lockfile updates, `--locked`, `--frozen`, extras, and dependency groups work as 
 cache and keep it available for the command's lifetime. Python's `-S` option skips the wheel paths.
 Package files are shared and should be treated as read-only by the command.
 
+## Private project environments
+
+Enable `run-private-environment` to run each project command in its own temporary virtual
+environment:
+
+```toml title="pyproject.toml"
+[tool.uv]
+preview-features = ["run-private-environment"]
+```
+
+For example, `uv run pytest` installs the selected dependencies into a fresh environment, even when
+the project already has a `.venv`. uv requests copy-on-write file clones from the filesystem and
+uses ordinary copies when cloning is unavailable or copying is requested. Edits to installed wheel
+files are visible to other processes using the same temporary environment. Those edits disappear
+when the run ends, leaving the original installed files and cached wheels intact.
+
+uv updates the lockfile as usual. Use `--locked` to require an up-to-date lockfile or `--frozen` to
+run with the versions it already records. This preview takes precedence over `run-cached-wheels`. It
+requires synchronization and currently rejects `--no-sync` and additional run requirements
+(`--with`, `--with-editable`, `--with-requirements`, and `--with-cached-wheel`). Files in the
+project working directory and editable source trees remain writable in their usual locations.
+
 ## Signal handling
 
 uv does not cede control of the process to the spawned command in order to provide better error

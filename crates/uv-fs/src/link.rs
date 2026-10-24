@@ -28,6 +28,11 @@ pub enum LinkMode {
     #[cfg_attr(feature = "serde", serde(alias = "reflink"))]
     #[cfg_attr(feature = "clap", value(alias = "reflink"))]
     Clone,
+    /// Install files using reflinks or copies so modifications do not affect the source.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    Private { reflink: bool },
     /// Copy packages from the source into the destination.
     Copy,
     /// Hard link packages from the source into the destination.
@@ -81,9 +86,44 @@ where
     F: Fn(&Path) -> bool,
 {
     match options.mode {
-        LinkMode::Clone => clone_dir(src, dst, options),
+        LinkMode::Private { .. } if options.on_existing_directory == OnExistingDirectory::Merge => {
+            stage_private_dir(src, dst, options.mode)
+        }
+        LinkMode::Clone | LinkMode::Private { reflink: true } => clone_dir(src, dst, options),
+        LinkMode::Private { reflink: false } => walk_and_link(src, dst, LinkMode::Copy, options),
         mode => walk_and_link(src, dst, mode, options),
     }
+}
+
+/// Stage each wheel on the destination filesystem before publishing its entries by rename.
+/// If a directory cannot replace an existing directory, merge their entries recursively.
+fn stage_private_dir(src: &Path, dst: &Path, mode: LinkMode) -> Result<LinkMode, LinkError> {
+    fs_err::create_dir_all(dst)?;
+    let staging = tempfile::tempdir_in(dst)?;
+    let wheel = staging.path().join("wheel");
+    let used_mode = link_dir(src, &wheel, &LinkOptions::new(mode))?;
+    publish_staged_entries(&wheel, dst)?;
+    staging.close()?;
+    Ok(used_mode)
+}
+
+fn publish_staged_entries(staging: &Path, dst: &Path) -> io::Result<()> {
+    for entry in fs_err::read_dir(staging)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if let Err(err) = fs_err::rename(&from, &to) {
+            // Check the destination entry itself to avoid following an existing directory symlink.
+            if entry.file_type()?.is_dir()
+                && fs_err::symlink_metadata(&to).is_ok_and(|m| m.is_dir())
+            {
+                publish_staged_entries(&from, &to)?;
+            } else {
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Directory-level locks for concurrent copy operations.
@@ -266,6 +306,7 @@ impl LinkState {
     /// Transition to the next fallback strategy in the chain.
     ///
     /// - [`LinkMode::Clone`] → [`LinkMode::Hardlink`]
+    /// - [`LinkMode::Private`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Hardlink`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Symlink`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Copy`] → Failure
@@ -276,7 +317,9 @@ impl LinkState {
         );
         Self::new(match self.mode {
             LinkMode::Clone => LinkMode::Hardlink,
-            LinkMode::Hardlink | LinkMode::Symlink | LinkMode::Copy => LinkMode::Copy,
+            LinkMode::Private { .. } | LinkMode::Hardlink | LinkMode::Symlink | LinkMode::Copy => {
+                LinkMode::Copy
+            }
         })
     }
 }
@@ -345,7 +388,7 @@ where
         }
     }
 
-    walk_and_link(src, dst, LinkMode::Clone, options)
+    walk_and_link(src, dst, options.mode, options)
 }
 
 /// Walk a directory tree and link each file using the given starting [`LinkMode`].
@@ -384,7 +427,10 @@ where
         state = link_file(path, &target, state, options)?;
     }
 
-    Ok(state.mode)
+    Ok(match state.mode {
+        LinkMode::Private { reflink: true } => LinkMode::Clone,
+        mode => mode,
+    })
 }
 
 /// Dispatch a single file to the appropriate linking strategy based on the current state.
@@ -402,10 +448,12 @@ where
     F: Fn(&Path) -> bool,
 {
     match state.mode {
-        LinkMode::Clone => reflink_file_with_fallback(path, target, state, options),
+        LinkMode::Clone | LinkMode::Private { reflink: true } => {
+            reflink_file_with_fallback(path, target, state, options)
+        }
         LinkMode::Hardlink => hardlink_file_with_fallback(path, target, state, options),
         LinkMode::Symlink => symlink_file_with_fallback(path, target, state, options),
-        LinkMode::Copy => {
+        LinkMode::Copy | LinkMode::Private { reflink: false } => {
             if options.on_existing_directory == OnExistingDirectory::Merge {
                 atomic_copy_overwrite(path, target)?;
             } else {
@@ -968,6 +1016,49 @@ mod tests {
 
         assert_eq!(result, LinkMode::Copy);
         verify_test_tree(dst_dir.path());
+    }
+
+    #[test]
+    fn private_wheels_merge_shared_namespaces() -> Result<(), LinkError> {
+        let first = test_tempdir();
+        let second = test_tempdir();
+        let destination = test_tempdir();
+        for (wheel, name) in [(&first, "first"), (&second, "second")] {
+            let namespace = wheel.path().join("namespace/nested");
+            fs_err::create_dir_all(&namespace)?;
+            fs_err::write(namespace.join(name), name)?;
+            fs_err::write(namespace.join("shared"), name.repeat(8192))?;
+        }
+        let options = LinkOptions::new(LinkMode::Private { reflink: false })
+            .with_on_existing_directory(OnExistingDirectory::Merge);
+        std::thread::scope(|scope| -> Result<(), LinkError> {
+            let first = scope.spawn(|| link_dir(first.path(), destination.path(), &options));
+            link_dir(second.path(), destination.path(), &options)?;
+            first.join().expect("installer thread panicked")?;
+            Ok(())
+        })?;
+        let namespace = destination.path().join("namespace/nested");
+        assert_eq!(fs_err::read_to_string(namespace.join("first"))?, "first");
+        assert_eq!(fs_err::read_to_string(namespace.join("second"))?, "second");
+        let shared = fs_err::read_to_string(namespace.join("shared"))?;
+        assert!(shared == "first".repeat(8192) || shared == "second".repeat(8192));
+        assert_eq!(fs_err::read_dir(destination.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn private_wheels_do_not_publish_through_a_directory_symlink() -> Result<(), LinkError> {
+        let wheel = test_tempdir();
+        create_test_tree(wheel.path());
+        let destination = test_tempdir();
+        let external = test_tempdir();
+        fs_err::os::unix::fs::symlink(external.path(), destination.path().join("subdir"))?;
+        let options = LinkOptions::new(LinkMode::Private { reflink: false })
+            .with_on_existing_directory(OnExistingDirectory::Merge);
+        assert!(link_dir(wheel.path(), destination.path(), &options).is_err());
+        assert_eq!(fs_err::read_dir(external.path())?.count(), 0);
+        Ok(())
     }
 
     #[test]
