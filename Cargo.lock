@@ -8191,11 +8191,14 @@ version = "0.13.5"
 name = "uv-virtualenv"
 version = "0.0.97"
 dependencies = [
+ "anyhow",
  "console",
+ "filetime",
  "fs-err",
  "itertools 0.14.0",
  "owo-colors",
  "pathdiff",
+ "reflink-copy",
  "thiserror",
  "tracing",
  "uv-console",
@@ -8207,6 +8210,7 @@ dependencies = [
  "uv-python-managed",
  "uv-shell",
  "uv-version",
+ "walkdir",
 ]
 
 [[package]]

@@ -131,6 +131,15 @@ general usage.
 uv itself does not depend on Python, but it does need to locate a Python environment to (1) install
 dependencies into the environment and (2) build source distributions.
 
+## Cloning an environment
+
+To copy a prepared environment, create the source with `uv venv --relocatable seed` and install
+packages into it with `uv pip install --python seed --link-mode copy ...`. Then run
+`uv venv --clone seed job`. The destination must be a new directory. Installed package files are
+independent, and compatible bytecode can be reused. The clone uses the same base Python
+installation. On Unix, the destination directory is private to its owner. Editable packages continue
+to use the original project sources.
+
 ## Discovery of Python environments
 
 When running a command that mutates an environment such as `uv pip sync` or `uv pip install`, uv

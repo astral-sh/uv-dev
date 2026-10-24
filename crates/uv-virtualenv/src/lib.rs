@@ -7,8 +7,10 @@ use uv_fs::Simplified;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 pub use uv_python_managed::UpgradePolicy;
 
+pub use snapshot::clone_venv;
 pub use virtualenv::{ClearNonVirtualenv, OnExisting, RemovalReason, Seed};
 
+mod snapshot;
 mod virtualenv;
 
 #[derive(Debug, Error)]

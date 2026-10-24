@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
 use clap::{CommandFactory, Error, Parser};
 use futures::FutureExt;
@@ -1385,6 +1385,17 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::VenvSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
+
+            if let Some(source) = args.clone_from {
+                let destination = args.path.context("`--clone` requires a destination path")?;
+                uv_virtualenv::clone_venv(&source, &destination)?;
+                writeln!(
+                    printer.stderr(),
+                    "Cloned virtual environment to: {}",
+                    destination.user_display()
+                )?;
+                return Ok(ExitStatus::Success);
+            }
 
             // Check for conflicts between offline and refresh.
             globals

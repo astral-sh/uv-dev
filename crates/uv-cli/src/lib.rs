@@ -2887,6 +2887,15 @@ pub struct BuildArgs {
 
 #[derive(Args)]
 pub struct VenvArgs {
+    /// Clone a virtual environment prepared with `uv venv --relocatable`.
+    ///
+    /// Choose a new destination in an existing directory and keep the source unchanged during
+    /// cloning. Regular files use filesystem copy-on-write when available and are otherwise
+    /// copied. The base Python installation must remain available. Other external symlinks are
+    /// rejected. Editable installations continue to refer to their project sources.
+    #[arg(long = "clone", value_name = "SOURCE", value_hint = ValueHint::DirPath, requires = "path", conflicts_with_all = ["python", "seed", "clear", "force", "allow_existing", "prompt", "system_site_packages", "relocatable", "no_relocatable", "link_mode"])]
+    pub clone_from: Option<PathBuf>,
+
     /// The Python interpreter to use for the virtual environment.
     ///
     /// During virtual environment creation, uv will not look for Python interpreters in virtual
