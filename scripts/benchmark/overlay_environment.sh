@@ -33,6 +33,8 @@ mkdir -- "$job/upper" "$job/work" "$job/env"
 
 # The mount disappears with the job's namespace. The parent namespace sees an
 # empty mount point even if the command exits with an error.
+# The inner shell expands its positional arguments after entering the namespace.
+# shellcheck disable=SC2016
 exec unshare --mount --propagation private sh -ec '
     seed=$1 job=$2
     shift 2
