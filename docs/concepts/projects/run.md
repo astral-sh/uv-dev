@@ -113,9 +113,10 @@ $ uv vm run --image project.ext4 --kernel vmlinuz -- python -c "import sys; prin
 
 Prepare a raw ext4 root containing the guest's Python installation and its shared libraries. Inside
 that root, run `uv sync --locked --no-editable --link-mode copy` in `/app` to populate `/app/.venv`.
-Include `/dev` as a mount point. Supply a kernel with built-in virtio PCI, virtio block, ext4,
-devtmpfs automount, procfs, sysfs, and serial console support. The host needs `qemu-img` and
-`qemu-system-x86_64` on `PATH`.
+Include `/dev` as a mount point. Supply a kernel with virtio PCI, virtio block, ext4, procfs, sysfs,
+and serial console support. Without an initramfs, build the root-disk drivers into the kernel and
+enable devtmpfs automount. The host needs `qemu-img` and the QEMU executable for the guest
+architecture on `PATH`.
 
 The default accelerator is TCG. Use `--accel kvm` on a compatible Linux host with access to
 `/dev/kvm`. The guest runs with its own environment, without networking or host directory mounts,
