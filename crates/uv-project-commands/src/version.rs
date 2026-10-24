@@ -528,16 +528,19 @@ async fn lock_and_sync(
     let groups = DependencyGroups::default().with_defaults(default_groups);
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
+    let python_roots = PackageSelection::from_args(false, &[], project.project_name())
+        .python_roots(project.workspace());
 
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {
         // Discover the interpreter.
-        let project_python = ProjectPythonRequest::from_request(
+        let project_python = ProjectPythonRequest::from_request_for_roots(
             python.as_deref().map(PythonRequest::parse),
             Some(project.workspace()),
             &groups,
             project_dir,
             config_discovery,
+            python_roots.as_deref(),
         )
         .await?;
         let interpreter = ProjectInterpreter::discover(
@@ -562,6 +565,7 @@ async fn lock_and_sync(
         let environment = ProjectEnvironment::get_or_init(
             ProjectEnvironmentTarget::from(project.workspace()),
             None,
+            python_roots.as_deref(),
             &groups,
             python.as_deref().map(PythonRequest::parse),
             &install_mirrors,

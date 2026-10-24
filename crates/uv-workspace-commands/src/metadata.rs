@@ -211,9 +211,13 @@ pub async fn metadata(
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
+                let roots = workspace
+                    .resolution_roots()
+                    .map(|roots| roots.iter().cloned().collect::<Vec<_>>());
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
+                    roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
@@ -255,6 +259,7 @@ pub async fn metadata(
                     lock,
                 },
                 Some(install_target),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

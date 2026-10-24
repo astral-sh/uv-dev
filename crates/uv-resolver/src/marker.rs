@@ -1,98 +1,12 @@
-use pubgrub::Ranges;
-use smallvec::SmallVec;
-use std::ops::Bound;
+use uv_pep440::{LowerBound, UpperBound};
+use uv_pep508::MarkerTree;
 
-use uv_pep440::{LowerBound, UpperBound, Version};
-use uv_pep508::{CanonicalMarkerValueVersion, MarkerTree, MarkerTreeKind};
-
-use uv_distribution_types::RequiresPythonRange;
+use uv_distribution_types::{RequiresPythonRange, python_version_ranges};
 
 /// Returns the bounding Python versions that can satisfy the [`MarkerTree`], if it's constrained.
 pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
-    /// A small vector of Python version markers.
-    type Markers = SmallVec<[Ranges<Version>; 3]>;
-
-    /// Collect the Python version markers from the tree.
-    ///
-    /// Specifically, performs a DFS to collect all Python requirements on the path to every
-    /// `MarkerTreeKind::True` node.
-    fn collect_python_markers(tree: MarkerTree, markers: &mut Markers, range: &Ranges<Version>) {
-        match tree.kind() {
-            MarkerTreeKind::True => {
-                markers.push(range.clone());
-            }
-            MarkerTreeKind::False => {}
-            MarkerTreeKind::Version(marker) => match marker.key() {
-                CanonicalMarkerValueVersion::PythonFullVersion => {
-                    for (range, tree) in marker.edges() {
-                        collect_python_markers(tree, markers, range);
-                    }
-                }
-                CanonicalMarkerValueVersion::ImplementationVersion => {
-                    for (_, tree) in marker.edges() {
-                        collect_python_markers(tree, markers, range);
-                    }
-                }
-            },
-            MarkerTreeKind::VersionString(marker) => {
-                for (_, tree) in marker.edges() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-            MarkerTreeKind::String(marker) => {
-                for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-            MarkerTreeKind::In(marker) => {
-                for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-            MarkerTreeKind::Contains(marker) => {
-                for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-            MarkerTreeKind::Extra(marker) => {
-                for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-            MarkerTreeKind::List(marker) => {
-                for (_, tree) in marker.children() {
-                    collect_python_markers(tree, markers, range);
-                }
-            }
-        }
-    }
-
-    if tree.is_true() || tree.is_false() {
-        return None;
-    }
-
-    let mut markers = Markers::new();
-    collect_python_markers(tree, &mut markers, &Ranges::full());
-
-    // If there are no Python version markers, return `None`.
-    if markers.iter().all(|range| {
-        let Some((lower, upper)) = range.bounding_range() else {
-            return true;
-        };
-        matches!((lower, upper), (Bound::Unbounded, Bound::Unbounded))
-    }) {
-        return None;
-    }
-
-    // Take the union of the intersections of the Python version markers.
-    let range = markers
-        .into_iter()
-        .fold(Ranges::empty(), |acc: Ranges<Version>, range| {
-            acc.union(&range)
-        });
-
+    let range = python_version_ranges(tree)?;
     let (lower, upper) = range.bounding_range()?;
-
     Some(RequiresPythonRange::new(
         LowerBound::new(lower.cloned()),
         UpperBound::new(upper.cloned()),
@@ -104,7 +18,7 @@ mod tests {
     use super::*;
     use std::ops::Bound;
     use std::str::FromStr;
-    use uv_pep440::UpperBound;
+    use uv_pep440::{UpperBound, Version};
 
     #[test]
     fn test_requires_python() {

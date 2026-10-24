@@ -10,8 +10,9 @@ use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
-use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
+use uv_lock::{GroupMetadata, Lock, SatisfiesResult, implicit_constraints_marker};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
 use uv_python_interpreter::Interpreter;
@@ -44,6 +45,7 @@ impl ValidatedLock {
         install_path: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        root_markers: Option<&BTreeMap<PackageName, MarkerTree>>,
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
@@ -204,6 +206,16 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
+        let workspace_members_match = if root_markers.is_some() {
+            lock.workspace_members().iter().eq(packages.keys())
+        } else {
+            lock.workspace_members().iter().eq(members)
+        };
+        if !workspace_members_match {
+            debug!("Resolving despite existing lockfile due to change in workspace membership");
+            return Ok(Self::Versions(lock));
+        }
+
         // If the Requires-Python bound has changed, we have to perform a clean resolution, since
         // the set of `resolution-markers` may no longer cover the entire supported Python range.
         if lock.requires_python().range() != requires_python.range() {
@@ -217,6 +229,29 @@ impl ValidatedLock {
             } else {
                 Ok(Self::Versions(lock))
             };
+        }
+
+        if let Some(root_markers) = root_markers {
+            let environment = implicit_constraints_marker(
+                lock.requires_python().to_marker_tree(),
+                lock.supported_environments(),
+            );
+            for (name, expected) in root_markers {
+                let expected = expected.and(environment);
+                let Some(package) = lock.find_by_name(name).ok().flatten() else {
+                    if expected.is_false() {
+                        continue;
+                    }
+                    return Ok(Self::Versions(lock));
+                };
+                let actual = package.environment_marker().and(environment);
+                if expected != actual {
+                    debug!(
+                        "Resolving despite existing lockfile due to change in Python requirement for root `{name}`"
+                    );
+                    return Ok(Self::Versions(lock));
+                }
+            }
         }
 
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
@@ -276,6 +311,7 @@ impl ValidatedLock {
                 install_path,
                 packages,
                 members,
+                root_markers,
                 required_members,
                 requirements,
                 constraints,
@@ -463,6 +499,13 @@ impl ValidatedLock {
                     );
                 }
                 Ok(Self::Preferable(lock))
+            }
+            SatisfiesResult::MismatchedPackageRequiresPython(name, expected, actual) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched Python requirements for: `{name}`\n  Requested: {:?}\n  Existing: {:?}",
+                    expected, actual
+                );
+                Ok(Self::Versions(lock))
             }
             SatisfiesResult::MismatchedPackageDependencies(name, version, expected, actual) => {
                 if let Some(version) = version {

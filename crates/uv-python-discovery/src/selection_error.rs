@@ -2,9 +2,11 @@
 
 use uv_distribution_types::RequiresPython;
 use uv_pep440::Version;
-use uv_workspace::{RequiresPythonSources, dependency_groups::DependencyGroupError};
+use uv_workspace::{
+    RequiresPythonSources, dependency_groups::DependencyGroupError, format_requires_python_sources,
+};
 
-use crate::{PythonRequirementConflicts, format_requires_python_sources};
+use crate::PythonRequirementConflicts;
 
 /// A failure while discovering or validating a project or script interpreter.
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +52,12 @@ pub enum PythonSelectionError {
     )]
     DisjointRequiresPython(RequiresPythonSources),
 
+    #[error(
+        "The union of the resolution roots' Python requirements cannot be represented by `requires-python`:\n{}",
+        format_requires_python_sources(_0)
+    )]
+    UnrepresentableRequiresPythonUnion(RequiresPythonSources),
+
     #[error(transparent)]
     Python(#[from] crate::Error),
 
@@ -71,6 +79,7 @@ impl uv_errors::Hinted for PythonSelectionError {
             | Self::DotPythonVersionScriptIncompatibility(..)
             | Self::RequiresPythonScriptIncompatibility(..)
             | Self::DisjointRequiresPython(..)
+            | Self::UnrepresentableRequiresPythonUnion(..)
             | Self::DependencyGroup(..)
             | Self::Io(..) => uv_errors::Hints::none(),
         }

@@ -1,5 +1,8 @@
 //! Integration tests for uv synchronization and settings.
 
+#[cfg(feature = "test-python")]
+mod explicit_roots;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod centralized_project_envs;
 

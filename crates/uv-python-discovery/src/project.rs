@@ -6,21 +6,23 @@ use crate::ConfigDiscovery;
 use crate::PythonInstallation;
 use crate::PythonVersionFile;
 use crate::VersionFileDiscoveryOptions;
-use itertools::Itertools;
 use tracing::debug;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
-use uv_pep440::TildeVersionSpecifier;
+use uv_pep440::{TildeVersionSpecifier, VersionSpecifiers};
 use uv_python_interpreter::{Interpreter, RequestedInterpreter};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user_once;
-use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, Workspace};
+use uv_workspace::{
+    PackageName, RequiresPythonDeclaration, RequiresPythonSources, Workspace,
+    format_requires_python_sources,
+};
 
 use crate::PythonDownloadReporter;
 use crate::PythonSelectionError;
@@ -96,8 +98,28 @@ impl ProjectPythonRequest {
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
     ) -> Result<Self, PythonSelectionError> {
+        Self::from_request_for_roots(
+            python_request,
+            workspace,
+            groups,
+            project_dir,
+            config_discovery,
+            None,
+        )
+        .await
+    }
+
+    /// Resolve a Python request for the selected members of an explicit-roots workspace.
+    pub async fn from_request_for_roots(
+        python_request: Option<PythonRequest>,
+        workspace: Option<&Workspace>,
+        groups: &DependencyGroupsWithDefaults,
+        project_dir: &Path,
+        config_discovery: ConfigDiscovery,
+        roots: Option<&[PackageName]>,
+    ) -> Result<Self, PythonSelectionError> {
         let requirement = workspace
-            .map(|workspace| find_workspace_python_requirement(workspace, groups))
+            .map(|workspace| find_workspace_python_requirement_for_roots(workspace, groups, roots))
             .transpose()?
             .flatten();
 
@@ -258,7 +280,20 @@ fn find_workspace_python_requirement(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<ProjectPythonRequirement>, PythonSelectionError> {
-    let requires_python = workspace.requires_python(groups)?;
+    find_workspace_python_requirement_for_roots(workspace, groups, None)
+}
+
+fn find_workspace_python_requirement_for_roots(
+    workspace: &Workspace,
+    groups: &DependencyGroupsWithDefaults,
+    roots: Option<&[PackageName]>,
+) -> Result<Option<ProjectPythonRequirement>, PythonSelectionError> {
+    let roots = roots.filter(|_| workspace.resolution_roots().is_some());
+    let requires_python = if let Some(roots) = roots {
+        workspace.requires_python_for(groups, roots)?
+    } else {
+        workspace.requires_python(groups)?
+    };
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);
@@ -281,6 +316,44 @@ fn find_workspace_python_requirement(
                 );
             }
         }
+    }
+    if roots.is_none()
+        && let Some(roots) = workspace.resolution_roots()
+    {
+        let mut ranges = Vec::new();
+        for root in roots {
+            let root_requires = requires_python
+                .iter()
+                .filter(|(source, _)| match source {
+                    RequiresPythonDeclaration::Member(package, _) => package == root,
+                    RequiresPythonDeclaration::Workspace(_) => true,
+                })
+                .map(|(source, specifiers)| (source.clone(), specifiers.clone()))
+                .collect::<RequiresPythonSources>();
+            if root_requires.is_empty() {
+                ranges.push(RequiresPython::from_specifiers(VersionSpecifiers::empty()));
+                continue;
+            }
+            let Some(requires_python) = RequiresPython::intersection(
+                root_requires.iter().map(|(.., specifiers)| specifiers),
+            ) else {
+                return Err(PythonSelectionError::DisjointRequiresPython(root_requires));
+            };
+            ranges.push(requires_python);
+        }
+        let Some(union) = RequiresPython::union(ranges.iter().map(RequiresPython::specifiers))
+        else {
+            return Err(PythonSelectionError::UnrepresentableRequiresPythonUnion(
+                requires_python,
+            ));
+        };
+        return Ok(Some(ProjectPythonRequirement {
+            requires_python: union,
+            source: PythonRequirementSource::Workspace {
+                sources: requires_python,
+                multiple_members: workspace.packages().len() > 1,
+            },
+        }));
     }
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(intersection) => Ok(Some(ProjectPythonRequirement {
@@ -464,11 +537,4 @@ fn validate_python_requirement(
             ))
         }
     }
-}
-
-pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
-    conflicts
-        .iter()
-        .map(|(source, specifiers)| format!("- {source}: {specifiers}"))
-        .join("\n")
 }

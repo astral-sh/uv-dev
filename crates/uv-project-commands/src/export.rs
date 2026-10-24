@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -24,7 +25,7 @@ use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, detect_conflicts,
 };
 use uv_fs::CWD;
-use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_lock::{Installable, Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -583,9 +584,16 @@ async fn render_export<'output>(
         }
     });
 
+    let requires_python = match format {
+        ExportFormat::PylockToml => Cow::Owned(target.export_python_requirement(groups)?),
+        ExportFormat::RequirementsTxt | ExportFormat::CycloneDX1_5 => {
+            Cow::Borrowed(lock.requires_python())
+        }
+    };
+
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {
-        detect_conflicts(&target, extras, groups)?;
+        detect_conflicts(&target, extras, groups, &requires_python, None)?;
     }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.

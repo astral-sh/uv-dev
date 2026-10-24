@@ -27,6 +27,227 @@ fn workspaces_dir() -> PathBuf {
 }
 
 #[test]
+fn workspace_resolution_roots_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+        roots = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `tool.uv.workspace.roots` must contain at least one member
+    ");
+
+    pyproject.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+        roots = ["missing"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace resolution root `missing` is not a workspace member
+    ");
+
+    // Root names follow package-name normalization, and duplicate normalized names are harmless.
+    pyproject.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+        roots = ["ROOT_A", "root-a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock["manifest"]["members"], @r#"
+    [
+      "root-a"
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn workspace_resolution_roots_relock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let write_workspace = |roots: &str| {
+        context.temp_dir.child("pyproject.toml").write_str(&format!(
+            r#"
+            [tool.uv.workspace]
+            members = ["members/*"]
+            {roots}
+
+            [tool.uv.sources]
+            shared = {{ workspace = true }}
+            "#,
+        ))
+    };
+    for (name, dependencies) in [
+        ("root-a", r#"["shared"]"#),
+        ("root-b", "[]"),
+        ("shared", "[]"),
+        ("unused", r#"["missing-package==1"]"#),
+    ] {
+        context
+            .temp_dir
+            .child("members")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = {dependencies}
+
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+
+    write_workspace(r#"roots = ["root-a"]"#)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock.sources(), @r#"
+    {
+      "root-a": {
+        "virtual": "members/root-a"
+      },
+      "shared": {
+        "virtual": "members/shared"
+      }
+    }
+    "#);
+
+    context
+        .temp_dir
+        .child("members/unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+        dependencies = ["missing-package==1"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    write_workspace(r#"roots = ["root-b"]"#)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Removed root-a v0.1.0
+    Added root-b v0.1.0
+    Removed shared v0.1.0
+    ");
+    let lock: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock.sources(), @r#"
+    {
+      "root-b": {
+        "virtual": "members/root-b"
+      }
+    }
+    "#);
+    uv_snapshot!(context.filters(), context.export().arg("--frozen").arg("--package").arg("root-a"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Could not find root package `root-a`
+    ");
+
+    write_workspace(r#"roots = ["root-a", "root-b"]"#)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Added root-a v0.1.0
+    Added shared v0.1.0
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let lock: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock.sources(), @r#"
+    {
+      "root-a": {
+        "virtual": "members/root-a"
+      },
+      "root-b": {
+        "virtual": "members/root-b"
+      },
+      "shared": {
+        "virtual": "members/shared"
+      }
+    }
+    "#);
+
+    // Omitting roots makes every discovered member participate, including the invalid member.
+    write_workspace("")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because missing-package was not found in the provided package locations and unused depends on missing-package==1, we can conclude that unused's requirements are unsatisfiable.
+             And because your workspace requires unused, we can conclude that your workspace's requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples_bird_feeder() {
     let context = uv_test::test_context!("3.12");
