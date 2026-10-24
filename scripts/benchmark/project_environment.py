@@ -50,14 +50,15 @@ def project(seed: Path, job: Path, *, stable_imports: bool = False) -> None:
         local = job / site.relative_to(seed)
         local.mkdir()
         for entry in site.iterdir():
-            if entry.name == "__pycache__":
-                continue
             target = local / entry.name
-            if entry.name.endswith(".dist-info") and entry.is_dir():
-                # `uv` discovers installed wheels by scanning real metadata directories.
+            if entry.is_dir() and (
+                entry.name.endswith(".dist-info") or entry.name == "__pycache__"
+            ):
+                # `uv` scans real metadata directories. A job-local bytecode
+                # directory can read adjacent caches and acquire its own new files.
                 target.mkdir()
-                for metadata in entry.iterdir():
-                    (target / metadata.name).symlink_to(metadata)
+                for child in entry.iterdir():
+                    (target / child.name).symlink_to(child)
             else:
                 target.symlink_to(entry)
         if stable_imports:

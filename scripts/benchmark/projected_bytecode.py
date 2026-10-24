@@ -3,8 +3,9 @@
     OPENBLAS_NUM_THREADS=1 python3 projected_bytecode.py /path/to/seed numpy --scratch .
 
 Each external cache starts empty. The first job fills it and the second imports
-the same module. Pass the same installation prepared with `uv sync --compile-bytecode`
-as `--compiled-seed` to compare reading adjacent bytecode with writes disabled.
+the same module. Pass a copy of the same installation prepared with
+`uv sync --compile-bytecode` as `--compiled-seed` to compare imports from a precompiled
+seed with bytecode writes disabled.
 Environment creation, seed compilation and cache enumeration are untimed.
 """
 
@@ -17,6 +18,13 @@ from tempfile import TemporaryDirectory
 from time import perf_counter_ns
 
 from project_environment import project
+
+
+def wheel_records(seed: Path) -> dict[str, bytes]:
+    return {
+        p.parent.name: p.read_bytes()
+        for p in seed.glob("lib/python*/site-packages/*.dist-info/RECORD")
+    }
 
 
 def run_import(job: Path, cache: Path | None, module: str) -> float:
@@ -48,17 +56,37 @@ def main() -> None:
         jobs = {}
         seeds = {"linked": args.seed, "stable": args.seed}
         if args.compiled_seed:
-            if not any(
-                args.compiled_seed.glob(
-                    "lib/python*/site-packages/**/__pycache__/*.pyc"
+            records = wheel_records(args.seed)
+            if (
+                not records
+                or records != wheel_records(args.compiled_seed)
+                or not (args.seed / "bin/python").samefile(
+                    args.compiled_seed / "bin/python"
                 )
             ):
-                parser.error("--compiled-seed contains no installed package bytecode")
+                parser.error(
+                    "--compiled-seed must have the same interpreter and installed wheel records"
+                )
             seeds["precompiled"] = args.compiled_seed
         for mode, seed in seeds.items():
             jobs[mode] = [root / f"{mode}-{name}" for name in ("first", "second")]
             for job in jobs[mode]:
                 project(seed, job, stable_imports=mode == "stable")
+        if "precompiled" in jobs:
+            audit = """
+import importlib, pathlib, sys
+def require_bytecode(event, args):
+    if event == "compile" and isinstance(args[1], str) and "site-packages" in pathlib.Path(args[1]).parts:
+        raise RuntimeError(f"compiled installed source during precompiled import: {args[1]}")
+sys.addaudithook(require_bytecode)
+module = importlib.import_module(sys.argv[1])
+if not getattr(module, "__file__", None) or "site-packages" not in pathlib.Path(module.__file__).parts:
+    raise ValueError("choose a module from the projected environment")
+"""
+            subprocess.run(
+                [jobs["precompiled"][0] / "bin/python", "-IBc", audit, args.module],
+                check=True,
+            )
         orders = list(itertools.permutations(jobs))
         samples = []
         for index in range(args.rounds):
