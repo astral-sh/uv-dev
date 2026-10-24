@@ -2887,6 +2887,15 @@ pub struct BuildArgs {
 
 #[derive(Args)]
 pub struct VenvArgs {
+    /// Clone a virtual environment prepared with `uv venv --relocatable`.
+    ///
+    /// Choose a new destination in an existing directory and keep the source unchanged during
+    /// cloning. Regular files use filesystem copy-on-write when available and are otherwise
+    /// copied. The base Python installation must remain available. Other external symlinks are
+    /// rejected. Editable installations continue to refer to their project sources.
+    #[arg(long = "clone", value_name = "SOURCE", value_hint = ValueHint::DirPath, requires = "path", conflicts_with_all = ["python", "seed", "clear", "force", "allow_existing", "prompt", "system_site_packages", "relocatable", "no_relocatable", "link_mode"])]
+    pub clone_from: Option<PathBuf>,
+
     /// The Python interpreter to use for the virtual environment.
     ///
     /// During virtual environment creation, uv will not look for Python interpreters in virtual
@@ -3350,6 +3359,14 @@ pub struct RunArgs {
     /// Using `pyproject.toml`, `setup.py`, or `setup.cfg` files is not allowed.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// Run with the packages and entry points from a prepared virtual environment.
+    ///
+    /// The environment must use the same base Python installation as the interpreter selected by
+    /// uv. Its site-packages directory is added before the project's site-packages directory.
+    /// Changes to those package files are visible to other users of the environment.
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::DirPath, conflicts_with_all = ["with", "with_editable", "with_requirements"])]
+    pub with_environment: Option<PathBuf>,
 
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///

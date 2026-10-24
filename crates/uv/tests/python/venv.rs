@@ -20,6 +20,89 @@ use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 use uv_test::{assert_link_target, site_packages_path, uv_snapshot};
 
 #[test]
+fn clone_relocatable_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .venv()
+        .args(["--relocatable", "--python", "3.12", "seed"])
+        .assert()
+        .success();
+    let seed = context.temp_dir.child("seed");
+    let job = context.temp_dir.child("job");
+    let source = site_packages_path(seed.path(), "python3.12").join("sample.py");
+    fs_err::write(&source, "value = 1\n")?;
+    let modified = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    filetime::set_file_mtime(&source, modified)?;
+
+    uv_snapshot!(context.filters(), context.venv().args(["--clone", "seed", "job"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Cloned virtual environment to: job
+    ");
+    let cloned = site_packages_path(job.path(), "python3.12").join("sample.py");
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&fs_err::metadata(&cloned)?),
+        modified
+    );
+    fs_err::write(&cloned, "value = 2\n")?;
+    assert_eq!(fs_err::read_to_string(&source)?, "value = 1\n");
+    let python = uv_python_interpreter::virtualenv_python_executable(job.path());
+    std::process::Command::new(python)
+        .args([
+            "-IBc",
+            "import sample, sys; assert sample.value == 2; assert sys.prefix == sys.argv[1]",
+        ])
+        .arg(job.path())
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn clone_requires_relocatable_source() {
+    let context = uv_test::test_context!("3.12");
+    context
+        .venv()
+        .args(["--no-relocatable", "--python", "3.12", "seed"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.venv().args(["--clone", "seed", "job"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The source must be a virtual environment created with `uv venv --relocatable`
+    ");
+    context
+        .temp_dir
+        .child("job")
+        .assert(predicate::path::missing());
+}
+
+#[test]
+#[cfg(unix)]
+fn clone_rejects_external_package_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .venv()
+        .args(["--relocatable", "--python", "3.12", "seed"])
+        .assert()
+        .success();
+    let external = context.temp_dir.child("external.py");
+    external.touch()?;
+    let link = context.temp_dir.child("seed/linked.py");
+    symlink(external.path(), link.path())?;
+    uv_snapshot!(context.filters(), context.venv().args(["--clone", "seed", "job"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Symlink `seed/linked.py` points outside the source environment
+    ");
+    context
+        .temp_dir
+        .child("job")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
 fn create_venv() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 

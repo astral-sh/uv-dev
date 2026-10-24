@@ -29,10 +29,14 @@ uv-pypi-types = { workspace = true }
 uv-shell = { workspace = true }
 uv-version = { workspace = true }
 
+anyhow = { workspace = true }
 console = { workspace = true }
+filetime = { workspace = true }
 fs-err = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
 pathdiff = { workspace = true }
+reflink-copy = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+walkdir = { workspace = true }

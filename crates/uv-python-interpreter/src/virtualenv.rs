@@ -172,7 +172,7 @@ impl PyVenvConfiguration {
     }
 
     /// Returns true if the virtual environment is relocatable.
-    pub(crate) fn is_relocatable(&self) -> bool {
+    pub fn is_relocatable(&self) -> bool {
         self.relocatable
     }
 
