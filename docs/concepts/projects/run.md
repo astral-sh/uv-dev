@@ -39,6 +39,23 @@ $ uv run --with httpx==0.25.0 python -c "import httpx; print(httpx.__version__)"
 The requested version will be respected regardless of the project's requirements. For example, even
 if the project requires `httpx==0.24.0`, the output above would be the same.
 
+### Importing wheels from the cache
+
+To import an extracted wheel directly from uv's cache, pass its exact filename. The wheel must
+already be cached from a configured index or `--find-links` location. uv checks its filename tags
+and `Requires-Python` against the selected interpreter. A cache miss fails even when online.
+
+```console
+$ uv run --offline --with-cached-wheel idna-3.10-py3-none-any.whl python -Ic "import idna; print(idna.__file__)"
+```
+
+Repeat `--with-cached-wheel` for dependencies missing from the underlying environment. Imported
+modules can point into the shared cache. Use this mode with code that treats its installed files as
+read-only. Python suppresses automatic bytecode writes during imports after loading the wheel paths.
+The option does not resolve wheel dependencies or generate console scripts. Wheels with a `.data`
+directory require a regular installation. This mode uses Python site initialization, so `python -S`
+skips the wheel paths.
+
 ## Running scripts
 
 Scripts that declare inline metadata are automatically executed in environments isolated from the

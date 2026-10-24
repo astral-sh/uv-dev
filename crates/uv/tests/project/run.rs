@@ -1663,6 +1663,55 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn run_with_cached_wheel() {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
+    context.venv().args(["--python", "3.13"]).assert().success();
+    let links = context.workspace_root.join("test/links");
+    context
+        .pip_install()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .arg("basic-package==0.1.0")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--no-project", "--offline", "--no-index", "--find-links"]).arg(&links)
+        .args(["--with-cached-wheel", "basic_package-0.1.0-py3-none-any.whl", "--python"])
+        .arg(&context.python_versions[0].1).args(["python", "-Ic", indoc! {"
+            import importlib.metadata, pathlib, sys
+            import basic_package
+            cache = pathlib.Path(sys.argv[1]).resolve() / 'archive-v0'
+            assert pathlib.Path(basic_package.__file__).resolve().is_relative_to(cache)
+            assert not list(cache.rglob('*.pyc'))
+            print(importlib.metadata.version('basic-package'))
+        "}]).arg(context.cache_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    0.1.0
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--no-project", "--offline", "--no-index", "--find-links"]).arg(&links)
+        .args(["--with-cached-wheel", "basic_package-0.1.0-py3-none-any.whl", "--python"])
+        .arg(&context.python_versions[1].1).args(["python", "-V"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Wheel `basic_package-0.1.0-py3-none-any.whl` requires Python `>=3.13`, but the selected interpreter is `3.12.[X]`
+    ");
+}
+
+#[test]
+fn run_with_cached_wheel_missing() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--offline", "--with-cached-wheel", "missing-1.0-py3-none-any.whl", "python", "-V",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Wheel `missing-1.0-py3-none-any.whl` is not cached from a configured index
+    ");
+}
+
 /// Test that an ephemeral environment writes the path of its parent environment to the `extends-environment` key
 /// of its `pyvenv.cfg` file. This feature makes it easier for static-analysis tools like ty to resolve which import
 /// search paths are available in these ephemeral environments.
