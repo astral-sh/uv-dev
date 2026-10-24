@@ -1,5 +1,5 @@
 name: CI
-run-name: Diagnose Windows archive extraction and bootstrap placement
+run-name: Isolate elapsed time before the Windows workspace restore
 on: workflow_dispatch
 permissions:
   contents: read
@@ -18,9 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python_drive: [C, D]
+        restore_timing: [early, delayed]
         sample: [1,2,3,4]
-    name: Windows ${{ matrix.python_drive }} sample ${{ matrix.sample }}
+    name: Windows ${{ matrix.restore_timing }} sample ${{ matrix.sample }}
     runs-on: namespace-profile-windows-2022-x86-64-16x32
     timeout-minutes: 18
     steps:
@@ -43,11 +43,6 @@ jobs:
           version: "0.13.5"
           checksum: "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a"
 
-      - name: Use original image Python directory
-        if: matrix.python_drive == 'C'
-        run: |
-          "UV_PYTHON_INSTALL_DIR=$env:APPDATA/uv/python" >> $env:GITHUB_ENV
-
       - name: "Install required Python versions"
         env:
           UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
@@ -56,6 +51,10 @@ jobs:
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
+
+      - name: Match the elapsed time of a system-drive Python install
+        if: matrix.restore_timing == 'delayed'
+        run: Start-Sleep -Seconds 53
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
@@ -67,50 +66,3 @@ jobs:
           add-job-id-key: false
           save-if: 'false'
 
-      - name: Record disk and image configuration
-        run: |
-          Get-Volume -DriveLetter C,D | Select-Object DriveLetter,FileSystem,Size,SizeRemaining | Format-Table
-          Get-Partition -DriveLetter C,D | Get-Disk | Select-Object Number,FriendlyName,BusType,PartitionStyle | Format-Table
-          Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object AntivirusEnabled,RealTimeProtectionEnabled | Format-List
-          & "$env:SystemRoot/System32/tar.exe" --version
-
-      - name: Replay the same compressed workspace to fresh directories
-        shell: bash
-        env:
-          SAMPLE: ${{ matrix.sample }}
-        run: |
-          set -euo pipefail
-          gnutar="/c/Program Files/Git/usr/bin/tar.exe"
-          bsdtar="/c/Windows/System32/tar.exe"
-          scratch=$(cygpath -u "$RUNNER_TEMP")
-          archive="$scratch/windows-restore-probe.tar.zst"
-          cd /d
-          paths=(uv/target)
-          for name in .cargo/registry .cargo/git; do
-            if test -d "$name"; then paths+=("$name"); fi
-          done
-          "$gnutar" --posix -cf - "${paths[@]}" | zstd -q -3 -T0 -o "$archive"
-          echo "PROBE_ARCHIVE_BYTES $(stat -c %s "$archive")"
-          start=$(date +%s%3N)
-          zstd -dc "$archive" >/dev/null
-          end=$(date +%s%3N)
-          echo "PROBE_DECODE_MS $((end-start))"
-          # Rotate order so each reader/drive combination runs first on two machines.
-          cases=(gnuD nativeC nativeD gnuC)
-          for ((i=0; i<4; i++)); do
-            mode=${cases[$(((i+SAMPLE-1)%4))]}
-            drive=${mode: -1}
-            dest="/${drive,}/uv-restore-bench-$mode"
-            mkdir "$dest"
-            start=$(date +%s%3N)
-            result=0
-            if [[ "$mode" == gnu* ]]; then
-              zstd -dc "$archive" | "$gnutar" -xf - -C "$dest" || result=$?
-            else
-              zstd -dc "$archive" | "$bsdtar" -xf - -C "$(cygpath -w "$dest")" || result=$?
-            fi
-            end=$(date +%s%3N)
-            echo "PROBE_UNPACK $mode $((end-start)) $result"
-            find "$dest" -type f | wc -l
-            rm -rf -- "$dest"
-          done
