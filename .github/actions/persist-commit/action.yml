@@ -1,0 +1,48 @@
+name: "Persist commit"
+description: "Upload a commit and its history since a known base as an immutable Git bundle."
+
+inputs:
+  name:
+    description: "A unique artifact name."
+    required: true
+  base-sha:
+    description: "The full SHA of an ancestor already available to the consumer."
+    required: true
+  head-sha:
+    description: "The full commit SHA to persist, or HEAD."
+    default: "HEAD"
+    required: false
+  retention-days:
+    description: "How long to retain the commit artifact."
+    default: "1"
+    required: false
+
+outputs:
+  artifact-id:
+    description: "The immutable artifact ID to pass to load-commit."
+    value: ${{ steps.upload.outputs.artifact-id }}
+  head-sha:
+    description: "The persisted commit SHA."
+    value: ${{ steps.bundle.outputs.head-sha }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Bundle commit"
+      id: bundle
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: bash "$ACTION_PATH/persist.sh"
+
+    - name: "Upload commit"
+      id: upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ steps.bundle.outputs.path }}
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: ${{ inputs.retention-days }}
