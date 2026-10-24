@@ -627,9 +627,9 @@ pub async fn run(
                     bail!("`run-private-environment` does not support additional run requirements");
                 }
                 // A private installation must never fall back to a hardlink into the cache.
-                if settings.resolver.link_mode != LinkMode::Copy {
-                    settings.resolver.link_mode = LinkMode::CloneOrCopy;
-                }
+                settings.resolver.link_mode = LinkMode::Private {
+                    reflink: settings.resolver.link_mode != LinkMode::Copy,
+                };
             }
             let try_cached = !private
                 && preview.is_enabled(PreviewFeature::RunCachedWheels)
