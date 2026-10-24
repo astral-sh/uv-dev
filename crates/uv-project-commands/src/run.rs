@@ -1333,6 +1333,7 @@ pub async fn run(
     run_to_completion(handle).await
 }
 
+#[derive(Clone, Copy)]
 enum WheelSelection<'a> {
     Explicit(&'a [WheelFilename]),
     Locked(&'a Resolution),
