@@ -1,406 +1,2537 @@
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
+name: Measure native Rust cache
+run-name: ${{ inputs.phase }} / ${{ inputs.suite }}
+'on':
   workflow_dispatch:
-
+    inputs:
+      phase:
+        type: choice
+        options:
+        - seed
+        - warm
+        default: warm
+        required: true
+      suite:
+        type: string
+        default: all
+        required: true
+      schema-changed:
+        type: string
+        default: 'false'
+        required: false
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
-
-env:
-  UV_LOCKED: 1
-
 jobs:
-  plan:
-    # CI on main is redundant in the security repository.
-    if: ${{ github.repository != 'astral-sh/uv-security' || github.ref != 'refs/heads/main' }}
-    uses: $/.github/workflows/plan.yml
-
-  check-fmt:
-    needs: plan
-    uses: $/.github/workflows/check-fmt.yml
-
-  review:
-    needs: plan
-    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.review-security == 'true' }}
-    uses: astral-sh/github-actions/.github/workflows/pull-request-security-review.yml@f11dbff15181b71f2cc5e8487b1ac7d7bb03ea7d
-    with:
-      runner: depot-ubuntu-24.04-16
-      helper-runner: github-ubuntu-24.04-x86_64-4
-      # renovate: datasource=github-release-attachments depName=astral-sh/uv
-      uv-version: "0.13.5"
-      uv-checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
-      # Install Rust tools such as cargo-nextest so the reviewer can test PR code.
-      # Keep the environment outside the checkout when switching to the PR head.
-      setup-command: |
-        export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/pull-request-review-tools"
-        export UV_PYTHON_DOWNLOADS_JSON_URL="$GITHUB_WORKSPACE/crates/uv-python-managed/download-metadata.json"
-        uv sync --locked --only-dev
-        echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
-  review-code-quality:
-    needs: plan
-    if: >-
-      ${{
-        github.event_name == 'pull_request' &&
-        (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev') &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        needs.plan.outputs.run-checks == 'true'
-      }}
-    uses: $/.github/workflows/pull-request-code-quality-review.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
-  check-lint:
-    needs: plan
-    uses: $/.github/workflows/check-lint.yml
-    with:
-      code-changed: ${{ needs.plan.outputs.test-code }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  check-docs:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-docs.yml
-    secrets: inherit
-
-  check-zizmor:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-zizmor.yml
-    permissions:
-      contents: read
-      security-events: write
-
-  check-publish:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-publish.yml
-
-  check-release:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' || needs.plan.outputs.require-check-release == 'true' }}
-    uses: $/.github/workflows/check-release.yml
-
-  check-crates-policies:
-    needs: plan
-    if: ${{ needs.plan.outputs.check-crates-policies == 'true' }}
-    uses: $/.github/workflows/check-crates-policies.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-
-  check-cargo-lock-changes:
-    name: "Cargo lockfile changes"
-    if: >-
-      ${{
-        github.event_name == 'pull_request' &&
-        github.repository_owner == 'astral-sh' &&
-        github.event.pull_request.head.repo.full_name != github.repository
-      }}
-    runs-on: github-ubuntu-24.04-x86_64-2
+  linux-tests-before:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    name: linux-tests / before
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.5"
-          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
-      - name: "Check Cargo lockfile changes"
-        env:
-          GH_REPOSITORY: ${{ github.repository }}
-          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
-        run: uv run --script scripts/check-cargo-lock-changes.py HEAD^1 HEAD
-
-  check-lock:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-lock.yml
-
-  check-generated-files:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-generated-files.yml
-    with:
-      schema-changed: ${{ needs.plan.outputs.check-schema }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/test.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-      test-macos: ${{ needs.plan.outputs.test-macos }}
-
-  test-windows-trampolines:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}
-    uses: $/.github/workflows/test-windows-trampolines.yml
-    with:
-      trampoline-build: ${{ needs.plan.outputs.test-windows-trampoline-check-binary }}
-
-  build-dev-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/build-dev-binaries.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test-smoke:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-smoke == 'true' }}
-    uses: $/.github/workflows/test-smoke.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-integration:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
-    uses: $/.github/workflows/test-integration.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      sha: ${{ github.sha }}
-
-  test-system:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-system == 'true' }}
-    uses: $/.github/workflows/test-system.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-ecosystem:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-ecosystem == 'true' }}
-    uses: $/.github/workflows/test-ecosystem.yml
-    with:
-      sha: ${{ github.sha }}
-
-  build-release-artifacts:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
-    uses: $/.github/workflows/build-release-binaries.yml
-    secrets: inherit
-
-  build-docker:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-docker == 'true' }}
-    uses: $/.github/workflows/build-docker.yml
-    with:
-      push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-
-  publish-docker:
-    needs: build-docker
-    if: ${{ needs.build-docker.outputs.publish-dev == 'true' }}
-    uses: $/.github/workflows/publish-docker.yml
-    with:
-      manifest: ${{ needs.build-docker.outputs.manifest }}
-      push-dev: true
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-      attestations: write
-
-  bench:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-bench == 'true' }}
-    uses: $/.github/workflows/bench.yml
-    secrets: inherit
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-    permissions:
-      contents: read
-      id-token: write
-
-  # This job cannot be moved into a reusable workflow because it includes coverage for uploading
-  # attestations and PyPI does not support attestations in reusable workflows.
-  test-publish:
-    cache-mode: none
-    name: "test uv publish"
-    timeout-minutes: 20
-    needs:
-      - plan
-      - build-dev-binaries
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
-    # Only the main repository is a trusted publisher
-    if: ${{ github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.fork != true && needs.plan.outputs.test-publish == 'true' }}
-    environment:
-      name: uv-test-publish
-      deployment: false
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+      with:
+        prefix-key: uv-native-20261024-v1-linux-tests-before
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Start gnome-keyring
+      run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+    - name: Create btrfs filesystem
+      run: |
+        sudo apt install -y btrfs-progs
+        truncate -s 1G /tmp/btrfs.img
+        mkfs.btrfs /tmp/btrfs.img
+        sudo mkdir /btrfs
+        sudo mount -o loop /tmp/btrfs.img /btrfs
+        sudo chown "$(id -u):$(id -g)" /btrfs
+    - name: Create tmpfs filesystem
+      run: |
+        sudo mkdir /tmpfs
+        sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+        sudo chown "$(id -u):$(id -g)" /tmpfs
+    - name: Create minix filesystem (low hardlink limit)
+      run: |
+        truncate -s 16M /tmp/minix.img
+        mkfs.minix /tmp/minix.img
+        sudo mkdir /minix
+        sudo mount -o loop /tmp/minix.img /minix
+        sudo chown "$(id -u):$(id -g)" /minix
+    - name: Cargo test
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux
+    - name: Upload pending snapshots
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: pending-snapshots-linux-linux-tests-before
+        path: pending-snapshots/
+        if-no-files-found: ignore
+        include-hidden-files: true
+        retention-days: 1
+    - name: Upload JUnit results
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: junit-results-linux-linux-tests-before
+        path: target/nextest/ci*/junit.xml
+        if-no-files-found: ignore
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'linux-tests') }}
     env:
-      PYTHON_VERSION: 3.12
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
     permissions:
-      # For trusted publishing
-      id-token: write
+      contents: read
+  linux-tests-after:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    name: linux-tests / after
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "${{ env.PYTHON_VERSION }}"
-
-      - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: uv-linux-libc-${{ github.sha }}
-
-      - name: "Prepare binary"
-        run: chmod +x ./uv
-
-      - name: "Build astral-test-pypa-gh-action"
-        shell: bash -eo pipefail {0}
-        run: |
-          # Build a yet unused version of `astral-test-pypa-gh-action`
-          mkdir astral-test-pypa-gh-action
-          cd astral-test-pypa-gh-action
-          ../uv init --package --no-workspace
-          # Get the latest patch version
-          patch_version=$(curl https://test.pypi.org/simple/astral-test-pypa-gh-action/?format=application/vnd.pypi.simple.v1+json | jq --raw-output '[.files[].filename | select(endswith(".tar.gz"))] | last' | grep -oP '(?<=astral_test_pypa_gh_action-0\.1\.)\d+(?=\.tar\.gz)')
-          # Set the current version to one higher (which should be unused)
-          sed -i "s/0.1.0/0.1.$((patch_version + 1))/g" pyproject.toml
-          ../uv build
-
-      - name: "Publish astral-test-pypa-gh-action"
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-        with:
-          # With this GitHub action, we can't do as rigid checks as with our custom Python script, so we publish more
-          # leniently
-          skip-existing: "true"
-          verbose: "true"
-          repository-url: "https://test.pypi.org/legacy/"
-          packages-dir: "astral-test-pypa-gh-action/dist"
-
-      - name: "Request GitLab OIDC tokens for impersonation"
-        uses: digital-blueprint/gitlab-pipeline-trigger-action@c59b56e9d2688ab42c1304322ac8831a4ef6f7d2 # v1.4.0
-        with:
-          host: gitlab.com
-          id: astral-test-publish/astral-test-gitlab-pypi-tp
-          ref: main
-          trigger_token: ${{ secrets.GITLAB_TEST_PUBLISH_TRIGGER_TOKEN }}
-          access_token: ${{ secrets.GITLAB_TEST_PUBLISH_ACCESS_TOKEN }}
-          download_artifacts: true
-          fail_if_no_artifacts: true
-          download_path: ./gitlab-artifacts
-
-      - name: "Load GitLab OIDC tokens from GitLab job artifacts"
-        id: load-gitlab-oidc-token
-        run: |
-          # we expect ./gitlab-artifacts/*/artifacts/pypi-id-token to exist
-          pypi_id_token_file=$(find ./gitlab-artifacts -type f -name pypi-id-token | head -n 1)
-          if [ -z "${pypi_id_token_file}" ]; then
-            echo "No pypi-id-token file found in GitLab artifacts"
-            exit 1
-          fi
-          GITLAB_PYPI_OIDC_TOKEN=$(cat "${pypi_id_token_file}")
-
-          # Add secret masks for the tokens.
-          echo "::add-mask::$GITLAB_PYPI_OIDC_TOKEN"
-
-          echo "GITLAB_PYPI_OIDC_TOKEN=${GITLAB_PYPI_OIDC_TOKEN}" >> "${GITHUB_OUTPUT}"
-
-      - name: "Add password to uv text store"
-        run: |
-          ./uv auth login https://test.pypi.org/legacy/?astral-test-text-store --token ${UV_TEST_PUBLISH_TEXT_STORE}
-        env:
-          UV_TEST_PUBLISH_TEXT_STORE: ${{ secrets.UV_TEST_PUBLISH_TEXT_STORE }}
-
-      - name: "Publish test packages"
-        # `-p 3.12` prefers the python we just installed over the one locked in `.python_version`.
-        run: ./uv run --no-project -p "${PYTHON_VERSION}" scripts/publish/test_publish.py --uv ./uv all
-        env:
-          UV_TEST_PUBLISH_RUST_LOG: uv=debug,uv_publish=trace
-          UV_TEST_PUBLISH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_TOKEN }}
-          UV_TEST_PUBLISH_PASSWORD: ${{ secrets.UV_TEST_PUBLISH_PASSWORD }}
-          UV_TEST_PUBLISH_KEYRING: ${{ secrets.UV_TEST_PUBLISH_KEYRING }}
-          UV_TEST_PUBLISH_GITLAB_PAT: ${{ secrets.UV_TEST_PUBLISH_GITLAB_PAT }}
-          UV_TEST_PUBLISH_CODEBERG_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CODEBERG_TOKEN }}
-          UV_TEST_PUBLISH_CLOUDSMITH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CLOUDSMITH_TOKEN }}
-          UV_TEST_PUBLISH_PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
-          UV_TEST_PUBLISH_GITLAB_PYPI_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYPI_OIDC_TOKEN }}
-
-  required-checks-passed:
-    name: "all required jobs passed"
-    if: ${{ always() && github.ref != 'refs/heads/main' }}
-    needs:
-      - plan
-      - check-cargo-lock-changes
-      - check-fmt
-      - check-lint
-      - check-docs
-      - check-lock
-      - check-crates-policies
-      - check-release
-      - check-generated-files
-      - test
-      - test-integration
-      - test-system
-      - build-dev-binaries
-      - build-release-artifacts
-      - build-docker
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-linux-tests-after
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Start gnome-keyring
+      run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+    - name: Create btrfs filesystem
+      run: |
+        sudo apt install -y btrfs-progs
+        truncate -s 1G /tmp/btrfs.img
+        mkfs.btrfs /tmp/btrfs.img
+        sudo mkdir /btrfs
+        sudo mount -o loop /tmp/btrfs.img /btrfs
+        sudo chown "$(id -u):$(id -g)" /btrfs
+    - name: Create tmpfs filesystem
+      run: |
+        sudo mkdir /tmpfs
+        sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+        sudo chown "$(id -u):$(id -g)" /tmpfs
+    - name: Create minix filesystem (low hardlink limit)
+      run: |
+        truncate -s 16M /tmp/minix.img
+        mkfs.minix /tmp/minix.img
+        sudo mkdir /minix
+        sudo mount -o loop /tmp/minix.img /minix
+        sudo chown "$(id -u):$(id -g)" /minix
+    - name: Cargo test
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux
+    - name: Upload pending snapshots
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: pending-snapshots-linux-linux-tests-after
+        path: pending-snapshots/
+        if-no-files-found: ignore
+        include-hidden-files: true
+        retention-days: 1
+    - name: Upload JUnit results
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: junit-results-linux-linux-tests-after
+        path: target/nextest/ci*/junit.xml
+        if-no-files-found: ignore
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'linux-tests') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  dev-linux-x64-before:
+    name: dev-linux-x64 / before
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
     steps:
-      - name: "Check required jobs passed"
-        run: |
-          failing=$(
-            echo "$NEEDS_JSON" | jq -r --argjson conditional_jobs "$CONDITIONAL_JOBS" '
-              to_entries[]
-              | select($conditional_jobs[.key] != false)
-              | select(.value.result != "success" and .value.result != "skipped")
-              | "\(.key): \(.value.result)"
-            '
-          )
-          if [ -n "$failing" ]; then
-            echo "$failing"
-            exit 1
-          fi
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-          # Jobs not listed here are always required.
-          CONDITIONAL_JOBS: >-
-            {
-              "build-release-artifacts": ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }},
-              "check-release": ${{ needs.plan.outputs.require-check-release == 'true' }},
-              "test-integration": ${{ contains(github.event.pull_request.labels.*.name, 'test:integration') }},
-              "test-system": ${{ contains(github.event.pull_request.labels.*.name, 'test:system') }}
-            }
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-x64-before
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-libc-${{ github.sha }}-dev-linux-x64-before
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-x64') }}
+    permissions:
+      contents: read
+  dev-linux-x64-after:
+    name: dev-linux-x64 / after
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-x64-after
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-libc-${{ github.sha }}-dev-linux-x64-after
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-x64') }}
+    permissions:
+      contents: read
+  dev-linux-arm64-before:
+    name: dev-linux-arm64 / before
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-aarch64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: -Z unstable-options -C linker-features=+lld -C link-self-contained=+linker
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-arm64-before
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-aarch64-${{ github.sha }}-dev-linux-arm64-before
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-arm64') }}
+    permissions:
+      contents: read
+  dev-linux-arm64-after:
+    name: dev-linux-arm64 / after
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-aarch64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: -Z unstable-options -C linker-features=+lld -C link-self-contained=+linker
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-arm64-after
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-aarch64-${{ github.sha }}-dev-linux-arm64-after
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-arm64') }}
+    permissions:
+      contents: read
+  dev-linux-armv7-before:
+    name: dev-linux-armv7 / before
+    timeout-minutes: 15
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup armv7
+      run: |
+        # Slow downloads from the Azure mirror can exhaust the job timeout.
+        sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+        cat /etc/apt/apt-mirrors.txt
+        # Try the next configured mirror after the first failed download.
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/zz-uv-retries > /dev/null
+        sudo apt-get update
+        sudo apt-get install gcc-arm-linux-gnueabihf
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add armv7-unknown-linux-gnueabihf
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-armv7-before
+        profile: armv7-unknown-linux-gnueabihf/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      env:
+        CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf --bin
+        uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-armv7-gnueabihf-${{ github.sha }}-dev-linux-armv7-before
+        path: |
+          ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv
+          ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-armv7') }}
+    permissions:
+      contents: read
+  dev-linux-armv7-after:
+    name: dev-linux-armv7 / after
+    timeout-minutes: 15
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup armv7
+      run: |
+        # Slow downloads from the Azure mirror can exhaust the job timeout.
+        sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+        cat /etc/apt/apt-mirrors.txt
+        # Try the next configured mirror after the first failed download.
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/zz-uv-retries > /dev/null
+        sudo apt-get update
+        sudo apt-get install gcc-arm-linux-gnueabihf
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add armv7-unknown-linux-gnueabihf
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-armv7-after
+        profile: armv7-unknown-linux-gnueabihf/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      env:
+        CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf --bin
+        uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-armv7-gnueabihf-${{ github.sha }}-dev-linux-armv7-after
+        path: |
+          ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv
+          ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-armv7') }}
+    permissions:
+      contents: read
+  dev-linux-musl-before:
+    name: dev-linux-musl / before
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: -Z unstable-options -C linker-features=+lld -C link-self-contained=+linker
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup musl
+      run: |
+        sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+        sudo apt-get install musl-tools
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add x86_64-unknown-linux-musl
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-musl-before
+        profile: x86_64-unknown-linux-musl/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl --bin
+        uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-musl-${{ github.sha }}-dev-linux-musl-before
+        path: |
+          ./target/x86_64-unknown-linux-musl/no-debug-nightly/uv
+          ./target/x86_64-unknown-linux-musl/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-musl') }}
+    permissions:
+      contents: read
+  dev-linux-musl-after:
+    name: dev-linux-musl / after
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: -Z unstable-options -C linker-features=+lld -C link-self-contained=+linker
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup musl
+      run: |
+        sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+        sudo apt-get install musl-tools
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add x86_64-unknown-linux-musl
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-linux-musl-after
+        profile: x86_64-unknown-linux-musl/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl --bin
+        uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-linux-musl-${{ github.sha }}-dev-linux-musl-after
+        path: |
+          ./target/x86_64-unknown-linux-musl/no-debug-nightly/uv
+          ./target/x86_64-unknown-linux-musl/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-linux-musl') }}
+    permissions:
+      contents: read
+  dev-macos-arm64-before:
+    name: dev-macos-arm64 / before
+    timeout-minutes: 10
+    runs-on: namespace-profile-macos-15
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-macos-arm64-before
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-bin: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-macos-aarch64-${{ github.sha }}-dev-macos-arm64-before
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-macos-arm64') }}
+    permissions:
+      contents: read
+  dev-macos-arm64-after:
+    name: dev-macos-arm64 / after
+    timeout-minutes: 10
+    runs-on: namespace-profile-macos-15
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-macos-arm64-after
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-macos-aarch64-${{ github.sha }}-dev-macos-arm64-after
+        path: |
+          ./target/no-debug-nightly/uv
+          ./target/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-macos-arm64') }}
+    permissions:
+      contents: read
+  dev-macos-x64-before:
+    name: dev-macos-x64 / before
+    timeout-minutes: 10
+    runs-on: namespace-profile-macos-15
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add x86_64-apple-darwin
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-macos-x64-before
+        profile: x86_64-apple-darwin/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-bin: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-apple-darwin --bin uv --bin
+        uvx
+    - name: Verify binary architecture
+      run: |
+        test "$(lipo -archs target/x86_64-apple-darwin/no-debug-nightly/uv)" = x86_64
+        test "$(lipo -archs target/x86_64-apple-darwin/no-debug-nightly/uvx)" = x86_64
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-macos-x86_64-${{ github.sha }}-dev-macos-x64-before
+        path: |
+          ./target/x86_64-apple-darwin/no-debug-nightly/uv
+          ./target/x86_64-apple-darwin/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-macos-x64') }}
+    permissions:
+      contents: read
+  dev-macos-x64-after:
+    name: dev-macos-x64 / after
+    timeout-minutes: 10
+    runs-on: namespace-profile-macos-15
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add x86_64-apple-darwin
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-macos-x64-after
+        profile: x86_64-apple-darwin/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target x86_64-apple-darwin --bin uv --bin
+        uvx
+    - name: Verify binary architecture
+      run: |
+        test "$(lipo -archs target/x86_64-apple-darwin/no-debug-nightly/uv)" = x86_64
+        test "$(lipo -archs target/x86_64-apple-darwin/no-debug-nightly/uvx)" = x86_64
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-macos-x86_64-${{ github.sha }}-dev-macos-x64-after
+        path: |
+          ./target/x86_64-apple-darwin/no-debug-nightly/uv
+          ./target/x86_64-apple-darwin/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-macos-x64') }}
+    permissions:
+      contents: read
+  dev-windows-x64-before:
+    name: dev-windows-x64 / before
+    timeout-minutes: 10
+    runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-windows-x64-before
+        workspace: ${{ env.UV_WORKSPACE }}
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-windows-x86_64-${{ github.sha }}-dev-windows-x64-before
+        path: |
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-windows-x64') }}
+    permissions:
+      contents: read
+  dev-windows-x64-after:
+    name: dev-windows-x64 / after
+    timeout-minutes: 10
+    runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-windows-x64-after
+        workspace: ${{ env.UV_WORKSPACE }}
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-windows-x86_64-${{ github.sha }}-dev-windows-x64-after
+        path: |
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-windows-x64') }}
+    permissions:
+      contents: read
+  dev-windows-arm64-before:
+    name: dev-windows-arm64 / before
+    timeout-minutes: 15
+    runs-on: windows-11-arm
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-windows-arm64-before
+        workspace: ${{ env.UV_WORKSPACE }}
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-windows-aarch64-${{ github.sha }}-dev-windows-arm64-before
+        path: |
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-windows-arm64') }}
+    permissions:
+      contents: read
+  dev-windows-arm64-after:
+    name: dev-windows-arm64 / after
+    timeout-minutes: 15
+    runs-on: windows-11-arm
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-windows-arm64-after
+        workspace: ${{ env.UV_WORKSPACE }}
+        profile: no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      working-directory: ${{ env.UV_WORKSPACE }}
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-windows-aarch64-${{ github.sha }}-dev-windows-arm64-after
+        path: |
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
+          ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-windows-arm64') }}
+    permissions:
+      contents: read
+  dev-android-before:
+    name: dev-android / before
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Android NDK
+      run: |
+        # Use ANDROID_NDK_ROOT if set, otherwise find the latest installed NDK
+        if [ -z "${ANDROID_NDK_ROOT}" ]; then
+          NDK_ROOT=$(ls -d "${ANDROID_HOME}/ndk/"* 2>/dev/null | sort -V | tail -n1)
+        else
+          NDK_ROOT="${ANDROID_NDK_ROOT}"
+        fi
+        TOOLCHAIN="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
+
+        echo "CC_aarch64_linux_android=${TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+        echo "CXX_aarch64_linux_android=${TOOLCHAIN}/bin/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+        echo "AR_aarch64_linux_android=${TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+        echo "RANLIB_aarch64_linux_android=${TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RANLIB=${TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+
+        # NDK 23+ removed libgcc, provide a stub that redirects to libunwind
+        LIBDIR=$(echo "${TOOLCHAIN}"/lib/clang/*/lib/linux/aarch64)
+        if [ ! -f "${LIBDIR}/libgcc.a" ]; then
+          echo 'INPUT(-lunwind)' | sudo tee "${LIBDIR}/libgcc.a" > /dev/null
+        fi
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add aarch64-linux-android
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-dev-android-before
+        profile: aarch64-linux-android/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target aarch64-linux-android --bin uv --bin
+        uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-android-aarch64-${{ github.sha }}-dev-android-before
+        path: |
+          ./target/aarch64-linux-android/no-debug-nightly/uv
+          ./target/aarch64-linux-android/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-android') }}
+    permissions:
+      contents: read
+  dev-android-after:
+    name: dev-android / after
+    timeout-minutes: 10
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: 1
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Android NDK
+      run: |
+        # Use ANDROID_NDK_ROOT if set, otherwise find the latest installed NDK
+        if [ -z "${ANDROID_NDK_ROOT}" ]; then
+          NDK_ROOT=$(ls -d "${ANDROID_HOME}/ndk/"* 2>/dev/null | sort -V | tail -n1)
+        else
+          NDK_ROOT="${ANDROID_NDK_ROOT}"
+        fi
+        TOOLCHAIN="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
+
+        echo "CC_aarch64_linux_android=${TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+        echo "CXX_aarch64_linux_android=${TOOLCHAIN}/bin/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+        echo "AR_aarch64_linux_android=${TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+        echo "RANLIB_aarch64_linux_android=${TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RANLIB=${TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+
+        # NDK 23+ removed libgcc, provide a stub that redirects to libunwind
+        LIBDIR=$(echo "${TOOLCHAIN}"/lib/clang/*/lib/linux/aarch64)
+        if [ ! -f "${LIBDIR}/libgcc.a" ]; then
+          echo 'INPUT(-lunwind)' | sudo tee "${LIBDIR}/libgcc.a" > /dev/null
+        fi
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install --profile minimal
+        rustup target add aarch64-linux-android
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-dev-android-after
+        profile: aarch64-linux-android/no-debug-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Build
+      run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness --target aarch64-linux-android --bin uv --bin
+        uvx
+    - name: Upload binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: uv-android-aarch64-${{ github.sha }}-dev-android-after
+        path: |
+          ./target/aarch64-linux-android/no-debug-nightly/uv
+          ./target/aarch64-linux-android/no-debug-nightly/uvx
+        retention-days: 1
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-android') }}
+    permissions:
+      contents: read
+  dev-msrv-before:
+    name: dev-msrv / before
+    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Read MSRV from Cargo.toml
+      id: msrv
+      run: |
+        MSRV=$(grep -m1 'rust-version' Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
+        echo "value=$MSRV" >> "$GITHUB_OUTPUT"
+    - name: Install Rust toolchain
+      run: rustup default ${MSRV}
+      env:
+        MSRV: ${{ steps.msrv.outputs.value }}
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-dev-msrv-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - run: cargo +${MSRV} build --locked --profile no-debug
+      env:
+        MSRV: ${{ steps.msrv.outputs.value }}
+    - run: ./target/no-debug/uv --version
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-msrv') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  dev-msrv-after:
+    name: dev-msrv / after
+    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Read MSRV from Cargo.toml
+      id: msrv
+      run: |
+        MSRV=$(grep -m1 'rust-version' Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
+        echo "value=$MSRV" >> "$GITHUB_OUTPUT"
+    - name: Install Rust toolchain
+      run: |
+        rustup toolchain install "${MSRV}" --profile minimal
+        echo "RUSTUP_TOOLCHAIN=${MSRV}" >> "$GITHUB_ENV"
+      env:
+        MSRV: ${{ steps.msrv.outputs.value }}
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        cache-workspace-crates: 'false'
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-dev-msrv-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - run: cargo +${MSRV} build --locked --profile no-debug
+      env:
+        MSRV: ${{ steps.msrv.outputs.value }}
+    - run: ./target/no-debug/uv --version
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-msrv') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  dev-freebsd-before:
+    name: dev-freebsd / before
+    timeout-minutes: 10
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-dev-freebsd-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Cross build
+      env:
+        CROSS_BUILD_ENV_PASSTHROUGH: UV_INTERNAL__BUILD_GIT_INFO
+      run: |
+        # Install cross from `freebsd-firecracker`
+        wget -q -O cross https://github.com/acj/freebsd-firecracker/releases/download/v0.0.10/cross
+        chmod +x cross
+        mv cross /usr/local/bin/cross
+
+        cross build --target x86_64-unknown-freebsd --profile no-debug
+    - name: Test in Firecracker VM
+      uses: acj/freebsd-firecracker-action@ba4f70408ef1d979acdd7bd36fc4b27e06fe5abe
+      with:
+        verbose: false
+        checkout: false
+        pre-run: |
+          # The exclude `*` prevents examination of directories so we need to
+          # include each parent directory of the binary
+          include_path="$(mktemp)"
+          cat <<EOF > $include_path
+          target
+          target/x86_64-unknown-freebsd
+          target/x86_64-unknown-freebsd/no-debug
+          target/x86_64-unknown-freebsd/no-debug/uv
+          EOF
+
+          rsync -r -e "ssh" \
+            --relative \
+            --copy-links \
+            --include-from "$include_path" \
+            --exclude "*" \
+            . firecracker:
+        run-in-vm: |
+          mv target/x86_64-unknown-freebsd/no-debug/uv uv
+          chmod +x uv
+          ./uv --version
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-freebsd') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  dev-freebsd-after:
+    name: dev-freebsd / after
+    timeout-minutes: 10
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        cache-workspace-crates: 'false'
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-dev-freebsd-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Cross build
+      env:
+        CROSS_BUILD_ENV_PASSTHROUGH: UV_INTERNAL__BUILD_GIT_INFO
+      run: |
+        # Install cross from `freebsd-firecracker`
+        wget -q -O cross https://github.com/acj/freebsd-firecracker/releases/download/v0.0.10/cross
+        chmod +x cross
+        mv cross /usr/local/bin/cross
+
+        cross build --target x86_64-unknown-freebsd --profile no-debug
+    - name: Test in Firecracker VM
+      uses: acj/freebsd-firecracker-action@ba4f70408ef1d979acdd7bd36fc4b27e06fe5abe
+      with:
+        verbose: false
+        checkout: false
+        pre-run: |
+          # The exclude `*` prevents examination of directories so we need to
+          # include each parent directory of the binary
+          include_path="$(mktemp)"
+          cat <<EOF > $include_path
+          target
+          target/x86_64-unknown-freebsd
+          target/x86_64-unknown-freebsd/no-debug
+          target/x86_64-unknown-freebsd/no-debug/uv
+          EOF
+
+          rsync -r -e "ssh" \
+            --relative \
+            --copy-links \
+            --include-from "$include_path" \
+            --exclude "*" \
+            . firecracker:
+        run-in-vm: |
+          mv target/x86_64-unknown-freebsd/no-debug/uv uv
+          chmod +x uv
+          ./uv --version
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'dev-freebsd') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_INTERNAL__BUILD_GIT_INFO: 1
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  macos-tests-before:
+    timeout-minutes: 20
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'macos-tests') }}
+    runs-on: namespace-profile-macos-15
+    name: macos-tests / before
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: uv-native-20261024-v1-macos-tests-before
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Create HFS+ disk image (no reflink support)
+      run: |
+        hdiutil create -size 256m -fs HFS+ -volname NoReflink /tmp/noreflink.dmg
+        hdiutil attach /tmp/noreflink.dmg
+        echo "HFS_MOUNT=/Volumes/NoReflink" >> "$GITHUB_ENV"
+    - name: Create CI keychain
+      run: |
+        security create-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security set-keychain-settings -lut 21600 "$RUNNER_TEMP/uv-ci.keychain-db"
+        security unlock-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security list-keychains -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+        security default-keychain -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: 743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Cargo test
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: ${{ runner.temp }}
+        UV_INTERNAL__TEST_NOCOW_FS: ${{ env.HFS_MOUNT }}
+        UV_INTERNAL__TEST_ALT_FS: ${{ env.HFS_MOUNT }}
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --no-default-features \
+          --features test-python,test-python-managed,test-pypi,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native \
+          --workspace \
+          --profile ci-macos
+    - name: Upload pending snapshots
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: pending-snapshots-macos-macos-tests-before
+        path: pending-snapshots/
+        if-no-files-found: ignore
+        include-hidden-files: true
+        retention-days: 1
+    - name: Upload JUnit results
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: junit-results-macos-macos-tests-before
+        path: target/nextest/ci*/junit.xml
+        if-no-files-found: ignore
+        retention-days: 1
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  macos-tests-after:
+    timeout-minutes: 20
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'macos-tests') }}
+    runs-on: namespace-profile-macos-15
+    name: macos-tests / after
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        prefix-key: uv-native-20261024-v1-macos-tests-after
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Create HFS+ disk image (no reflink support)
+      run: |
+        hdiutil create -size 256m -fs HFS+ -volname NoReflink /tmp/noreflink.dmg
+        hdiutil attach /tmp/noreflink.dmg
+        echo "HFS_MOUNT=/Volumes/NoReflink" >> "$GITHUB_ENV"
+    - name: Create CI keychain
+      run: |
+        security create-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security set-keychain-settings -lut 21600 "$RUNNER_TEMP/uv-ci.keychain-db"
+        security unlock-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security list-keychains -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+        security default-keychain -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: 743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Cargo test
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: ${{ runner.temp }}
+        UV_INTERNAL__TEST_NOCOW_FS: ${{ env.HFS_MOUNT }}
+        UV_INTERNAL__TEST_ALT_FS: ${{ env.HFS_MOUNT }}
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --no-default-features \
+          --features test-python,test-python-managed,test-pypi,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native \
+          --workspace \
+          --profile ci-macos
+    - name: Upload pending snapshots
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: pending-snapshots-macos-macos-tests-after
+        path: pending-snapshots/
+        if-no-files-found: ignore
+        include-hidden-files: true
+        retention-days: 1
+    - name: Upload JUnit results
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: junit-results-macos-macos-tests-after
+        path: target/nextest/ci*/junit.xml
+        if-no-files-found: ignore
+        retention-days: 1
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  clippy-linux-before:
+    name: clippy-linux / before
+    timeout-minutes: 10
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'clippy-linux') }}
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup component add clippy
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-clippy-linux-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Clippy
+      env:
+        CARGO_BUILD_WARNINGS: deny
+      run: cargo clippy --workspace --all-targets --all-features --locked
+    permissions:
+      contents: read
+  clippy-linux-after:
+    name: clippy-linux / after
+    timeout-minutes: 10
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'clippy-linux') }}
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup component add clippy
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-clippy-linux-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Clippy
+      env:
+        CARGO_BUILD_WARNINGS: deny
+      run: cargo clippy --workspace --all-targets --all-features --locked
+    permissions:
+      contents: read
+  clippy-windows-before:
+    name: clippy-windows / before
+    timeout-minutes: 15
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'clippy-windows') }}
+    runs-on: namespace-profile-windows-2022-x86-64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      run: rustup component add clippy
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        workspace: ${{ env.UV_WORKSPACE }}
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-clippy-windows-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Clippy
+      working-directory: ${{ env.UV_WORKSPACE }}
+      env:
+        CARGO_BUILD_WARNINGS: deny
+      run: cargo clippy --workspace --all-targets --all-features --locked
+    permissions:
+      contents: read
+  clippy-windows-after:
+    name: clippy-windows / after
+    timeout-minutes: 15
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'clippy-windows') }}
+    runs-on: namespace-profile-windows-2022-x86-64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Setup Dev Drive
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+    - name: Copy Git Repo to Dev Drive
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+    - name: Install Rust toolchain
+      run: rustup component add clippy
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        workspace: ${{ env.UV_WORKSPACE }}
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-clippy-windows-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Clippy
+      working-directory: ${{ env.UV_WORKSPACE }}
+      env:
+        CARGO_BUILD_WARNINGS: deny
+      run: cargo clippy --workspace --all-targets --all-features --locked
+    permissions:
+      contents: read
+  hawk-before:
+    timeout-minutes: 15
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'hawk') }}
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        workspaces: . -> target/hawk
+        cache-workspace-crates: 'false'
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-hawk-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install Rust toolchain
+      run: rustup toolchain install 1.99.0
+    - name: Install Hawk
+      run: |
+        curl --proto '=https' --tlsv1.2 -LsSf \
+          "https://github.com/astral-sh/hawk/releases/download/${HAWK_VERSION}/cargo-hawk-installer.sh" | sh
+    - name: Hawk
+      run: cargo +1.99.0 hawk check --target-dir target/hawk -D warnings
+    name: hawk / before
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+    permissions:
+      contents: read
+  hawk-after:
+    timeout-minutes: 15
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'hawk') }}
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      HAWK_VERSION: 0.1.15
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTUP_TOOLCHAIN: 1.99.0
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install 1.99.0
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        target-directory: target/hawk
+        cache-workspace-crates: 'false'
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-hawk-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install Hawk
+      run: |
+        curl --proto '=https' --tlsv1.2 -LsSf \
+          "https://github.com/astral-sh/hawk/releases/download/${HAWK_VERSION}/cargo-hawk-installer.sh" | sh
+    - name: Hawk
+      run: cargo +1.99.0 hawk check --target-dir target/hawk -D warnings
+    name: hawk / after
+    permissions:
+      contents: read
+  publish-before:
+    timeout-minutes: 20
+    runs-on: depot-ubuntu-24.04-8
+    name: publish / before
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-publish-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: cargo publish dry-run
+      run: cargo publish --locked --workspace --dry-run
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'publish') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  publish-after:
+    timeout-minutes: 20
+    runs-on: depot-ubuntu-24.04-8
+    name: publish / after
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        cache-workspace-crates: 'false'
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-publish-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: cargo publish dry-run
+      run: cargo publish --locked --workspace --dry-run
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'publish') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+  docs-before:
+    timeout-minutes: 10
+    name: docs / before
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.14'
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-docs-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Generate reference documentation
+      run: |
+        cargo --locked dev generate-options-reference
+        cargo --locked dev generate-cli-reference
+        cargo --locked dev generate-env-vars-reference
+        cargo --locked dev generate-preview-features-reference
+    - name: Build docs
+      run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'docs') }}
+    permissions:
+      contents: read
+  docs-after:
+    timeout-minutes: 10
+    name: docs / after
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      UV_LOCKED: 1
+      UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.14'
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-docs-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Generate reference documentation
+      run: |
+        cargo --locked dev generate-options-reference
+        cargo --locked dev generate-cli-reference
+        cargo --locked dev generate-env-vars-reference
+        cargo --locked dev generate-preview-features-reference
+    - name: Build docs
+      run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'docs') }}
+    permissions:
+      contents: read
+  generated-before:
+    timeout-minutes: 10
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    name: generated / before
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-generated-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Generate all
+      run: cargo --locked dev generate-all --mode dry-run
+    - name: Check sysconfig mappings
+      run: cargo --locked dev generate-sysconfig-metadata --mode check
+    - name: Install Rustfmt
+      run: rustup component add rustfmt
+    - name: Check Packse scenario tests
+      run: cargo --locked dev generate-scenario-tests --mode check
+    - name: Check JSON schema
+      if: ${{ inputs.schema-changed == 'true' }}
+      run: cargo --locked dev generate-json-schema --mode check
+    - name: Check uv-extract dirhash test vectors
+      run: cargo --locked dev generate-dirhash-test-vectors --mode check
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'generated') }}
+    permissions:
+      contents: read
+  generated-after:
+    timeout-minutes: 10
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    name: generated / after
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-generated-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Generate all
+      run: cargo --locked dev generate-all --mode dry-run
+    - name: Check sysconfig mappings
+      run: cargo --locked dev generate-sysconfig-metadata --mode check
+    - name: Install Rustfmt
+      run: rustup component add rustfmt
+    - name: Check Packse scenario tests
+      run: cargo --locked dev generate-scenario-tests --mode check
+    - name: Check JSON schema
+      if: ${{ inputs.schema-changed == 'true' }}
+      run: cargo --locked dev generate-json-schema --mode check
+    - name: Check uv-extract dirhash test vectors
+      run: cargo --locked dev generate-dirhash-test-vectors --mode check
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'generated') }}
+    permissions:
+      contents: read
+  bench-walltime-before:
+    name: bench-walltime / before
+    runs-on: depot-ubuntu-24.04-16
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'bench-walltime') }}
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - name: Checkout Branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup show
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        profile: |
+          debug
+          profiling
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-bench-walltime-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install requirements and prime cache
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+        cargo run --locked --bin uv -- venv --cache-dir .cache
+        # Resolve benchmark fixtures without the repository's tooling build policy.
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+    - name: Build benchmarks
+      run: |
+        # cargo-codspeed resolves metadata before passing --locked to Cargo.
+        cargo metadata --locked --format-version 1 > /dev/null
+        uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch --bench uv_pep508 --bench uv_settings
+    - name: Create artifact archive
+      shell: bash
+      run: |
+        mkdir -p target/codspeed-bin
+        cp "$(uv run --only-dev which cargo-codspeed)" target/codspeed-bin/
+        tar -cf - target/codspeed target/codspeed-bin target/debug/uv .cache | zstd -T0 -3 -o benchmarks-walltime.tar.zst
+    - name: Upload benchmark artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: benchmarks-walltime-bench-walltime-before
+        path: benchmarks-walltime.tar.zst
+        compression-level: 0
+        retention-days: 1
+    permissions:
+      contents: read
+  bench-walltime-after:
+    name: bench-walltime / after
+    runs-on: depot-ubuntu-24.04-16
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'bench-walltime') }}
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - name: Checkout Branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup show
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        profile: |
+          debug
+          profiling
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-bench-walltime-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install requirements and prime cache
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+        cargo run --locked --bin uv -- venv --cache-dir .cache
+        # Resolve benchmark fixtures without the repository's tooling build policy.
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+    - name: Build benchmarks
+      run: |
+        # cargo-codspeed resolves metadata before passing --locked to Cargo.
+        cargo metadata --locked --format-version 1 > /dev/null
+        uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch --bench uv_pep508 --bench uv_settings
+    - name: Create artifact archive
+      shell: bash
+      run: |
+        mkdir -p target/codspeed-bin
+        cp "$(uv run --only-dev which cargo-codspeed)" target/codspeed-bin/
+        tar -cf - target/codspeed target/codspeed-bin target/debug/uv .cache | zstd -T0 -3 -o benchmarks-walltime.tar.zst
+    - name: Upload benchmark artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: benchmarks-walltime-bench-walltime-after
+        path: benchmarks-walltime.tar.zst
+        compression-level: 0
+        retention-days: 1
+    permissions:
+      contents: read
+  bench-simulated-before:
+    name: bench-simulated / before
+    runs-on: depot-ubuntu-24.04-4
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'bench-simulated') }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - name: Checkout Branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup show
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        profile: |
+          debug
+          profiling
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-bench-simulated-before
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install requirements and prime cache
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+        cargo run --locked --bin uv -- venv --cache-dir .cache
+        # Resolve benchmark fixtures without the repository's tooling build policy.
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+    - name: Build benchmarks
+      run: |
+        # cargo-codspeed resolves metadata before passing --locked to Cargo.
+        cargo metadata --locked --format-version 1 > /dev/null
+        uv run --only-dev cargo codspeed build --locked --profile profiling -p uv-bench
+  bench-simulated-after:
+    name: bench-simulated / after
+    runs-on: depot-ubuntu-24.04-4
+    if: ${{ (inputs.suite == 'all' || inputs.suite == 'bench-simulated') }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+      RUSTC_BOOTSTRAP: '1'
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+    steps:
+    - name: Checkout Branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup show
+    - uses: astral-sh/github-actions/rust-workspace-cache@4f88db2c55c0e0588aaae819ef0ef95e4924c753
+      with:
+        profile: |
+          debug
+          profiling
+        save-if: ${{ inputs.phase == 'seed' }}
+        prefix-key: uv-native-20261024-v1-bench-simulated-after
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        EXPECTED_HIT: 'true'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "${CACHE_HIT:-false}" = "$EXPECTED_HIT"
+    - name: Install uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install requirements and prime cache
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+        cargo run --locked --bin uv -- venv --cache-dir .cache
+        # Resolve benchmark fixtures without the repository's tooling build policy.
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+        cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+    - name: Build benchmarks
+      run: |
+        # cargo-codspeed resolves metadata before passing --locked to Cargo.
+        cargo metadata --locked --format-version 1 > /dev/null
+        uv run --only-dev cargo codspeed build --locked --profile profiling -p uv-bench
