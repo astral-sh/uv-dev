@@ -6,6 +6,9 @@ on:
       number:
         required: true
         type: string
+      source-base-ref:
+        required: true
+        type: string
       base-ref:
         required: true
         type: string
@@ -122,6 +125,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload updated parent candidate
+        id: bundle
         if: steps.update.outputs.outcome == 'clean'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -130,3 +134,56 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+          overwrite: true
+
+      - name: Record parent update outcome
+        id: result
+        if: always()
+        env:
+          PULL_REQUEST_NUMBER: ${{ inputs.number }}
+          SOURCE_BASE_REF: ${{ inputs.source-base-ref }}
+          BASE_REF: ${{ inputs.base-ref }}
+          BASE_SHA: ${{ inputs.base-sha }}
+          BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+          PARENT_MERGE_SHA: ${{ inputs.parent-merge-sha }}
+          HEAD_REF: ${{ inputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+          UPDATE_STATUS: ${{ steps.update.outcome }}
+          BUNDLE_STATUS: ${{ steps.bundle.outcome }}
+          UPDATE_OUTCOME: ${{ steps.update.outputs.outcome }}
+          CANDIDATE_HEAD: ${{ steps.update.outputs.head_sha }}
+          REJECTION_REASON: ${{ steps.update.outputs.rejection_reason }}
+        run: |
+          outcome="$UPDATE_OUTCOME"
+          case "$UPDATE_STATUS:$outcome" in
+            success:clean)
+              if [ "$BUNDLE_STATUS" != success ]; then
+                outcome=failed
+                REJECTION_REASON="The clean parent-update bundle could not be uploaded."
+              fi
+              ;;
+            success:conflicts|success:empty) ;;
+            success:) outcome=rejected ;;
+            *) outcome=failed ;;
+          esac
+          jq --null-input \
+            --arg number "$PULL_REQUEST_NUMBER" \
+            --arg source_base_ref "$SOURCE_BASE_REF" \
+            --arg base_ref "$BASE_REF" --arg base_sha "$BASE_SHA" \
+            --arg previous_sha "$BASE_PREVIOUS_SHA" --arg merge_sha "$PARENT_MERGE_SHA" \
+            --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" \
+            --arg outcome "$outcome" --arg candidate_head "$CANDIDATE_HEAD" \
+            --arg rejection_reason "$REJECTION_REASON" \
+            '{schema: 1, $number, $source_base_ref, $base_ref, $base_sha, $previous_sha,
+              $merge_sha, $head_ref, $head_sha, $outcome, $candidate_head, $rejection_reason}' \
+            > "$RUNNER_TEMP/parent-update-outcome.json"
+
+      - name: Upload parent update outcome
+        if: always() && steps.result.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: parent-update-outcome-${{ inputs.number }}-${{ inputs.head-sha }}
+          path: ${{ runner.temp }}/parent-update-outcome.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
