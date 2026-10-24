@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5596,
+        "title": "Feature Request: `extend` config option",
+        "url": "https://github.com/astral-sh/uv/issues/5596",
+        "state": "open",
+        "reason": "Requests composing separately maintained shared configuration with local settings through a Ruff-like extend option. This covers the same underlying need; the proposed fragment directory, ordering, and extension filtering offer an alternative design. The issue remains labeled wish."
+      },
+      {
+        "kind": "issue",
+        "number": 11070,
+        "title": "Inheriting [tool.uv] section from root-level `pyproject.toml` when desired",
+        "url": "https://github.com/astral-sh/uv/issues/11070",
+        "state": "open",
+        "reason": "Related inheritance request explicitly connected to astral-sh/uv#5596. A maintainer highlighted configuration inheritance complexity. This concerns parent/child project configuration rather than multiple user-level fragments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7851,
+        "title": "Add support for system-level `uv.toml` configuration",
+        "url": "https://github.com/astral-sh/uv/pull/7851",
+        "state": "merged",
+        "reason": "Implemented the system-level layer mentioned as a workaround, released in uv 0.4.26. Its discussion chose the first discovered system file instead of merging every system file. It does not provide user-level fragments."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged PRs using authenticated gh. Separately searched splitting (uv.toml.d, uv.toml split, multiple files), ordering (lexicographical, lexicographic, alphabetical), and filtering (suffix, extension). Conceptual searches covered include, extend, inheritance, fragments, drop-in, machine-specific settings, dotfiles, and area:configuration. Inspected candidate comments and cross-references. PR search omitted a known matching PR, so checks also used a PR title inventory, changelogs, and direct PR reads. Ruled out astral-sh/uv#12013 and astral-sh/uv#6772 as dependency-source override requests; astral-sh/uv#20995 concerns sharing a specific setting across workspaces. Historical checks included astral-sh/uv#3049 and astral-sh/uv#7851. Also ruled out astral-sh/uv#22554, an internal merge optimization, and astral-sh/uv#3203, a configuration-path correction."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#5596 already tracks composing shared configuration with separately maintained local settings. The machine-specific use case and ordered fragment-directory proposal can be centralized there as an alternative design. Source confirms that uv currently loads one user-level uv.toml; no incorrect behavior or regression is established.",
+  "summary": "astral-sh/uv#5596 is the closest existing configuration-composition request. astral-sh/uv#11070 provides related design discussion, while astral-sh/uv#7851 implements the existing system-level workaround.",
+  "draft_response": "You're correct: uv currently reads a single user-level `uv.toml` and does not load a `uv.toml.d` directory. The underlying request to combine shared configuration with local settings is tracked in astral-sh/uv#5596. Please add your machine-specific use case and the ordered `.toml` fragment proposal there so we can keep the design discussion together. That request remains on the wishlist, with no implementation timeline."
+}
