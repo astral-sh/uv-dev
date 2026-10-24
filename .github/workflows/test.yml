@@ -281,7 +281,7 @@ jobs:
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
 
-      # Keep the top-level uv executable on the workspace drive for path-sensitive tests.
+      # Keep `uv.exe` on the workspace drive so its reported path matches test snapshots.
       - uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9 # v1
         with:
           path: |
