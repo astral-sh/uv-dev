@@ -6,7 +6,7 @@ on:
       mode:
         type: choice
         description: Seed or read the cache
-        options: [prime, measure, verify]
+        options: [prime, measure, verify, isolate]
         default: measure
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: ${{ fromJSON(inputs.mode != 'measure' && '[2]' || '[1,2,3]') }}
+        partition: ${{ fromJSON((inputs.mode == 'prime' || inputs.mode == 'verify') && '[2]' || '[1,2,3]') }}
         arm: ${{ fromJSON(inputs.mode == 'prime' && '["timestamps"]' || '["current","timestamps"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,7 +64,7 @@ jobs:
         run: Add-Content "$env:UV_WORKSPACE/crates/uv/build.rs" '// Exercise changed build-script invalidation.'
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
-        if: inputs.mode == 'prime' || matrix.arm == 'current'
+        if: inputs.mode != 'isolate' && (inputs.mode == 'prime' || matrix.arm == 'current')
         with:
           prefix-key: v1-rust-workspace
           key: ${{ hashFiles('Cargo.toml') }}
@@ -75,7 +75,7 @@ jobs:
           save-if: 'false'
 
       - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
-        if: matrix.arm == 'timestamps'
+        if: inputs.mode != 'isolate' && matrix.arm == 'timestamps'
         env:
           CARGO_UNSTABLE_MTIME_ON_USE: "false"
         with:
@@ -86,6 +86,38 @@ jobs:
           # Use the same cache entry across the partitions
           add-job-id-key: false
           save-if: ${{ inputs.mode == 'prime' }}
+
+      - name: Prepare shared input metadata directory
+        if: inputs.mode == 'isolate'
+        id: metadata
+        uses: astral-sh/github-actions/rust-workspace-cache/inputs/prepare@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+        with:
+          workspace: ${{ env.UV_WORKSPACE }}
+
+      - name: Restore the identical archive in both arms
+        if: inputs.mode == 'isolate'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+        with:
+          prefix-key: v1-bench-windows-build-inputs-20261024-build-inputs-v1
+          key: ${{ hashFiles('Cargo.toml') }}
+          workspaces: ${{ env.UV_WORKSPACE }} -> target
+          cache-workspace-crates: "true"
+          add-job-id-key: false
+          cache-bin: "true"
+          cache-directories: ${{ steps.metadata.outputs.directory }}
+          save-if: "false"
+
+      - name: Apply cached build input timestamps
+        if: inputs.mode == 'isolate' && matrix.arm == 'timestamps'
+        uses: astral-sh/github-actions/rust-workspace-cache/inputs@52ea66bbf7dbe95fc9e2baae530cb3827214c530
+        with:
+          workspace: ${{ env.UV_WORKSPACE }}
+          target-directory: target
+          profile: fast-build-nightly
+          directory: ${{ steps.metadata.outputs.directory }}
+          save: "false"
 
       - name: "Create NTFS test directory (low hardlink limit)"
         run: New-Item -Path "C:\uv" -ItemType Directory -Force
