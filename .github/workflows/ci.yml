@@ -6,7 +6,7 @@ on:
       mode:
         type: choice
         description: Seed or read the cache
-        options: [prime, measure]
+        options: [prime, measure, verify]
         default: measure
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: ${{ fromJSON(inputs.mode == 'prime' && '[2]' || '[1,2,3]') }}
+        partition: ${{ fromJSON(inputs.mode != 'measure' && '[2]' || '[1,2,3]') }}
         arm: ${{ fromJSON(inputs.mode == 'prime' && '["timestamps"]' || '["current","timestamps"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,6 +58,10 @@ jobs:
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
+
+      - name: Change one tracked build script
+        if: inputs.mode == 'verify'
+        run: Add-Content "$env:UV_WORKSPACE/crates/uv/build.rs" '// Exercise changed build-script invalidation.'
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         if: inputs.mode == 'prime' || matrix.arm == 'current'
