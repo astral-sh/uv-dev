@@ -1,24 +1,50 @@
 //! Integration tests for uv Python commands.
 
+#[cfg(feature = "test-python-managed")]
+mod build_upgrade;
+
+#[cfg(feature = "test-python")]
+mod fixtures;
+
+#[cfg(feature = "test-python-managed")]
+mod managed_venv;
+
 mod python_dir;
 
 #[cfg(feature = "test-python")]
 mod python_find;
 
 #[cfg(feature = "test-python-managed")]
+mod python_find_managed;
+
+mod python_find_missing;
+
+#[cfg(feature = "test-python-managed")]
 mod python_install;
 
-#[cfg(feature = "test-python")]
+#[cfg(unix)]
+mod python_install_repair;
+
 mod python_list;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod python_module;
 
-#[cfg(feature = "test-python")]
 mod python_pin;
+
+mod python_request_validation;
 
 #[cfg(feature = "test-python-managed")]
 mod python_upgrade;
 
 #[cfg(feature = "test-python")]
 mod venv;
+
+mod venv_config;
+
+#[cfg(all(
+    windows,
+    feature = "test-python-managed",
+    feature = "test-windows-registry"
+))]
+mod windows_registry;

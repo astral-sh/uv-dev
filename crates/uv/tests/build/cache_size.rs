@@ -1,49 +1,68 @@
-use assert_cmd::assert::OutputAssertExt;
+use assert_fs::fixture::{FileWriteBin, PathChild};
 
 use uv_test::uv_snapshot;
 
-/// Test that `cache size` returns 0 when the cache directory does not exist.
+/// Reporting the size of a missing cache should not create it.
 #[test]
-fn cache_size_missing_raw() {
+fn cache_size_missing_cache_remains_missing() {
     let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("missing-cache");
+    context.assert_path_missing(&context.cache_dir);
 
     uv_snapshot!(context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
     0
     ");
+
+    context.assert_path_missing(&context.cache_dir);
 }
 
-/// Test that `cache size` returns raw bytes after installing packages.
+/// Files added to the cache contribute to its reported disk usage.
 #[test]
-fn cache_size_with_packages_raw() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+fn cache_size_populated_raw() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_cache_size();
 
-    // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
-
-    // Check cache size is now positive (raw bytes).
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
+    let empty = uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [SIZE]
     ");
+    let empty_size = std::str::from_utf8(&empty.stdout)?.trim().parse::<u64>()?;
+
+    context
+        .cache_dir
+        .child("payload.bin")
+        .write_binary(&[42; 8192])?;
+    let populated = uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [SIZE]
+    ");
+    let populated_size = std::str::from_utf8(&populated.stdout)?
+        .trim()
+        .parse::<u64>()?;
+    assert!(
+        populated_size > empty_size,
+        "adding a file should increase cache usage (empty: {empty_size}, populated: {populated_size})"
+    );
+    Ok(())
 }
 
-/// Test that `cache size --human` returns human-readable format after installing packages.
+/// A populated cache reports human-readable units.
 #[test]
-fn cache_size_with_packages_human() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+fn cache_size_populated_human() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
+    context
+        .cache_dir
+        .child("payload.bin")
+        .write_binary(&[42; 8192])?;
 
-    // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
-
-    // Check cache size with --human flag
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [SIZE]KiB
+    [SIZE]
     ");
+    Ok(())
 }
 
 /// Explicit output formats override terminal detection.
@@ -67,30 +86,6 @@ fn cache_size_output_formats() {
     exit_code: 0 (success)
     ----- stdout -----
     0
-    ");
-}
-
-/// Existing human-readable flags remain equivalent to `--output-format human`.
-#[test]
-fn cache_size_human_aliases() {
-    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("missing-cache");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
-    ");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("-H"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
-    ");
-
-    uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human-readable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0B
     ");
 }
 

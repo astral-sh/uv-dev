@@ -184,25 +184,35 @@ fn build_simple_api_response(
     entries: &[PackageEntry],
     file_url_prefix: &str,
 ) -> serde_json::Value {
+    build_simple_api_response_with_upload_time(package_name, entries, file_url_prefix, true)
+}
+
+fn build_simple_api_response_with_upload_time(
+    package_name: &str,
+    entries: &[PackageEntry],
+    file_url_prefix: &str,
+    include_upload_time: bool,
+) -> serde_json::Value {
     let files: Vec<serde_json::Value> = entries
         .iter()
         .map(|entry| {
-            // Rewrite "https://files.pythonhosted.org/..." to "{file_url_prefix}/..."
-            let rewritten_url = entry.url.replace(
-                "https://files.pythonhosted.org/",
-                &format!("{file_url_prefix}/"),
-            );
+            let path = entry
+                .url
+                .strip_prefix("https://files.pythonhosted.org/")
+                .expect("mock proxy artifacts must use Python-hosted URLs");
             let mut file_obj = json!({
                 "filename": entry.filename,
-                "url": rewritten_url,
+                "url": format!("{file_url_prefix}/{path}"),
                 "hashes": {
                     "sha256": entry.sha256
                 },
                 "size": entry.size,
-                "upload-time": entry.upload_time,
             });
-            if let Some(rp) = entry.requires_python {
-                file_obj["requires-python"] = json!(rp);
+            if include_upload_time {
+                file_obj["upload-time"] = json!(entry.upload_time);
+            }
+            if let Some(requires_python) = entry.requires_python {
+                file_obj["requires-python"] = json!(requires_python);
             }
             file_obj
         })
@@ -233,77 +243,6 @@ fn build_simple_api_response_with_project_status(
     }
     body["project-status"] = project_status;
     body
-}
-
-/// Build the JSON Simple API response for a package without `upload-time`.
-fn build_simple_api_response_without_upload_time(
-    package_name: &str,
-    entries: &[PackageEntry],
-    file_url_prefix: &str,
-) -> serde_json::Value {
-    let files: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|entry| {
-            let rewritten_url = entry.url.replace(
-                "https://files.pythonhosted.org/",
-                &format!("{file_url_prefix}/"),
-            );
-            let mut file_obj = json!({
-                "filename": entry.filename,
-                "url": rewritten_url,
-                "hashes": {
-                    "sha256": entry.sha256
-                },
-                "size": entry.size,
-            });
-            if let Some(rp) = entry.requires_python {
-                file_obj["requires-python"] = json!(rp);
-            }
-            file_obj
-        })
-        .collect();
-
-    json!({
-        "meta": { "api-version": "1.1" },
-        "name": package_name,
-        "files": files,
-    })
-}
-
-/// Build the JSON Simple API response for a package with relative file URLs.
-///
-/// File URLs are relative paths like `../../../files/packages/...`
-fn build_simple_api_response_relative(
-    package_name: &str,
-    entries: &[PackageEntry],
-) -> serde_json::Value {
-    let files: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|entry| {
-            let rewritten_url = entry
-                .url
-                .replace("https://files.pythonhosted.org/", "../../../files/");
-            let mut file_obj = json!({
-                "filename": entry.filename,
-                "url": rewritten_url,
-                "hashes": {
-                    "sha256": entry.sha256
-                },
-                "size": entry.size,
-                "upload-time": entry.upload_time,
-            });
-            if let Some(rp) = entry.requires_python {
-                file_obj["requires-python"] = json!(rp);
-            }
-            file_obj
-        })
-        .collect();
-
-    json!({
-        "meta": { "api-version": "1.1" },
-        "name": package_name,
-        "files": files,
-    })
 }
 
 /// A running mock PyPI proxy server. Returned by [`start`].
@@ -435,7 +374,7 @@ pub async fn start() -> PypiProxy {
                     .is_some_and(|(u, p)| u == "public" && p == "heron")
                 {
                     if let Some(entries) = db.get(pkg) {
-                        let body = build_simple_api_response_relative(pkg, entries);
+                        let body = build_simple_api_response(pkg, entries, "../../../files");
                         return simple_api_response(&body);
                     }
                     return ResponseTemplate::new(404);
@@ -494,7 +433,7 @@ pub async fn start() -> PypiProxy {
             // Route: /relative/simple/{pkg}/  (unauthenticated, relative links)
             if let Some(pkg) = extract_package_name(path, "/relative/simple/") {
                 if let Some(entries) = db.get(pkg) {
-                    let body = build_simple_api_response_relative(pkg, entries);
+                    let body = build_simple_api_response(pkg, entries, "../../../files");
                     return simple_api_response(&body);
                 }
                 return ResponseTemplate::new(404);
@@ -504,8 +443,12 @@ pub async fn start() -> PypiProxy {
             if let Some(pkg) = extract_package_name(path, "/no-upload-time/simple/") {
                 if let Some(entries) = db.get(pkg) {
                     let file_prefix = "https://files.pythonhosted.org";
-                    let body =
-                        build_simple_api_response_without_upload_time(pkg, entries, file_prefix);
+                    let body = build_simple_api_response_with_upload_time(
+                        pkg,
+                        entries,
+                        file_prefix,
+                        false,
+                    );
                     return simple_api_response(&body);
                 }
                 return ResponseTemplate::new(404);

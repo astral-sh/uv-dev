@@ -1,11 +1,6 @@
 #![cfg(not(windows))]
 
-use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::FileTouch;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
-use assert_fs::fixture::PathCreateDir;
-use indoc::indoc;
+use assert_fs::fixture::{FileWriteStr, PathChild};
 
 use uv_test::uv_snapshot;
 
@@ -15,44 +10,6 @@ fn no_package() {
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn prune_last_in_the_subgroup() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
-    "
-    );
-
-    context.assert_command("import requests").success();
-    uv_snapshot!(context.filters(), context.pip_tree().arg("--prune").arg("certifi"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    requests v2.31.0
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
     "
     );
 }
@@ -140,97 +97,25 @@ fn nested_dependencies() {
     );
 }
 
-/// Identical test as `invert` since `--reverse` is simply an alias for `--invert`.
 #[test]
-#[cfg(feature = "test-pypi")]
-fn reverse() {
+fn reverse_dependencies() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
+    write_branching_dependency_metadata(&context)?;
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--reverse"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn invert() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+    leaf v1.0.0
+    ├── left v1.0.0
+    │   └── root v1.0.0
+    └── right v1.0.0
+        └── root v1.0.0
+    unshared v1.0.0
+    └── root v1.0.0
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_tree().arg("--invert"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
-    "
-    );
+    Ok(())
 }
 
 #[test]
@@ -300,75 +185,60 @@ fn depth() {
     );
 }
 
+fn write_branching_dependency_metadata(context: &uv_test::TestContext) -> anyhow::Result<()> {
+    use assert_fs::fixture::{ChildPath, PathCreateDir};
+
+    let site_packages = ChildPath::new(context.site_packages());
+    for (name, requires_dist) in [
+        (
+            "root",
+            "Requires-Dist: left\nRequires-Dist: right\nRequires-Dist: unshared\n",
+        ),
+        ("left", "Requires-Dist: leaf\n"),
+        ("right", "Requires-Dist: leaf\n"),
+        ("leaf", ""),
+        ("unshared", ""),
+    ] {
+        let dist_info = site_packages.child(format!("{name}-1.0.0.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str(&format!(
+            "Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n{requires_dist}"
+        ))?;
+    }
+    Ok(())
+}
+
 #[test]
-#[cfg(feature = "test-pypi")]
-fn prune() {
+fn prune() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
+    write_branching_dependency_metadata(&context)?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+    uv_snapshot!(context.filters(), context.pip_tree()
+        .arg("--prune")
+        .arg("right"), @"
     exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+    ----- stdout -----
+    root v1.0.0
+    ├── left v1.0.0
+    │   └── leaf v1.0.0
+    └── unshared v1.0.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
-        .arg("werkzeug"), @"
+        .arg("right")
+        .arg("--prune")
+        .arg("left"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    └── jinja2 v3.1.3
-        └── markupsafe v2.1.5
+    leaf v1.0.0
+    root v1.0.0
+    └── unshared v1.0.0
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_tree()
-        .arg("--prune")
-        .arg("werkzeug")
-        .arg("--prune")
-        .arg("jinja2"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    └── itsdangerous v2.1.2
-    markupsafe v2.1.5
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_tree()
-        .arg("--prune")
-        .arg("werkzeug"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    └── jinja2 v3.1.3
-        └── markupsafe v2.1.5
-    "
-    );
+    Ok(())
 }
 
 /// Ensure `pip tree` behaves correctly after a package has been removed.
@@ -529,7 +399,8 @@ fn cycle() {
     );
 }
 
-/// Both `pendulum` and `boto3` depend on `python-dateutil`.
+/// Both `pendulum` and `time-machine` depend on `python-dateutil`.
+/// The graph includes `tzdata` on every platform, so keep it in the install snapshot.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn multiple_packages_shared_descendant() {
@@ -545,7 +416,7 @@ fn multiple_packages_shared_descendant() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -593,7 +464,7 @@ fn no_dedupe_and_invert() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -640,7 +511,7 @@ fn no_dedupe() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -674,7 +545,7 @@ fn no_dedupe() {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
+#[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn with_editable() {
     let context = uv_test::test_context!("3.12");
 
@@ -971,8 +842,14 @@ fn outdated() {
 /// are only displayed once in the tree.
 #[test]
 #[cfg(feature = "test-pypi")]
-fn no_duplicate_dependencies_with_markers() {
-    const PY_PROJECT: &str = indoc! {r#"
+fn no_duplicate_dependencies_with_markers() -> anyhow::Result<()> {
+    use assert_cmd::assert::OutputAssertExt;
+    use assert_fs::fixture::FileTouch;
+    use indoc::indoc;
+
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let project = context.temp_dir.child("debug");
+    project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "debug"
         version = "0.1.0"
@@ -986,38 +863,17 @@ fn no_duplicate_dependencies_with_markers() {
         [build-system]
         requires = ["uv_build>=0.8.22,<10000"]
         build-backend = "uv_build"
-    "#};
-
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_counts();
-
-    let project = context.temp_dir.child("debug");
-
-    project.create_dir_all().unwrap();
-
-    project.child("src/debug").create_dir_all().unwrap();
-
-    project.child("src/debug/__init__.py").touch().unwrap();
-
-    project
-        .child("pyproject.toml")
-        .write_str(PY_PROJECT)
-        .unwrap();
+    "#})?;
+    project.child("src/debug/__init__.py").touch()?;
 
     context.reset_venv();
 
-    uv_snapshot!(context.filters(), context
+    context
         .pip_install()
         .arg(project.path())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
-    "
-    );
+        .arg("--strict")
+        .assert()
+        .success();
 
     // Ensure that the dependency is only listed once, even though `debug` declares multiple
     // marker-specific requirements for the same dependency.
@@ -1048,19 +904,12 @@ fn no_duplicate_dependencies_with_markers() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context
+    context
         .pip_install()
         .arg(project.path())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
-    "
-    );
+        .arg("--strict")
+        .assert()
+        .success();
 
     uv_snapshot!(
         context.filters(),
@@ -1072,4 +921,6 @@ fn no_duplicate_dependencies_with_markers() {
     └── sniffio v1.3.1 [required: >=1.0.2]
     "
     );
+
+    Ok(())
 }

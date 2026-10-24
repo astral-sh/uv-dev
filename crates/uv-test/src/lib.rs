@@ -2,44 +2,45 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod archive;
+pub mod audit;
+mod download;
 pub mod find_links;
 mod http_server;
 pub mod package_server;
 pub mod packse;
 mod path;
 pub mod pypi_proxy;
+mod snapshot;
+pub mod subdirectory_archive;
 mod vendor;
 
+pub use download::download_to_disk;
 pub use path::{assert_link_target, assert_path_missing};
+#[doc(hidden)]
+pub use snapshot::{INSTA_FILTERS, run_and_format_silent};
+pub use snapshot::{WindowsFilters, apply_filters, diff_snapshot, run_and_format};
 
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::Write as _;
 use std::iter::Iterator;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Command;
 use std::str::FromStr;
 use std::{env, io};
 use uv_python_managed::downloads::ManagedPythonDownloadList;
 
+use anyhow::Context;
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir, SymlinkToFile};
 use base64::{Engine, prelude::BASE64_STANDARD as base64};
-use futures::StreamExt;
 use indoc::{formatdoc, indoc};
 use itertools::Itertools;
 use predicates::prelude::predicate;
-use regex::{Regex, regex};
-use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
 use uv_cache::{Cache, CacheBucket};
 use uv_fs::Simplified;
 use uv_python_discovery::PythonInstallation;
-use uv_python_managed::ManagedPythonInstallations;
 use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest, PythonVersion};
 use uv_static::EnvVars;
 
@@ -98,31 +99,6 @@ macro_rules! get_bin {
     };
 }
 
-#[doc(hidden)] // Macro and test context only, don't use directly.
-pub const INSTA_FILTERS: &[(&str, &str)] = &[
-    (r"--cache-dir [^\s]+", "--cache-dir [CACHE_DIR]"),
-    // Operation times
-    (r"(\s|\()(\d+m )?(\d+\.)?\d+(ms|s)", "$1[TIME]"),
-    // Timestamps
-    (r"tv_sec: \d+", "tv_sec: [TIME]"),
-    (r"tv_nsec: \d+", "tv_nsec: [TIME]"),
-    // Rewrite Windows output to Unix output
-    (r"\\([\w\d]|\.)", "/$1"),
-    (r"uv\.exe", "uv"),
-    // uv version display
-    (
-        r"uv(-.*)? \d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?(\+\d+)?( \([^)]*\))?",
-        r"uv [VERSION] ([COMMIT] DATE)",
-    ),
-    // Trim end-of-line whitespaces, to allow removing them on save.
-    (r"([^\s])[ \t]+(\r?\n)", "$1$2"),
-    // Certificate overrides and their contents depend on the host environment.
-    (
-        r"(?ms)^([ \t]*custom_certificates: )(?:None|Some\(\n.*?^[ \t]*\),\n[ \t]*\)),",
-        "${1}[CERTIFICATES],",
-    ),
-];
-
 /// Create a context for tests which simplifies shared behavior across tests.
 ///
 /// * Set the current directory to a temporary directory (`temp_dir`).
@@ -141,8 +117,8 @@ pub struct TestContext {
     pub venv: ChildPath,
     pub workspace_root: PathBuf,
 
-    /// The Python version used for the virtual environment, if any.
-    python_version: Option<PythonVersion>,
+    /// The Python interpreter used for the virtual environment, independent of the search order.
+    venv_python: Option<(PythonVersion, PathBuf)>,
 
     /// All the Python versions available during this test context.
     pub python_versions: Vec<(PythonVersion, PathBuf)>,
@@ -199,11 +175,23 @@ impl TestContext {
         self
     }
 
-    /// Return the sorted paths of all regular files in a cache bucket.
+    /// Return the sorted paths of all regular files in a cache bucket, or an empty list if the
+    /// bucket does not exist.
     pub fn cache_files(&self, bucket: CacheBucket) -> anyhow::Result<Vec<PathBuf>> {
-        let cache = Cache::from_path(self.cache_dir.path());
+        let bucket = Cache::from_path(self.cache_dir.path()).bucket(bucket);
+        let metadata = match fs_err::symlink_metadata(&bucket) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        // A directory link is a valid bucket, but a dangling link is not an absent bucket.
+        anyhow::ensure!(
+            metadata.is_dir() || fs_err::metadata(&bucket)?.is_dir(),
+            "cache bucket `{}` is not a directory",
+            bucket.user_display()
+        );
         let mut files = Vec::new();
-        for entry in WalkDir::new(cache.bucket(bucket)).min_depth(1) {
+        for entry in WalkDir::new(bucket).min_depth(1) {
             let entry = entry?;
             if entry.file_type().is_file() {
                 files.push(entry.path().to_path_buf());
@@ -369,13 +357,24 @@ impl TestContext {
         self
     }
 
+    /// Mask the localized OS message following a backticked filesystem path while retaining the
+    /// error code and the operation that failed.
+    #[must_use]
+    pub fn with_filtered_path_os_error(self, code: u32) -> Self {
+        self.with_filter((
+            format!(r"(?m)(`:[ \t]+)[^`\r\n]* \(os error {code}\)(\r?)$"),
+            format!("${{1}}[OS ERROR {code}]${{2}}"),
+        ))
+    }
+
     /// Add extra standard filtering for executable suffixes on the current platform e.g.
     /// drops `.exe` on Windows.
     #[must_use]
-    pub fn with_filtered_exe_suffix(mut self) -> Self {
-        self.filters
-            .push((regex::escape(env::consts::EXE_SUFFIX), String::new()));
-        self
+    pub fn with_filtered_exe_suffix(self) -> Self {
+        match env::consts::EXE_SUFFIX {
+            "" => self,
+            suffix => self.with_filter((regex::escape(suffix), String::new())),
+        }
     }
 
     /// Add extra standard filtering for Python interpreter sources
@@ -589,15 +588,13 @@ impl TestContext {
     /// Adds a filter for platform-specific errors when a file is not executable.
     #[inline]
     #[must_use]
-    pub fn with_filtered_not_executable(mut self) -> Self {
-        let pattern = if cfg!(unix) {
-            r"Permission denied \(os error 13\)"
-        } else {
-            r"\%1 is not a valid Win32 application. \(os error 193\)"
-        };
-        self.filters
-            .push((pattern.to_string(), "[PERMISSION DENIED]".to_string()));
-        self
+    pub fn with_filtered_not_executable(self) -> Self {
+        // Operating-system messages can be localized; identify the non-executable cause by code.
+        let code = if cfg!(unix) { 13 } else { 193 };
+        self.with_filter((
+            format!(r"(?m)^([ \t]*cause: )[^\r\n]* \(os error {code}\)(\r?)$"),
+            "${1}[PERMISSION DENIED]${2}",
+        ))
     }
 
     /// Adds a filter that ignores platform information in a Python installation key.
@@ -638,20 +635,20 @@ impl TestContext {
     /// Adds a filter that replaces the latest Python patch versions with `[LATEST]` placeholder.
     #[must_use]
     pub fn with_filtered_latest_python_versions(mut self) -> Self {
-        // Filter the latest patch versions with [LATEST] placeholder
-        // The order matters - we want to match the full version first
-        for (minor, patch) in [
-            ("3.16", LATEST_PYTHON_3_16.strip_prefix("3.16.").unwrap()),
-            ("3.15", LATEST_PYTHON_3_15.strip_prefix("3.15.").unwrap()),
-            ("3.14", LATEST_PYTHON_3_14.strip_prefix("3.14.").unwrap()),
-            ("3.13", LATEST_PYTHON_3_13.strip_prefix("3.13.").unwrap()),
-            ("3.12", LATEST_PYTHON_3_12.strip_prefix("3.12.").unwrap()),
-            ("3.11", LATEST_PYTHON_3_11.strip_prefix("3.11.").unwrap()),
-            ("3.10", LATEST_PYTHON_3_10.strip_prefix("3.10.").unwrap()),
+        for version in [
+            LATEST_PYTHON_3_16,
+            LATEST_PYTHON_3_15,
+            LATEST_PYTHON_3_14,
+            LATEST_PYTHON_3_13,
+            LATEST_PYTHON_3_12,
+            LATEST_PYTHON_3_11,
+            LATEST_PYTHON_3_10,
         ] {
-            // Match the full version in various contexts (cpython-X.Y.Z, Python X.Y.Z, etc.)
-            let pattern = format!(r"(\b){minor}\.{patch}(\b)");
-            let replacement = format!("${{1}}{minor}.[LATEST]${{2}}");
+            let (major_minor, _) = version
+                .rsplit_once('.')
+                .expect("latest Python version includes a patch component");
+            let pattern = format!(r"\b{}\b", regex::escape(version));
+            let replacement = format!("{major_minor}.[LATEST]");
             self.filters.push((pattern, replacement));
         }
         self
@@ -672,11 +669,11 @@ impl TestContext {
         self
     }
 
-    /// Add a filter for (bytecode) compilation file counts
+    /// Normalize positive bytecode compilation counts while keeping zero visible.
     #[must_use]
     pub fn with_filtered_compiled_file_count(mut self) -> Self {
         self.filters.push((
-            r"compiled \d+ files".to_string(),
+            r"compiled [1-9][0-9]* files".to_string(),
             "compiled [COUNT] files".to_string(),
         ));
         self
@@ -821,10 +818,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_cow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_COW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "COW_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_COW_FS, "COW_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -832,10 +826,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_alt_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_ALT_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "ALT_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_ALT_FS, "ALT_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -843,10 +834,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_lowlinks_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_LOWLINKS_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "LOWLINKS_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_LOWLINKS_FS, "LOWLINKS_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -854,10 +842,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_nocow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_NOCOW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "NOCOW_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_NOCOW_FS, "NOCOW_FS")
     }
 
     /// Use a working directory on the filesystem specified by
@@ -867,10 +852,7 @@ impl TestContext {
     ///
     /// Note a virtual environment is not created automatically.
     pub fn with_working_dir_on_cow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_COW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_working_dir_on_fs(&dir, "COW_FS").map(Some)
+        self.with_working_dir_on_fs(EnvVars::UV_INTERNAL__TEST_COW_FS, "COW_FS")
     }
 
     /// Use a working directory on the filesystem specified by
@@ -880,15 +862,13 @@ impl TestContext {
     ///
     /// Note a virtual environment is not created automatically.
     pub fn with_working_dir_on_nocow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_NOCOW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_working_dir_on_fs(&dir, "NOCOW_FS").map(Some)
+        self.with_working_dir_on_fs(EnvVars::UV_INTERNAL__TEST_NOCOW_FS, "NOCOW_FS")
     }
 
-    fn with_cache_on_fs(mut self, dir: &str, name: &str) -> anyhow::Result<Self> {
-        fs_err::create_dir_all(dir)?;
-        let tmp = tempfile::TempDir::new_in(dir)?;
+    fn with_cache_on_fs(mut self, variable: &str, name: &str) -> anyhow::Result<Option<Self>> {
+        let Some(tmp) = Self::temp_dir_on_fs(variable)? else {
+            return Ok(None);
+        };
         self.cache_dir = ChildPath::new(tmp.path()).child("cache");
         fs_err::create_dir_all(&self.cache_dir)?;
         let replacement = format!("[{name}]/[CACHE_DIR]/");
@@ -896,32 +876,53 @@ impl TestContext {
             self.filters.insert(0, (pattern, replacement.clone()));
         }
         self._extra_tempdirs.push(tmp);
-        Ok(self)
+        Ok(Some(self))
     }
 
-    fn with_working_dir_on_fs(mut self, dir: &str, name: &str) -> anyhow::Result<Self> {
-        fs_err::create_dir_all(dir)?;
-        let tmp = tempfile::TempDir::new_in(dir)?;
-        self.temp_dir = ChildPath::new(tmp.path()).child("temp");
-        fs_err::create_dir_all(&self.temp_dir)?;
+    fn with_working_dir_on_fs(self, variable: &str, name: &str) -> anyhow::Result<Option<Self>> {
+        let Some(tmp) = Self::temp_dir_on_fs(variable)? else {
+            return Ok(None);
+        };
+        self.with_working_dir(tmp, name).map(Some)
+    }
+
+    fn with_working_dir(mut self, tmp: tempfile::TempDir, name: &str) -> anyhow::Result<Self> {
+        self.temp_dir = Self::create_working_dir(tmp.path())?;
         // Place the venv inside temp_dir (matching the default TestContext layout)
         // so that `context.venv()` creates it at the same path that `VIRTUAL_ENV` points to.
         let canonical_temp_dir = self.temp_dir.canonicalize()?;
         self.venv = ChildPath::new(canonical_temp_dir.join(".venv"));
-        let temp_replacement = format!("[{name}]/[TEMP_DIR]/");
-        self.filters.extend(
-            Self::path_patterns(&self.temp_dir)
-                .into_iter()
-                .map(|pattern| (pattern, temp_replacement.clone())),
-        );
-        let venv_replacement = format!("[{name}]/[VENV]/");
-        self.filters.extend(
+        // Apply specific paths before their parents and before generic temporary-path filters.
+        self.filters.splice(
+            0..0,
             Self::path_patterns(&self.venv)
                 .into_iter()
-                .map(|pattern| (pattern, venv_replacement.clone())),
+                .map(|pattern| (pattern, format!("[{name}]/[VENV]/")))
+                .chain(
+                    Self::path_patterns(&self.temp_dir)
+                        .into_iter()
+                        .map(|pattern| (pattern, format!("[{name}]/[TEMP_DIR]/"))),
+                ),
         );
         self._extra_tempdirs.push(tmp);
         Ok(self)
+    }
+
+    fn create_working_dir(root: &Path) -> io::Result<ChildPath> {
+        // Bound discovery to this fixture even when its filesystem is nested in a repository.
+        fs_err::create_dir_all(root.join(".git"))?;
+        let working_dir = ChildPath::new(root).child("temp");
+        fs_err::create_dir_all(&working_dir)?;
+        Ok(working_dir)
+    }
+
+    fn temp_dir_on_fs(variable: &str) -> anyhow::Result<Option<tempfile::TempDir>> {
+        let Some(directory) = env::var_os(variable) else {
+            return Ok(None);
+        };
+        let directory = Path::new(&directory);
+        fs_err::create_dir_all(directory)?;
+        Ok(Some(tempfile::TempDir::new_in(directory)?))
     }
 
     /// Default to the canonicalized path to the temp directory. We need to do this because on
@@ -952,13 +953,8 @@ impl TestContext {
 
         let root = tempfile::TempDir::new_in(bucket).expect("Failed to create test root directory");
 
-        // Create a `.git` directory to isolate tests that search for git boundaries from the state
-        // of the file system
-        fs_err::create_dir_all(root.path().join(".git"))
-            .expect("Failed to create `.git` placeholder in test root directory");
-
-        let temp_dir = ChildPath::new(root.path()).child("temp");
-        fs_err::create_dir_all(&temp_dir).expect("Failed to create test working directory");
+        let temp_dir =
+            Self::create_working_dir(root.path()).expect("Failed to create test working directory");
 
         let cache_dir = ChildPath::new(root.path()).child("cache");
         fs_err::create_dir_all(&cache_dir).expect("Failed to create test cache directory");
@@ -987,17 +983,11 @@ impl TestContext {
         let canonical_temp_dir = temp_dir.canonicalize().unwrap();
         let venv = ChildPath::new(canonical_temp_dir.join(".venv"));
 
-        let python_version = python_versions
-            .first()
-            .map(|version| PythonVersion::from_str(version).unwrap());
-
-        let site_packages = python_version
-            .as_ref()
-            .map(|version| site_packages_path(&venv, &format!("python{version}")));
-
         // The workspace root directory is not available without walking up the tree
         // https://github.com/rust-lang/cargo/issues/3946
-        let workspace_root = Path::new(&env::var(EnvVars::CARGO_MANIFEST_DIR).unwrap())
+        let manifest_dir = env::var_os(EnvVars::CARGO_MANIFEST_DIR)
+            .expect("CARGO_MANIFEST_DIR must be set for test contexts");
+        let workspace_root = Path::new(&manifest_dir)
             .parent()
             .expect("CARGO_MANIFEST_DIR should be nested in workspace")
             .parent()
@@ -1025,6 +1015,10 @@ impl TestContext {
                 .expect("Failed to find test Python versions"),
             )
             .collect();
+        let venv_python = python_versions.first().cloned();
+        let site_packages = venv_python
+            .as_ref()
+            .map(|(version, _)| site_packages_path_for_version(&venv, "python", version));
 
         // Construct directories for each Python executable on Unix where the executable names
         // need to be normalized
@@ -1212,7 +1206,7 @@ impl TestContext {
             bin_dir,
             venv,
             workspace_root,
-            python_version,
+            venv_python,
             python_versions,
             uv_bin,
             filters,
@@ -1240,7 +1234,7 @@ impl TestContext {
 
     /// Create a command for an external program with the test environment.
     pub fn external_command(&self, program: impl AsRef<Path>) -> Command {
-        let mut command = Self::new_command_with(program.as_ref());
+        let mut command = Command::new(program.as_ref());
         self.add_shared_env(&mut command, false);
         command
     }
@@ -1312,11 +1306,13 @@ impl TestContext {
 
     /// Only the environment variables of [`TestContext::add_shared_options`].
     pub fn add_shared_env(&self, command: &mut Command, activate_venv: bool) {
+        Self::clear_host_environment(command);
+
         // Push the test context bin to the front of the PATH
         let path = env::join_paths(std::iter::once(self.bin_dir.to_path_buf()).chain(
-            env::split_paths(&env::var(EnvVars::PATH).unwrap_or_default()),
+            env::split_paths(&env::var_os(EnvVars::PATH).unwrap_or_default()),
         ))
-        .unwrap();
+        .expect("Failed to add test bin directory to PATH");
 
         // Ensure the tests aren't sensitive to the running user's shell without forcing
         // `bash` on Windows
@@ -1364,20 +1360,14 @@ impl TestContext {
             // Since downloads, fetches and builds run in parallel, their message output order is
             // non-deterministic, so can't capture them in test output.
             .env(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS, "1")
-            // I believe the intent of all tests is that they are run outside the
-            // context of an existing git repository. And when they aren't, state
-            // from the parent git repository can bleed into the behavior of `uv
-            // init` in a way that makes it difficult to test consistently. By
-            // setting GIT_CEILING_DIRECTORIES, we specifically prevent git from
-            // climbing up past the root of our test directory to look for any
-            // other git repos.
-            //
-            // If one wants to write a test specifically targeting uv within a
-            // pre-existing git repository, then the test should make the parent
-            // git repo explicitly. The GIT_CEILING_DIRECTORIES here shouldn't
-            // impact it, since it only prevents git from discovering repositories
-            // at or above the root.
-            .env(EnvVars::GIT_CEILING_DIRECTORIES, self.root.path())
+            // Keep Git subprocesses from discovering repositories at or above the working
+            // directory's fixture root. Tests can create their own repositories below it.
+            .env(
+                EnvVars::GIT_CEILING_DIRECTORIES,
+                self.temp_dir
+                    .parent()
+                    .expect("test working directory must have a parent"),
+            )
             .current_dir(self.temp_dir.path());
 
         for (key, value) in &self.extra_env {
@@ -1820,21 +1810,25 @@ impl TestContext {
         }
     }
 
+    /// Create a command for the fixture virtual environment's Python, or the first configured
+    /// interpreter when no environment exists.
     pub fn python_command(&self) -> Command {
-        let mut interpreter = self.interpreter();
+        let interpreter = match fs_err::symlink_metadata(self.venv.path()) {
+            Ok(_) => self.interpreter(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => self
+                .python_versions
+                .first()
+                .expect("At least one Python version is required")
+                .1
+                .clone(),
+            Err(error) => panic!("Failed to inspect fixture virtual environment: {error}"),
+        };
 
-        // If there's not a virtual environment, use the first Python interpreter in the context
-        if !interpreter.exists() {
-            interpreter.clone_from(
-                &self
-                    .python_versions
-                    .first()
-                    .expect("At least one Python version is required")
-                    .1,
-            );
-        }
+        self.python_command_at(&interpreter)
+    }
 
-        let mut command = Self::new_command_with(&interpreter);
+    fn python_command_at(&self, interpreter: &Path) -> Command {
+        let mut command = Command::new(interpreter);
         command
             // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
             // https://github.com/python/cpython/issues/75953
@@ -1844,6 +1838,13 @@ impl TestContext {
 
         self.add_shared_env(&mut command, false);
 
+        command
+    }
+
+    /// Probe the fixture environment without a base-interpreter fallback or local-source imports.
+    fn isolated_venv_python_command(&self) -> Command {
+        let mut command = self.python_command_at(&self.interpreter());
+        command.arg("-I");
         command
     }
 
@@ -1897,7 +1898,8 @@ impl TestContext {
         self
     }
 
-    /// Run the given python code and check whether it succeeds.
+    /// Run the given Python code and return an assertion handle for its result.
+    #[must_use = "assert the result with `.success()`, `.failure()`, or another assertion"]
     pub fn assert_command(&self, command: &str) -> Assert {
         self.python_command()
             .arg("-c")
@@ -1906,7 +1908,8 @@ impl TestContext {
             .assert()
     }
 
-    /// Run the given python file and check whether it succeeds.
+    /// Run the given Python file and return an assertion handle for its result.
+    #[must_use = "assert the result with `.success()`, `.failure()`, or another assertion"]
     pub fn assert_file(&self, file: impl AsRef<Path>) -> Assert {
         self.python_command()
             .arg(file.as_ref())
@@ -1914,19 +1917,32 @@ impl TestContext {
             .assert()
     }
 
-    /// Assert a package is installed with the given version.
+    /// Assert a module is installed in the fixture virtual environment with the given version.
     pub fn assert_installed(&self, package: &'static str, version: &'static str) {
-        self.assert_command(
-            format!("import {package} as package; print(package.__version__, end='')").as_str(),
-        )
-        .success()
-        .stdout(version);
+        self.isolated_venv_python_command()
+            .arg("-c")
+            .arg(format!(
+                "import {package} as package; print(package.__version__, end='')"
+            ))
+            .assert()
+            .success()
+            .stdout(version);
     }
 
-    /// Assert a package is not installed.
+    /// Assert that a module is unavailable in the fixture virtual environment.
     pub fn assert_not_installed(&self, package: &'static str) {
-        self.assert_command(format!("import {package}").as_str())
-            .failure();
+        self.isolated_venv_python_command()
+            .arg("-c")
+            .arg(indoc! {r"
+                import importlib.util
+                import sys
+
+                if importlib.util.find_spec(sys.argv[1]) is not None:
+                    raise SystemExit(f'{sys.argv[1]} is installed')
+            "})
+            .arg(package)
+            .assert()
+            .success();
     }
 
     /// Generate various escaped regex patterns for the given path.
@@ -1944,6 +1960,8 @@ impl TestContext {
 
         // Include a non-canonicalized version
         patterns.push(Self::path_pattern(path));
+        // An already canonical path has the same spelling in both forms.
+        patterns.dedup();
 
         patterns
     }
@@ -2007,45 +2025,30 @@ impl TestContext {
 
     /// Returns the site-packages folder inside the venv.
     pub fn site_packages(&self) -> PathBuf {
-        site_packages_path(
-            &self.venv,
-            &format!(
-                "{}{}",
-                self.python_kind(),
-                self.python_version.as_ref().expect(
-                    "A Python version must be provided to retrieve the test site packages path"
-                )
-            ),
-        )
+        let (version, _) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to retrieve the test site packages path");
+        site_packages_path_for_version(&self.venv, self.python_kind(), version)
     }
 
-    /// Reset the virtual environment in the test context.
+    /// Reset the fixture virtual environment independently of project configuration.
     pub fn reset_venv(&self) {
         self.create_venv();
     }
 
     /// Create a new virtual environment named `.venv` in the test context.
     fn create_venv(&self) {
-        let executable = get_python(
-            self.python_version
-                .as_ref()
-                .expect("A Python version must be provided to create a test virtual environment"),
-        );
-        create_venv_from_executable(&self.venv, &self.cache_dir, &executable, &self.uv_bin);
+        let (_, executable) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to create a test virtual environment");
+        create_venv_from_executable(&self.venv, &self.cache_dir, executable, &self.uv_bin);
     }
 
-    /// Copies the files from the ecosystem project given into this text
-    /// context.
-    ///
-    /// This will almost always write at least a `pyproject.toml` into this
-    /// test context.
-    ///
-    /// The given name should correspond to the name of a sub-directory (not a
-    /// path to it) in the `test/ecosystem` directory.
-    ///
-    /// This panics (fails the current test) for any failure.
+    /// Copy the named fixture from `test/ecosystem` into this test context.
     pub fn copy_ecosystem_project(&self, name: &str) {
-        let project_dir = PathBuf::from(format!("../../test/ecosystem/{name}"));
+        let project_dir = self.workspace_root.join("test/ecosystem").join(name);
         copy_dir_ignore(project_dir, &self.temp_dir).expect("Failed to copy ecosystem project");
         // If there is a (gitignore) lockfile, remove it.
         if let Err(err) = fs_err::remove_file(self.temp_dir.join("uv.lock")) {
@@ -2079,10 +2082,19 @@ impl TestContext {
         diff_snapshot(&old_lock, &new_lock, 10)
     }
 
-    /// Read a file in the temporary directory
+    /// Assert that no filesystem entry exists, resolving relative paths against the temporary directory.
+    #[track_caller]
+    pub fn assert_path_missing(&self, path: impl AsRef<Path>) {
+        path::assert_path_missing(self.temp_dir.join(path));
+    }
+
+    /// Read a UTF-8 file, resolving relative paths against the temporary directory.
+    #[track_caller]
     pub fn read(&self, file: impl AsRef<Path>) -> String {
-        fs_err::read_to_string(self.temp_dir.join(&file))
-            .unwrap_or_else(|_| panic!("Missing file: `{}`", file.user_display()))
+        match fs_err::read_to_string(self.temp_dir.join(&file)) {
+            Ok(contents) => contents,
+            Err(error) => panic!("Failed to read `{}`: {error}", file.user_display()),
+        }
     }
 
     /// Read a file as bytes, resolving relative paths against the temporary directory.
@@ -2094,10 +2106,9 @@ impl TestContext {
         }
     }
 
-    /// Creates a new `Command` that is intended to be suitable for use in
-    /// all tests.
+    /// Create a command for the uv binary, before applying the shared test environment.
     fn new_command(&self) -> Command {
-        Self::new_command_with(&self.uv_bin)
+        Command::new(&self.uv_bin)
     }
 
     /// Creates a new `Command` that is intended to be suitable for use in
@@ -2107,7 +2118,27 @@ impl TestContext {
     /// test host settings.
     fn new_command_with(bin: &Path) -> Command {
         let mut command = Command::new(bin);
+        Self::clear_host_environment(&mut command);
+        command
+    }
 
+    /// Remove inherited host settings without erasing explicit command overrides.
+    fn clear_host_environment(command: &mut Command) {
+        let explicit_environment: Vec<_> = command
+            .get_envs()
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        let is_explicit = |name: &str| {
+            explicit_environment.iter().any(|explicit| {
+                if cfg!(windows) {
+                    explicit
+                        .to_str()
+                        .is_some_and(|explicit| explicit.eq_ignore_ascii_case(name))
+                } else {
+                    explicit == name
+                }
+            })
+        };
         let passthrough = [
             // For linux distributions
             EnvVars::PATH,
@@ -2129,86 +2160,24 @@ impl TestContext {
             EnvVars::UV_SYSTEM_CERTS,
         ];
 
-        for env_var in EnvVars::all_names()
+        // Python can redirect user installations or bytecode writes outside the fixture even
+        // though uv does not read these variables itself.
+        for name in EnvVars::all_names()
             .iter()
-            .filter(|name| !passthrough.contains(name))
+            .copied()
+            .chain(["PYTHONPYCACHEPREFIX", "PYTHONUSERBASE"])
         {
-            command.env_remove(env_var);
+            if !passthrough.contains(&name) && !is_explicit(name) {
+                command.env_remove(name);
+            }
         }
 
-        if let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG) {
+        if !is_explicit(EnvVars::RUST_LOG)
+            && let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG)
+        {
             command.env(EnvVars::RUST_LOG, rust_log);
         }
-
-        command
     }
-}
-
-/// Creates a "unified" diff between the two line-oriented strings suitable
-/// for snapshotting.
-pub fn diff_snapshot(old: &str, new: &str, context_radius: usize) -> String {
-    let diff = similar::TextDiff::from_lines(old, new);
-    let unified = diff
-        .unified_diff()
-        .context_radius(context_radius)
-        .header("old", "new")
-        .to_string();
-    // Not totally clear why, but some lines end up containing only
-    // whitespace in the diff, even though they don't appear in the
-    // original data. So just strip them here.
-    regex!(r"(?m)^\s+$").replace_all(&unified, "").into_owned()
-}
-
-/// Assert a snapshot of the diff between `old` and a command's output.
-///
-/// Returns the command's snapshot, this is useful for chaining diffs.
-#[macro_export]
-macro_rules! diff_uv_snapshot {
-    ($filters:expr, $old:expr, $spawnable:expr, @$snapshot:literal) => {{
-        let new = $crate::capture_uv_snapshot!($filters, $spawnable);
-        let snapshot = $crate::diff_snapshot($old, &new, 3);
-        let mut settings = ::insta::Settings::clone_current();
-        // Show the complete diff on failure while avoiding assertions on its unstable metadata.
-        let description = match settings.description() {
-            Some(description) => format!("{description}\n\nUnfiltered diff:\n{snapshot}"),
-            None => format!("Unfiltered diff:\n{snapshot}"),
-        };
-        settings.set_description(description);
-        settings.add_filter(r"^--- old\n\+\+\+ new\n", "");
-        settings.add_filter(r"(?m)^@@.*$", "...");
-        settings.add_filter(r"\n$", "\n...\n");
-        settings.bind(|| {
-            ::insta::assert_snapshot!(snapshot, @$snapshot);
-        });
-        new
-    }};
-}
-
-/// Capture a command's output, optionally asserting it against a snapshot.
-#[macro_export]
-macro_rules! capture_uv_snapshot {
-    ($filters:expr, $spawnable:expr) => {{
-        // Don't echo the output to stderr while capturing without asserting.
-        let (snapshot, _) = $crate::run_and_format_silent(
-            $spawnable,
-            &$filters,
-            $crate::function_name!(),
-            Some($crate::WindowsFilters::Platform),
-            None,
-        );
-        snapshot
-    }};
-    ($filters:expr, $spawnable:expr, @$snapshot:literal) => {{
-        let (snapshot, _) = $crate::run_and_format(
-            $spawnable,
-            &$filters,
-            $crate::function_name!(),
-            Some($crate::WindowsFilters::Platform),
-            None,
-        );
-        ::insta::assert_snapshot!(snapshot, @$snapshot);
-        snapshot
-    }};
 }
 
 pub fn site_packages_path(venv: &Path, python: &str) -> PathBuf {
@@ -2221,6 +2190,11 @@ pub fn site_packages_path(venv: &Path, python: &str) -> PathBuf {
     }
 }
 
+/// Construct a site-packages path using the Python library directory's major and minor version.
+fn site_packages_path_for_version(venv: &Path, kind: &str, version: &PythonVersion) -> PathBuf {
+    site_packages_path(venv, &format!("{kind}{}", version.python_version()))
+}
+
 pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
     if cfg!(unix) {
         venv.as_ref().join("bin")
@@ -2229,23 +2203,6 @@ pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
     } else {
         unimplemented!("Only Windows and Unix are supported")
     }
-}
-
-/// Get the path to the python interpreter for a specific python version.
-fn get_python(version: &PythonVersion) -> PathBuf {
-    ManagedPythonInstallations::from_settings(None)
-        .map(|installed_pythons| {
-            installed_pythons
-                .find_version(version)
-                .expect("Tests are run on a supported platform")
-                .next()
-                .as_ref()
-                .map(|python| python.executable(false))
-        })
-        // We'll search for the request Python on the PATH if not found in the python versions
-        // We hack this into a `PathBuf` to satisfy the compiler but it's just a string
-        .unwrap_or_default()
-        .unwrap_or(PathBuf::from(version.to_string()))
 }
 
 /// Create a virtual environment at the given path.
@@ -2259,6 +2216,7 @@ fn create_venv_from_executable<P: AsRef<Path>>(
         .arg("venv")
         .arg(path.as_ref().as_os_str())
         .arg("--clear")
+        .arg("--no-config")
         .arg("--cache-dir")
         .arg(cache_dir.path())
         .arg("--python")
@@ -2266,26 +2224,57 @@ fn create_venv_from_executable<P: AsRef<Path>>(
         .current_dir(path.as_ref().parent().unwrap())
         .assert()
         .success();
-    ChildPath::new(path.as_ref()).assert(predicate::path::is_dir());
+    ChildPath::new(path.as_ref()).assert(predicate::path::is_dir().follow_links(true));
 }
 
 /// Create a `PATH` with the requested Python versions available in order.
 ///
-/// Generally this should be used with `UV_PYTHON_SEARCH_PATH`.
+/// On Unix, each interpreter is isolated so other executables in its original directory cannot
+/// affect discovery. The returned paths remain valid until `temp_dir` is removed. Generally this
+/// should be used with `UV_PYTHON_SEARCH_PATH`.
 pub fn python_path_with_versions(
     temp_dir: &ChildPath,
     python_versions: &[&str],
 ) -> anyhow::Result<OsString> {
-    let download_list = if python_versions.is_empty() {
-        None
-    } else {
-        Some(ManagedPythonDownloadList::new_only_embedded()?)
-    };
-    Ok(env::join_paths(
-        python_installations_for_versions(temp_dir, python_versions, download_list.as_ref())?
-            .into_iter()
-            .map(|path| path.parent().unwrap().to_path_buf()),
-    )?)
+    if python_versions.is_empty() {
+        return Ok(OsString::new());
+    }
+
+    let download_list = ManagedPythonDownloadList::new_only_embedded()?;
+    let installations =
+        python_installations_for_versions(temp_dir, python_versions, Some(&download_list))?;
+    #[cfg(unix)]
+    {
+        isolated_python_search_path(temp_dir, &installations)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(env::join_paths(
+            installations
+                .into_iter()
+                .map(|path| path.parent().unwrap().to_path_buf()),
+        )?)
+    }
+}
+
+#[cfg(unix)]
+fn isolated_python_search_path(
+    temp_dir: &ChildPath,
+    installations: &[PathBuf],
+) -> anyhow::Result<OsString> {
+    let mut root = tempfile::Builder::new()
+        .prefix("python-search-")
+        .tempdir_in(temp_dir)?;
+    let mut directories = Vec::with_capacity(installations.len());
+    for (index, installation) in installations.iter().enumerate() {
+        let directory = root.path().join(index.to_string());
+        fs_err::create_dir(&directory)?;
+        fs_err::os::unix::fs::symlink(installation, directory.join("python3"))?;
+        directories.push(directory);
+    }
+    let path = env::join_paths(directories)?;
+    root.disable_cleanup(true);
+    Ok(path)
 }
 
 /// Returns a list of Python executables for the given versions.
@@ -2296,261 +2285,44 @@ fn python_installations_for_versions(
     python_versions: &[&str],
     download_list: Option<&ManagedPythonDownloadList>,
 ) -> anyhow::Result<Vec<PathBuf>> {
+    let Some(download_list) = download_list else {
+        return Ok(Vec::new());
+    };
     let cache = Cache::from_path(temp_dir.child("cache").to_path_buf())
         .init_no_wait()?
         .expect("No cache contention when setting up Python in tests");
     let _preview = uv_preview::test::with_features(&[]);
-    let Some(download_list) = download_list else {
-        return Ok(Vec::new());
-    };
-    let selected_pythons = python_versions
+    python_versions
         .iter()
         .map(|python_version| {
-            if let Ok(python) = PythonInstallation::find(
+            PythonInstallation::find(
                 &PythonRequest::parse(python_version),
                 EnvironmentPreference::OnlySystem,
                 PythonPreference::Managed,
                 None,
                 download_list,
                 &cache,
-            ) {
-                python.into_interpreter().sys_executable().to_owned()
-            } else {
-                panic!("Could not find Python {python_version} for test\nTry `cargo run python install` first, or refer to CONTRIBUTING.md");
-            }
+            )
+            .map(|python| python.into_interpreter().sys_executable().to_owned())
+            .with_context(|| {
+                format!(
+                    "Could not find Python {python_version} for test\nTry `cargo run python install` first, or refer to CONTRIBUTING.md"
+                )
+            })
         })
-        .collect::<Vec<_>>();
-
-    assert!(
-        python_versions.is_empty() || !selected_pythons.is_empty(),
-        "Failed to fulfill requested test Python versions: {selected_pythons:?}"
-    );
-
-    Ok(selected_pythons)
+        .collect()
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum WindowsFilters {
-    Platform,
-    Universal,
-}
-
-thread_local! {
-    /// Reuse compiled patterns across snapshots and contexts on the same test thread.
-    static SNAPSHOT_FILTER_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
-}
-
-/// Helper method to apply filters to a string. Useful when `!uv_snapshot` cannot be used.
-pub fn apply_filters<T: AsRef<str>>(mut snapshot: String, filters: impl AsRef<[(T, T)]>) -> String {
-    let filters = filters.as_ref();
-    // Release the thread-local borrow before converting the caller's filters.
-    let mut compiled_filters = SNAPSHOT_FILTER_CACHE.take();
-    for (matcher, replacement) in filters {
-        let matcher = matcher.as_ref();
-        if !compiled_filters.contains_key(matcher) {
-            compiled_filters.insert(
-                matcher.to_owned(),
-                Regex::new(matcher).expect("Do you need to regex::escape your filter?"),
-            );
-        }
-        let re = &compiled_filters[matcher];
-        if re.is_match(&snapshot) {
-            snapshot = re.replace_all(&snapshot, replacement.as_ref()).to_string();
-        }
-    }
-    SNAPSHOT_FILTER_CACHE.set(compiled_filters);
-    snapshot
-}
-
-/// Execute the command and format its output status, stdout and stderr into a snapshot string.
-///
-/// This function is derived from `insta_cmd`s `spawn_with_info`.
-#[expect(clippy::print_stderr)]
-pub fn run_and_format<T: AsRef<str>>(
-    command: impl BorrowMut<Command>,
-    filters: impl AsRef<[(T, T)]>,
-    function_name: &str,
-    windows_filters: Option<WindowsFilters>,
-    input: Option<&str>,
-) -> (String, Output) {
-    let (snapshot, output) =
-        run_and_format_silent(command, filters, function_name, windows_filters, input);
-    eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Unfiltered output ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    eprintln!(
-        "----- exit status -----\n{}\n----- stdout -----\n{}\n----- stderr -----\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    eprintln!("────────────────────────────────────────────────────────────────────────────────\n");
-    (snapshot, output)
-}
-
-/// Execute the command and format its output without printing the unfiltered output.
-#[doc(hidden)]
-pub fn run_and_format_silent<T: AsRef<str>>(
-    mut command: impl BorrowMut<Command>,
-    filters: impl AsRef<[(T, T)]>,
-    function_name: &str,
-    windows_filters: Option<WindowsFilters>,
-    input: Option<&str>,
-) -> (String, Output) {
-    assert_effective_cache_directory(command.borrow_mut());
-
-    let program = command
-        .borrow_mut()
-        .get_program()
-        .to_string_lossy()
-        .to_string();
-
-    // Support profiling test run commands with traces.
-    if let Ok(root) = env::var(EnvVars::TRACING_DURATIONS_TEST_ROOT) {
-        // We only want to fail if the variable is set at runtime.
-        #[expect(clippy::assertions_on_constants)]
-        {
-            assert!(
-                cfg!(feature = "tracing-durations-export"),
-                "You need to enable the tracing-durations-export feature to use `TRACING_DURATIONS_TEST_ROOT`"
-            );
-        }
-        command.borrow_mut().env(
-            EnvVars::TRACING_DURATIONS_FILE,
-            Path::new(&root).join(function_name).with_extension("jsonl"),
-        );
-    }
-
-    let output = if let Some(input) = input {
-        let mut child = command
-            .borrow_mut()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|err| panic!("Failed to spawn {program}: {err}"));
-        child
-            .stdin
-            .as_mut()
-            .expect("Failed to open stdin")
-            .write_all(input.as_bytes())
-            .expect("Failed to write to stdin");
-
-        child
-            .wait_with_output()
-            .unwrap_or_else(|err| panic!("Failed to read output from {program}: {err}"))
-    } else {
-        command
-            .borrow_mut()
-            .output()
-            .unwrap_or_else(|err| panic!("Failed to spawn {program}: {err}"))
-    };
-
-    let mut snapshot = format!(
-        "exit_code: {} ({})\n",
-        output.status.code().unwrap_or(!0),
-        if output.status.success() {
-            "success"
-        } else {
-            "failure"
-        },
-    );
-    if output.status.code().is_none() {
-        snapshot.push_str("exit_status: ");
-        snapshot.push_str(&output.status.to_string());
-        snapshot.push('\n');
-    }
-    if !output.stdout.is_empty() {
-        snapshot.push_str("----- stdout -----\n");
-        snapshot.push_str(&String::from_utf8_lossy(&output.stdout));
-    }
-    if !output.stderr.is_empty() {
-        if !output.stdout.is_empty() {
-            snapshot.push('\n');
-        }
-        snapshot.push_str("----- stderr -----\n");
-        snapshot.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    let mut snapshot = apply_filters(snapshot, filters);
-
-    // This is a heuristic filter meant to try and make *most* of our tests
-    // pass whether it's on Windows or Unix. In particular, there are some very
-    // common Windows-only dependencies that, when removed from a resolution,
-    // cause the set of dependencies to be the same across platforms.
-    if cfg!(windows) {
-        if let Some(windows_filters) = windows_filters {
-            // The optional leading +/-/~ is for install logs, the optional next line is for lockfiles
-            let windows_only_deps = [
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-            ];
-            let mut removed_packages = 0;
-            for windows_only_dep in windows_only_deps {
-                // TODO(konstin): Cache regex compilation
-                let re = Regex::new(windows_only_dep).unwrap();
-                if re.is_match(&snapshot) {
-                    snapshot = re.replace(&snapshot, "").to_string();
-                    removed_packages += 1;
-                }
-            }
-            if removed_packages > 0 {
-                for i in 1..20 {
-                    for verb in match windows_filters {
-                        WindowsFilters::Platform => [
-                            "Resolved",
-                            "Prepared",
-                            "Installed",
-                            "Checked",
-                            "Uninstalled",
-                        ]
-                        .iter(),
-                        WindowsFilters::Universal => {
-                            ["Prepared", "Installed", "Checked", "Uninstalled"].iter()
-                        }
-                    } {
-                        snapshot = snapshot.replace(
-                            &format!("{verb} {} packages", i + removed_packages),
-                            &format!("{verb} {} package{}", i, if i > 1 { "s" } else { "" }),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    (snapshot, output)
-}
-
-/// Reject cache environment overrides hidden by an explicit cache-directory argument.
-///
-/// Context commands always include `--cache-dir`, so setting `UV_CACHE_DIR` after constructing
-/// one cannot change its cache. Check the completed command immediately before execution so
-/// snapshots cannot silently pass without exercising their intended cache configuration.
-fn assert_effective_cache_directory(command: &Command) {
-    let cache_directory_override = command
-        .get_envs()
-        .find(|(name, value)| *name == EnvVars::UV_CACHE_DIR && value.is_some());
-
-    if cache_directory_override.is_none() {
-        return;
-    }
-
-    let explicit_cache_directory = command.get_args().any(|argument| {
-        argument == "--cache-dir"
-            || argument
-                .to_str()
-                .is_some_and(|argument| argument.starts_with("--cache-dir="))
-    });
-
-    assert!(
-        !explicit_cache_directory,
-        "`UV_CACHE_DIR` is ignored because this command already supplies `--cache-dir`; configure `TestContext::cache_dir` instead"
-    );
-}
-
-/// Recursively copy a directory and its contents, skipping gitignored files.
+/// Recursively copy a directory, respecting project ignore files and skipping Git metadata.
+/// Machine-specific Git exclusions do not define the contents of a test fixture.
 pub fn copy_dir_ignore(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::Result<()> {
-    for entry in ignore::Walk::new(&src) {
+    let walker = ignore::WalkBuilder::new(&src)
+        .git_global(false)
+        .git_exclude(false)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walker {
         let entry = entry?;
         let relative = entry.path().strip_prefix(&src)?;
         let ty = entry.file_type().unwrap();
@@ -2616,38 +2388,13 @@ pub fn decode_token(content: &[&str]) -> String {
         .join("_")
 }
 
-/// Simulates `reqwest::blocking::get` but returns bytes directly, and disables
-/// certificate verification, passing through the `BaseClient`
-#[tokio::main(flavor = "current_thread")]
-pub async fn download_to_disk(url: &str, path: &Path) {
-    let trusted_hosts: Vec<_> = env::var(EnvVars::UV_INSECURE_HOST)
-        .unwrap_or_default()
-        .split(' ')
-        .map(|h| uv_configuration::TrustedHost::from_str(h).unwrap())
-        .collect();
-
-    let client = uv_client::BaseClientBuilder::default()
-        .allow_insecure_host(trusted_hosts)
-        .build()
-        .expect("failed to build base client");
-    let url = url.parse().unwrap();
-    let response = client.for_host(&url).get(url).send().await.unwrap();
-
-    let mut file = fs_err::tokio::File::create(path).await.unwrap();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        file.write_all(&chunk.unwrap()).await.unwrap();
-    }
-    file.sync_all().await.unwrap();
-}
-
 /// A guard that sets a directory to read-only and restores original permissions when dropped.
 ///
 /// This is useful for tests that need to make a directory read-only and ensure
 /// the permissions are restored even if the test panics.
 #[cfg(unix)]
 pub struct ReadOnlyDirectoryGuard {
-    path: PathBuf,
+    directory: fs_err::File,
     original_mode: u32,
 }
 
@@ -2657,14 +2404,13 @@ impl ReadOnlyDirectoryGuard {
     /// that will restore the original permissions when dropped.
     pub fn new(path: impl Into<PathBuf>) -> std::io::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
-        let path = path.into();
-        let metadata = fs_err::metadata(&path)?;
-        let original_mode = metadata.permissions().mode();
+        let directory = fs_err::File::open(path)?;
+        let original_mode = directory.metadata()?.permissions().mode();
         // Remove write permissions (keep read and execute)
         let readonly_mode = original_mode & !0o222;
-        fs_err::set_permissions(&path, std::fs::Permissions::from_mode(readonly_mode))?;
+        directory.set_permissions(std::fs::Permissions::from_mode(readonly_mode))?;
         Ok(Self {
-            path,
+            directory,
             original_mode,
         })
     }
@@ -2674,149 +2420,153 @@ impl ReadOnlyDirectoryGuard {
 impl Drop for ReadOnlyDirectoryGuard {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs_err::set_permissions(
-            &self.path,
-            std::fs::Permissions::from_mode(self.original_mode),
-        );
+        // The original pathname may now identify a replacement directory.
+        let _ = self
+            .directory
+            .set_permissions(std::fs::Permissions::from_mode(self.original_mode));
     }
-}
-
-/// Utility macro to return the name of the current function.
-///
-/// https://stackoverflow.com/a/40234666/3549270
-#[doc(hidden)]
-#[macro_export]
-macro_rules! function_name {
-    () => {{
-        fn f() {}
-        fn type_name_of_val<T>(_: T) -> &'static str {
-            std::any::type_name::<T>()
-        }
-        let mut name = type_name_of_val(f).strip_suffix("::f").unwrap_or("");
-        while let Some(rest) = name.strip_suffix("::{{closure}}") {
-            name = rest;
-        }
-        name
-    }};
-}
-
-/// Run [`assert_cmd_snapshot!`], with default filters or with custom filters.
-///
-/// By default, the filters will search for the generally windows-only deps colorama and tzdata,
-/// filter them out and decrease the package counts by one for each match.
-#[macro_export]
-macro_rules! uv_snapshot {
-    ($spawnable:expr, @$snapshot:literal) => {{
-        uv_snapshot!($crate::INSTA_FILTERS.to_vec(), $spawnable, @$snapshot)
-    }};
-    ($filters:expr, $spawnable:expr, @$snapshot:literal) => {{
-        // Take a reference for backwards compatibility with the vec-expecting insta filters.
-        let (snapshot, output) = $crate::run_and_format($spawnable, &$filters, $crate::function_name!(), Some($crate::WindowsFilters::Platform), None);
-        ::insta::assert_snapshot!(snapshot, @$snapshot);
-        output
-    }};
-    ($filters:expr, $spawnable:expr, input=$input:expr, @$snapshot:literal) => {{
-        // Take a reference for backwards compatibility with the vec-expecting insta filters.
-        let (snapshot, output) = $crate::run_and_format($spawnable, &$filters, $crate::function_name!(), Some($crate::WindowsFilters::Platform), Some($input));
-        ::insta::assert_snapshot!(snapshot, @$snapshot);
-        output
-    }};
-    ($filters:expr, windows_filters=false, $spawnable:expr, @$snapshot:literal) => {{
-        // Take a reference for backwards compatibility with the vec-expecting insta filters.
-        let (snapshot, output) = $crate::run_and_format($spawnable, &$filters, $crate::function_name!(), None, None);
-        ::insta::assert_snapshot!(snapshot, @$snapshot);
-        output
-    }};
-    ($filters:expr, universal_windows_filters=true, $spawnable:expr, @$snapshot:literal) => {{
-        // Take a reference for backwards compatibility with the vec-expecting insta filters.
-        let (snapshot, output) = $crate::run_and_format($spawnable, &$filters, $crate::function_name!(), Some($crate::WindowsFilters::Universal), None);
-        ::insta::assert_snapshot!(snapshot, @$snapshot);
-        output
-    }};
 }
 
 #[cfg(all(test, unix))]
-mod process_status_tests {
-    use std::process::Command;
+mod read_only_directory_tests {
+    use std::os::unix::fs::PermissionsExt;
 
-    use super::run_and_format_silent;
-
-    #[test]
-    fn reports_signal() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "kill -TERM $$"]);
-        let filters: &[(&str, &str)] = &[];
-        let (snapshot, _) = run_and_format_silent(command, filters, "reports_signal", None, None);
-
-        insta::assert_snapshot!(snapshot, @"
-        exit_code: -1 (failure)
-        exit_status: signal: 15 (SIGTERM)
-        ");
-    }
+    use super::ReadOnlyDirectoryGuard;
 
     #[test]
-    fn preserves_exit_code() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 7"]);
-        let filters: &[(&str, &str)] = &[];
-        let (snapshot, _) =
-            run_and_format_silent(command, filters, "preserves_exit_code", None, None);
+    fn restores_the_original_directory_after_replacement() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let original = root.path().join("original");
+        let moved = root.path().join("moved");
+        fs_err::create_dir(&original)?;
+        fs_err::set_permissions(&original, std::fs::Permissions::from_mode(0o750))?;
 
-        insta::assert_snapshot!(snapshot, @"exit_code: 7 (failure)");
+        let guard = ReadOnlyDirectoryGuard::new(&original)?;
+        assert_eq!(
+            fs_err::metadata(&original)?.permissions().mode() & 0o777,
+            0o550
+        );
+        fs_err::rename(&original, &moved)?;
+        fs_err::create_dir(&original)?;
+        fs_err::set_permissions(&original, std::fs::Permissions::from_mode(0o700))?;
+        drop(guard);
+
+        assert_eq!(
+            fs_err::metadata(&moved)?.permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            fs_err::metadata(&original)?.permissions().mode() & 0o777,
+            0o700
+        );
+        Ok(())
     }
 }
 
 #[cfg(test)]
-mod cache_directory_tests {
+mod command_environment_tests {
+    use std::path::PathBuf;
     use std::process::Command;
 
     use uv_static::EnvVars;
 
-    use super::assert_effective_cache_directory;
+    use super::TestContext;
 
     #[test]
-    #[should_panic(expected = "`UV_CACHE_DIR` is ignored")]
-    fn rejects_environment_override_with_explicit_cache_argument() {
+    fn applies_isolation_to_manually_constructed_command() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
         let mut command = Command::new("uv");
-        command
-            .arg("--cache-dir")
-            .arg("context-cache")
-            .env(EnvVars::UV_CACHE_DIR, "ignored-cache");
+        let offline = if cfg!(windows) {
+            "uv_offline"
+        } else {
+            EnvVars::UV_OFFLINE
+        };
+        command.env(offline, "1");
 
-        assert_effective_cache_directory(&command);
+        context.add_shared_env(&mut command, false);
+
+        for isolated in [
+            EnvVars::UV_INDEX_URL,
+            "PYTHONPYCACHEPREFIX",
+            "PYTHONUSERBASE",
+        ] {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(name, value)| name == isolated && value.is_none()),
+                "{isolated} was not isolated from the host"
+            );
+        }
+        assert!(
+            command.get_envs().any(|(name, value)| {
+                name == offline && value.is_some_and(|value| value == "1")
+            })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "`UV_CACHE_DIR` is ignored")]
-    fn rejects_environment_override_with_inline_cache_argument() {
-        let mut command = Command::new("uv");
-        command
-            .arg("--cache-dir=context-cache")
-            .env(EnvVars::UV_CACHE_DIR, "ignored-cache");
+    fn relocated_working_directory_bounds_repository_discovery() -> anyhow::Result<()> {
+        let relocated_root = tempfile::tempdir()?;
+        let expected_ceiling = relocated_root.path().to_path_buf();
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"))
+            .with_working_dir(relocated_root, "COW_FS")?;
+        let command = context.command();
 
-        assert_effective_cache_directory(&command);
+        let ceiling = command
+            .get_envs()
+            .find(|(name, _)| *name == EnvVars::GIT_CEILING_DIRECTORIES)
+            .and_then(|(_, value)| value);
+        assert_eq!(ceiling, Some(expected_ceiling.as_os_str()));
+        assert!(expected_ceiling.join(".git").is_dir());
+        Ok(())
     }
+}
+
+#[cfg(all(test, unix))]
+mod site_packages_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::site_packages_path_for_version;
 
     #[test]
-    fn allows_environment_override_without_explicit_cache_argument() {
-        let mut command = Command::new("uv");
-        command
-            .arg("cache")
-            .arg("dir")
-            .env(EnvVars::UV_CACHE_DIR, "effective-cache");
+    fn patch_version_does_not_appear_in_library_directory() {
+        let version = "3.12.9".parse().expect("valid Python version");
 
-        assert_effective_cache_directory(&command);
+        assert_eq!(
+            site_packages_path_for_version(Path::new(".venv"), "python", &version),
+            PathBuf::from(".venv/lib/python3.12/site-packages")
+        );
     }
+}
+
+#[cfg(test)]
+mod cache_files_tests {
+    use assert_fs::fixture::{FileWriteStr, PathChild};
+    use uv_cache::{Cache, CacheBucket};
+
+    use super::TestContext;
 
     #[test]
-    fn allows_removed_environment_override_with_explicit_cache_argument() {
-        let mut command = Command::new("uv");
-        command
-            .arg("--cache-dir")
-            .arg("context-cache")
-            .env_remove(EnvVars::UV_CACHE_DIR);
+    fn distinguishes_absent_invalid_and_linked_cache_buckets() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into());
+        let bucket = Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Files);
+        assert!(context.cache_files(CacheBucket::Files)?.is_empty());
 
-        assert_effective_cache_directory(&command);
+        fs_err::write(&bucket, "invalid bucket")?;
+        let error = context
+            .cache_files(CacheBucket::Files)
+            .expect_err("a cache bucket file is not an empty directory");
+        assert!(error.to_string().contains("is not a directory"));
+
+        fs_err::remove_file(&bucket)?;
+        let target = context.temp_dir.child("bucket-target");
+        target.child("cached-file").write_str("cached")?;
+        uv_fs::create_symlink(target.path(), &bucket)?;
+        assert_eq!(
+            context.cache_files(CacheBucket::Files)?,
+            [bucket.join("cached-file")]
+        );
+        Ok(())
     }
 }
 
@@ -2840,6 +2590,19 @@ mod file_read_tests {
     }
 
     #[test]
+    #[should_panic(expected = "did not contain valid UTF-8")]
+    fn reports_invalid_utf8() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        context
+            .temp_dir
+            .child("text")
+            .write_binary(&[0xff])
+            .expect("write invalid text fixture");
+
+        context.read("text");
+    }
+
+    #[test]
     fn reads_absolute_path_outside_project() -> anyhow::Result<()> {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
         let file = context.cache_dir.child("binary");
@@ -2860,12 +2623,169 @@ mod file_read_tests {
 }
 
 #[cfg(test)]
+mod python_discovery_tests {
+    #[cfg(unix)]
+    use std::env;
+    use std::path::PathBuf;
+
+    use assert_fs::fixture::PathCreateDir;
+
+    use super::TestContext;
+    #[cfg(unix)]
+    use super::{assert_path_missing, isolated_python_search_path};
+
+    #[test]
+    fn does_not_initialize_discovery_cache_without_python() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+
+        context.assert_path_missing("cache");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn additional_python_search_path_excludes_sibling_executables() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        let host_bin = context.temp_dir.join("host-bin");
+        fs_err::create_dir(&host_bin)?;
+        let requested = host_bin.join("python3.11");
+        fs_err::write(&requested, b"")?;
+        fs_err::write(host_bin.join("python3.12"), b"")?;
+
+        let search_path =
+            isolated_python_search_path(&context.temp_dir, std::slice::from_ref(&requested))?;
+        let directories = env::split_paths(&search_path).collect::<Vec<_>>();
+        assert_eq!(directories.len(), 1);
+        assert_eq!(
+            fs_err::read_link(directories[0].join("python3"))?,
+            requested
+        );
+        assert_path_missing(directories[0].join("python3.12"));
+        Ok(())
+    }
+
+    #[test]
+    fn python_command_uses_base_only_without_fixture_environment() -> anyhow::Result<()> {
+        let mut context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        let base_python = context.temp_dir.join("base-python");
+        context.python_versions.push((
+            "3.12".parse().expect("valid fixture Python version"),
+            base_python.clone(),
+        ));
+
+        assert_eq!(context.python_command().get_program(), base_python);
+
+        context.venv.create_dir_all()?;
+        assert_eq!(
+            context.python_command().get_program(),
+            context.interpreter()
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::{LATEST_PYTHON_3_12, TestContext, apply_filters};
+
+    #[test]
+    fn localized_path_error_preserves_operation_and_code() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_path_os_error(145);
+        let output = concat!(
+            "warning: failed to link `project`: failed to remove directory `fixture`: Fehler: Verzeichnis nicht leer (os error 145)\r\n",
+            "warning: unrelated operation (os error 145)\n",
+            "warning: failed to remove directory `fixture`: other error (os error 32)\n",
+        );
+
+        assert_eq!(
+            apply_filters(output.to_string(), context.filters()),
+            concat!(
+                "warning: failed to link `project`: failed to remove directory `fixture`: [OS ERROR 145]\r\n",
+                "warning: unrelated operation (os error 145)\n",
+                "warning: failed to remove directory `fixture`: other error (os error 32)\n",
+            )
+        );
+    }
+
+    #[test]
+    fn zero_bytecode_compilation_count_remains_visible() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_compiled_file_count();
+
+        assert_eq!(
+            apply_filters(
+                "Bytecode compiled 0 files\nBytecode compiled 12 files\n".to_string(),
+                context.filters()
+            ),
+            "Bytecode compiled 0 files\nBytecode compiled [COUNT] files\n"
+        );
+    }
+
+    #[test]
+    fn canonical_path_has_one_pattern() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let canonical = directory.path().canonicalize()?;
+
+        assert_eq!(TestContext::path_patterns(canonical).len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_working_directory_filters_precede_generic_filters() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_working_dir(tempfile::tempdir()?, "COW_FS")?;
+        let output = format!(
+            "{}\n{}",
+            context.temp_dir.join("project").display(),
+            context.venv.join("package").display(),
+        );
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            "[COW_FS]/[TEMP_DIR]/project\n[COW_FS]/[VENV]/package"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn latest_python_version_filter_matches_literal_separators() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_latest_python_versions();
+        let malformed = LATEST_PYTHON_3_12.replacen('.', "x", 1);
+        let output = format!("Python {LATEST_PYTHON_3_12}; Python {malformed}");
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            format!("Python 3.12.[LATEST]; Python {malformed}")
+        );
+    }
+
+    #[test]
+    fn non_executable_filter_handles_localized_messages() {
+        let context =
+            TestContext::new_with_versions_and_bin(&[], "uv".into()).with_filtered_not_executable();
+        let localized = if cfg!(unix) {
+            "  cause: Accès refusé (os error 13)\r\n"
+        } else {
+            "  cause: Keine zulässige Win32-Anwendung. (os error 193)\r\n"
+        };
+        let output = format!("{localized}  cause: unrelated failure (os error 5)\n");
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            "  cause: [PERMISSION DENIED]\r\n  cause: unrelated failure (os error 5)\n"
+        );
+    }
+}
+
+#[cfg(test)]
 mod copy_dir_ignore_tests {
     use anyhow::Result;
     use assert_fs::prelude::*;
     use predicates::prelude::predicate;
 
-    use super::copy_dir_ignore;
+    use super::{assert_path_missing, copy_dir_ignore};
 
     #[test]
     fn copy_fixture_into_nested_destination() -> Result<()> {
@@ -2902,6 +2822,45 @@ mod copy_dir_ignore_tests {
 
         destination.child("module.py").assert("VALUE = 1\n");
         destination.child("existing.txt").assert("existing file");
+        Ok(())
+    }
+
+    #[test]
+    fn checkout_local_exclusions_do_not_change_fixture_contents() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let source = root.child("source");
+        source.child(".git/info/exclude").write_str("module.py\n")?;
+        source.child("module.py").write_str("VALUE = 1\n")?;
+
+        let destination = root.child("destination");
+        copy_dir_ignore(&source, &destination)?;
+
+        destination.child("module.py").assert("VALUE = 1\n");
+        Ok(())
+    }
+
+    #[test]
+    fn copies_unignored_dotfiles_without_git_metadata() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let source = root.child("source");
+        source
+            .child(".git/HEAD")
+            .write_str("ref: refs/heads/main\n")?;
+        source
+            .child("nested/.git/HEAD")
+            .write_str("ref: refs/heads/main\n")?;
+        source.child(".gitignore").write_str(".ignored.env\n")?;
+        source.child(".ignored.env").write_str("ignored\n")?;
+        source.child(".python-version").write_str("3.12\n")?;
+
+        let destination = root.child("destination");
+        copy_dir_ignore(&source, &destination)?;
+
+        destination.child(".python-version").assert("3.12\n");
+        destination.child(".gitignore").assert(".ignored.env\n");
+        assert_path_missing(destination.child(".ignored.env"));
+        assert_path_missing(destination.child(".git"));
+        assert_path_missing(destination.child("nested/.git"));
         Ok(())
     }
 }

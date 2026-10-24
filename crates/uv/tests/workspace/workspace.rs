@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::path::PathBuf;
 
 use anyhow::Result;
+#[cfg(any(feature = "test-pypi", feature = "test-universal"))]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 #[cfg(feature = "test-universal")]
@@ -11,19 +10,24 @@ use indoc::indoc;
 use insta::assert_json_snapshot;
 #[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
+#[cfg(any(feature = "test-pypi", feature = "test-universal"))]
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde::{Deserialize, Serialize};
 
-use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
+#[cfg(feature = "test-pypi")]
+use uv_test::copy_dir_ignore;
+use uv_test::{make_project, uv_snapshot};
 
-fn workspaces_dir() -> PathBuf {
-    env::current_dir()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("test")
-        .join("workspaces")
+#[cfg(feature = "test-pypi")]
+fn assert_workspace_installation(root: &std::path::Path, script: &std::path::Path) {
+    let python = uv_test::venv_bin_path(root.join(".venv"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    std::process::Command::new(python)
+        .arg("-I")
+        .arg(script)
+        .assert()
+        .success()
+        .stdout(predicate::eq("Success").trim());
 }
 
 #[test]
@@ -32,7 +36,12 @@ fn test_albatross_in_examples_bird_feeder() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-in-example";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace
         .join("albatross-in-example")
@@ -52,7 +61,8 @@ fn test_albatross_in_examples_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -61,7 +71,7 @@ fn test_albatross_in_examples_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -70,7 +80,12 @@ fn test_albatross_in_examples() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-in-example";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-in-example");
 
@@ -87,7 +102,8 @@ fn test_albatross_in_examples() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -96,7 +112,7 @@ fn test_albatross_in_examples() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -105,7 +121,12 @@ fn test_albatross_just_project() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-just-project";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-just-project");
 
@@ -122,7 +143,8 @@ fn test_albatross_just_project() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -131,7 +153,7 @@ fn test_albatross_just_project() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -140,7 +162,12 @@ fn test_albatross_project_in_excluded() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-project-in-excluded";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-project-in-excluded");
 
@@ -175,7 +202,8 @@ fn test_albatross_project_in_excluded() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -184,7 +212,7 @@ fn test_albatross_project_in_excluded() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 
     let current_dir = workspace
         .join("albatross-project-in-excluded")
@@ -204,7 +232,12 @@ fn test_albatross_root_workspace() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-root-workspace");
 
@@ -224,7 +257,8 @@ fn test_albatross_root_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -233,7 +267,7 @@ fn test_albatross_root_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -242,12 +276,15 @@ fn test_albatross_root_workspace_bird_feeder() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-root-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
@@ -264,7 +301,8 @@ fn test_albatross_root_workspace_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&root, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -273,30 +311,34 @@ fn test_albatross_root_workspace_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 #[test]
 #[cfg(feature = "test-pypi")]
-fn test_albatross_root_workspace_albatross() {
+fn test_albatross_root_workspace_albatross_from_member() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-root-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
-    uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "albatross"]).current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: [TEMP_DIR]/workspace/albatross-root-workspace/.venv
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Prepared 5 packages in [TIME]
+    Installed 5 packages in [TIME]
+     + albatross==0.1.0 (from file://[TEMP_DIR]/workspace/albatross-root-workspace)
      + bird-feeder==1.0.0 (from file://[TEMP_DIR]/workspace/albatross-root-workspace/packages/bird-feeder)
      + idna==3.6
      + iniconfig==2.0.0
@@ -304,16 +346,17 @@ fn test_albatross_root_workspace_albatross() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
-    uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
+    let check_script = root.join("check_installed_albatross.py");
+    assert_workspace_installation(&root, &check_script);
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "albatross"]).current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Checked 5 packages in [TIME]
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 #[test]
@@ -322,12 +365,15 @@ fn test_albatross_virtual_workspace() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-virtual-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-virtual-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
@@ -345,7 +391,8 @@ fn test_albatross_virtual_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&root, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -354,7 +401,7 @@ fn test_albatross_virtual_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 /// Check that `uv run --package` works in a virtual workspace.
@@ -365,7 +412,10 @@ fn test_uv_run_with_package_virtual_workspace() -> Result<()> {
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
-        workspaces_dir().join("albatross-virtual-workspace"),
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-virtual-workspace"),
         &work_dir,
     )?;
 
@@ -427,7 +477,10 @@ fn test_uv_run_virtual_workspace_root() -> Result<()> {
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
-        workspaces_dir().join("albatross-virtual-workspace"),
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-virtual-workspace"),
         &work_dir,
     )?;
 
@@ -466,7 +519,13 @@ fn test_uv_run_with_package_root_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
-    copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-root-workspace"),
+        &work_dir,
+    )?;
 
     uv_snapshot!(context.filters(), context
         .run()
@@ -521,7 +580,13 @@ fn test_uv_run_isolate() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
-    copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-root-workspace"),
+        &work_dir,
+    )?;
 
     // Install the root package.
     uv_snapshot!(context.filters(), context
@@ -598,58 +663,98 @@ fn test_uv_run_isolate() -> Result<()> {
     Ok(())
 }
 
-/// Check that the resolution is the same no matter where in the workspace we are.
-fn workspace_lock_idempotence(workspace: &str, subdirectories: &[&str]) -> Result<()> {
-    let mut shared_lock = None;
-
-    for dir in subdirectories {
-        let context = uv_test::test_context!("3.12");
-        let work_dir = context.temp_dir.join(workspace);
-
-        copy_dir_ignore(workspaces_dir().join(workspace), &work_dir)?;
-
-        context
-            .lock()
-            .current_dir(work_dir.join(dir))
-            .assert()
-            .success();
-
-        let lock = context.read(PathBuf::from(workspace).join("uv.lock"));
-        // Check the lockfile is the same for all resolutions.
-        if let Some(shared_lock) = &shared_lock {
-            assert_eq!(shared_lock, &lock);
-        } else {
-            shared_lock = Some(lock);
-        }
-    }
-    Ok(())
-}
-
-/// Check that the resolution is the same no matter where in the workspace we are.
+/// Locking from a root workspace or either member resolves to the same lockfile from a cold cache.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_root_workspace() -> Result<()> {
-    workspace_lock_idempotence(
-        "albatross-root-workspace",
-        &[".", "packages/bird-feeder", "packages/seeds"],
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("albatross-root-workspace");
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces/albatross-root-workspace"),
+        &workspace,
     )?;
+    let lockfile = workspace.child("uv.lock");
+
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(&workspace)
+        .assert()
+        .success();
+    let baseline = context.read(&lockfile);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(workspace.child("packages/bird-feeder"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(workspace.child("packages/seeds"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
     Ok(())
 }
 
-/// Check that the resolution is the same no matter where in the workspace we are, and that locking
-/// works even if there is no root project.
+/// Locking from a virtual workspace or any member resolves to the same lockfile from a cold cache.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
-    workspace_lock_idempotence(
-        "albatross-virtual-workspace",
-        &[
-            ".",
-            "packages/albatross",
-            "packages/bird-feeder",
-            "packages/seeds",
-        ],
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("albatross-virtual-workspace");
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces/albatross-virtual-workspace"),
+        &workspace,
     )?;
+    let lockfile = workspace.child("uv.lock");
+
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(&workspace)
+        .assert()
+        .success();
+    let baseline = context.read(&lockfile);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(workspace.child("packages/albatross"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(workspace.child("packages/bird-feeder"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .arg("--no-cache")
+        .current_dir(workspace.child("packages/seeds"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
     Ok(())
 }
 
@@ -661,10 +766,18 @@ struct SourceLock {
 
 impl SourceLock {
     fn sources(&self) -> BTreeMap<String, toml::Value> {
-        self.package
+        let sources = self
+            .package
             .iter()
             .map(|package| (package.name.clone(), package.source.clone()))
-            .collect()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            sources.len(),
+            self.package.len(),
+            "a source map cannot represent multiple lockfile packages with the same name: {:#?}",
+            self.package
+        );
+        sources
     }
 }
 
@@ -740,7 +853,7 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
     "#};
     make_project(&other_workspace.join("packages").join("e"), "e", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&main_workspace), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&main_workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -766,6 +879,24 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
       }
     }
     "#);
+
+    context
+        .sync()
+        .args(["--frozen", "--offline", "--package", "a"])
+        .current_dir(&main_workspace)
+        .assert()
+        .success();
+    let python = uv_test::venv_bin_path(main_workspace.join(".venv"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    std::process::Command::new(python)
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import distributions; print(sorted(d.metadata['Name'] for d in distributions()))",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq("['a', 'b', 'c', 'd']").trim());
 
     Ok(())
 }
@@ -824,8 +955,8 @@ fn workspace_gitignored_member() -> Result<()> {
         members = ["packages/*"]
     "#})?;
 
-    // ... with a `.gitignore` that ignores `__pycache__` ...
-    workspace.child(".gitignore").write_str("__pycache__/\n")?;
+    let gitignore = workspace.child(".gitignore");
+    gitignore.write_str("uv-workspace-test-generated/\n")?;
 
     // ... with a  ...
     let deps = indoc! {r#"
@@ -841,16 +972,9 @@ fn workspace_gitignored_member() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a c that only contains gitignored files.
-    fs_err::create_dir_all(workspace.join("packages").join("c").join("__pycache__"))?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/uv-workspace-test-generated/content.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -872,6 +996,13 @@ fn workspace_gitignored_member() -> Result<()> {
       }
     }
     "#);
+
+    fs_err::remove_file(gitignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
@@ -890,8 +1021,8 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
         members = ["packages/*"]
     "#})?;
 
-    // ... with a `.gitignore` that ignores `__pycache__` ...
-    workspace.child(".gitignore").write_str("__pycache__/\n")?;
+    let gitignore = workspace.child(".gitignore");
+    gitignore.write_str("uv-workspace-test-generated/\n")?;
 
     // ... with a  ...
     let deps = indoc! {r#"
@@ -907,23 +1038,9 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a c that only contains gitignored files.
-    fs_err::create_dir_all(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("foo")
-            .join("__pycache__"),
-    )?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("foo")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/foo/uv-workspace-test-generated/content.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -945,6 +1062,13 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
       }
     }
     "#);
+
+    fs_err::remove_file(gitignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
@@ -956,17 +1080,15 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
 fn workspace_ignored_member() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Build the main workspace ...
     let workspace = context.temp_dir.child("workspace");
     workspace.child("pyproject.toml").write_str(indoc! {r#"
         [tool.uv.workspace]
         members = ["packages/*"]
     "#})?;
 
-    // ... with an `.ignore` file that ignores `__pycache__` ...
-    workspace.child(".ignore").write_str("__pycache__/\n")?;
+    let ignore = workspace.child(".ignore");
+    ignore.write_str("generated-data.txt\n")?;
 
-    // ... with a  ...
     let deps = indoc! {r#"
         dependencies = ["b"]
 
@@ -975,21 +1097,11 @@ fn workspace_ignored_member() -> Result<()> {
     "#};
     make_project(&workspace.join("packages").join("a"), "a", deps)?;
 
-    // ... and b.
-    let deps = indoc! {r"
-    "};
-    make_project(&workspace.join("packages").join("b"), "b", deps)?;
+    make_project(&workspace.join("packages").join("b"), "b", "")?;
 
-    // ... and a c that only contains ignored files.
-    fs_err::create_dir_all(workspace.join("packages").join("c").join("__pycache__"))?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/generated-data.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -1011,6 +1123,14 @@ fn workspace_ignored_member() -> Result<()> {
       }
     }
     "#);
+
+    // The same member is invalid once the ignore rule is removed.
+    fs_err::remove_file(ignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
@@ -1063,10 +1183,11 @@ fn workspace_nonempty_member_no_pyproject() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that workspace discovery ignores hidden directories.
+/// Workspace discovery ignores hidden directories without a `pyproject.toml`, even when they
+/// contain visible files.
 #[cfg(feature = "test-universal")]
 #[test]
-fn workspace_hidden_files() -> Result<()> {
+fn workspace_hidden_directory_without_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Build the main workspace ...
@@ -1090,8 +1211,8 @@ fn workspace_hidden_files() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a hidden c.
-    fs_err::create_dir_all(workspace.join("packages").join(".c"))?;
+    // A visible file distinguishes the hidden-directory rule from the empty-directory rule.
+    workspace.child("packages/.c/README.md").write_str("# c")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -1262,7 +1383,7 @@ fn workspace_inherit_sources() -> Result<()> {
         [tool.uv.workspace]
         members = ["packages/*"]
     "#})?;
-    workspace.child("src/__init__.py").touch()?;
+    workspace.child("src/workspace/__init__.py").touch()?;
 
     // Create a package.
     let leaf = workspace.child("packages").child("leaf");
@@ -1276,7 +1397,7 @@ fn workspace_inherit_sources() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    leaf.child("src/__init__.py").touch()?;
+    leaf.child("src/leaf/__init__.py").touch()?;
 
     // Create a peripheral library.
     let library = context.temp_dir.child("library");
@@ -1290,7 +1411,7 @@ fn workspace_inherit_sources() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    library.child("src/__init__.py").touch()?;
+    library.child("src/library/__init__.py").touch()?;
 
     // As-is, resolving should fail.
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
@@ -1319,7 +1440,6 @@ fn workspace_inherit_sources() -> Result<()> {
         [tool.uv.sources]
         library = { path = "../../../library", editable = true }
     "#})?;
-    leaf.child("src/__init__.py").touch()?;
 
     // Resolving should succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
@@ -1415,25 +1535,6 @@ fn workspace_inherit_sources() -> Result<()> {
         );
     });
 
-    // Update the root to include the source again.
-    workspace.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "workspace"
-        version = "0.1.0"
-        dependencies = []
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        library = { path = "../library", editable = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-
     // Update the member to include a _different_ source.
     leaf.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1449,8 +1550,8 @@ fn workspace_inherit_sources() -> Result<()> {
         application = { path = "../application", editable = true }
     "#})?;
 
-    // Resolving should succeed; the member should still use the root's source, despite defining
-    // some of its own
+    // Resolve from scratch so the existing lockfile cannot supply the inherited source.
+    fs_err::remove_file(workspace.child("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1458,6 +1559,7 @@ fn workspace_inherit_sources() -> Result<()> {
     Resolved 3 packages in [TIME]
     "
     );
+    assert_eq!(context.read("workspace/uv.lock"), lock);
 
     Ok(())
 }
@@ -1630,8 +1732,8 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
     "#})?;
     knot.child("src/__init__.py").touch()?;
 
-    // We'll raise the first conflict in the resolver, so `bird` shouldn't be
-    // present in the error even though it also incompatible
+    // The diagnostic should report a sufficient conflicting pair, even though all three
+    // members have incompatible pins.
     let bird = workspace.child("packages").child("bird");
     bird.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1655,6 +1757,56 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
              And because your workspace requires bird and knot, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
+
+    Ok(())
+}
+
+/// Every pair of members is satisfiable, but their combined requirements have no solution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn workspace_unsatisfiable_member_dependencies_requires_three_members() -> Result<()> {
+    let server = uv_test::packse::PackseServer::new("fork/conflict-unsatisfiable.toml");
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    make_project(
+        workspace.path(),
+        "workspace",
+        indoc! {r#"
+            dependencies = []
+
+            [tool.uv.workspace]
+            members = ["packages/*"]
+        "#},
+    )?;
+    let packages = workspace.join("packages");
+    // The index provides a==1, a==2, and a==3. Each member excludes a different one.
+    make_project(&packages.join("red"), "red", r#"dependencies = ["a<3"]"#)?;
+    make_project(&packages.join("knot"), "knot", r#"dependencies = ["a>=2"]"#)?;
+    make_project(
+        &packages.join("bird"),
+        "bird",
+        r#"dependencies = ["a!=2.*"]"#,
+    )?;
+
+    let output = context
+        .lock()
+        .current_dir(&workspace)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "No solution found when resolving dependencies",
+        ));
+    let stderr = std::str::from_utf8(&output.get_output().stderr)?;
+    for member in ["bird", "knot", "red"] {
+        assert!(
+            stderr
+                .split(|character: char| !character.is_alphanumeric() && character != '_')
+                .any(|word| word == member),
+            "missing workspace member `{member}` in the conflict diagnostic:\n{stderr}"
+        );
+    }
 
     Ok(())
 }
@@ -2341,32 +2493,25 @@ fn workspace_unmanaged_member_no_project() -> Result<()> {
 
         [tool.uv.workspace]
         members = ["member"]
-
-        [build-system]
-        requires = ["uv_build>=0.9.0,<10000"]
-        build-backend = "uv_build"
     "#})?;
 
-    fs_err::create_dir_all(workspace.join("src").join("root"))?;
-    fs_err::write(workspace.join("src").join("root").join("__init__.py"), "")?;
-
-    // Create a workspace member with `managed = false` but no `[project]` section.
-    let member = workspace.join("member");
-    fs_err::create_dir_all(&member)?;
-    fs_err::write(
-        member.join("pyproject.toml"),
-        indoc! {"
+    workspace
+        .child("member/pyproject.toml")
+        .write_str(indoc! {"
             [tool.uv]
             managed = false
-        "},
-    )?;
+        "})?;
 
     context
         .lock()
         .arg("--verbose")
+        .arg("--offline")
         .current_dir(&workspace)
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(
+            "is marked as unmanaged; omitting from workspace members",
+        ));
 
     Ok(())
 }

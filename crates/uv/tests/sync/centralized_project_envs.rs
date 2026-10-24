@@ -7,6 +7,7 @@ use serde_json::json;
 use std::process::Command;
 
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 #[cfg(unix)]
 use uv_test::ReadOnlyDirectoryGuard;
@@ -97,6 +98,8 @@ fn sync_centralized_env_switch_python() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(link_312.portable_display(), @"[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]");
     });
+    let marker = link_312.join("reuse-marker");
+    fs_err::write(&marker, "original environment")?;
 
     context
         .sync()
@@ -122,6 +125,8 @@ fn sync_centralized_env_switch_python() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     "#);
+    assert_link_target(context.temp_dir.child(".venv"), &link_312);
+    assert_eq!(fs_err::read_to_string(marker)?, "original environment");
     Ok(())
 }
 
@@ -234,21 +239,34 @@ fn sync_centralized_env_avoids_project_name_collisions() -> Result<()> {
         )?;
     }
 
-    for project in [&project_a, &project_b] {
-        context
-            .sync()
-            .arg("--preview-features")
-            .arg("centralized-project-envs")
-            .arg("--project")
-            .arg(project.path())
-            .assert()
-            .success();
-    }
-
+    context
+        .sync()
+        .args([
+            "--preview-features",
+            "centralized-project-envs",
+            "--project",
+        ])
+        .arg(project_a.path())
+        .assert()
+        .success();
     let target_a = fs_err::read_link(project_a.child(".venv").path())?;
+
+    context
+        .sync()
+        .args([
+            "--preview-features",
+            "centralized-project-envs",
+            "--project",
+        ])
+        .arg(project_b.path())
+        .assert()
+        .success();
     let target_b = fs_err::read_link(project_b.child(".venv").path())?;
     // Projects with the same name use different environments.
-    assert_ne!(target_a, target_b);
+    assert_ne!(
+        fs_err::canonicalize(project_a.join(target_a))?,
+        fs_err::canonicalize(project_b.join(target_b))?
+    );
     Ok(())
 }
 
@@ -280,6 +298,8 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
         .assert()
         .success();
     let first = fs_err::read_link(project.child(".venv").path())?;
+    let marker = first.join("reuse-marker");
+    fs_err::write(&marker, "original environment")?;
 
     fs_err::remove_file(project.child(".venv").path())?;
     context
@@ -293,29 +313,38 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
     let second = fs_err::read_link(project.child(".venv").path())?;
 
     assert_eq!(first, second);
+    assert_eq!(fs_err::read_to_string(marker)?, "original environment");
     Ok(())
 }
 
 #[test]
 fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    write_project(&context, ">=3.12", &[])?;
+    let wheel_url = SafeUrl::from_file_path(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )
+    .expect("fixture path is absolute");
+    write_project(&context, ">=3.12", &[&format!("ok @ {wheel_url}")])?;
+    let override_environment = context.temp_dir.child("override");
 
     context
         .sync()
+        .arg("--offline")
         .arg("--preview-features")
         .arg("centralized-project-envs")
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "override")
         .assert()
         .success();
     // `UV_PROJECT_ENVIRONMENT` bypasses centralized environments.
-    assert!(context.temp_dir.child("override").is_dir());
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
 
     let active = context.temp_dir.child("active");
     context.venv().arg(active.path()).assert().success();
     context
         .sync()
+        .arg("--offline")
         .arg("--preview-features")
         .arg("centralized-project-envs")
         .arg("--active")
@@ -324,8 +353,17 @@ fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
         .assert()
         .success();
     // `--active` uses `VIRTUAL_ENV` directly.
-    assert!(active.is_dir());
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
+
+    for environment in [override_environment, active] {
+        let python = uv_test::venv_bin_path(environment.path())
+            .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+        Command::new(python)
+            .args(["-I", "-c", "import ok; print(ok.__version__, end='')"])
+            .assert()
+            .success()
+            .stdout("1.0.0");
+    }
     Ok(())
 }
 
@@ -423,7 +461,7 @@ fn sync_centralized_env_dry_run() -> Result<()> {
      + iniconfig==2.0.0
     "#);
     // Dry-run creates neither the persistent environment nor its project link.
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
     assert!(!context.cache_dir.child("environments-v2").exists());
     Ok(())
 }
@@ -441,7 +479,13 @@ fn cache_prune_removes_and_recreates_centralized_environment() -> Result<()> {
         .success();
     let link = context.temp_dir.child(".venv");
     let target = fs_err::read_link(link.path())?;
-    assert!(target.starts_with(context.cache_dir.child("environments-v2").path()));
+    let cache = context.cache_dir.child("environments-v2");
+    assert!(
+        uv_fs::verbatim_path(&target).starts_with(uv_fs::verbatim_path(cache.path()).as_ref()),
+        "centralized environment target {} is outside cache {}",
+        target.display(),
+        cache.path().display()
+    );
     assert!(target.is_dir());
 
     context.prune().assert().success();
@@ -614,7 +658,13 @@ fn sync_recovers_from_centralized_environment_path_file() -> Result<()> {
 
     // An arbitrary `.venv` file is preserved.
     environment.write_str("user-data")?;
-    context.sync().assert().failure();
+    context
+        .sync()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "expected directory but found a file",
+        ));
     assert_eq!(context.read(".venv"), "user-data");
 
     // A centralized path file can be replaced when returning to a local environment.

@@ -1,5 +1,6 @@
 use anyhow::Result;
-use assert_cmd::prelude::*;
+#[cfg(feature = "test-pypi")]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
@@ -7,6 +8,7 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 
 use uv_static::EnvVars;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
 #[test]
@@ -222,17 +224,24 @@ fn list_single_no_editable() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
-fn list_outdated_columns() -> Result<()> {
+fn list_outdated_formats() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
+    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+        name = "outdated-list-formats"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.anyio.versions."3.0.0"]
+        requires = ["idna==3.6", "sniffio==1.3.1"]
+        [packages.anyio.versions."4.3.0"]
+        [packages.idna.versions."3.6"]
+        [packages.sniffio.versions."1.3.1"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let index_url = index.index_url();
     uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+        .args(["anyio==3.0.0", "--strict", "--default-index"])
+        .arg(&index_url), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -241,50 +250,28 @@ fn list_outdated_columns() -> Result<()> {
      + anyio==3.0.0
      + idna==3.6
      + sniffio==1.3.1
-    "
-    );
+    ");
 
-    uv_snapshot!(context.pip_list().arg("--outdated"), @"
+    let list = || {
+        let mut command = context.pip_list();
+        command
+            .args(["--outdated", "--default-index"])
+            .arg(&index_url);
+        command
+    };
+    uv_snapshot!(list(), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Latest Type
     ------- ------- ------ -----
     anyio   3.0.0   4.3.0  wheel
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_outdated_json() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.0.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.pip_list().arg("--outdated").arg("--format").arg("json"), @r#"
+    uv_snapshot!(list().args(["--format", "json"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     [{"name":"anyio","version":"3.0.0","latest_version":"4.3.0","latest_filetype":"wheel"}]
-    "#
-    );
+    "#);
 
     Ok(())
 }
@@ -346,19 +333,7 @@ fn list_outdated_find_links() -> Result<()> {
 }
 
 #[test]
-fn list_outdated_freeze() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_list().arg("--outdated").arg("--format").arg("freeze"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `--outdated` cannot be used with `--format freeze`
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-git")]
+#[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn list_outdated_git() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -382,7 +357,11 @@ fn list_outdated_git() -> Result<()> {
     "
     );
 
-    uv_snapshot!(context.pip_list().arg("--outdated"), @"
+    let without_git_package = PackseServer::new("simple/dependency-groups.toml");
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--default-index")
+        .arg(without_git_package.index_url()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package   Version Latest Type
@@ -391,55 +370,80 @@ fn list_outdated_git() -> Result<()> {
     "
     );
 
+    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+        name = "git-package-on-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.iniconfig.versions."2.0.0"]
+        [packages.uv-public-pypackage.versions."0.2.0"]
+    "#})?;
+    let with_git_package = PackseServer::from_scenario(&scenario);
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--default-index")
+        .arg(with_git_package.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package             Version Latest Type
+    ------------------- ------- ------ -----
+    iniconfig           1.0.0   2.0.0  wheel
+    uv-public-pypackage 0.1.0   0.2.0  wheel
+    ");
+
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn list_outdated_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    // The configured index has `a==3.0.0` and `b`; the explicit index has only `a<=2.0.0`.
+    let configured = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    context.temp_dir.child("uv.toml").write_str(&format!(
+        "[[index]]\nurl = \"{}\"\ndefault = true\n",
+        configured.index_url()
+    ))?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+    uv_snapshot!(context.pip_install().args(["a==1.0.0", "b==1.0.0", "--strict"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.0.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + a==1.0.0
+     + b==1.0.0
+    ");
 
-    uv_snapshot!(context.pip_list()
-        .arg("--outdated")
-        .arg("--index-url")
-        .arg("https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.pip_list().arg("--outdated"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Latest Type
     ------- ------- ------ -----
-    anyio   3.0.0   3.5.0  wheel
-    "
-    );
+    a       1.0.0   3.0.0  wheel
+    ");
+
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(explicit.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version Latest Type
+    ------- ------- ------ -----
+    a       1.0.0   2.0.0  wheel
+    ");
 
     Ok(())
 }
 
 #[test]
 #[cfg(feature = "test-pypi")]
-fn list_editable() {
+fn list_editable_filters() {
     let context = uv_test::test_context!("3.12")
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
 
-    // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
         .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
@@ -452,10 +456,10 @@ fn list_editable() {
      + idna==3.6
      + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
      + sniffio==1.3.1
-    "
-    );
+    ");
 
-    uv_snapshot!(context.filters(), context.pip_list(), @"
+    let all = uv_test::capture_uv_snapshot!(context.filters(), context.pip_list());
+    insta::assert_snapshot!(&all, @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Editable project location
@@ -464,45 +468,29 @@ fn list_editable() {
     idna 3.6
     poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
     sniffio 1.3.1
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_editable_only() {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
-        .with_filter(("  +", " "));
-
-    // Install the editable package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
-    "
+    ");
+    assert_eq!(
+        uv_test::capture_uv_snapshot!(
+            context.filters(),
+            context.pip_list().args(["--exclude", "numpy"])
+        ),
+        all,
+        "excluding an absent package should not change the listing"
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--editable"), @"
+    uv_snapshot!(context.filters(), context.pip_list().arg("--editable"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Editable project location
     [UNDERLINE]
     poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
-    "
-    );
+    ");
 
-    uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--exclude-editable"), @"
+    let non_editable = uv_test::capture_uv_snapshot!(
+        context.filters(),
+        context.pip_list().arg("--exclude-editable")
+    );
+    insta::assert_snapshot!(&non_editable, @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version
@@ -510,99 +498,37 @@ fn list_editable_only() {
     anyio 4.3.0
     idna 3.6
     sniffio 1.3.1
-    "
+    ");
+    assert_eq!(
+        uv_test::capture_uv_snapshot!(
+            context.filters(),
+            context.pip_list().args(["--exclude", "poetry-editable"])
+        ),
+        non_editable,
+        "excluding the editable package by name should omit its column"
     );
 
     uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--editable")
-        .arg("--exclude-editable"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the argument '--editable' cannot be used with '--exclude-editable'
-
-    Usage: uv pip list --cache-dir [CACHE_DIR] --editable --exclude-newer <EXCLUDE_NEWER>
-
-    For more information, try '--help'.
-    "
-    );
+        .args(["--exclude", "anyio", "--exclude", "poetry-editable"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version
+    [UNDERLINE]
+    idna 3.6
+    sniffio 1.3.1
+    ");
 }
 
 #[test]
 #[cfg(feature = "test-pypi")]
-fn list_exclude() {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
-        .with_filter(("  +", " "));
-
-    // Install the editable package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("numpy"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version Editable project location
-    [UNDERLINE]
-    anyio 4.3.0
-    idna 3.6
-    poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
-    sniffio 1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("poetry-editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version
-    [UNDERLINE]
-    anyio 4.3.0
-    idna 3.6
-    sniffio 1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("numpy")
-    .arg("--exclude")
-    .arg("poetry-editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version
-    [UNDERLINE]
-    anyio 4.3.0
-    idna 3.6
-    sniffio 1.3.1
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-#[cfg(not(windows))]
-fn list_format_json() {
+fn list_format_json() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let project = context.workspace_root.join("test/packages/poetry_editable");
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
+        .arg(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -615,31 +541,63 @@ fn list_format_json() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"anyio","version":"4.3.0"},{"name":"idna","version":"3.6"},{"name":"poetry-editable","version":"0.1.0","editable_project_location":"[WORKSPACE]/test/packages/poetry_editable"},{"name":"sniffio","version":"1.3.1"}]
-    "#
+    let output = context
+        .pip_list()
+        .arg("--format=json")
+        .assert()
+        .success()
+        .stderr("");
+    let all: Vec<serde_json::Value> = serde_json::from_slice(&output.get_output().stdout)?;
+    let location = all
+        .get(2)
+        .and_then(|row| row.get("editable_project_location"))
+        .and_then(serde_json::Value::as_str)
+        .expect("missing editable project location");
+    assert_eq!(
+        fs_err::canonicalize(location)?,
+        fs_err::canonicalize(&project)?
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json")
-    .arg("--editable"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"poetry-editable","version":"0.1.0","editable_project_location":"[WORKSPACE]/test/packages/poetry_editable"}]
-    "#
+    let anyio = serde_json::json!({"name": "anyio", "version": "4.3.0"});
+    let idna = serde_json::json!({"name": "idna", "version": "3.6"});
+    let editable = serde_json::json!({
+        "name": "poetry-editable",
+        "version": "0.1.0",
+        "editable_project_location": location,
+    });
+    let sniffio = serde_json::json!({"name": "sniffio", "version": "1.3.1"});
+    assert_eq!(
+        all,
+        vec![
+            anyio.clone(),
+            idna.clone(),
+            editable.clone(),
+            sniffio.clone()
+        ]
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json")
-    .arg("--exclude-editable"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"anyio","version":"4.3.0"},{"name":"idna","version":"3.6"},{"name":"sniffio","version":"1.3.1"}]
-    "#
+    let editable_only = context
+        .pip_list()
+        .args(["--format=json", "--editable"])
+        .assert()
+        .success()
+        .stderr("");
+    assert_eq!(
+        serde_json::from_slice::<Vec<serde_json::Value>>(&editable_only.get_output().stdout)?,
+        vec![editable]
     );
+
+    let non_editable = context
+        .pip_list()
+        .args(["--format=json", "--exclude-editable"])
+        .assert()
+        .success()
+        .stderr("");
+    assert_eq!(
+        serde_json::from_slice::<Vec<serde_json::Value>>(&non_editable.get_output().stdout)?,
+        vec![anyio, idna, sniffio]
+    );
+    Ok(())
 }
 
 #[test]

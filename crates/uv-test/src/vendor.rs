@@ -2,17 +2,15 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use uv_configuration::TrustedHost;
 use uv_fs::{LockedFile, LockedFileMode, persist_with_retry_sync, tempfile_in};
-use uv_static::EnvVars;
 
 use crate::TestContext;
+use crate::download::fixture_client;
 
 pub(crate) struct VendorArtifact {
     pub(crate) filename: &'static str,
@@ -34,6 +32,17 @@ impl VendorArtifact {
     #[cfg(test)]
     pub(crate) fn is_loaded(&self) -> bool {
         self.bytes.get().is_some()
+    }
+
+    /// Construct a private artifact for testing lazy server indexing.
+    #[cfg(test)]
+    pub(crate) const fn test_fixture() -> Self {
+        Self {
+            filename: "fixture-1.0.0-py3-none-any.whl",
+            url: "unused",
+            sha256: "unused",
+            bytes: OnceLock::new(),
+        }
     }
 }
 
@@ -168,16 +177,15 @@ async fn load_vendor_file_async(artifact: &VendorArtifact) -> Result<Vec<u8>> {
     fs_err::create_dir_all(&cache_dir)
         .with_context(|| format!("failed to create vendor cache at `{}`", cache_dir.display()))?;
     let path = cache_dir.join(artifact.filename);
-    ensure_cached_artifact(artifact, &path).await?;
-    let bytes = fs_err::read(&path)
-        .with_context(|| format!("failed to read cached vendor artifact `{}`", path.display()))?;
-    verify_bytes(artifact, &bytes)?;
-    Ok(bytes)
+    load_cached_or_download_artifact(artifact, &path).await
 }
 
-async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Result<()> {
-    if cached_artifact_matches(artifact, path) {
-        return Ok(());
+async fn load_cached_or_download_artifact(
+    artifact: &VendorArtifact,
+    path: &Path,
+) -> Result<Vec<u8>> {
+    if let Some(bytes) = read_cached_artifact(artifact, path)? {
+        return Ok(bytes);
     }
 
     let lock_path = artifact_lock_path(path)?;
@@ -194,20 +202,11 @@ async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Resul
         )
     })?;
 
-    if cached_artifact_matches(artifact, path) {
-        return Ok(());
+    if let Some(bytes) = read_cached_artifact(artifact, path)? {
+        return Ok(bytes);
     }
 
-    let trusted_hosts = std::env::var(EnvVars::UV_INSECURE_HOST)
-        .unwrap_or_default()
-        .split(' ')
-        .filter(|host| !host.is_empty())
-        .map(TrustedHost::from_str)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let client = uv_client::BaseClientBuilder::default()
-        .allow_insecure_host(trusted_hosts)
-        .build()
-        .context("failed to build vendor artifact client")?;
+    let client = fixture_client().context("failed to build vendor artifact client")?;
 
     let url = artifact
         .url
@@ -243,24 +242,30 @@ async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Resul
         .with_context(|| format!("failed to sync `{}`", artifact.filename))?;
 
     match persist_with_retry_sync(temp, path) {
-        Ok(()) => Ok(()),
-        Err(_)
-            if let Ok(bytes) = fs_err::read(path)
-                && verify_bytes(artifact, &bytes).is_ok() =>
-        {
-            Ok(())
-        }
-        Err(error) => Err(error).with_context(|| {
-            format!(
-                "failed to persist cached vendor artifact `{}`",
-                path.display()
-            )
-        }),
+        Ok(()) => Ok(bytes.to_vec()),
+        Err(error) => match read_cached_artifact(artifact, path) {
+            Ok(Some(bytes)) => Ok(bytes),
+            _ => Err(error).with_context(|| {
+                format!(
+                    "failed to persist cached vendor artifact `{}`",
+                    path.display()
+                )
+            }),
+        },
     }
 }
 
-fn cached_artifact_matches(artifact: &VendorArtifact, path: &Path) -> bool {
-    fs_err::read(path).is_ok_and(|bytes| verify_bytes(artifact, &bytes).is_ok())
+fn read_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Result<Option<Vec<u8>>> {
+    let bytes = match fs_err::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed to read cached vendor artifact `{}`", path.display())
+            });
+        }
+    };
+    Ok(verify_bytes(artifact, &bytes).is_ok().then_some(bytes))
 }
 
 fn artifact_lock_path(path: &Path) -> Result<PathBuf> {
@@ -330,5 +335,28 @@ mod tests {
             b"available"
         );
         assert!(unloaded.bytes.get().is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_read_errors_do_not_trigger_downloads() {
+        let directory = tempfile::tempdir().expect("create cache directory");
+        let path = directory.path().join("fixture.whl");
+        fs_err::create_dir(&path).expect("create invalid cache entry");
+        let artifact = VendorArtifact {
+            filename: "fixture.whl",
+            url: "invalid URL",
+            sha256: "unused",
+            bytes: OnceLock::new(),
+        };
+
+        let error = load_cached_or_download_artifact(&artifact, &path)
+            .await
+            .expect_err("a cache entry that is a directory should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to read cached vendor artifact")
+        );
     }
 }

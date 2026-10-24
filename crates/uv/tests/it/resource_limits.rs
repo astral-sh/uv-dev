@@ -1,15 +1,18 @@
 use uv_static::EnvVars;
-use uv_test::{get_bin, uv_snapshot};
+#[cfg(feature = "test-python")]
+use uv_test::get_bin;
+use uv_test::uv_snapshot;
 
+#[cfg(feature = "test-python")]
 #[test]
 fn adjust_open_file_limit() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.external_command("sh");
     command
         .arg("-c")
-        .arg("ulimit -S -n 128; exec \"$@\"")
+        .arg("ulimit -S -n 128 && exec \"$@\"")
         .arg("sh")
         .arg(get_bin!())
         .arg("run")
@@ -27,9 +30,10 @@ fn adjust_open_file_limit() {
     ");
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn run_open_file_limit_override() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.run();
@@ -53,16 +57,13 @@ fn run_open_file_limit_override() {
 
 #[test]
 fn run_open_file_limit_override_invalid() {
-    let context = uv_test::test_context!("3.12");
-    let python = &context.python_versions[0].1;
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let mut command = context.run();
     command
         .arg("--no-project")
         .arg("--")
-        .arg(python)
-        .arg("-c")
-        .arg("pass")
+        .arg("true")
         .env(EnvVars::UV_RUN_RLIMIT_NOFILE, "invalid");
 
     uv_snapshot!(context.filters(), command, @r"
@@ -72,15 +73,16 @@ fn run_open_file_limit_override_invalid() {
     ");
 }
 
+#[cfg(feature = "test-python")]
 #[test]
 fn run_open_file_limit_override_exceeds_hard_limit() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.external_command("sh");
     command
         .arg("-c")
-        .arg("ulimit -S -n 128; ulimit -H -n 128; exec \"$@\"")
+        .arg("ulimit -S -n 128 && ulimit -H -n 128 && exec \"$@\"")
         .arg("sh")
         .arg(get_bin!())
         .arg("run")

@@ -1,54 +1,100 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
-use insta::allow_duplicates;
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
+#[cfg(feature = "native-auth")]
+use crate::native_auth_fixture::NativeAuthFixture;
+
+#[cfg(feature = "test-python")]
 #[tokio::test]
-async fn invalid_cloud_endpoint_urls() {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let proxy = crate::pypi_proxy::start().await;
-    let mut filters = context.filters();
-    filters.push((r"UV_(S3|GCS|AZURE)_ENDPOINT_URL", "UV_[CLOUD]_ENDPOINT_URL"));
+async fn invalid_s3_endpoint_url() {
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
 
-    allow_duplicates! {
-        for env_var in [
-            EnvVars::UV_S3_ENDPOINT_URL,
-            EnvVars::UV_GCS_ENDPOINT_URL,
-            EnvVars::UV_AZURE_ENDPOINT_URL,
-        ] {
-            uv_snapshot!(filters, context.pip_install()
-                .arg("--dry-run")
-                .arg("--default-index")
-                .arg(proxy.url("/basic-auth/simple"))
-                .arg("iniconfig")
-                .env(env_var, "not-a-url"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
-              cause: Invalid `UV_[CLOUD]_ENDPOINT_URL`
-              cause: relative URL without a base
-            ");
-        }
-    }
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_S3_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_S3_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
+}
+
+#[cfg(feature = "test-python")]
+#[tokio::test]
+async fn invalid_gcs_endpoint_url() {
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_GCS_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_GCS_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
+}
+
+#[cfg(feature = "test-python")]
+#[tokio::test]
+async fn invalid_azure_endpoint_url() {
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_AZURE_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_AZURE_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
+}
+
+#[cfg(feature = "test-python")]
+async fn cloud_auth_challenge() -> wiremock::MockServer {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+    // A challenge triggers lazy credential lookup; an invalid endpoint must prevent a retry.
+    Mock::given(method("GET"))
+        .and(path("/iniconfig/"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", r#"Basic realm="test""#),
+        )
+        .expect(0..=1)
+        .mount(&server)
+        .await;
+    server
 }
 
 #[tokio::test]
-#[cfg(feature = "native-auth")]
+#[cfg(all(
+    feature = "native-auth",
+    feature = "test-python",
+    feature = "test-pypi"
+))]
 async fn add_package_native_auth_realm() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+    let credential = NativeAuthFixture::guard_vacant_entry(proxy.uri(), Some("public"), "heron")?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc::indoc! { r#"
@@ -90,7 +136,7 @@ async fn add_package_native_auth_realm() -> Result<()> {
     );
 
     // Try to add the original package without credentials again. This should use credentials
-    // storied in the system keyring.
+    // stored in the system keyring.
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
@@ -115,6 +161,7 @@ async fn add_package_native_auth_realm() -> Result<()> {
     Removed credentials for public@http://[LOCALHOST]/
     "
     );
+    credential.finish_after_logout()?;
 
     // Authentication should fail again
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
@@ -135,19 +182,19 @@ async fn add_package_native_auth_realm() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "native-auth")]
+#[cfg(all(
+    feature = "native-auth",
+    feature = "test-python",
+    feature = "test-pypi"
+))]
 async fn add_package_native_auth() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+    let credential = NativeAuthFixture::guard_vacant_entry(
+        proxy.url("/basic-auth/simple"),
+        Some("public"),
+        "heron",
+    )?;
 
     // Configure `pyproject.toml` with native keyring provider.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -190,7 +237,7 @@ async fn add_package_native_auth() -> Result<()> {
     );
 
     // Try to add the original package without credentials again. This should use
-    // credentials storied in the system keyring.
+    // credentials stored in the system keyring.
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
@@ -215,6 +262,7 @@ async fn add_package_native_auth() -> Result<()> {
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     "
     );
+    credential.finish_after_logout()?;
 
     // Authentication should fail again
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
@@ -240,15 +288,6 @@ async fn token_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
     // Without persisted credentials
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.url("/basic-auth/simple"))
@@ -269,7 +308,11 @@ async fn token_native_auth() -> Result<()> {
     error: Failed to fetch credentials for `public@http://[LOCALHOST]/basic-auth/simple`
     ");
 
-    // Login to the index
+    let account = NativeAuthFixture::guard_vacant_entry(
+        proxy.url("/basic-auth/simple"),
+        Some("public"),
+        "heron",
+    )?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.url("/basic-auth/simple"))
         .arg("--username")
@@ -316,11 +359,15 @@ async fn token_native_auth() -> Result<()> {
     error: Failed to fetch credentials for `private@http://[LOCALHOST]/basic-auth/simple`
     ");
 
-    // Login to the index with a token
+    let token = NativeAuthFixture::guard_vacant_entry(
+        proxy.url("/basic-auth/simple"),
+        None,
+        "token-secret",
+    )?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.url("/basic-auth/simple"))
         .arg("--token")
-        .arg("heron")
+        .arg("token-secret")
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -334,17 +381,10 @@ async fn token_native_auth() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    heron
+    token-secret
     ");
 
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .status()?;
-
-    // Retrieve token using URL with embedded username (no --username needed)
+    // An embedded username selects the account credential instead of the token credential.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
@@ -364,7 +404,8 @@ async fn token_native_auth() -> Result<()> {
     error: Cannot specify a username both via the URL and CLI; found `--username different` and `public`
     ");
 
-    Ok(())
+    token.finish()?;
+    account.finish()
 }
 
 #[tokio::test]
@@ -372,27 +413,6 @@ async fn token_native_auth() -> Result<()> {
 async fn token_native_auth_realm() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
 
     // Without persisted credentials
     uv_snapshot!(context.filters(), context.auth_token()
@@ -414,7 +434,7 @@ async fn token_native_auth_realm() -> Result<()> {
     error: Failed to fetch credentials for `public@http://[LOCALHOST]/`
     ");
 
-    // Login to the index
+    let account = NativeAuthFixture::guard_vacant_entry(proxy.uri(), Some("public"), "heron")?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.uri())
         .arg("--username")
@@ -491,11 +511,11 @@ async fn token_native_auth_realm() -> Result<()> {
     error: Failed to fetch credentials for `public@https://192.0.2.1:1000/`
     ");
 
-    // Login to the index with a token
+    let token = NativeAuthFixture::guard_vacant_entry(proxy.uri(), None, "realm-token-secret")?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.uri())
         .arg("--token")
-        .arg("heron")
+        .arg("realm-token-secret")
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -509,17 +529,10 @@ async fn token_native_auth_realm() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    heron
+    realm-token-secret
     ");
 
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .status()?;
-
-    // Retrieve token using URL with embedded username (no --username needed)
+    // An embedded username selects the host account credential for the child URL.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
@@ -528,23 +541,15 @@ async fn token_native_auth_realm() -> Result<()> {
     heron
     ");
 
-    Ok(())
+    token.finish()?;
+    account.finish()
 }
 
-#[tokio::test]
-#[cfg(feature = "native-auth")]
-async fn login_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+#[test]
+fn login_missing_arguments() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.temp_dir.child("credentials");
+    let context = context.with_env(EnvVars::UV_CREDENTIALS_DIR, credentials_dir.as_os_str());
 
     // Without a service name
     uv_snapshot!(context.filters(), context.auth_login(), @r"
@@ -560,8 +565,7 @@ async fn login_native_auth() -> Result<()> {
 
     // Without a username (or token)
     uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("https://example.invalid/simple"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No username provided; did you mean to provide `--username` or `--token`?
@@ -569,60 +573,15 @@ async fn login_native_auth() -> Result<()> {
 
     // Without a password
     uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
+        .arg("https://example.invalid/simple")
         .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("public"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No password provided; did you mean to provide `--password` or `--token`?
     ");
 
-    // Successful
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .arg("--password")
-        .arg("heron")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for public@http://[LOCALHOST]/basic-auth
-    "
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "native-auth")]
-async fn login_token_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("__token__")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Successful with token
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--token")
-        .arg("test-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for http://[LOCALHOST]/basic-auth
-    "
-    );
-
-    Ok(())
+    assert_path_missing(credentials_dir.child("credentials.toml"));
 }
 
 #[tokio::test]
@@ -630,20 +589,20 @@ async fn login_token_native_auth() -> Result<()> {
 async fn logout_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
+    let service = proxy.url("/basic-auth/simple");
+    let token_status = context
+        .auth_token()
+        .arg(&service)
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+    anyhow::ensure!(
+        token_status.code() == Some(2),
+        "refusing to remove an existing native token credential"
+    );
+    let credential =
+        NativeAuthFixture::guard_vacant_entry(service.clone(), Some("public"), "heron")?;
 
     // Without a service name
     uv_snapshot!(context.filters(), context.auth_logout(), @r"
@@ -714,8 +673,10 @@ async fn logout_native_auth() -> Result<()> {
     ----- stderr -----
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
+    credential.finish_after_logout()?;
 
     // Login again
+    let credential = NativeAuthFixture::guard_vacant_entry(service, Some("public"), "heron")?;
     context
         .auth_login()
         .arg(proxy.url("/basic-auth/simple"))
@@ -735,6 +696,7 @@ async fn logout_native_auth() -> Result<()> {
     ----- stderr -----
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
+    credential.finish_after_logout()?;
 
     // Conflict between --username and a URL username is rejected
     uv_snapshot!(context.filters(), context.auth_logout()
@@ -761,47 +723,30 @@ async fn logout_native_auth() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 #[cfg(feature = "native-auth")]
-async fn logout_token_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
+fn logout_token_native_auth() -> Result<()> {
+    let fixture = NativeAuthFixture::new_token("test-token")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with a token
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--token")
-        .arg("test-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.own_token(), @r"
     exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for http://[LOCALHOST]/basic-auth
+    ----- stdout -----
+    test-token
     "
     );
 
-    // Logout without a username
-    uv_snapshot!(context.filters(), context.auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.filters(), fixture.logout(), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed credentials for http://[LOCALHOST]/basic-auth
+    Removed credentials for [SERVICE]
     ");
 
-    Ok(())
+    fixture.finish_after_logout()
 }
 
 #[test]
-#[cfg(feature = "native-auth")]
-fn login_native_auth_url() {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+fn login_service_url_normalizes_to_https() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // A domain-only service name gets https:// prepended
     uv_snapshot!(context.auth_login()
@@ -809,39 +754,15 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("domain-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
-
-    // HTTP URLs are not allowed - only HTTPS
-    uv_snapshot!(context.auth_login()
-        .arg("http://example.com")
-        .arg("--username")
-        .arg("test")
-        .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid value 'http://example.com' for '<SERVICE>': HTTPS is required for non-local hosts
-
-    For more information, try '--help'.
-    ");
-
-    // HTTP URLs are fine for localhost
-    uv_snapshot!(context.auth_login()
-        .arg("http://localhost:1324")
-        .arg("--username")
-        .arg("test")
-        .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
     exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for test@http://localhost:1324/
+    ----- stdout -----
+    domain-password
     ");
 
     uv_snapshot!(context.auth_login()
@@ -849,11 +770,15 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("https-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
+    ");
+    uv_snapshot!(context.auth_token().args(["example.com", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    https-password
     ");
 
     // A domain-only service with a path also gets https:// prepended
@@ -862,47 +787,72 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("path-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    path-password
+    ");
+}
 
-    // An invalid URL is rejected
+#[test]
+fn login_rejects_invalid_service_url() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
         .arg("not a valid url")
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("test"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: invalid value 'not a valid url' for '<SERVICE>': invalid international domain name
 
     For more information, try '--help'.
     ");
+}
 
-    // URL with embedded credentials works
+#[test]
+fn login_with_embedded_credentials() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
-        .arg("https://test:password@example.com/simple")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("https://test:password@example.com/simple"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    password
+    ");
+}
 
-    // URL with embedded username and separate password works
+#[test]
+fn login_with_embedded_username_and_cli_password() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
         .arg("https://test@example.com/simple")
         .arg("--password")
-        .arg("password")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    password
+    ");
+}
+
+#[test]
+fn login_url_credential_conflicts() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Conflict between --username and URL username is rejected
     uv_snapshot!(context.auth_login()
@@ -910,8 +860,7 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("different")
         .arg("--password")
-        .arg("password")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("password"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot specify a username both via the URL and CLI; found `--username different` and `test`
@@ -921,8 +870,7 @@ fn login_native_auth_url() {
     uv_snapshot!(context.auth_login()
         .arg("https://test:password@example.com/simple")
         .arg("--password")
-        .arg("different")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("different"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot specify a password both via the URL and CLI
@@ -932,8 +880,7 @@ fn login_native_auth_url() {
     uv_snapshot!(context.auth_login()
         .arg("https://test:password@example.com/simple")
         .arg("--token")
-        .arg("some-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("some-token"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: When using `--token`, a username cannot not be provided; found: test
@@ -1066,9 +1013,7 @@ fn login_text_store_empty_file() -> Result<()> {
     context.temp_dir.child("credentials.toml").write_str("")?;
 
     uv_snapshot!(context.auth_login()
-        .arg("https://example.com/simple")
-        .arg("--token")
-        .arg("test-token")
+        .args(["https://example.com/simple", "--token", "test-token"])
         .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1082,7 +1027,6 @@ fn login_text_store_empty_file() -> Result<()> {
     ----- stdout -----
     test-token
     ");
-
     Ok(())
 }
 
@@ -1095,15 +1039,20 @@ fn login_text_store_comments_only_file() -> Result<()> {
         .write_str("# No credentials have been configured yet.\n")?;
 
     uv_snapshot!(context.auth_login()
-        .arg("https://example.com/simple")
-        .arg("--token")
-        .arg("test-token")
+        .args(["https://example.com/simple", "--token", "test-token"])
         .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for https://example.com/
     ");
 
+    uv_snapshot!(context.auth_token()
+        .arg("https://example.com/simple")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    test-token
+    ");
     Ok(())
 }
 
@@ -1642,101 +1591,39 @@ fn logout_text_store_multiple_usernames() {
 
 #[test]
 #[cfg(feature = "native-auth")]
-fn native_auth_prefix_match() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+fn native_auth_path_login_matches_child_path() -> Result<()> {
+    let fixture = NativeAuthFixture::new("https://example.invalid/api", "testpass")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg("https://example.com/api")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with credentials for a path
-    uv_snapshot!(context.auth_login()
-        .arg("https://example.com/api")
-        .arg("--username")
-        .arg("testuser")
-        .arg("--password")
-        .arg("testpass")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for testuser@https://example.com/api
-    "
-    );
-
-    // A request for a child path does not match, the native store does not yet implement prefix
-    // matching
-    uv_snapshot!(context.auth_token()
-        .arg("https://example.com/api/v1")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.token("https://example.invalid/api/v1"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     testpass
     "
     );
 
-    Ok(())
+    fixture.finish()
 }
 
 #[test]
 #[cfg(feature = "native-auth")]
 fn native_auth_host_fallback() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+    let fixture = NativeAuthFixture::new("https://example.invalid/", "hostpass")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg("example.com")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with credentials for the host
-    uv_snapshot!(context.auth_login()
-        .arg("example.com")
-        .arg("--username")
-        .arg("testuser")
-        .arg("--password")
-        .arg("hostpass")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for testuser@https://example.com/
-    "
-    );
-
-    // Should fallback to host-level matching
-    uv_snapshot!(context.auth_token()
-        .arg("https://example.com/any/path")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.token("https://example.invalid/any/path"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     hostpass
     "
     );
 
-    // A request to another host should not work
-    uv_snapshot!(context.auth_token()
-        .arg("https://another-example.com/any/path")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.filters(), fixture.token("https://other.invalid/any/path"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch credentials for `testuser@https://another-example.com/any/path`
+    error: Failed to fetch credentials for `[USERNAME]@https://other.invalid/any/path`
     "
     );
 
-    Ok(())
+    fixture.finish()
 }
 
 /// Test credential helper with basic auth credentials

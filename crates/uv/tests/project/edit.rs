@@ -1,5 +1,3 @@
-#![expect(clippy::disallowed_types)]
-
 #[cfg(feature = "test-git")]
 mod conditional_imports {
     pub(crate) use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
@@ -10,7 +8,7 @@ use conditional_imports::*;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::prelude::*;
+use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
@@ -20,7 +18,7 @@ use std::path::Path;
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{basic_auth, method, path},
 };
 
 #[cfg(feature = "test-git-lfs")]
@@ -30,7 +28,8 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::subdirectory_archive::SubdirectoryArchive;
+use uv_test::{TestContext, diff_snapshot, site_packages_path, uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
 #[test]
@@ -835,16 +834,26 @@ fn add_git_lfs() -> Result<()> {
     assert!(ok_checkout_file.exists());
     assert!(lfs_db_bucket_objects.exists());
 
-    // Exercise the sdist cache
+    // Reinstall offline to require the recovered cache instead of accepting the existing package.
+    context
+        .pip_uninstall()
+        .arg("test-lfs-repo")
+        .assert()
+        .success();
     uv_snapshot!(context.filters(), context.add()
         .arg("git+https://github.com/astral-sh/test-lfs-repo")
         .arg("--rev").arg("261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        .arg("--offline")
         .arg("--lfs"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Checked 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + test-lfs-repo==0.1.0 (from git+https://github.com/astral-sh/test-lfs-repo@261c828b8e05251f3a3e4f6b47b149d691c7efbb#lfs=true)
     ");
+    context
+        .assert_command("import test_lfs_repo.lfs_module")
+        .success();
 
     Ok(())
 }
@@ -1033,7 +1042,6 @@ fn add_git_implicit() -> Result<()> {
 
 /// `--raw-sources` should be considered conflicting with sources-specific arguments, like `--tag`.
 #[test]
-#[cfg(feature = "test-git")]
 fn add_raw_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1060,8 +1068,9 @@ fn add_raw_error() -> Result<()> {
     Ok(())
 }
 
+/// Re-adding a local source reinstalls it without losing its editable status.
 #[test]
-fn reinstall_local_source_trees() -> Result<()> {
+fn add_reinstalls_local_editable_source() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let project_1 = context.temp_dir.child("project1");
@@ -1080,9 +1089,14 @@ fn reinstall_local_source_trees() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = []
-    "#})?;
 
-    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable"), @"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project_2.child("src/project2/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -1094,7 +1108,7 @@ fn reinstall_local_source_trees() -> Result<()> {
     ");
 
     // Running `uv add` should reinstall the project.
-    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable"), @"
+    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1103,12 +1117,15 @@ fn reinstall_local_source_trees() -> Result<()> {
     Installed 1 package in [TIME]
      ~ project2==0.1.0 (from file://[TEMP_DIR]/project2)
     ");
+    let direct_url = site_packages_path(project_1.child(".venv").path(), "python3.12")
+        .join("project2-0.1.0.dist-info/direct_url.json");
+    let direct_url: serde_json::Value = serde_json::from_slice(&fs_err::read(direct_url)?)?;
+    assert_eq!(direct_url["dir_info"]["editable"], true);
 
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-git")]
 fn add_editable_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -4424,13 +4441,16 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
 
     assert!(!context.venv.exists());
 
+    let active = context.temp_dir.child("active");
     context
         .venv()
-        .arg("active")
+        .arg(active.path())
         .arg("--python")
         .arg("3.12")
         .assert()
         .success();
+    let active_package =
+        ChildPath::new(site_packages_path(active.path(), "python3.12")).child("ok/__init__.py");
 
     // An explicitly requested active environment still determines the interpreter.
     uv_snapshot!(context.filters(), context
@@ -4447,6 +4467,17 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     ");
 
     assert!(!context.venv.exists());
+    active_package.assert(predicate::path::missing());
+
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(active.path())
+        .arg("--offline")
+        .arg("./ok-1.0.0-py3-none-any.whl")
+        .assert()
+        .success();
+    active_package.assert(predicate::path::is_file());
 
     uv_snapshot!(context.filters(), context
         .remove()
@@ -4462,6 +4493,7 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     ");
 
     assert!(!context.venv.exists());
+    active_package.assert(predicate::path::is_file());
 
     // Commands that synchronize the project environment must retain the mismatch warning.
     uv_snapshot!(context.filters(), context
@@ -5625,6 +5657,7 @@ fn add_repeat() -> Result<()> {
 /// Add from requirement file.
 #[test]
 #[cfg(feature = "test-git")]
+#[expect(clippy::disallowed_types)]
 fn add_requirements_file() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 
@@ -6804,7 +6837,7 @@ fn remove_group() -> Result<()> {
     Ok(())
 }
 
-/// Add to a PEP 732 script.
+/// Adding a dependency edits a PEP 723 script without running its body.
 #[test]
 fn add_script() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -6819,12 +6852,9 @@ fn add_script() -> Result<()> {
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("script executed")
     "#})?;
 
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--script").arg("script.py"), @"
@@ -6849,18 +6879,19 @@ fn add_script() -> Result<()> {
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("script executed")
         "#
         );
     });
 
     // Adding to a script without a lockfile shouldn't create a lockfile.
     assert!(!context.temp_dir.join("script.py.lock").exists());
+    context
+        .temp_dir
+        .child("script.executed")
+        .assert(predicate::path::missing());
 
     Ok(())
 }
@@ -7639,13 +7670,13 @@ fn remove_repeated() -> Result<()> {
     Ok(())
 }
 
-/// Add to (and remove from) a PEP 732 script with a lockfile.
+/// Add to (and remove from) a PEP 723 script with a lockfile.
 #[test]
 fn add_remove_script_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
-    script.write_str(indoc! {r#"
+    let original_script = indoc! {r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
@@ -7660,7 +7691,8 @@ fn add_remove_script_lock() -> Result<()> {
         resp = requests.get("https://peps.python.org/api/peps.json")
         data = resp.json()
         pprint([(k, v["title"]) for k, v in data.items()][:10])
-    "#})?;
+    "#};
+    script.write_str(original_script)?;
 
     // Explicitly lock the script.
     uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
@@ -7669,13 +7701,13 @@ fn add_remove_script_lock() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    let lock = context.read("script.py.lock");
+    let original_lock = context.read("script.py.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            original_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.11"
@@ -7849,174 +7881,54 @@ fn add_remove_script_lock() -> Result<()> {
         );
     });
 
-    let lock = context.read("script.py.lock");
+    let lock_changes = diff_snapshot(&original_lock, &context.read("script.py.lock"), 3);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock_changes, @r#"
+        --- old
+        +++ new
+        @@ -7,11 +7,25 @@
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.11"
+         [manifest]
+         requirements = [
+        +    { name = "anyio", specifier = ">=4.3.0" },
+             { name = "requests", specifier = "<3" },
+             { name = "rich" },
+         ]
 
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
+         [[package]]
+        +name = "anyio"
+        +version = "4.3.0"
+        +source = { registry = "https://pypi.org/simple" }
+        +dependencies = [
+        +    { name = "idna" },
+        +    { name = "sniffio" },
+        +]
+        +sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
+        +wheels = [
+        +    { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+        +]
+        +
+        +[[package]]
+         name = "certifi"
+         version = "2024.2.2"
+         source = { registry = "https://pypi.org/simple" }
+        @@ -127,6 +141,15 @@
+         ]
 
-        [manifest]
-        requirements = [
-            { name = "anyio", specifier = ">=4.3.0" },
-            { name = "requests", specifier = "<3" },
-            { name = "rich" },
-        ]
-
-        [[package]]
-        name = "anyio"
-        version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
-        ]
-
-        [[package]]
-        name = "certifi"
-        version = "2024.2.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/71/da/e94e26401b62acd6d91df2b52954aceb7f561743aa5ccc32152886c76c96/certifi-2024.2.2.tar.gz", hash = "sha256:0569859f95fc761b18b45ef421b1290a0f65f147e92a1e5eb3e635f9a5e4e66f", size = 164886, upload-time = "2024-02-02T01:22:17.364Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ba/06/a07f096c664aeb9f01624f858c3add0a4e913d6c96257acb4fce61e7de14/certifi-2024.2.2-py3-none-any.whl", hash = "sha256:dc383c07b76109f368f6106eee2b593b04a011ea4d55f652c6ca24a754d1cdd1", size = 163774, upload-time = "2024-02-02T01:22:14.86Z" },
-        ]
-
-        [[package]]
-        name = "charset-normalizer"
-        version = "3.3.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/63/09/c1bc53dab74b1816a00d8d030de5bf98f724c52c1635e07681d312f20be8/charset-normalizer-3.3.2.tar.gz", hash = "sha256:f30c3cb33b24454a82faecaf01b19c18562b1e89558fb6c56de4d9118a032fd5", size = 104809, upload-time = "2023-11-01T04:04:59.997Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/77/02839016f6fbbf808e8b38601df6e0e66c17bbab76dff4613f7511413597/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:802fe99cca7457642125a8a88a084cef28ff0cf9407060f7b93dca5aa25480db", size = 191647, upload-time = "2023-11-01T04:02:55.329Z" },
-            { url = "https://files.pythonhosted.org/packages/3e/33/21a875a61057165e92227466e54ee076b73af1e21fe1b31f1e292251aa1e/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:573f6eac48f4769d667c4442081b1794f52919e7edada77495aaed9236d13a96", size = 121434, upload-time = "2023-11-01T04:02:57.173Z" },
-            { url = "https://files.pythonhosted.org/packages/dd/51/68b61b90b24ca35495956b718f35a9756ef7d3dd4b3c1508056fa98d1a1b/charset_normalizer-3.3.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:549a3a73da901d5bc3ce8d24e0600d1fa85524c10287f6004fbab87672bf3e1e", size = 118979, upload-time = "2023-11-01T04:02:58.442Z" },
-            { url = "https://files.pythonhosted.org/packages/e4/a6/7ee57823d46331ddc37dd00749c95b0edec2c79b15fc0d6e6efb532e89ac/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f27273b60488abe721a075bcca6d7f3964f9f6f067c8c4c605743023d7d3944f", size = 136582, upload-time = "2023-11-01T04:02:59.776Z" },
-            { url = "https://files.pythonhosted.org/packages/74/f1/0d9fe69ac441467b737ba7f48c68241487df2f4522dd7246d9426e7c690e/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1ceae2f17a9c33cb48e3263960dc5fc8005351ee19db217e9b1bb15d28c02574", size = 146645, upload-time = "2023-11-01T04:03:02.186Z" },
-            { url = "https://files.pythonhosted.org/packages/05/31/e1f51c76db7be1d4aef220d29fbfa5dbb4a99165d9833dcbf166753b6dc0/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:65f6f63034100ead094b8744b3b97965785388f308a64cf8d7c34f2f2e5be0c4", size = 139398, upload-time = "2023-11-01T04:03:04.255Z" },
-            { url = "https://files.pythonhosted.org/packages/40/26/f35951c45070edc957ba40a5b1db3cf60a9dbb1b350c2d5bef03e01e61de/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:753f10e867343b4511128c6ed8c82f7bec3bd026875576dfd88483c5c73b2fd8", size = 140273, upload-time = "2023-11-01T04:03:05.983Z" },
-            { url = "https://files.pythonhosted.org/packages/07/07/7e554f2bbce3295e191f7e653ff15d55309a9ca40d0362fcdab36f01063c/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:4a78b2b446bd7c934f5dcedc588903fb2f5eec172f3d29e52a9096a43722adfc", size = 142577, upload-time = "2023-11-01T04:03:07.567Z" },
-            { url = "https://files.pythonhosted.org/packages/d8/b5/eb705c313100defa57da79277d9207dc8d8e45931035862fa64b625bfead/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:e537484df0d8f426ce2afb2d0f8e1c3d0b114b83f8850e5f2fbea0e797bd82ae", size = 137747, upload-time = "2023-11-01T04:03:08.886Z" },
-            { url = "https://files.pythonhosted.org/packages/19/28/573147271fd041d351b438a5665be8223f1dd92f273713cb882ddafe214c/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:eb6904c354526e758fda7167b33005998fb68c46fbc10e013ca97f21ca5c8887", size = 143375, upload-time = "2023-11-01T04:03:10.613Z" },
-            { url = "https://files.pythonhosted.org/packages/cf/7c/f3b682fa053cc21373c9a839e6beba7705857075686a05c72e0f8c4980ca/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_ppc64le.whl", hash = "sha256:deb6be0ac38ece9ba87dea880e438f25ca3eddfac8b002a2ec3d9183a454e8ae", size = 148474, upload-time = "2023-11-01T04:03:11.973Z" },
-            { url = "https://files.pythonhosted.org/packages/1e/49/7ab74d4ac537ece3bc3334ee08645e231f39f7d6df6347b29a74b0537103/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_s390x.whl", hash = "sha256:4ab2fe47fae9e0f9dee8c04187ce5d09f48eabe611be8259444906793ab7cbce", size = 140232, upload-time = "2023-11-01T04:03:13.505Z" },
-            { url = "https://files.pythonhosted.org/packages/2d/dc/9dacba68c9ac0ae781d40e1a0c0058e26302ea0660e574ddf6797a0347f7/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:80402cd6ee291dcb72644d6eac93785fe2c8b9cb30893c1af5b8fdd753b9d40f", size = 140859, upload-time = "2023-11-01T04:03:17.362Z" },
-            { url = "https://files.pythonhosted.org/packages/6c/c2/4a583f800c0708dd22096298e49f887b49d9746d0e78bfc1d7e29816614c/charset_normalizer-3.3.2-cp311-cp311-win32.whl", hash = "sha256:7cd13a2e3ddeed6913a65e66e94b51d80a041145a026c27e6bb76c31a853c6ab", size = 92509, upload-time = "2023-11-01T04:03:21.453Z" },
-            { url = "https://files.pythonhosted.org/packages/57/ec/80c8d48ac8b1741d5b963797b7c0c869335619e13d4744ca2f67fc11c6fc/charset_normalizer-3.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:663946639d296df6a2bb2aa51b60a2454ca1cb29835324c640dafb5ff2131a77", size = 99870, upload-time = "2023-11-01T04:03:22.723Z" },
-            { url = "https://files.pythonhosted.org/packages/d1/b2/fcedc8255ec42afee97f9e6f0145c734bbe104aac28300214593eb326f1d/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:0b2b64d2bb6d3fb9112bafa732def486049e63de9618b5843bcdd081d8144cd8", size = 192892, upload-time = "2023-11-01T04:03:24.135Z" },
-            { url = "https://files.pythonhosted.org/packages/2e/7d/2259318c202f3d17f3fe6438149b3b9e706d1070fe3fcbb28049730bb25c/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:ddbb2551d7e0102e7252db79ba445cdab71b26640817ab1e3e3648dad515003b", size = 122213, upload-time = "2023-11-01T04:03:25.66Z" },
-            { url = "https://files.pythonhosted.org/packages/3a/52/9f9d17c3b54dc238de384c4cb5a2ef0e27985b42a0e5cc8e8a31d918d48d/charset_normalizer-3.3.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:55086ee1064215781fff39a1af09518bc9255b50d6333f2e4c74ca09fac6a8f6", size = 119404, upload-time = "2023-11-01T04:03:27.04Z" },
-            { url = "https://files.pythonhosted.org/packages/99/b0/9c365f6d79a9f0f3c379ddb40a256a67aa69c59609608fe7feb6235896e1/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f4a014bc36d3c57402e2977dada34f9c12300af536839dc38c0beab8878f38a", size = 137275, upload-time = "2023-11-01T04:03:28.466Z" },
-            { url = "https://files.pythonhosted.org/packages/91/33/749df346e93d7a30cdcb90cbfdd41a06026317bfbfb62cd68307c1a3c543/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:a10af20b82360ab00827f916a6058451b723b4e65030c5a18577c8b2de5b3389", size = 147518, upload-time = "2023-11-01T04:03:29.82Z" },
-            { url = "https://files.pythonhosted.org/packages/72/1a/641d5c9f59e6af4c7b53da463d07600a695b9824e20849cb6eea8a627761/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:8d756e44e94489e49571086ef83b2bb8ce311e730092d2c34ca8f7d925cb20aa", size = 140182, upload-time = "2023-11-01T04:03:31.511Z" },
-            { url = "https://files.pythonhosted.org/packages/ee/fb/14d30eb4956408ee3ae09ad34299131fb383c47df355ddb428a7331cfa1e/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:90d558489962fd4918143277a773316e56c72da56ec7aa3dc3dbbe20fdfed15b", size = 141869, upload-time = "2023-11-01T04:03:32.887Z" },
-            { url = "https://files.pythonhosted.org/packages/df/3e/a06b18788ca2eb6695c9b22325b6fde7dde0f1d1838b1792a0076f58fe9d/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6ac7ffc7ad6d040517be39eb591cac5ff87416c2537df6ba3cba3bae290c0fed", size = 144042, upload-time = "2023-11-01T04:03:34.412Z" },
-            { url = "https://files.pythonhosted.org/packages/45/59/3d27019d3b447a88fe7e7d004a1e04be220227760264cc41b405e863891b/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:7ed9e526742851e8d5cc9e6cf41427dfc6068d4f5a3bb03659444b4cabf6bc26", size = 138275, upload-time = "2023-11-01T04:03:35.759Z" },
-            { url = "https://files.pythonhosted.org/packages/7b/ef/5eb105530b4da8ae37d506ccfa25057961b7b63d581def6f99165ea89c7e/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:8bdb58ff7ba23002a4c5808d608e4e6c687175724f54a5dade5fa8c67b604e4d", size = 144819, upload-time = "2023-11-01T04:03:37.216Z" },
-            { url = "https://files.pythonhosted.org/packages/a2/51/e5023f937d7f307c948ed3e5c29c4b7a3e42ed2ee0b8cdf8f3a706089bf0/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_ppc64le.whl", hash = "sha256:6b3251890fff30ee142c44144871185dbe13b11bab478a88887a639655be1068", size = 149415, upload-time = "2023-11-01T04:03:38.694Z" },
-            { url = "https://files.pythonhosted.org/packages/24/9d/2e3ef673dfd5be0154b20363c5cdcc5606f35666544381bee15af3778239/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_s390x.whl", hash = "sha256:b4a23f61ce87adf89be746c8a8974fe1c823c891d8f86eb218bb957c924bb143", size = 141212, upload-time = "2023-11-01T04:03:40.07Z" },
-            { url = "https://files.pythonhosted.org/packages/5b/ae/ce2c12fcac59cb3860b2e2d76dc405253a4475436b1861d95fe75bdea520/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:efcb3f6676480691518c177e3b465bcddf57cea040302f9f4e6e191af91174d4", size = 142167, upload-time = "2023-11-01T04:03:41.491Z" },
-            { url = "https://files.pythonhosted.org/packages/ed/3a/a448bf035dce5da359daf9ae8a16b8a39623cc395a2ffb1620aa1bce62b0/charset_normalizer-3.3.2-cp312-cp312-win32.whl", hash = "sha256:d965bba47ddeec8cd560687584e88cf699fd28f192ceb452d1d7ee807c5597b7", size = 93041, upload-time = "2023-11-01T04:03:42.836Z" },
-            { url = "https://files.pythonhosted.org/packages/b6/7c/8debebb4f90174074b827c63242c23851bdf00a532489fba57fef3416e40/charset_normalizer-3.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:96b02a3dc4381e5494fad39be677abcb5e6634bf7b4fa83a6dd3112607547001", size = 100397, upload-time = "2023-11-01T04:03:44.467Z" },
-            { url = "https://files.pythonhosted.org/packages/28/76/e6222113b83e3622caa4bb41032d0b1bf785250607392e1b778aca0b8a7d/charset_normalizer-3.3.2-py3-none-any.whl", hash = "sha256:3e4d1f6587322d2788836a99c69062fbb091331ec940e02d12d179c1d53e25fc", size = 48543, upload-time = "2023-11-01T04:04:58.622Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "markdown-it-py"
-        version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "mdurl" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/38/71/3b932df36c1a044d397a1f92d1cf91ee0a503d91e470cbd670aa66b07ed0/markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb", size = 74596, upload-time = "2023-06-03T06:41:14.443Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/42/d7/1ec15b46af6af88f19b8e5ffea08fa375d433c998b8a7639e76935c14f1f/markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1", size = 87528, upload-time = "2023-06-03T06:41:11.019Z" },
-        ]
-
-        [[package]]
-        name = "mdurl"
-        version = "0.1.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-        ]
-
-        [[package]]
-        name = "pygments"
-        version = "2.17.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/55/59/8bccf4157baf25e4aa5a0bb7fa3ba8600907de105ebc22b0c78cfbf6f565/pygments-2.17.2.tar.gz", hash = "sha256:da46cec9fd2de5be3a8a784f434e4c4ab670b4ff54d605c4c2717e9d49c4c367", size = 4827772, upload-time = "2023-11-21T20:43:53.875Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/97/9c/372fef8377a6e340b1704768d20daaded98bf13282b5327beb2e2fe2c7ef/pygments-2.17.2-py3-none-any.whl", hash = "sha256:b27c2826c47d0f3219f29554824c30c5e8945175d888647acd804ddd04af846c", size = 1179756, upload-time = "2023-11-21T20:43:49.423Z" },
-        ]
-
-        [[package]]
-        name = "requests"
-        version = "2.31.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "certifi" },
-            { name = "charset-normalizer" },
-            { name = "idna" },
-            { name = "urllib3" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/9d/be/10918a2eac4ae9f02f6cfe6414b7a155ccd8f7f9d4380d62fd5b955065c3/requests-2.31.0.tar.gz", hash = "sha256:942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1", size = 110794, upload-time = "2023-05-22T15:12:44.175Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb167a1a26b2ce6cd6965bf26b47bc0bf44/requests-2.31.0-py3-none-any.whl", hash = "sha256:58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f", size = 62574, upload-time = "2023-05-22T15:12:42.313Z" },
-        ]
-
-        [[package]]
-        name = "rich"
-        version = "13.7.1"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "markdown-it-py" },
-            { name = "pygments" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/b3/01/c954e134dc440ab5f96952fe52b4fdc64225530320a910473c1fe270d9aa/rich-13.7.1.tar.gz", hash = "sha256:9be308cb1fe2f1f57d67ce99e95af38a1e2bc71ad9813b0e247cf7ffbcc3a432", size = 221248, upload-time = "2024-02-28T14:51:19.472Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/87/67/a37f6214d0e9fe57f6ae54b2956d550ca8365857f42a1ce0392bb21d9410/rich-13.7.1-py3-none-any.whl", hash = "sha256:4edbae314f59eb482f54e9e30bf00d33350aaa94f4bfcd4e9e3110e64d0d7222", size = 240681, upload-time = "2024-02-28T14:51:14.353Z" },
-        ]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
-        ]
-
-        [[package]]
-        name = "urllib3"
-        version = "2.2.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
-        ]
-        "#
-        );
+         [[package]]
+        +name = "sniffio"
+        +version = "1.3.1"
+        +source = { registry = "https://pypi.org/simple" }
+        +sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        +wheels = [
+        +    { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+        +]
+        +
+        +[[package]]
+         name = "urllib3"
+         version = "2.2.1"
+         source = { registry = "https://pypi.org/simple" }
+        "#);
     });
 
     // Removing from a locked script should update the lockfile.
@@ -8026,177 +7938,8 @@ fn add_remove_script_lock() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    let script_content = context.read("script.py");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            script_content, @r#"
-        # /// script
-        # requires-python = ">=3.11"
-        # dependencies = [
-        #   "requests<3",
-        #   "rich",
-        # ]
-        # ///
-
-        import requests
-        from rich.pretty import pprint
-
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
-        "#
-        );
-    });
-
-    let lock = context.read("script.py.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.11"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        requirements = [
-            { name = "requests", specifier = "<3" },
-            { name = "rich" },
-        ]
-
-        [[package]]
-        name = "certifi"
-        version = "2024.2.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/71/da/e94e26401b62acd6d91df2b52954aceb7f561743aa5ccc32152886c76c96/certifi-2024.2.2.tar.gz", hash = "sha256:0569859f95fc761b18b45ef421b1290a0f65f147e92a1e5eb3e635f9a5e4e66f", size = 164886, upload-time = "2024-02-02T01:22:17.364Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ba/06/a07f096c664aeb9f01624f858c3add0a4e913d6c96257acb4fce61e7de14/certifi-2024.2.2-py3-none-any.whl", hash = "sha256:dc383c07b76109f368f6106eee2b593b04a011ea4d55f652c6ca24a754d1cdd1", size = 163774, upload-time = "2024-02-02T01:22:14.86Z" },
-        ]
-
-        [[package]]
-        name = "charset-normalizer"
-        version = "3.3.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/63/09/c1bc53dab74b1816a00d8d030de5bf98f724c52c1635e07681d312f20be8/charset-normalizer-3.3.2.tar.gz", hash = "sha256:f30c3cb33b24454a82faecaf01b19c18562b1e89558fb6c56de4d9118a032fd5", size = 104809, upload-time = "2023-11-01T04:04:59.997Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/77/02839016f6fbbf808e8b38601df6e0e66c17bbab76dff4613f7511413597/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:802fe99cca7457642125a8a88a084cef28ff0cf9407060f7b93dca5aa25480db", size = 191647, upload-time = "2023-11-01T04:02:55.329Z" },
-            { url = "https://files.pythonhosted.org/packages/3e/33/21a875a61057165e92227466e54ee076b73af1e21fe1b31f1e292251aa1e/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:573f6eac48f4769d667c4442081b1794f52919e7edada77495aaed9236d13a96", size = 121434, upload-time = "2023-11-01T04:02:57.173Z" },
-            { url = "https://files.pythonhosted.org/packages/dd/51/68b61b90b24ca35495956b718f35a9756ef7d3dd4b3c1508056fa98d1a1b/charset_normalizer-3.3.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:549a3a73da901d5bc3ce8d24e0600d1fa85524c10287f6004fbab87672bf3e1e", size = 118979, upload-time = "2023-11-01T04:02:58.442Z" },
-            { url = "https://files.pythonhosted.org/packages/e4/a6/7ee57823d46331ddc37dd00749c95b0edec2c79b15fc0d6e6efb532e89ac/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f27273b60488abe721a075bcca6d7f3964f9f6f067c8c4c605743023d7d3944f", size = 136582, upload-time = "2023-11-01T04:02:59.776Z" },
-            { url = "https://files.pythonhosted.org/packages/74/f1/0d9fe69ac441467b737ba7f48c68241487df2f4522dd7246d9426e7c690e/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1ceae2f17a9c33cb48e3263960dc5fc8005351ee19db217e9b1bb15d28c02574", size = 146645, upload-time = "2023-11-01T04:03:02.186Z" },
-            { url = "https://files.pythonhosted.org/packages/05/31/e1f51c76db7be1d4aef220d29fbfa5dbb4a99165d9833dcbf166753b6dc0/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:65f6f63034100ead094b8744b3b97965785388f308a64cf8d7c34f2f2e5be0c4", size = 139398, upload-time = "2023-11-01T04:03:04.255Z" },
-            { url = "https://files.pythonhosted.org/packages/40/26/f35951c45070edc957ba40a5b1db3cf60a9dbb1b350c2d5bef03e01e61de/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:753f10e867343b4511128c6ed8c82f7bec3bd026875576dfd88483c5c73b2fd8", size = 140273, upload-time = "2023-11-01T04:03:05.983Z" },
-            { url = "https://files.pythonhosted.org/packages/07/07/7e554f2bbce3295e191f7e653ff15d55309a9ca40d0362fcdab36f01063c/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:4a78b2b446bd7c934f5dcedc588903fb2f5eec172f3d29e52a9096a43722adfc", size = 142577, upload-time = "2023-11-01T04:03:07.567Z" },
-            { url = "https://files.pythonhosted.org/packages/d8/b5/eb705c313100defa57da79277d9207dc8d8e45931035862fa64b625bfead/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:e537484df0d8f426ce2afb2d0f8e1c3d0b114b83f8850e5f2fbea0e797bd82ae", size = 137747, upload-time = "2023-11-01T04:03:08.886Z" },
-            { url = "https://files.pythonhosted.org/packages/19/28/573147271fd041d351b438a5665be8223f1dd92f273713cb882ddafe214c/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:eb6904c354526e758fda7167b33005998fb68c46fbc10e013ca97f21ca5c8887", size = 143375, upload-time = "2023-11-01T04:03:10.613Z" },
-            { url = "https://files.pythonhosted.org/packages/cf/7c/f3b682fa053cc21373c9a839e6beba7705857075686a05c72e0f8c4980ca/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_ppc64le.whl", hash = "sha256:deb6be0ac38ece9ba87dea880e438f25ca3eddfac8b002a2ec3d9183a454e8ae", size = 148474, upload-time = "2023-11-01T04:03:11.973Z" },
-            { url = "https://files.pythonhosted.org/packages/1e/49/7ab74d4ac537ece3bc3334ee08645e231f39f7d6df6347b29a74b0537103/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_s390x.whl", hash = "sha256:4ab2fe47fae9e0f9dee8c04187ce5d09f48eabe611be8259444906793ab7cbce", size = 140232, upload-time = "2023-11-01T04:03:13.505Z" },
-            { url = "https://files.pythonhosted.org/packages/2d/dc/9dacba68c9ac0ae781d40e1a0c0058e26302ea0660e574ddf6797a0347f7/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:80402cd6ee291dcb72644d6eac93785fe2c8b9cb30893c1af5b8fdd753b9d40f", size = 140859, upload-time = "2023-11-01T04:03:17.362Z" },
-            { url = "https://files.pythonhosted.org/packages/6c/c2/4a583f800c0708dd22096298e49f887b49d9746d0e78bfc1d7e29816614c/charset_normalizer-3.3.2-cp311-cp311-win32.whl", hash = "sha256:7cd13a2e3ddeed6913a65e66e94b51d80a041145a026c27e6bb76c31a853c6ab", size = 92509, upload-time = "2023-11-01T04:03:21.453Z" },
-            { url = "https://files.pythonhosted.org/packages/57/ec/80c8d48ac8b1741d5b963797b7c0c869335619e13d4744ca2f67fc11c6fc/charset_normalizer-3.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:663946639d296df6a2bb2aa51b60a2454ca1cb29835324c640dafb5ff2131a77", size = 99870, upload-time = "2023-11-01T04:03:22.723Z" },
-            { url = "https://files.pythonhosted.org/packages/d1/b2/fcedc8255ec42afee97f9e6f0145c734bbe104aac28300214593eb326f1d/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:0b2b64d2bb6d3fb9112bafa732def486049e63de9618b5843bcdd081d8144cd8", size = 192892, upload-time = "2023-11-01T04:03:24.135Z" },
-            { url = "https://files.pythonhosted.org/packages/2e/7d/2259318c202f3d17f3fe6438149b3b9e706d1070fe3fcbb28049730bb25c/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:ddbb2551d7e0102e7252db79ba445cdab71b26640817ab1e3e3648dad515003b", size = 122213, upload-time = "2023-11-01T04:03:25.66Z" },
-            { url = "https://files.pythonhosted.org/packages/3a/52/9f9d17c3b54dc238de384c4cb5a2ef0e27985b42a0e5cc8e8a31d918d48d/charset_normalizer-3.3.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:55086ee1064215781fff39a1af09518bc9255b50d6333f2e4c74ca09fac6a8f6", size = 119404, upload-time = "2023-11-01T04:03:27.04Z" },
-            { url = "https://files.pythonhosted.org/packages/99/b0/9c365f6d79a9f0f3c379ddb40a256a67aa69c59609608fe7feb6235896e1/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f4a014bc36d3c57402e2977dada34f9c12300af536839dc38c0beab8878f38a", size = 137275, upload-time = "2023-11-01T04:03:28.466Z" },
-            { url = "https://files.pythonhosted.org/packages/91/33/749df346e93d7a30cdcb90cbfdd41a06026317bfbfb62cd68307c1a3c543/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:a10af20b82360ab00827f916a6058451b723b4e65030c5a18577c8b2de5b3389", size = 147518, upload-time = "2023-11-01T04:03:29.82Z" },
-            { url = "https://files.pythonhosted.org/packages/72/1a/641d5c9f59e6af4c7b53da463d07600a695b9824e20849cb6eea8a627761/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:8d756e44e94489e49571086ef83b2bb8ce311e730092d2c34ca8f7d925cb20aa", size = 140182, upload-time = "2023-11-01T04:03:31.511Z" },
-            { url = "https://files.pythonhosted.org/packages/ee/fb/14d30eb4956408ee3ae09ad34299131fb383c47df355ddb428a7331cfa1e/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:90d558489962fd4918143277a773316e56c72da56ec7aa3dc3dbbe20fdfed15b", size = 141869, upload-time = "2023-11-01T04:03:32.887Z" },
-            { url = "https://files.pythonhosted.org/packages/df/3e/a06b18788ca2eb6695c9b22325b6fde7dde0f1d1838b1792a0076f58fe9d/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6ac7ffc7ad6d040517be39eb591cac5ff87416c2537df6ba3cba3bae290c0fed", size = 144042, upload-time = "2023-11-01T04:03:34.412Z" },
-            { url = "https://files.pythonhosted.org/packages/45/59/3d27019d3b447a88fe7e7d004a1e04be220227760264cc41b405e863891b/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:7ed9e526742851e8d5cc9e6cf41427dfc6068d4f5a3bb03659444b4cabf6bc26", size = 138275, upload-time = "2023-11-01T04:03:35.759Z" },
-            { url = "https://files.pythonhosted.org/packages/7b/ef/5eb105530b4da8ae37d506ccfa25057961b7b63d581def6f99165ea89c7e/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:8bdb58ff7ba23002a4c5808d608e4e6c687175724f54a5dade5fa8c67b604e4d", size = 144819, upload-time = "2023-11-01T04:03:37.216Z" },
-            { url = "https://files.pythonhosted.org/packages/a2/51/e5023f937d7f307c948ed3e5c29c4b7a3e42ed2ee0b8cdf8f3a706089bf0/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_ppc64le.whl", hash = "sha256:6b3251890fff30ee142c44144871185dbe13b11bab478a88887a639655be1068", size = 149415, upload-time = "2023-11-01T04:03:38.694Z" },
-            { url = "https://files.pythonhosted.org/packages/24/9d/2e3ef673dfd5be0154b20363c5cdcc5606f35666544381bee15af3778239/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_s390x.whl", hash = "sha256:b4a23f61ce87adf89be746c8a8974fe1c823c891d8f86eb218bb957c924bb143", size = 141212, upload-time = "2023-11-01T04:03:40.07Z" },
-            { url = "https://files.pythonhosted.org/packages/5b/ae/ce2c12fcac59cb3860b2e2d76dc405253a4475436b1861d95fe75bdea520/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:efcb3f6676480691518c177e3b465bcddf57cea040302f9f4e6e191af91174d4", size = 142167, upload-time = "2023-11-01T04:03:41.491Z" },
-            { url = "https://files.pythonhosted.org/packages/ed/3a/a448bf035dce5da359daf9ae8a16b8a39623cc395a2ffb1620aa1bce62b0/charset_normalizer-3.3.2-cp312-cp312-win32.whl", hash = "sha256:d965bba47ddeec8cd560687584e88cf699fd28f192ceb452d1d7ee807c5597b7", size = 93041, upload-time = "2023-11-01T04:03:42.836Z" },
-            { url = "https://files.pythonhosted.org/packages/b6/7c/8debebb4f90174074b827c63242c23851bdf00a532489fba57fef3416e40/charset_normalizer-3.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:96b02a3dc4381e5494fad39be677abcb5e6634bf7b4fa83a6dd3112607547001", size = 100397, upload-time = "2023-11-01T04:03:44.467Z" },
-            { url = "https://files.pythonhosted.org/packages/28/76/e6222113b83e3622caa4bb41032d0b1bf785250607392e1b778aca0b8a7d/charset_normalizer-3.3.2-py3-none-any.whl", hash = "sha256:3e4d1f6587322d2788836a99c69062fbb091331ec940e02d12d179c1d53e25fc", size = 48543, upload-time = "2023-11-01T04:04:58.622Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "markdown-it-py"
-        version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "mdurl" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/38/71/3b932df36c1a044d397a1f92d1cf91ee0a503d91e470cbd670aa66b07ed0/markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb", size = 74596, upload-time = "2023-06-03T06:41:14.443Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/42/d7/1ec15b46af6af88f19b8e5ffea08fa375d433c998b8a7639e76935c14f1f/markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1", size = 87528, upload-time = "2023-06-03T06:41:11.019Z" },
-        ]
-
-        [[package]]
-        name = "mdurl"
-        version = "0.1.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-        ]
-
-        [[package]]
-        name = "pygments"
-        version = "2.17.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/55/59/8bccf4157baf25e4aa5a0bb7fa3ba8600907de105ebc22b0c78cfbf6f565/pygments-2.17.2.tar.gz", hash = "sha256:da46cec9fd2de5be3a8a784f434e4c4ab670b4ff54d605c4c2717e9d49c4c367", size = 4827772, upload-time = "2023-11-21T20:43:53.875Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/97/9c/372fef8377a6e340b1704768d20daaded98bf13282b5327beb2e2fe2c7ef/pygments-2.17.2-py3-none-any.whl", hash = "sha256:b27c2826c47d0f3219f29554824c30c5e8945175d888647acd804ddd04af846c", size = 1179756, upload-time = "2023-11-21T20:43:49.423Z" },
-        ]
-
-        [[package]]
-        name = "requests"
-        version = "2.31.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "certifi" },
-            { name = "charset-normalizer" },
-            { name = "idna" },
-            { name = "urllib3" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/9d/be/10918a2eac4ae9f02f6cfe6414b7a155ccd8f7f9d4380d62fd5b955065c3/requests-2.31.0.tar.gz", hash = "sha256:942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1", size = 110794, upload-time = "2023-05-22T15:12:44.175Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb167a1a26b2ce6cd6965bf26b47bc0bf44/requests-2.31.0-py3-none-any.whl", hash = "sha256:58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f", size = 62574, upload-time = "2023-05-22T15:12:42.313Z" },
-        ]
-
-        [[package]]
-        name = "rich"
-        version = "13.7.1"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "markdown-it-py" },
-            { name = "pygments" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/b3/01/c954e134dc440ab5f96952fe52b4fdc64225530320a910473c1fe270d9aa/rich-13.7.1.tar.gz", hash = "sha256:9be308cb1fe2f1f57d67ce99e95af38a1e2bc71ad9813b0e247cf7ffbcc3a432", size = 221248, upload-time = "2024-02-28T14:51:19.472Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/87/67/a37f6214d0e9fe57f6ae54b2956d550ca8365857f42a1ce0392bb21d9410/rich-13.7.1-py3-none-any.whl", hash = "sha256:4edbae314f59eb482f54e9e30bf00d33350aaa94f4bfcd4e9e3110e64d0d7222", size = 240681, upload-time = "2024-02-28T14:51:14.353Z" },
-        ]
-
-        [[package]]
-        name = "urllib3"
-        version = "2.2.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
-        ]
-        "#
-        );
-    });
+    assert_eq!(context.read("script.py"), original_script);
+    assert_eq!(context.read("script.py.lock"), original_lock);
 
     Ok(())
 }
@@ -8297,12 +8040,9 @@ fn remove_last_dep_script() -> Result<()> {
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("rich")
     "#})?;
 
     uv_snapshot!(context.filters(), context.remove().arg("rich").arg("--script").arg("script.py"), @"
@@ -8323,15 +8063,16 @@ fn remove_last_dep_script() -> Result<()> {
         # dependencies = []
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        from pathlib import Path
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
-        data = resp.json()
-        pprint([(k, v["title"]) for k, v in data.items()][:10])
+        Path(__file__).with_suffix(".executed").write_text("rich")
         "#
         );
     });
+    context
+        .temp_dir
+        .child("script.executed")
+        .assert(predicate::path::missing());
     Ok(())
 }
 
@@ -8549,6 +8290,8 @@ fn remove_locked_reverts_project() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn add_locked_readonly_workspace() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("pyproject.toml");
     workspace.write_str(indoc! {r#"
@@ -8569,6 +8312,13 @@ fn add_locked_readonly_workspace() -> Result<()> {
     let member = context.read("member/pyproject.toml");
     let lock = context.read("uv.lock");
     fs_err::set_permissions(&workspace, Permissions::from_mode(0o444))?;
+    let error = fs_err::OpenOptions::new()
+        .write(true)
+        .open(workspace.path())
+        .expect_err("the workspace manifest must reject writes");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    // Holding the original inode prevents its reuse if rollback replaces the file.
+    let original_workspace = fs_err::File::open(workspace.path())?;
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--package").arg("member").arg("--locked").arg("--no-sync"), @"
     exit_code: 1 (failure)
@@ -8580,6 +8330,13 @@ fn add_locked_readonly_workspace() -> Result<()> {
     ");
     assert_eq!(context.read("member/pyproject.toml"), member);
     assert_eq!(context.read("uv.lock"), lock);
+    let original = original_workspace.metadata()?;
+    let current = fs_err::metadata(workspace.path())?;
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (original.dev(), original.ino()),
+        "rollback replaced the unchanged workspace manifest"
+    );
     Ok(())
 }
 
@@ -8601,6 +8358,8 @@ fn add_remove_frozen_unreadable_lockfile() -> Result<()> {
     let lock = context.temp_dir.child("uv.lock");
     lock.write_str("unreadable lockfile\n")?;
     fs_err::set_permissions(&lock, Permissions::from_mode(0o000))?;
+    let error = fs_err::read(lock.path()).expect_err("the lockfile must reject reads");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--frozen"), @"
     exit_code: 0 (success)
@@ -8631,115 +8390,226 @@ fn add_remove_frozen_unreadable_lockfile() -> Result<()> {
     Ok(())
 }
 
-/// Restore both files when syncing fails after resolution has written a lockfile.
-#[test]
-fn remove_version_build_failure_reverts_project() -> Result<()> {
-    for args in [
-        &["remove", "iniconfig"][..],
-        &["version", "--bump", "minor"][..],
-    ] {
-        for locked in [false, true] {
-            let context = uv_test::test_context!("3.12");
+fn assert_edit_rolled_back(context: &TestContext, pyproject: &str, lock: Option<&str>) {
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    match lock {
+        Some(lock) => assert_eq!(context.read("uv.lock"), lock),
+        None => {
             context
                 .temp_dir
-                .child("pyproject.toml")
-                .write_str(indoc! {r#"
-                [project]
-                name = "project"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["iniconfig"]
-
-                [build-system]
-                requires = []
-                build-backend = "backend"
-                backend-path = ["."]
-            "#})?;
-            context.temp_dir.child("backend.py").write_str(indoc! {r#"
-                from pathlib import Path
-
-                def build_editable(*args, **kwargs):
-                    Path(__file__).with_name("built").touch()
-                    raise RuntimeError("build failed")
-            "#})?;
-            if locked {
-                context.lock().assert().success();
-            }
-            let pyproject = context.read("pyproject.toml");
-            let lock = locked.then(|| context.read("uv.lock"));
-
-            context.command().args(args).assert().code(1);
-            assert!(context.temp_dir.join("built").exists(), "{args:?}");
-            assert_eq!(context.read("pyproject.toml"), pyproject, "{args:?}");
-            match lock {
-                Some(lock) => assert_eq!(context.read("uv.lock"), lock, "{args:?}"),
-                None => {
-                    context
-                        .temp_dir
-                        .child("uv.lock")
-                        .assert(predicate::path::missing());
-                }
-            }
+                .child("uv.lock")
+                .assert(predicate::path::missing());
         }
     }
+}
+
+fn project_with_editable_build_backend(backend: &str) -> Result<TestContext> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["iniconfig"]
+
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+    context.temp_dir.child("backend.py").write_str(backend)?;
+    Ok(context)
+}
+
+fn project_with_failing_editable_build() -> Result<TestContext> {
+    project_with_editable_build_backend(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            Path(__file__).with_name("built").touch()
+            raise RuntimeError("build failed")
+    "#})
+}
+
+fn assert_failed_build_rolled_back(context: &TestContext, pyproject: &str, lock: Option<&str>) {
+    context
+        .temp_dir
+        .child("built")
+        .assert(predicate::path::is_file());
+    assert_edit_rolled_back(context, pyproject, lock);
+}
+
+#[test]
+fn remove_build_failure_reverts_new_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
+    context.remove().arg("iniconfig").assert().code(1);
+    assert_failed_build_rolled_back(&context, &pyproject, None);
     Ok(())
 }
 
-/// Interrupt during a build, after the manifest and lockfile have both been written.
+#[test]
+fn remove_build_failure_reverts_existing_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context.remove().arg("iniconfig").assert().code(1);
+    assert_failed_build_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+fn version_build_failure_reverts_new_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
+    context.version().args(["--bump", "minor"]).assert().code(1);
+    assert_failed_build_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+fn version_build_failure_reverts_existing_lock() -> Result<()> {
+    let context = project_with_failing_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context.version().args(["--bump", "minor"]).assert().code(1);
+    assert_failed_build_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+/// The editable build interrupts uv after the manifest and lockfile have both been written.
+#[cfg(unix)]
+fn project_with_interrupted_editable_build() -> Result<TestContext> {
+    project_with_editable_build_backend(indoc! {r#"
+        import os
+        import signal
+        import time
+
+        def build_editable(*args, **kwargs):
+            os.kill(os.getppid(), signal.SIGINT)
+            time.sleep(1)
+            raise RuntimeError("build interrupted")
+    "#})
+}
+
 #[test]
 #[cfg(unix)]
-fn edit_interrupt_reverts_project() -> Result<()> {
-    for args in [
-        &["add", "iniconfig", "--dev"][..],
-        &["remove", "iniconfig"][..],
-        &["version", "--bump", "minor"][..],
-    ] {
-        for locked in [false, true] {
-            let context = uv_test::test_context!("3.12");
-            context
-                .temp_dir
-                .child("pyproject.toml")
-                .write_str(indoc! {r#"
-                [project]
-                name = "project"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["iniconfig"]
+fn add_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
 
-                [build-system]
-                requires = []
-                build-backend = "backend"
-                backend-path = ["."]
-            "#})?;
-            context.temp_dir.child("backend.py").write_str(indoc! {r#"
-                import os
-                import signal
-                import time
+    context
+        .add()
+        .args(["iniconfig", "--dev"])
+        .assert()
+        .code(130);
+    assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
 
-                def build_editable(*args, **kwargs):
-                    os.kill(os.getppid(), signal.SIGINT)
-                    time.sleep(1)
-                    raise RuntimeError("build interrupted")
-            "#})?;
-            if locked {
-                context.lock().assert().success();
-            }
-            let pyproject = context.read("pyproject.toml");
-            let lock = locked.then(|| context.read("uv.lock"));
+#[test]
+#[cfg(unix)]
+fn remove_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
 
-            context.command().args(args).assert().code(130);
-            assert_eq!(context.read("pyproject.toml"), pyproject, "{args:?}");
-            match lock {
-                Some(lock) => assert_eq!(context.read("uv.lock"), lock, "{args:?}"),
-                None => {
-                    context
-                        .temp_dir
-                        .child("uv.lock")
-                        .assert(predicate::path::missing());
-                }
-            }
-        }
-    }
+    context.remove().arg("iniconfig").assert().code(130);
+    assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn version_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
+    context
+        .version()
+        .args(["--bump", "minor"])
+        .assert()
+        .code(130);
+    assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn add_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context
+        .add()
+        .args(["iniconfig", "--dev"])
+        .assert()
+        .code(130);
+    assert_edit_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn remove_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context.remove().arg("iniconfig").assert().code(130);
+    assert_edit_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn version_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
+    context
+        .version()
+        .args(["--bump", "minor"])
+        .assert()
+        .code(130);
+    assert_edit_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+/// Create a local dependency that resolves from static metadata but fails during installation.
+fn write_uninstallable_dependency(context: &TestContext, name: &str) -> Result<()> {
+    let package = context.temp_dir.child(name);
+    package.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "{name}"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = []
+        build-backend = "fixture_backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("fixture_backend.py").write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            raise SystemExit("intentional fixture build failure")
+
+        get_requires_for_build_editable = get_requires_for_build_wheel
+    "#})?;
     Ok(())
 }
 
@@ -8758,48 +8628,21 @@ fn fail_to_add_revert_project() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
+    let original_manifest = context.read("pyproject.toml");
 
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("child/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("child")
-        .child("setup.py")
-        .write_str("1/0")?;
+    write_uninstallable_dependency(&context, "child")?;
 
     uv_snapshot!(context.filters(), context.add().arg("./child").arg("--no-workspace"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -8807,25 +8650,7 @@ fn fail_to_add_revert_project() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
-        "#
-        );
-    });
-
-    // The lockfile should not exist, even though resolution succeeded.
-    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert_edit_rolled_back(&context, &original_manifest, None);
 
     Ok(())
 }
@@ -8857,27 +8682,9 @@ fn fail_to_edit_revert_project() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    let before = context.read("uv.lock");
-
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("child/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("child")
-        .child("setup.py")
-        .write_str("1/0")?;
+    let original_manifest = context.read("pyproject.toml");
+    let original_lock = context.read("uv.lock");
+    write_uninstallable_dependency(&context, "child")?;
 
     uv_snapshot!(context.filters(), context.add().arg("./child").arg("--no-workspace"), @r#"
     exit_code: 1 (failure)
@@ -8886,20 +8693,10 @@ fn fail_to_edit_revert_project() -> Result<()> {
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -8907,28 +8704,7 @@ fn fail_to_edit_revert_project() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = [
-            "iniconfig>=2.0.0",
-        ]
-        "#
-        );
-    });
-
-    // The lockfile should exist, but be unchanged.
-    let after = context.read("uv.lock");
-    assert_eq!(before, after);
+    assert_edit_rolled_back(&context, &original_manifest, Some(&original_lock));
 
     Ok(())
 }
@@ -8948,72 +8724,22 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
+    let original_manifest = context.read("pyproject.toml");
 
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("child/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("child")
-        .child("setup.py")
-        .write_str("1/0")?;
-
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("broken").child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "broken"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("broken")
-        .child("setup.py")
-        .write_str("1/0")?;
+    write_uninstallable_dependency(&context, "broken")?;
 
     uv_snapshot!(context.filters(), context.add().arg("./broken"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     Added `broken` to workspace members
-    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `broken @ file://[TEMP_DIR]/broken`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 448, in get_requires_for_build_editable
-                 return self.get_requires_for_build_wheel(config_settings)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `broken` was included because `parent` (v0.1.0) depends on `broken`
 
@@ -9021,25 +8747,7 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
-        "#
-        );
-    });
-
-    // The lockfile should not exist, even though resolution succeeded.
-    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert_edit_rolled_back(&context, &original_manifest, None);
 
     Ok(())
 }
@@ -9065,6 +8773,7 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
         [tool.uv.sources]
         child = { workspace = true }
     "#})?;
+    let original_root_manifest = context.read("pyproject.toml");
 
     // Add a workspace dependency.
     let project = context.temp_dir.child("child");
@@ -9084,26 +8793,9 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
         .child("child")
         .child("__init__.py")
         .touch()?;
+    let original_member_manifest = context.read("child/pyproject.toml");
 
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("broken/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "broken"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("broken")
-        .child("setup.py")
-        .write_str("1/0")?;
+    write_uninstallable_dependency(&context, "broken")?;
 
     uv_snapshot!(context.filters(), context.add().current_dir(&project).arg("../broken"), @r#"
     exit_code: 1 (failure)
@@ -9113,23 +8805,10 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
     error: Failed to add dependencies
       cause: Failed to build `broken @ file://[TEMP_DIR]/broken`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 448, in get_requires_for_build_editable
-                 return self.get_requires_for_build_wheel(config_settings)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `broken` was included because `child` (v0.1.0) depends on `broken`
 
@@ -9137,49 +8816,11 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
-
-        [tool.uv.workspace]
-        members = ["child"]
-
-        [tool.uv.sources]
-        child = { workspace = true }
-        "#
-        );
-    });
-
-    let pyproject_toml = context.read("child/pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#
-        );
-    });
-
-    // The lockfile should not exist, even though resolution succeeded.
-    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert_edit_rolled_back(&context, &original_root_manifest, None);
+    assert_eq!(
+        context.read("child/pyproject.toml"),
+        original_member_manifest
+    );
 
     Ok(())
 }
@@ -10372,13 +10013,13 @@ fn add_index() -> Result<()> {
         );
     });
 
-    let lock = context.read("uv.lock");
+    let lock_before_reorder = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            lock_before_reorder, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -10498,90 +10139,7 @@ fn add_index() -> Result<()> {
         );
     });
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2025-01-30T00:00:00Z"
-
-        [manifest]
-        constraints = [{ name = "markupsafe", specifier = "<3" }]
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "jinja2"
-        version = "3.1.4"
-        source = { registry = "https://test.pypi.org/simple" }
-        dependencies = [
-            { name = "markupsafe" },
-        ]
-        sdist = { url = "https://test-files.pythonhosted.org/packages/ed/55/39036716d19cab0747a5020fc7e907f362fbf48c984b14e62127f7e68e5d/jinja2-3.1.4.tar.gz", hash = "sha256:4a3aee7acbbe7303aede8e9648d13b8bf88a429282aa6122a993f0ac800cb369", size = 240245, upload-time = "2024-05-05T23:41:55.462Z" }
-        wheels = [
-            { url = "https://test-files.pythonhosted.org/packages/31/80/3a54838c3fb461f6fec263ebf3a3a41771bd05190238de3486aae8540c36/jinja2-3.1.4-py3-none-any.whl", hash = "sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d", size = 133271, upload-time = "2024-05-05T23:41:53.978Z" },
-        ]
-
-        [[package]]
-        name = "markupsafe"
-        version = "2.1.5"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/87/5b/aae44c6655f3801e81aa3eef09dbbf012431987ba564d7231722f68df02d/MarkupSafe-2.1.5.tar.gz", hash = "sha256:d283d37a890ba4c1ae73ffadf8046435c76e7bc2247bbb63c00bd1a709c6544b", size = 19384, upload-time = "2024-02-02T16:31:22.863Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/53/bd/583bf3e4c8d6a321938c13f49d44024dbe5ed63e0a7ba127e454a66da974/MarkupSafe-2.1.5-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:8dec4936e9c3100156f8a2dc89c4b88d5c435175ff03413b443469c7c8c5f4d1", size = 18215, upload-time = "2024-02-02T16:30:33.081Z" },
-            { url = "https://files.pythonhosted.org/packages/48/d6/e7cd795fc710292c3af3a06d80868ce4b02bfbbf370b7cee11d282815a2a/MarkupSafe-2.1.5-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:3c6b973f22eb18a789b1460b4b91bf04ae3f0c4234a0a6aa6b0a92f6f7b951d4", size = 14069, upload-time = "2024-02-02T16:30:34.148Z" },
-            { url = "https://files.pythonhosted.org/packages/51/b5/5d8ec796e2a08fc814a2c7d2584b55f889a55cf17dd1a90f2beb70744e5c/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ac07bad82163452a6884fe8fa0963fb98c2346ba78d779ec06bd7a6262132aee", size = 29452, upload-time = "2024-02-02T16:30:35.149Z" },
-            { url = "https://files.pythonhosted.org/packages/0a/0d/2454f072fae3b5a137c119abf15465d1771319dfe9e4acbb31722a0fff91/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f5dfb42c4604dddc8e4305050aa6deb084540643ed5804d7455b5df8fe16f5e5", size = 28462, upload-time = "2024-02-02T16:30:36.166Z" },
-            { url = "https://files.pythonhosted.org/packages/2d/75/fd6cb2e68780f72d47e6671840ca517bda5ef663d30ada7616b0462ad1e3/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:ea3d8a3d18833cf4304cd2fc9cbb1efe188ca9b5efef2bdac7adc20594a0e46b", size = 27869, upload-time = "2024-02-02T16:30:37.834Z" },
-            { url = "https://files.pythonhosted.org/packages/b0/81/147c477391c2750e8fc7705829f7351cf1cd3be64406edcf900dc633feb2/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:d050b3361367a06d752db6ead6e7edeb0009be66bc3bae0ee9d97fb326badc2a", size = 33906, upload-time = "2024-02-02T16:30:39.366Z" },
-            { url = "https://files.pythonhosted.org/packages/8b/ff/9a52b71839d7a256b563e85d11050e307121000dcebc97df120176b3ad93/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:bec0a414d016ac1a18862a519e54b2fd0fc8bbfd6890376898a6c0891dd82e9f", size = 32296, upload-time = "2024-02-02T16:30:40.413Z" },
-            { url = "https://files.pythonhosted.org/packages/88/07/2dc76aa51b481eb96a4c3198894f38b480490e834479611a4053fbf08623/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:58c98fee265677f63a4385256a6d7683ab1832f3ddd1e66fe948d5880c21a169", size = 33038, upload-time = "2024-02-02T16:30:42.243Z" },
-            { url = "https://files.pythonhosted.org/packages/96/0c/620c1fb3661858c0e37eb3cbffd8c6f732a67cd97296f725789679801b31/MarkupSafe-2.1.5-cp312-cp312-win32.whl", hash = "sha256:8590b4ae07a35970728874632fed7bd57b26b0102df2d2b233b6d9d82f6c62ad", size = 16572, upload-time = "2024-02-02T16:30:43.326Z" },
-            { url = "https://files.pythonhosted.org/packages/3f/14/c3554d512d5f9100a95e737502f4a2323a1959f6d0d01e0d0997b35f7b10/MarkupSafe-2.1.5-cp312-cp312-win_amd64.whl", hash = "sha256:823b65d8706e32ad2df51ed89496147a42a2a6e01c13cfb6ffb8b1e92bc910bb", size = 17127, upload-time = "2024-02-02T16:30:44.418Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-            { name = "jinja2" },
-            { name = "typing-extensions" },
-        ]
-
-        [package.metadata]
-        requires-dist = [
-            { name = "iniconfig", specifier = "==2.0.0" },
-            { name = "jinja2", specifier = ">=3.1.4", index = "https://test.pypi.org/simple" },
-            { name = "typing-extensions", specifier = ">=4.12.2" },
-        ]
-
-        [[package]]
-        name = "typing-extensions"
-        version = "4.12.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/df/db/f35a00659bc03fec321ba8bce9420de607a1d37f8342eee1863174c69557/typing_extensions-4.12.2.tar.gz", hash = "sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8", size = 85321, upload-time = "2024-06-07T18:52:15.995Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/26/9f/ad63fc0248c5379346306f8668cda6e2e2e9c95e01216d2b8ffd9ff037d0/typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d", size = 37438, upload-time = "2024-06-07T18:52:13.582Z" },
-        ]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), lock_before_reorder);
 
     Ok(())
 }
@@ -12042,7 +11600,8 @@ fn add_preserves_end_of_line_comment_on_updated_optional_dependency() -> Result<
 
 #[test]
 fn add_direct_url_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -12053,7 +11612,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"), @"
+    uv_snapshot!(context.filters(), context.add().arg(format!("root @ {}#subdirectory=packages/root", archive.url())), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -12061,7 +11620,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -12081,7 +11640,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        root = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         "#
         );
     });
@@ -12131,16 +11690,16 @@ fn add_direct_url_subdirectory() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -12169,7 +11728,8 @@ fn add_direct_url_subdirectory() -> Result<()> {
 
 #[test]
 fn add_direct_url_subdirectory_raw() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -12180,7 +11740,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root").arg("--raw-sources"), @"
+    uv_snapshot!(context.filters(), context.add().arg(format!("root @ {}#subdirectory=packages/root", archive.url())).arg("--raw-sources"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -12188,7 +11748,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -12204,7 +11764,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root",
+            "root @ http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root",
         ]
         "#
         );
@@ -12255,16 +11815,16 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -13385,6 +12945,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn add_with_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -13615,7 +13176,13 @@ async fn add_stop_index_search_early_on_auth_failure() -> Result<()> {
 #[tokio::test]
 async fn add_ignore_error_codes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/anyio/"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1..)
+        .mount(&server)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -13627,10 +13194,10 @@ async fn add_ignore_error_codes() -> Result<()> {
         dependencies = []
         [[tool.uv.index]]
         name = "my-index"
-        url = "{proxy_uri}/basic-auth/simple"
+        url = "{index_uri}/simple"
         ignore-error-codes = [401, 403]
         "#,
-        proxy_uri = proxy.uri()
+        index_uri = server.uri()
     ))?;
 
     uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
@@ -13646,6 +13213,77 @@ async fn add_ignore_error_codes() -> Result<()> {
     );
 
     context.assert_command("import anyio").success();
+    Ok(())
+}
+
+/// An ignored metadata error skips one version without excluding the entire package.
+#[tokio::test]
+async fn add_ignore_error_codes_tries_older_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let files = [("2.0.0", true), ("1.0.0", false)].map(|(version, core_metadata)| {
+        let filename = format!("ok-{version}-py3-none-any.whl");
+        let url = format!("{}/files/{filename}", server.uri());
+        json!({
+            "filename": filename,
+            "url": url,
+            "hashes": {},
+            "upload-time": "2024-01-01T00:00:00Z",
+            "core-metadata": core_metadata,
+        })
+    });
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({ "meta": { "api-version": "1.0" }, "name": "ok", "files": files }).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/ok-2.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(fs_err::read(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            )?),
+        )
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [[tool.uv.index]]
+            name = "test-index"
+            url = "{index_url}/simple"
+            default = true
+            ignore-error-codes = [403]
+        "#, index_url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("ok"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    context
+        .assert_command("import ok; assert ok.__version__ == '1.0.0'")
+        .success();
     Ok(())
 }
 
@@ -13799,9 +13437,12 @@ async fn add_unexpected_error_code() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let server = MockServer::start().await;
+    let retry_count = 1_u64;
 
     Mock::given(method("GET"))
+        .and(path("/anyio/"))
         .respond_with(ResponseTemplate::new(503))
+        .expect(retry_count + 1)
         .mount(&server)
         .await;
 
@@ -13817,7 +13458,7 @@ async fn add_unexpected_error_code() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--index").arg(server.uri())
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-        .env(EnvVars::UV_HTTP_RETRIES, "1"), @"
+        .env(EnvVars::UV_HTTP_RETRIES, retry_count.to_string()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Request failed after 1 retry in [TIME]
@@ -14198,19 +13839,13 @@ async fn add_redirect_cross_origin() -> Result<()> {
     })?;
 
     let redirect_server = MockServer::start().await;
-    let proxy_base = proxy.url("/basic-auth/simple/");
-
-    Mock::given(method("GET"))
-        .respond_with(move |req: &wiremock::Request| {
-            let redirect_url = redirect_url_to_base(req, &proxy_base);
-            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
-        })
-        .mount(&redirect_server)
-        .await;
-
-    let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
-    let _ = redirect_url.set_password(Some("heron"));
+    let redirect_url = mount_authenticated_redirect(
+        &redirect_server,
+        proxy.url("/basic-auth/simple/"),
+        "public",
+        "heron",
+    )
+    .await;
 
     uv_snapshot!(context.filters(), context.add().arg("--default-index").arg(redirect_url.as_str()).arg("anyio"), @"
     exit_code: 1 (failure)
@@ -14292,7 +13927,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_filter((r"127\.0\.0\.1:\d*", "[LOCALHOST]"));
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14316,27 +13951,42 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
             let redirect_url = redirect_url_to_base(req, &proxy_base);
             ResponseTemplate::new(302).insert_header("Location", &redirect_url)
         })
+        .expect(1..)
         .mount(&redirect_server)
         .await;
 
     let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
+    redirect_url
+        .set_username("public")
+        .expect("HTTP URL supports a username");
 
-    uv_snapshot!(context.filters(), context.add().arg("--default-index")
+    // Preserve the origin of each keyring request before normalizing local server addresses.
+    let origin = regex::escape(&redirect_server.address().to_string());
+    let destination = regex::escape(&proxy.host_port());
+    let mut filters = context.filters();
+    filters.splice(
+        0..0,
+        [
+            (origin.as_str(), "[ORIGIN]"),
+            (destination.as_str(), "[DESTINATION]"),
+        ],
+    );
+
+    uv_snapshot!(filters, context.add().arg("--default-index")
         .arg(redirect_url.as_str())
         .arg("anyio")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
         .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Keyring request for public@http://[LOCALHOST]/
-    Keyring request for public@[LOCALHOST]
-    Keyring request for public@http://[LOCALHOST]
+    Keyring request for public@http://[ORIGIN]/
+    Keyring request for public@[ORIGIN]
+    Keyring request for public@http://[ORIGIN]
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    hint: An index URL (http://[ORIGIN]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -14359,24 +14009,20 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     ))?;
 
     let redirect_server = MockServer::start().await;
-    let proxy_base = proxy.url("/basic-auth/simple/");
-
-    Mock::given(method("GET"))
-        .respond_with(move |req: &wiremock::Request| {
-            let redirect_url = redirect_url_to_base(req, &proxy_base);
-            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
-        })
-        .mount(&redirect_server)
-        .await;
-
-    let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
+    // The origin credentials cannot authenticate to the target, so success requires netrc.
+    let redirect_url = mount_authenticated_redirect(
+        &redirect_server,
+        proxy.url("/basic-auth/simple/"),
+        "origin",
+        "origin-password",
+    )
+    .await;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
         .arg("--index-url")
         .arg(redirect_url.as_str())
-        .env(EnvVars::NETRC, netrc.to_str().unwrap())
+        .env(EnvVars::NETRC, netrc.path())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -14392,6 +14038,37 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     context.assert_command("import anyio").success();
 
     Ok(())
+}
+
+async fn mount_authenticated_redirect(
+    server: &MockServer,
+    destination_base: String,
+    username: &str,
+    password: &str,
+) -> SafeUrl {
+    Mock::given(method("GET"))
+        .and(basic_auth(username, password))
+        .respond_with(move |req: &wiremock::Request| {
+            let destination = redirect_url_to_base(req, &destination_base);
+            ResponseTemplate::new(302).insert_header("Location", &destination)
+        })
+        .with_priority(1)
+        .expect(1..)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"origin\""),
+        )
+        .mount(server)
+        .await;
+
+    let mut url = SafeUrl::parse(&server.uri()).expect("mock server URI is valid");
+    url.set_username(username)
+        .expect("HTTP URL supports a username");
+    url.set_password(Some(password))
+        .expect("HTTP URL supports a password");
+    url
 }
 
 fn redirect_url_to_base(req: &wiremock::Request, base: &str) -> String {
@@ -15214,11 +14891,46 @@ fn add_preserves_existing_sources_during_staged_update() -> Result<()> {
         .add()
         .arg("./added-source-dependency")
         .arg("--no-workspace")
-        .arg("--no-sync"), @"
+        .arg("--no-sync")
+        .arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
+
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "added-source-dependency"
+    version = "0.1.0"
+    source = { directory = "added-source-dependency" }
+
+    [[package]]
+    name = "preserved-source-dependency"
+    version = "0.1.0"
+    source = { directory = "preserved-source-dependency" }
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "added-source-dependency" },
+        { name = "preserved-source-dependency" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "added-source-dependency", directory = "added-source-dependency" },
+        { name = "preserved-source-dependency", directory = "preserved-source-dependency" },
+    ]
+    "#);
 
     Ok(())
 }
@@ -15295,11 +15007,37 @@ fn remove_preserves_existing_sources_during_staged_update() -> Result<()> {
     uv_snapshot!(context.filters(), context
         .remove()
         .arg("removed-source-dependency")
-        .arg("--no-sync"), @"
+        .arg("--no-sync")
+        .arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "preserved-source-dependency"
+    version = "0.1.0"
+    source = { directory = "preserved-source-dependency" }
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "preserved-source-dependency" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "preserved-source-dependency", directory = "preserved-source-dependency" }]
+    "#);
 
     Ok(())
 }
@@ -15373,13 +15111,7 @@ fn add_no_install_project() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    context
-        .temp_dir
-        .child("project")
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--no-install-project"), @"
     exit_code: 0 (success)
@@ -15389,6 +15121,7 @@ fn add_no_install_project() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    context.assert_not_installed("project");
 
     let pyproject_toml = context.read("pyproject.toml");
 
@@ -15457,6 +15190,7 @@ fn add_no_install_project() -> Result<()> {
     Installed 1 package in [TIME]
      + typing-extensions==4.10.0
     ");
+    context.assert_not_installed("project");
 
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--frozen").env(EnvVars::UV_NO_INSTALL_PROJECT, "1"), @"
     exit_code: 2 (failure)
@@ -15469,6 +15203,10 @@ fn add_no_install_project() -> Result<()> {
     ----- stderr -----
     error: the argument `UV_ONLY_INSTALL_PROJECT` (environment variable) cannot be used with `--frozen`
     ");
+
+    // Without either exclusion, adding the same requirement installs the project.
+    context.add().arg("typing-extensions").assert().success();
+    context.assert_command("import project").success();
 
     Ok(())
 }
@@ -15523,19 +15261,18 @@ fn add_git_lfs_error() -> Result<()> {
 
 /// Ensure that `uv add` aborts when malware is detected in a dependency.
 #[tokio::test]
-async fn add_malware_detected() {
+async fn add_malware_detected() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = []
-    "#})
-        .unwrap();
+    "#})?;
+    let original_pyproject = context.read("pyproject.toml");
 
     let server = MockServer::start().await;
 
@@ -15543,15 +15280,6 @@ async fn add_malware_detected() {
         .and(path("/v1/querybatch"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{"vulns": [{"id": "MAL-2026-1234"}]}]
-        })))
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-1234"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-1234",
-            "modified": "2026-01-01T00:00:00Z",
         })))
         .mount(&server)
         .await;
@@ -15569,4 +15297,7 @@ async fn add_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+    assert_edit_rolled_back(&context, &original_pyproject, None);
+
+    Ok(())
 }

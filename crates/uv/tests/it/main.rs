@@ -16,9 +16,15 @@ mod ecosystem;
 
 mod help;
 
-mod network;
+#[cfg(feature = "native-auth")]
+mod native_auth_fixture;
 
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
+mod network;
+mod network_configuration;
+mod network_fixtures;
+mod network_python_downloads;
+
 mod publish;
 
 mod requirements;
@@ -34,4 +40,6 @@ mod update_shell;
 
 mod upgrade;
 
+#[cfg(feature = "test-python")]
 mod version;
+mod version_read_only;
