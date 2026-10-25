@@ -102,10 +102,11 @@ impl<'lock> ExportableRequirements<'lock> {
                     name: root_name.clone(),
                 })?;
 
-            if root_kind == InstallableRootKind::Production && groups.prod() {
+            if root_kind == InstallableRootKind::Production
+                && groups.includes_non_group_dependencies()
+            {
                 // Track the activated package in the list of known conflicts.
                 activated_items.insert(ConflictItem::from(dist.id.name.clone()));
-
                 let package_index = target.lock().by_id[&dist.id];
 
                 // Add the workspace package to the graph.
