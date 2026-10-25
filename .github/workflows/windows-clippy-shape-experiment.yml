@@ -1,0 +1,114 @@
+name: Windows Clippy runner shape experiment
+"on":
+  push:
+    branches:
+      - zb/ci-windows-clippy-shape-20260909
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  HAWK_VERSION: 0.1.14
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
+jobs:
+  seed:
+    name: seed / ${{ matrix.replica }}
+    timeout-minutes: 35
+    runs-on: namespace-profile-windows-2022-x86-64-4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run: |
+          Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: ${{ env.UV_WORKSPACE }}
+          save-if: "true"
+          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}
+          add-job-id-key: false
+        id: rust-cache
+      - name: Install Rust toolchain
+        run: rustup component add clippy
+      - name: Clippy
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        replica:
+          - 1
+  compare:
+    name: ${{ matrix.cache }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
+    timeout-minutes: 35
+    runs-on: ${{ matrix.shape.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run: |
+          Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: ${{ env.UV_WORKSPACE }}
+          save-if: "false"
+          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}
+          add-job-id-key: false
+        id: rust-cache
+        if: ${{ matrix.cache == 'warm' }}
+      - name: Require the expected Rust cache
+        if: ${{ matrix.cache == 'warm' }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        shell: pwsh
+        run: if ($env:CACHE_HIT -ne 'true') { throw 'Expected an exact Rust cache hit' }
+      - name: Install Rust toolchain
+        run: rustup component add clippy
+      - name: Clippy
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    defaults:
+      run:
+        shell: pwsh
+    needs: seed
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+        cache:
+          - cold
+          - warm
+        shape:
+          - id: 4x16
+            runner: namespace-profile-windows-2022-x86-64-4
+          - id: 4x8
+            runner: namespace-profile-uv-ci-windows-2022-4x8
+          - id: 8x16
+            runner: namespace-profile-uv-ci-windows-2022-8x16
