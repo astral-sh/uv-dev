@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -20,6 +21,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildRequires, IndexLocations, PackageConfigSettings,
     Requirement,
 };
+use uv_errors::{Diagnostic, ErrorOptions, Hints};
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_normalize::DefaultGroups;
@@ -36,8 +38,10 @@ use uv_types::{
     AnyErrorBuild, BuildContext, BuildIsolation, BuildStack, HashStrategy, SourceTreeEditablePolicy,
 };
 use uv_virtualenv::{OnExisting, RemovalReason, Seed, UpgradePolicy};
-use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
+use uv_warnings::{warn_user, warn_user_with_chain};
+use uv_workspace::{
+    DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceError, WorkspaceErrorKind,
+};
 
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironmentTarget, centralized_environment_root,
@@ -50,6 +54,8 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 
+use uv_command_support::diagnostic_for_error;
+
 #[derive(Error, Debug)]
 enum VenvError {
     #[error("Failed to create virtual environment")]
@@ -60,6 +66,21 @@ enum VenvError {
 
     #[error("Failed to resolve `--find-links` entry")]
     FlatIndex(#[source] uv_client::FlatIndexError),
+}
+
+fn discovery_diagnostic_for_error<'a>(
+    error: &'a (dyn StdError + 'static),
+) -> Option<Diagnostic<'a>> {
+    if let Some(error) = error.downcast_ref::<WorkspaceError>()
+        && let WorkspaceErrorKind::Toml(path, _) = error.as_ref()
+    {
+        Some(Diagnostic::new(format!(
+            "Failed to parse `{}` during environment creation",
+            path.user_display(),
+        )))
+    } else {
+        diagnostic_for_error(error)
+    }
 }
 
 /// Create a virtual environment.
@@ -108,11 +129,11 @@ pub(crate) async fn venv(
                     WorkspaceErrorKind::MissingProject(_)
                     | WorkspaceErrorKind::MissingPyprojectToml
                     | WorkspaceErrorKind::NonWorkspace(_) => {}
-                    WorkspaceErrorKind::Toml(path, err) => {
-                        warn_user!(
-                            "Failed to parse `{}` during environment creation:\n{}",
-                            path.user_display().cyan(),
-                            textwrap::indent(&err.to_string(), "  ")
+                    WorkspaceErrorKind::Toml(..) => {
+                        warn_user_with_chain!(
+                            &err,
+                            Hints::none(),
+                            ErrorOptions::default().with_diagnostic(discovery_diagnostic_for_error),
                         );
                     }
                     _ => warn_user!("{err}"),
