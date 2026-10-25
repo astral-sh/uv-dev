@@ -2,13 +2,13 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
-use tracing::debug;
 
-use uv_cache::{Cache, RemovalAccounting};
+use uv_cache::Cache;
 use uv_command_support::{ExitStatus, Printer};
 use uv_fs::Simplified;
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::Preview;
 
+use crate::commands::cache_maintenance::prepare_cache;
 use crate::commands::human_readable_bytes;
 
 /// Prune dangling cache entries and cached environments.
@@ -19,36 +19,9 @@ pub(crate) async fn cache_prune(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    if !cache.root().exists() {
-        writeln!(
-            printer.stderr(),
-            "No cache found at: {}",
-            cache.root().user_display().cyan()
-        )?;
+    let Some(cache) = prepare_cache(cache, force, printer, preview).await? else {
         return Ok(ExitStatus::Success);
-    }
-
-    let cache = match cache.with_exclusive_lock_no_wait() {
-        Ok(cache) => cache,
-        Err(cache) if force => {
-            debug!("Cache is currently in use, proceeding due to `--force`");
-            cache
-        }
-        Err(cache) => {
-            writeln!(
-                printer.stderr(),
-                "Cache is currently in-use, waiting for other uv processes to finish (use `--force` to override)"
-            )?;
-            cache.with_exclusive_lock().await?
-        }
     };
-
-    let removal_accounting = if preview.is_enabled(PreviewFeature::CachePhysicalSpace) {
-        RemovalAccounting::Fine
-    } else {
-        RemovalAccounting::Coarse
-    };
-    let cache = cache.with_removal_accounting(removal_accounting);
 
     writeln!(
         printer.stderr(),
