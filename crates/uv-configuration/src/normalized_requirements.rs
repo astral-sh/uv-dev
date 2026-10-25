@@ -213,9 +213,9 @@ impl PartialEq for SemanticRequirement<'_> {
                 },
             ) = (&left.source, &right.source)
             {
-                left.iter().zip(right.iter()).all(|(left, right)| {
-                    left.version().release().len() == right.version().release().len()
-                })
+                left.iter()
+                    .map(VersionSpecifier::exact_key)
+                    .eq(right.iter().map(VersionSpecifier::exact_key))
             } else {
                 true
             }
@@ -397,8 +397,23 @@ fn normalize_package_requirements(
 /// Order declarations deterministically, including precision-sensitive specifiers.
 /// `==1.*` and `==1.0.*` accept different versions even though `1` and `1.0` compare equal.
 fn compare_requirements(left: &Requirement, right: &Requirement) -> Ordering {
-    left.cmp(right)
-        .then_with(|| left.to_string().cmp(&right.to_string()))
+    left.cmp(right).then_with(|| {
+        if let (
+            RequirementSource::Registry {
+                specifier: left, ..
+            },
+            RequirementSource::Registry {
+                specifier: right, ..
+            },
+        ) = (&left.source, &right.source)
+        {
+            left.iter()
+                .map(VersionSpecifier::exact_key)
+                .cmp(right.iter().map(VersionSpecifier::exact_key))
+        } else {
+            Ordering::Equal
+        }
+    })
 }
 
 /// Combine disjoint marker regions with equivalent extras, accepted versions, and candidate policies.
@@ -433,6 +448,7 @@ fn simplify_specifiers(specifiers: VersionSpecifiers) -> VersionSpecifiers {
         .into_iter()
         .map(normalize_specifier)
         .collect::<Vec<_>>();
+    // This presentation order selects the spelling retained among equivalent clauses.
     specifiers.sort_by_cached_key(ToString::to_string);
 
     // A clause is implied by the others if they already exclude every version it excludes.
@@ -658,6 +674,48 @@ mod tests {
             normalized,
             NormalizedRequirements::from(normalized.clone().into_inner())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn precision_order_matches_requirement_rendering() -> Result<()> {
+        let requirements = requirements(&[
+            "foo==1.*",
+            "foo==1.0.*",
+            "foo==1.0.0.*",
+            "foo!=1.*",
+            "foo!=1.0.*",
+            "foo~=1.0",
+            "foo~=1.0.0",
+            "foo==1",
+            "foo==1.0",
+            "foo==1a1",
+            "foo==1.0a1",
+            "foo==1.post1",
+            "foo==1.0.post1",
+            "foo==1.dev1",
+            "foo==1.0.dev1",
+            "foo==1+local",
+            "foo==1.0+local",
+            "foo===1",
+            "foo===1.0",
+            "foo==1,<=2",
+            "foo==1.0,<=2",
+            "foo==1; sys_platform == 'linux'",
+            "foo==1.0; sys_platform == 'linux'",
+        ])?;
+        for left in &requirements {
+            for right in &requirements {
+                let expected = left
+                    .cmp(right)
+                    .then_with(|| left.to_string().cmp(&right.to_string()));
+                assert_eq!(
+                    super::compare_requirements(left, right),
+                    expected,
+                    "{left}, {right}"
+                );
+            }
+        }
         Ok(())
     }
 

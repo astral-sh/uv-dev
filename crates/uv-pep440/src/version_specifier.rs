@@ -328,6 +328,57 @@ pub struct VersionSpecifier {
     pub(crate) version: Version,
 }
 
+/// A borrowed identity for a specifier declaration, including release precision.
+///
+/// Unlike [`VersionSpecifier`] equality, this key distinguishes trailing release zeros for every
+/// operator. Its ordering extends specifier ordering with canonical-spelling precision ties.
+#[derive(Debug, Clone, Copy)]
+pub struct VersionSpecifierKey<'a>(&'a VersionSpecifier);
+
+impl PartialEq for VersionSpecifierKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.operator == other.0.operator
+            && self.0.version == other.0.version
+            && self.0.version.release().len() == other.0.version.release().len()
+    }
+}
+
+impl Eq for VersionSpecifierKey<'_> {}
+
+impl Hash for VersionSpecifierKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.operator.hash(state);
+        self.0.version.hash(state);
+        self.0.version.release().len().hash(state);
+    }
+}
+
+impl PartialOrd for VersionSpecifierKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VersionSpecifierKey<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(other.0).then_with(|| {
+            let precision = self
+                .0
+                .version
+                .release()
+                .len()
+                .cmp(&other.0.version.release().len());
+            // An added `.0` sorts before prerelease, post-release and dev suffixes, but after
+            // the end of a release, a local suffix (`+`) or a wildcard (`.*`).
+            if self.0.version.is_pre() || self.0.version.is_post() || self.0.version.is_dev() {
+                precision.reverse()
+            } else {
+                precision
+            }
+        })
+    }
+}
+
 impl PartialEq for VersionSpecifier {
     fn eq(&self, other: &Self) -> bool {
         if self.operator != other.operator {
@@ -416,6 +467,13 @@ impl Serialize for VersionSpecifier {
 }
 
 impl VersionSpecifier {
+    /// Return a structural key that retains the declaration's release precision.
+    ///
+    /// Use this when identifying declarations rather than comparing zero-padded versions.
+    pub fn exact_key(&self) -> VersionSpecifierKey<'_> {
+        VersionSpecifierKey(self)
+    }
+
     /// Build from parts, validating that the operator is allowed with that version. The last
     /// parameter indicates a trailing `.*`, to differentiate between `1.1.*` and `1.1`
     pub fn from_pattern(
@@ -1066,13 +1124,75 @@ impl std::fmt::Display for TildeVersionSpecifier<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, error::Error, str::FromStr};
+    use std::{cmp::Ordering, collections::HashSet, error::Error, str::FromStr};
 
     use indoc::indoc;
 
     use crate::{LocalSegment, version};
 
     use super::*;
+
+    #[test]
+    fn exact_keys_retain_declaration_precision() -> Result<(), Box<dyn Error>> {
+        let specifiers = [
+            "==1",
+            "==1.0",
+            "==1.0.0",
+            "==v1.0",
+            "==1.*",
+            "==1.0.*",
+            "!=1.*",
+            "!=1.0.*",
+            "~=1.0",
+            "~=1.0.0",
+            "==1a1",
+            "==1.0a1",
+            "==1b1",
+            "==1.0b1",
+            "==1rc1",
+            "==1.0rc1",
+            "==1.post1",
+            "==1.0.post1",
+            "==1.dev1",
+            "==1.0.dev1",
+            "==1+local",
+            "==1.0+local",
+            "===1",
+            "===1.0",
+            ">=1",
+            ">=1.0",
+            "<=1",
+            "<=1.0",
+            "<1",
+            "<1.0",
+            ">1",
+            ">1.0",
+        ]
+        .into_iter()
+        .map(VersionSpecifier::from_str)
+        .collect::<Result<Vec<_>, _>>()?;
+        let rendered: HashSet<_> = specifiers.iter().map(ToString::to_string).collect();
+        let structural: HashSet<_> = specifiers.iter().map(VersionSpecifier::exact_key).collect();
+        assert_eq!(rendered.len(), structural.len());
+        for left in &specifiers {
+            for right in &specifiers {
+                assert_eq!(
+                    left.exact_key() == right.exact_key(),
+                    left.to_string() == right.to_string(),
+                    "{left}, {right}"
+                );
+                let expected = left
+                    .cmp(right)
+                    .then_with(|| left.to_string().cmp(&right.to_string()));
+                assert_eq!(
+                    left.exact_key().cmp(&right.exact_key()),
+                    expected,
+                    "{left}, {right}"
+                );
+            }
+        }
+        Ok(())
+    }
 
     /// <https://peps.python.org/pep-0440/#version-matching>
     #[test]
