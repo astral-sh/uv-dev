@@ -24,7 +24,8 @@ impl Backend {
             None => Ok(Self::Cli),
             Some(value) if value == "cli" => Ok(Self::Cli),
             Some(value) if value == "gitoxide" => {
-                if matches!(url.scheme(), "http" | "https")
+                if (matches!(url.scheme(), "http" | "https")
+                    || (url.scheme() == "file" && url.host().is_none()))
                     && !url.as_str().contains('?')
                     && url.fragment().is_none()
                     && !disable_ssl
@@ -57,16 +58,14 @@ pub(crate) fn init(path: &Path) -> gix::Result<gix::Repository> {
     .to_thread_local())
 }
 
+/// Return `false` when the local request cannot use the in-process fetch.
 pub(crate) fn fetch(
     path: &Path,
     url: &SafeUrl,
     refspecs: &[String],
     all_tags: bool,
     offline: bool,
-) -> Result<()> {
-    if offline {
-        return Err(GitError::TransportNotAllowed.into());
-    }
+) -> Result<bool> {
     let options = options().config_overrides(["gitoxide.credentials.terminalPrompt=false"]);
     let mut repo = gix::open_opts(path, options)?;
     repo.committer_or_set_generic_fallback()?;
@@ -75,6 +74,15 @@ pub(crate) fn fetch(
         .with_refspecs(refspecs.iter().map(String::as_str), Direction::Fetch)?;
     if all_tags {
         remote = remote.with_fetch_tags(gix::remote::fetch::Tags::All);
+    }
+    if remote
+        .url(Direction::Fetch)
+        .is_some_and(|url| url.scheme == gix::url::Scheme::File)
+    {
+        return Ok(remote.try_fetch_local(&AtomicBool::new(false))?.is_some());
+    }
+    if offline {
+        return Err(GitError::TransportNotAllowed.into());
     }
     let outcome = remote
         .connect(Direction::Fetch)?
@@ -90,7 +98,7 @@ pub(crate) fn fetch(
     {
         set_promisor(&mut repo, url)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {

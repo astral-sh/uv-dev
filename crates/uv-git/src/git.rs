@@ -741,8 +741,13 @@ fn fetch(
     let mut fetch_refspecs = |refspecs: &[String]| match repo.backend {
         Backend::Cli => fetch_with_cli(repo, remote_url, refspecs, tags, disable_ssl, offline),
         Backend::Gitoxide => {
-            crate::gitoxide::fetch(&repo.path, remote_url, refspecs, tags, offline)
-                .map_err(|err| redact_git_error(err, remote_url))
+            if crate::gitoxide::fetch(&repo.path, remote_url, refspecs, tags, offline)
+                .map_err(|err| redact_git_error(err, remote_url))?
+            {
+                Ok(())
+            } else {
+                fetch_with_cli(repo, remote_url, refspecs, tags, disable_ssl, offline)
+            }
         }
     };
     let result = match refspec_strategy {

@@ -1409,8 +1409,10 @@ impl EnvVars {
     pub const UV_NO_INSTALLER_METADATA: &'static str = "UV_NO_INSTALLER_METADATA";
 
     /// Selects the Git dependency backend. Defaults to `cli`. Set to `gitoxide` to use the
-    /// experimental Rust backend for HTTP(S) URLs without a query or fragment and with TLS
-    /// verification enabled. Supported Git LFS repositories use the basic transfer protocol.
+    /// experimental Rust backend for hostless `file://` URLs and for HTTP(S) URLs when uv
+    /// has not disabled TLS verification. URLs with a query or fragment and local requests
+    /// that need the configured upload-pack transport use the Git executable. Supported
+    /// HTTP(S) Git LFS repositories use the basic transfer protocol.
     /// Submodules with LFS enabled, custom transfers, pointer extensions and authentication
     /// that requires a credential helper use the Git LFS executable.
     #[attr_added_in("next release")]

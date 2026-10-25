@@ -24096,6 +24096,67 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
     Ok(())
 }
 
+/// Lock a local repository offline with a cold cache and no Git executable on uv's `PATH`.
+#[cfg(feature = "test-git")]
+#[test]
+fn lock_gitoxide_local_repository_without_git() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let repository = context.temp_dir.child("local dependency");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "local-package"
+        version = "1.2.3"
+        requires-python = ">=3.13"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "pyproject.toml"])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Package",
+        ])
+        .assert()
+        .success();
+    let url = SafeUrl::from_directory_path(repository.path()).unwrap();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["local-package @ git+{url}"]
+    "#})?;
+    context
+        .lock()
+        .arg("--offline")
+        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .assert()
+        .success();
+    assert!(
+        context
+            .read("uv.lock")
+            .contains("name = \"local-package\"\nversion = \"1.2.3\"")
+    );
+    Ok(())
+}
+
 /// Immutable Git packages can select repository-internal archives for first-party dependencies.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]

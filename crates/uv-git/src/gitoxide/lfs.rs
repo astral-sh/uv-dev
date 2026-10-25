@@ -182,6 +182,9 @@ pub(crate) fn fetch(
     if missing.is_empty() {
         return Ok(true);
     }
+    if !matches!(url.scheme(), "http" | "https") {
+        return Ok(false);
+    }
     if offline {
         return Err(GitError::TransportNotAllowed.into());
     }
