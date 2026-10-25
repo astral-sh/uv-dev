@@ -56,13 +56,21 @@ Set `type` to exactly one of these repository label names and explain the choice
 - `question` when the issue primarily asks for clarification or support and no incorrect behavior
   has been established.
 
+Set `subtype` to `regression` when `type` is `bug` and previously working behavior has broken. This
+includes a bug that returned after a fix, behavior that stopped working after an upgrade, and new
+backward incompatibility with data produced by other uv versions. Use reported known-good and
+failing versions, release timing, historical issues and fixes, repository history, and source-backed
+findings to establish the regression. Explain the evidence in `type_reason`, and distinguish
+confirmed regressions from unverified suspicions. Set `subtype` to `null` for all other issues,
+including non-regression bugs and duplicates of an open issue tracking a regression.
+
 Do not classify the new issue as a duplicate just because a pull request created in response to it
 fixes or implements the reported behavior.
 
 If a previously fixed bug has returned, classify the new issue as a `bug`, not a duplicate of the
 closed original issue or merged fix. Include the historical issue and fixing pull request in
-`related.items`, and explain the regression in `type_reason`. Only classify it as a duplicate if an
-open issue or pull request already tracks the same regression.
+`related.items`, set `subtype` to `regression`, and explain the regression in `type_reason`. Only
+classify it as a duplicate if an open issue or pull request already tracks the same regression.
 
 If an issue could fit multiple non-duplicate types, prioritize correctness: classify established
 incorrect behavior as a bug, even when the primary maintainer action requested is clarification.
@@ -84,9 +92,9 @@ response is a draft for maintainer review only; do not post it or make any other
 Author the complete `$RUNNER_TEMP/issue-context/README.md` as a coherent, self-contained maintainer
 handoff, using the existing template as its starting structure. Replace the template heading with
 the issue title, identify the issue using its canonical owner/repository#number reference, and
-include its classification. Replace every instructional placeholder with issue-specific content
-explaining the report, draft response, classification reasoning, related issues or pull requests,
-and supporting evidence. Format related issues and pull requests in the `## Related` section as a
-Markdown bullet list with one item per issue or pull request. If none were found, say so without
-using a list. Add or adjust sections when that makes the document clearer, and keep the README
-consistent with the structured JSON result.
+include its classification and the subtype in parentheses when it is non-null. Replace every
+instructional placeholder with issue-specific content explaining the report, draft response,
+classification reasoning, related issues or pull requests, and supporting evidence. Format related
+issues and pull requests in the `## Related` section as a Markdown bullet list with one item per
+issue or pull request. If none were found, say so without using a list. Add or adjust sections when
+that makes the document clearer, and keep the README consistent with the structured JSON result.

@@ -36,9 +36,13 @@
       "type": "string",
       "enum": ["bug", "enhancement", "duplicate", "question"]
     },
+    "subtype": {
+      "type": ["string", "null"],
+      "enum": ["regression", null]
+    },
     "type_reason": { "type": "string" },
     "summary": { "type": "string" },
     "draft_response": { "type": "string" }
   },
-  "required": ["related", "type", "type_reason", "summary", "draft_response"]
+  "required": ["related", "type", "subtype", "type_reason", "summary", "draft_response"]
 }
