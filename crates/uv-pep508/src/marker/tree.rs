@@ -207,6 +207,22 @@ impl FromStr for MarkerValue {
     }
 }
 
+/// PEP 508 marker literals have no escape syntax. A parsed literal always has an unused delimiter.
+struct QuotedMarkerValue<'a>(&'a str);
+
+impl Display for QuotedMarkerValue<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let value = self.0;
+        if !value.contains('\'') {
+            write!(f, "'{value}'")
+        } else if !value.contains('"') {
+            write!(f, "\"{value}\"")
+        } else {
+            Err(fmt::Error)
+        }
+    }
+}
+
 impl Display for MarkerValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -214,7 +230,7 @@ impl Display for MarkerValue {
             Self::MarkerEnvString(marker_value_string) => marker_value_string.fmt(f),
             Self::MarkerEnvList(marker_value_contains) => marker_value_contains.fmt(f),
             Self::Extra => f.write_str("extra"),
-            Self::QuotedString(value) => write!(f, "'{value}'"),
+            Self::QuotedString(value) => QuotedMarkerValue(value).fmt(f),
         }
     }
 }
@@ -656,20 +672,30 @@ impl Display for MarkerExpression {
                 operator,
                 value,
             } => {
+                let value = QuotedMarkerValue(value);
                 if matches!(
                     operator,
                     MarkerOperator::Contains | MarkerOperator::NotContains
                 ) {
-                    return write!(f, "'{value}' {} {key}", operator.invert());
+                    return write!(f, "{value} {} {key}", operator.invert());
                 }
 
-                write!(f, "{key} {operator} '{value}'")
+                write!(f, "{key} {operator} {value}")
             }
             Self::List { pair, operator } => {
-                write!(f, "'{}' {} {}", pair.value(), operator, pair.key())
+                write!(
+                    f,
+                    "{} {operator} {}",
+                    QuotedMarkerValue(&pair.value()),
+                    pair.key()
+                )
             }
             Self::Extra { operator, name } => {
-                write!(f, "extra {operator} '{name}'")
+                let value = match name {
+                    MarkerValueExtra::Extra(extra) => extra.as_ref(),
+                    MarkerValueExtra::Arbitrary(value) => value.as_str(),
+                };
+                write!(f, "extra {operator} {}", QuotedMarkerValue(value))
             }
         }
     }
@@ -2897,6 +2923,27 @@ mod test {
             .unwrap()
             .evaluate(&env37, &[]);
         assert!(result);
+    }
+
+    #[test]
+    fn quoted_marker_values_round_trip() {
+        for source in [
+            r#"platform_version == "O'Brien""#,
+            r#"platform_version == 'a "quoted" value'"#,
+            r#"platform_version == "x' or os_name == 'posix' or os_name == 'y""#,
+            r#""O'Brien" in platform_version"#,
+        ] {
+            let marker = m(source);
+            assert_eq!(m(&marker.try_to_string().unwrap()), marker, "{source}");
+        }
+    }
+
+    #[test]
+    fn quoted_marker_expressions_round_trip() {
+        for source in [r#""O'Brien" in extras"#, r#"extra == "O'Brien""#] {
+            let expression = MarkerExpression::from_str(source).unwrap().unwrap();
+            assert_eq!(expression.to_string(), source);
+        }
     }
 
     #[test]
