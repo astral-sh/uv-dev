@@ -943,6 +943,7 @@ async fn do_lock(
                     .map(NameRequirementSpecification::from)
                     .chain(external)
                     .collect(),
+                None,
                 Vec::new(),
                 overrides.clone(),
                 excludes.clone(),
