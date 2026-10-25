@@ -9,6 +9,10 @@ repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 
+[features]
+# Enables tests that execute the Git CLI.
+test-git = []
+
 [lib]
 doctest = false
 
@@ -38,4 +42,7 @@ tracing = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
+http = { workspace = true }
 indoc = { workspace = true }
+tempfile = { workspace = true }
