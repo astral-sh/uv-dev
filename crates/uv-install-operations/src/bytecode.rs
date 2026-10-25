@@ -7,7 +7,7 @@ use uv_cache::Cache;
 use uv_command_support::{Printer, elapsed};
 use uv_configuration::Concurrency;
 use uv_fs::CWD;
-use uv_installer::{compile_files, compile_tree};
+use uv_installer::{CompileMode, compile_files, compile_tree};
 use uv_python_interpreter::PythonEnvironment;
 
 use crate::Error;
@@ -16,11 +16,12 @@ use crate::Error;
 /// initial run of any subsequent executions.
 ///
 /// See the `--compile` option on `pip sync` and `pip install`.
-pub(super) async fn compile_bytecode(
+pub async fn compile_bytecode(
     venv: &PythonEnvironment,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
+    mode: CompileMode,
 ) -> Result<(), Error> {
     let start = std::time::Instant::now();
     let mut files = 0;
@@ -38,6 +39,7 @@ pub(super) async fn compile_bytecode(
             venv.python_executable(),
             concurrency,
             cache.root(),
+            mode,
         )
         .await
         .map_err(|source| Error::CompileTree {

@@ -18,7 +18,8 @@ use tokio::process::Command;
 use uv_cache::Cache;
 use uv_distribution_types::{BuiltDist, Dist, Resolution, ResolvedDist};
 use uv_environment_operations::EnvironmentError;
-use uv_python_interpreter::{PythonEnvironment, virtualenv_python_executable};
+use uv_python_interpreter::{Interpreter, PythonEnvironment, virtualenv_python_executable};
+use uv_static::EnvVars;
 
 /// Reuse a nonempty selection of hashed registry wheels that do not require revalidation.
 pub(super) fn eligible(resolution: &Resolution, cache: &Cache) -> bool {
@@ -34,6 +35,21 @@ pub(super) fn eligible(resolution: &Resolution, cache: &Cache) -> bool {
             !hashes.is_empty()
                 && !cache.must_revalidate_package(&registry.best_wheel().filename.name)
         })
+}
+
+/// A shared tree can supply checked-hash bytecode for CPython's default layout.
+pub(super) fn can_compile(interpreter: &Interpreter) -> bool {
+    interpreter.implementation_name() == "cpython"
+        && interpreter.python_tuple() >= (3, 7)
+        && std::env::var_os(EnvVars::PYC_INVALIDATION_MODE)
+            .is_none_or(|value| value == "CHECKED_HASH")
+        && [
+            "PYTHONOPTIMIZE",
+            "PYTHONPYCACHEPREFIX",
+            "PYTHONNODEBUGRANGES",
+        ]
+        .iter()
+        .all(|name| std::env::var_os(name).is_none_or(|value| value.is_empty()))
 }
 
 /// Creating a mount namespace requires `CAP_SYS_ADMIN`. Joining it also requires

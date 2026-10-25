@@ -33,7 +33,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_types::{BuildContext, HashStrategy, InFlight};
 use uv_warnings::warn_user;
 
-use crate::bytecode::{compile_bytecode, compile_bytecode_files};
+use crate::bytecode::compile_bytecode_files;
 use crate::loggers::InstallLogger;
 use crate::reporters::{InstallReporter, PrepareReporter};
 
@@ -44,6 +44,7 @@ pub mod loggers;
 pub mod report;
 mod reporters;
 
+pub use bytecode::compile_bytecode;
 pub use error::Error;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -515,7 +516,14 @@ impl InstallationPlan {
         if let Some(compile) = compile {
             match compile {
                 BytecodeCompilation::All => {
-                    compile_bytecode(venv, concurrency, cache, printer).await?;
+                    compile_bytecode(
+                        venv,
+                        concurrency,
+                        cache,
+                        printer,
+                        uv_installer::CompileMode::Environment,
+                    )
+                    .await?;
                 }
                 BytecodeCompilation::Installed => {
                     let files = python_source_files_for_installs(venv, &installs);

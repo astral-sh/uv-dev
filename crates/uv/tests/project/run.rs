@@ -2086,6 +2086,49 @@ fn run_private_environment_startup_hook() -> Result<()> {
     Ok(())
 }
 
+/// A prepared bytecode worker must not run site hooks or trust source timestamps.
+#[tokio::test]
+async fn run_private_environment_checked_bytecode() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().assert().success();
+    let site = uv_test::site_packages_path(context.venv.path(), "python3.12");
+    fs_err::write(site.join("prepared_module.py"), "value = 1\n")?;
+    fs_err::write(
+        site.join("hook.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'hook-ran').touch()\n",
+    )?;
+    uv_installer::compile_tree(
+        &site,
+        &context.interpreter(),
+        &uv_configuration::Concurrency::new(1, 1, 1, 1),
+        context.cache_dir.path(),
+        uv_installer::CompileMode::Prepared,
+    )
+    .await?;
+    assert!(!context.venv.join("hook-ran").exists());
+    context
+        .python_command()
+        .args([
+            "-I",
+            "-c",
+            indoc! {"
+        import importlib, os, pathlib, sys
+        import prepared_module
+        assert pathlib.Path(sys.prefix, 'hook-ran').exists()
+        bytecode = pathlib.Path(prepared_module.__cached__).read_bytes()
+        assert int.from_bytes(bytecode[4:8], 'little') == 3
+        source = pathlib.Path(prepared_module.__file__)
+        stat = source.stat()
+        source.write_bytes(b'value = 2\\n')
+        os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        assert importlib.reload(prepared_module).value == 2
+    "},
+        ])
+        .assert()
+        .success();
+    Ok(())
+}
+
 #[test]
 fn run_with_cached_wheel() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);

@@ -1267,6 +1267,7 @@ async fn compile_stdlib_bytecode(
         &installation.executable(false),
         concurrency,
         cache.root(),
+        uv_installer::CompileMode::Environment,
     )
     .await
     .with_context(|| format!("Error compiling bytecode in: {}", stdlib_path.display()))?;

@@ -245,7 +245,11 @@ impl CachedEnvironment {
             // A private run mounts a relocatable lower tree that other commands must never execute
             // directly. Replacing Python at the same path also requires a new lower tree.
             hash_digest(&(
-                "private-run-v1",
+                if settings.compile_bytecode {
+                    "private-run-checked-pyc-v1"
+                } else {
+                    "private-run-v1"
+                },
                 &executable,
                 interpreter.key(),
                 Timestamp::from_path(&executable)?,
@@ -293,13 +297,18 @@ impl CachedEnvironment {
             UpgradePolicy::Fixed,
         )?;
 
-        sync_environment(
+        let mut install_settings = uv_settings::InstallerSettingsRef::from(settings);
+        let compile_private = private && install_settings.compile_bytecode;
+        if compile_private {
+            install_settings.compile_bytecode = false;
+        }
+        let venv = sync_environment(
             venv,
             resolution,
             hash_strategy,
             Modifications::Exact,
             build_constraints,
-            settings.into(),
+            install_settings,
             client_builder,
             state,
             install,
@@ -310,6 +319,16 @@ impl CachedEnvironment {
             preview,
         )
         .await?;
+        if compile_private {
+            uv_install_operations::compile_bytecode(
+                &venv,
+                concurrency,
+                cache,
+                printer,
+                uv_installer::CompileMode::Prepared,
+            )
+            .await?;
+        }
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
