@@ -10,7 +10,7 @@ use uv_pep440::{Version, VersionSpecifier};
 use crate::marker::algebra::INTERNER;
 use crate::marker::algebra::isop::{Cover, Guard};
 use crate::marker::tree::{ContainerOperator, MarkerTree};
-use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTreeKind};
+use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTreeKind, MarkerValueString};
 
 /// Returns a simplified DNF expression for a given marker tree.
 ///
@@ -19,7 +19,7 @@ pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
     let cover = INTERNER.lock().isop(tree.0);
     let mut dnf = Vec::new();
     collect_cover(&cover, &mut dnf, &mut Vec::new());
-    sort(&mut dnf);
+    normalize(&mut dnf);
     dnf
 }
 
@@ -240,12 +240,28 @@ fn guard_range<'a, T: Clone + Ord + 'a>(
         .collect()
 }
 
-/// Sort the clauses in a DNF expression, for backwards compatibility. The goal is to avoid
-/// unnecessary churn in the display output of the marker expressions, e.g., when modifying the
-/// internal representations used in the marker algebra.
-fn sort(dnf: &mut [Vec<MarkerExpression>]) {
-    // Sort each clause.
+/// Remove redundant comparisons and sort DNF clauses for stable display.
+fn normalize(dnf: &mut [Vec<MarkerExpression>]) {
     for clause in dnf.iter_mut() {
+        // An ordered comparison or equality against a nonempty value already excludes an empty platform value.
+        for key in [
+            MarkerValueString::PlatformRelease,
+            MarkerValueString::PlatformVersion,
+        ] {
+            if clause.iter().any(|expr| {
+                matches!(expr,
+                    MarkerExpression::String { key: field, operator: MarkerOperator::Equal
+                        | MarkerOperator::LessThan | MarkerOperator::GreaterThan
+                        | MarkerOperator::LessEqual | MarkerOperator::GreaterEqual, value }
+                        if *field == key && !value.is_empty()
+                )
+            }) {
+                clause.retain(|expr| !matches!(expr,
+                    MarkerExpression::String { key: field, operator: MarkerOperator::NotEqual, value }
+                        if *field == key && value.is_empty()
+                ));
+            }
+        }
         clause.sort_by_key(MarkerExpression::kind);
     }
     // Sort the clauses.

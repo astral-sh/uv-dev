@@ -2100,6 +2100,18 @@ mod test {
         );
     }
 
+    #[test]
+    fn restricted_platform_release_forks_cover_unknown_targets() {
+        let supported = m("sys_platform == 'darwin' and platform_machine == 'arm64'");
+        let required = supported.and(m("platform_release == '24'"));
+        let wheel = supported.and(m("platform_release >= '25'"));
+        let split = required.restrict(required.or(wheel));
+        let forks = [supported.and(split), supported.and(split.negate())];
+        let [left, right] = forks.map(|tree| m(&tree.try_to_string().unwrap()));
+        assert_eq!(left.or(right), supported);
+        assert!(left.is_disjoint(right));
+    }
+
     fn env37() -> MarkerEnvironment {
         MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
             implementation_name: "",
@@ -3715,7 +3727,7 @@ mod test {
                 or (os_name != 'nt' and platform_version == '1' and (sys_platform == 'win32' or sys_platform == 'win64'))",
             "(os_name != 'nt' and platform_version == '1' and sys_platform == 'win64') \
                 or (os_name == 'nt' and sys_platform == 'win32') \
-                or (platform_version != '' and platform_version == '1' and sys_platform == 'win32')",
+                or (platform_version == '1' and sys_platform == 'win32')",
         );
 
         assert_simplifies(

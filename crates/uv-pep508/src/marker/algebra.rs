@@ -733,13 +733,22 @@ impl InternerGuard<'_> {
                 let Some(fallback) = fallback else {
                     return NodeId::FALSE;
                 };
+                // A platform version node is only defined when the field is nonempty.
+                // Keep its string branch even if the assumption excludes an unknown target.
+                let keep_string_branch = matches!(
+                    value_node.var,
+                    Variable::String(
+                        CanonicalMarkerValueString::PlatformRelease
+                            | CanonicalMarkerValueString::PlatformVersion
+                    )
+                );
                 let children = value_node.children.apply(
                     value,
                     &assumption_node.children,
                     assumption,
                     |value, assumption| {
                         if assumption.is_false() {
-                            fallback
+                            if keep_string_branch { value } else { fallback }
                         } else {
                             self.restrict_cached(value, assumption, cache)
                         }
