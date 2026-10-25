@@ -1329,6 +1329,26 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(Some(ResolverVersion::Unforked(version.clone())))
     }
 
+    /// Restrict required environments to the contexts in which this package is actually needed.
+    fn package_required_environments(
+        &self,
+        id: Id<PubGrubPackage>,
+        env: &ResolverEnvironment,
+        pubgrub: &State<UvDependencyProvider>,
+    ) -> Vec<MarkerTree> {
+        if self.options.required_environments.is_empty() {
+            return Vec::new();
+        }
+        let applicable = find_environments(id, pubgrub);
+        self.options
+            .required_environments
+            .iter()
+            .copied()
+            .map(|marker| marker.and(applicable))
+            .filter(|marker| env.included_by_marker(*marker))
+            .collect()
+    }
+
     /// Given a candidate registry requirement, choose the next version in range to try, or `None`
     /// if there is no version in this range.
     fn choose_version_registry<'index>(
@@ -1376,6 +1396,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         debug!("Searching for a compatible version of {package} ({range})");
 
         // Find a version.
+        let required_environments = self.package_required_environments(id, env, pubgrub);
         let Some(candidate) = self.selector.select(
             name,
             range,
@@ -1385,6 +1406,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             &self.exclusions,
             index,
             env,
+            &required_environments,
             self.tags.as_ref(),
         ) else {
             // Short circuit: we couldn't find _any_ versions for a package.
@@ -1692,6 +1714,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             candidate.version().clone().without_local(),
         ));
 
+        let required_environments = self.package_required_environments(id, env, pubgrub);
         let Some(base_candidate) = self.selector.select(
             name,
             &range,
@@ -1701,6 +1724,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             &self.exclusions,
             index,
             env,
+            &required_environments,
             self.tags.as_ref(),
         ) else {
             return Ok(None);
@@ -2431,6 +2455,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     &self.exclusions,
                     None,
                     &env,
+                    &[],
                     self.tags.as_ref(),
                 ) else {
                     return Ok(None);
