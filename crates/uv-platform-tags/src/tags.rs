@@ -327,6 +327,13 @@ impl Tags {
                 ));
             }
         }
+        if platform.os() == &Os::Windows && platform.arch() == Arch::Arm64Ec {
+            // Prefer a native wheel even when an emulated wheel has a more specific Python ABI.
+            tags.sort_by_key(|(_, _, platform)| {
+                (platform.is_any(), *platform == PlatformTag::WinAmd64)
+            });
+        }
+
         Ok(Self::new(
             tags,
             platform,
@@ -708,6 +715,7 @@ fn compatible_tags(platform: &Platform) -> Result<Vec<PlatformTag>, PlatformErro
             vec![PlatformTag::WinAmd64]
         }
         (Os::Windows, Arch::Aarch64) => vec![PlatformTag::WinArm64],
+        (Os::Windows, Arch::Arm64Ec) => vec![PlatformTag::WinArm64Ec, PlatformTag::WinAmd64],
         (Os::FreeBsd { release }, arch) => {
             let release_tag = release.replace(['.', '-'], "_").to_lowercase();
             let arch_tag = arch.machine();
@@ -1188,6 +1196,144 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
 
     use super::*;
+
+    #[test]
+    fn test_platform_tags_windows() -> Result<(), PlatformError> {
+        let mut platforms = Vec::new();
+        for arch in [Arch::X86, Arch::X86_64, Arch::Aarch64, Arch::Arm64Ec] {
+            let tags = compatible_tags(&Platform::new(Os::Windows, arch))?;
+            platforms.push((arch, tags));
+        }
+        assert_debug_snapshot!(platforms, @r#"
+        [
+            (
+                X86,
+                [
+                    Win32,
+                ],
+            ),
+            (
+                X86_64,
+                [
+                    WinAmd64,
+                ],
+            ),
+            (
+                Aarch64,
+                [
+                    WinArm64,
+                ],
+            ),
+            (
+                Arm64Ec,
+                [
+                    WinArm64Ec,
+                    WinAmd64,
+                ],
+            ),
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn test_system_tags_windows_arm64ec() -> Result<(), TagsError> {
+        let tags = Tags::from_env(
+            Platform::new(Os::Windows, Arch::Arm64Ec),
+            (3, 14),
+            "cpython",
+            (3, 14),
+            TagsOptions::default(),
+        )?;
+        let python = LanguageTag::CPython {
+            python_version: (3, 14),
+        };
+        let abi = AbiTag::CPython {
+            python_version: (3, 14),
+            variant: CPythonAbiVariants::default(),
+        };
+
+        let native = tags.compatibility_tag(&python, &abi, &PlatformTag::WinArm64Ec);
+        let native_abi3 = tags.compatibility_tag(
+            &LanguageTag::CPython {
+                python_version: (3, 10),
+            },
+            &AbiTag::Abi3,
+            &PlatformTag::WinArm64Ec,
+        );
+        let emulated = tags.compatibility_tag(&python, &abi, &PlatformTag::WinAmd64);
+        let universal = tags.compatibility_tag(
+            &LanguageTag::Python {
+                major: 3,
+                minor: None,
+            },
+            &AbiTag::None,
+            &PlatformTag::Any,
+        );
+
+        assert!(universal.is_compatible());
+        assert!(native > native_abi3);
+        assert!(native_abi3 > emulated);
+        assert!(emulated > universal);
+        assert_eq!(tags.platform_tag(), Some(&PlatformTag::WinArm64Ec));
+        assert!(
+            !tags
+                .compatibility_tag(&python, &abi, &PlatformTag::WinArm64)
+                .is_compatible()
+        );
+        assert!(
+            !tags
+                .compatibility_tag(&python, &abi, &PlatformTag::Win32)
+                .is_compatible()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_arm64ec_freethreaded_abi_compatibility() -> Result<(), TagsError> {
+        let tags = Tags::from_env(
+            Platform::new(Os::Windows, Arch::Arm64Ec),
+            (3, 14),
+            "cpython",
+            (3, 14),
+            TagsOptions {
+                gil_disabled: true,
+                ..TagsOptions::default()
+            },
+        )?;
+        let python = LanguageTag::CPython {
+            python_version: (3, 14),
+        };
+        let regular_abi = AbiTag::CPython {
+            python_version: (3, 14),
+            variant: CPythonAbiVariants::default(),
+        };
+        let freethreaded_abi = AbiTag::CPython {
+            python_version: (3, 14),
+            variant: CPythonAbiVariants::Freethreading,
+        };
+        for platform in [PlatformTag::WinArm64Ec, PlatformTag::WinAmd64] {
+            assert!(
+                tags.compatibility_tag(&python, &freethreaded_abi, &platform)
+                    .is_compatible()
+            );
+            assert!(
+                tags.compatibility_tag(&python, &AbiTag::Abi3T, &platform)
+                    .is_compatible()
+            );
+            assert!(
+                !tags
+                    .compatibility_tag(&python, &regular_abi, &platform)
+                    .is_compatible()
+            );
+            assert!(
+                !tags
+                    .compatibility_tag(&python, &AbiTag::Abi3, &platform)
+                    .is_compatible()
+            );
+        }
+        Ok(())
+    }
 
     /// Check platform tag ordering.
     /// The list is displayed in decreasing priority.

@@ -1951,10 +1951,9 @@ mod tests {
                     PythonVariant::Default
                 )),
                 implementation: Some(ImplementationName::CPython),
-                arch: Some(ArchRequest::Explicit(Arch::new(
-                    Architecture::Aarch64(Aarch64Architecture::Aarch64),
-                    None
-                ))),
+                arch: Some(ArchRequest::Explicit(Arch::from(Architecture::Aarch64(
+                    Aarch64Architecture::Aarch64
+                )))),
                 os: Some(Os::new(target_lexicon::OperatingSystem::Darwin(None))),
                 libc: Some(Libc::None),
                 build: None,
@@ -1988,10 +1987,9 @@ mod tests {
                     PythonVariant::Default
                 )),
                 implementation: None,
-                arch: Some(ArchRequest::Explicit(Arch::new(
-                    Architecture::Aarch64(Aarch64Architecture::Aarch64),
-                    None
-                ))),
+                arch: Some(ArchRequest::Explicit(Arch::from(Architecture::Aarch64(
+                    Aarch64Architecture::Aarch64
+                )))),
                 os: None,
                 libc: None,
                 build: None,
