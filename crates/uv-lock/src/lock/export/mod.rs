@@ -16,6 +16,7 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerExpression, MarkerTree, MarkerValueExtra};
 use uv_pypi_types::{ConflictItem, ConflictSet, Conflicts};
 
+use uv_resolver_types::graph_ops::NodeMap;
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
@@ -348,7 +349,7 @@ impl<'lock> ExportableRequirements<'lock> {
             .filter(|(_index, package)| include_package(package))
             .map(|(index, package)| ExportableRequirement {
                 package,
-                marker: reachability.remove(&index).unwrap_or_default(),
+                marker: reachability[index].take().unwrap_or_default(),
                 dependents: if annotate {
                     let mut dependents = graph
                         .edges_directed(index, Direction::Incoming)
@@ -426,7 +427,7 @@ fn conflict_marker_reachability<'lock>(
     known_conflicts: &FxHashSet<ConflictItem>,
     conflicts: &Conflicts,
     include_package: impl Fn(&Package) -> bool,
-) -> Result<FxHashMap<NodeIndex, MarkerTree>, LockError> {
+) -> Result<NodeMap<MarkerTree>, LockError> {
     let variables = ConflictVariables::from_graph(graph, known_conflicts, conflicts);
 
     // Give each requested package extra its own reachability node. For `a -> foo[ssl]`, the
@@ -487,7 +488,7 @@ fn conflict_marker_reachability<'lock>(
     // determined reachability. Omitted packages still participate in the analysis.
     let bounds = ExportActivationBounds::new(&solver.activations, &variables).solve();
     let mut resolved = FxHashMap::default();
-    let mut reachability = FxHashMap::default();
+    let mut reachability = NodeMap::new(graph.node_count());
     for index in graph.node_indices() {
         let marker = solver.nodes[index.index()].marker;
         let (lower, upper) = *resolved.entry(marker).or_insert_with(|| {
@@ -509,7 +510,7 @@ fn conflict_marker_reachability<'lock>(
             }
             .into());
         }
-        reachability.insert(index, lower);
+        reachability[index] = Some(lower);
     }
 
     Ok(reachability)
