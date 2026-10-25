@@ -4,16 +4,15 @@ use std::fmt::Write;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_normalize::PackageName;
 
-use crate::{ChangeEvent, ChangeEventKind};
-use crate::{Changelog, ShortSpecifier};
 use uv_command_support::Printer;
 use uv_command_support::elapsed;
+
+use crate::{ChangeEvent, ChangeEventKind, ChangedDist, Changelog};
 
 /// A trait to handle logging during install operations.
 pub trait InstallLogger {
@@ -362,33 +361,19 @@ impl InstallLogger for UpgradeInstallLogger {
         // TODO(tk): Adjust format for dry_run
         _dry_run: DryRun,
     ) -> fmt::Result {
-        // Index the removals by package name.
-        let removals: FxHashMap<&PackageName, BTreeSet<ShortSpecifier>> =
-            changelog.uninstalled.iter().fold(
-                FxHashMap::with_capacity_and_hasher(changelog.uninstalled.len(), FxBuildHasher),
-                |mut acc, distribution| {
-                    acc.entry(distribution.name())
-                        .or_default()
-                        .insert(distribution.short_specifier());
-                    acc
-                },
-            );
-
-        // Index the additions by package name.
-        let additions: FxHashMap<&PackageName, BTreeSet<ShortSpecifier>> =
-            changelog.installed.iter().fold(
-                FxHashMap::with_capacity_and_hasher(changelog.installed.len(), FxBuildHasher),
-                |mut acc, distribution| {
-                    acc.entry(distribution.name())
-                        .or_default()
-                        .insert(distribution.short_specifier());
-                    acc
-                },
-            );
+        // Collect the target's versions before and after the upgrade.
+        let [removals, additions] =
+            [&changelog.uninstalled, &changelog.installed].map(|distributions| {
+                distributions
+                    .iter()
+                    .filter(|distribution| distribution.name() == &self.target)
+                    .map(ChangedDist::short_specifier)
+                    .collect::<BTreeSet<_>>()
+            });
 
         // Summarize the change for the target.
-        match (removals.get(&self.target), additions.get(&self.target)) {
-            (Some(removals), Some(additions)) => {
+        match (removals.is_empty(), additions.is_empty()) {
+            (false, false) => {
                 if removals == additions {
                     let reinstalls = additions
                         .iter()
@@ -423,7 +408,7 @@ impl InstallLogger for UpgradeInstallLogger {
                     )?;
                 }
             }
-            (Some(removals), None) => {
+            (false, true) => {
                 let removals = removals
                     .iter()
                     .map(|version| format!("v{version}"))
@@ -437,7 +422,7 @@ impl InstallLogger for UpgradeInstallLogger {
                     removals
                 )?;
             }
-            (None, Some(additions)) => {
+            (true, false) => {
                 let additions = additions
                     .iter()
                     .map(|version| format!("v{version}"))
@@ -451,7 +436,7 @@ impl InstallLogger for UpgradeInstallLogger {
                     additions
                 )?;
             }
-            (None, None) => {
+            (true, true) => {
                 writeln!(
                     printer.stderr(),
                     "{} {} {}",
