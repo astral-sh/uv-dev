@@ -1,7 +1,7 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -18,6 +18,7 @@ use uv_environment_operations::{
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
+    handle_missing_script_lockfile,
 };
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -25,7 +26,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_scripts::Pep723Script;
+use uv_scripts::{Pep723Item, Pep723ItemRef, Pep723Script};
 use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverSettings,
 };
@@ -53,7 +54,7 @@ pub async fn metadata(
     malware_settings: MalwareCheckSettings,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
-    script: Option<Pep723Script>,
+    script: Option<Pep723Item>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
@@ -64,6 +65,17 @@ pub async fn metadata(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let stdin = match script.as_ref() {
+        Some(Pep723Item::Stdin(_)) => true,
+        Some(Pep723Item::Script(_) | Pep723Item::Remote(..)) | None => false,
+    };
+    let (lock_check, frozen) = if stdin {
+        handle_missing_script_lockfile(lock_check, frozen)?;
+        (LockCheck::Disabled, None)
+    } else {
+        (lock_check, frozen)
+    };
+
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
             "The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -72,26 +84,41 @@ pub async fn metadata(
     }
 
     let project;
-    let source = if let Some(script) = script.as_ref() {
-        MetadataSource::Manifest(LockTarget::Script(script))
-    } else {
-        project = DiscoveredProject::discover(
-            project_dir,
-            &DiscoveryOptions::default(),
-            None,
-            frozen,
-            preview,
-            cache,
-            workspace_cache,
-        )
-        .await?;
-        match &project {
-            DiscoveredProject::Manifest(project) => {
-                MetadataSource::Manifest(LockTarget::Workspace(project.workspace()))
+    let stdin_script;
+    let source = match script.as_ref() {
+        Some(Pep723Item::Script(script)) => MetadataSource::Manifest(LockTarget::Script(script)),
+        Some(Pep723Item::Stdin(metadata)) => {
+            stdin_script = Pep723Script {
+                path: Pep723ItemRef::Stdin(metadata).directory()?.join("-"),
+                metadata: metadata.clone(),
+                prelude: String::new(),
+                postlude: String::new(),
+            };
+            MetadataSource::Manifest(LockTarget::Script(&stdin_script))
+        }
+        Some(Pep723Item::Remote(..)) => {
+            bail!("Remote scripts are not supported by `uv workspace metadata`")
+        }
+        None => {
+            project = DiscoveredProject::discover(
+                project_dir,
+                &DiscoveryOptions::default(),
+                None,
+                frozen,
+                preview,
+                cache,
+                workspace_cache,
+            )
+            .await?;
+            match &project {
+                DiscoveredProject::Manifest(project) => {
+                    MetadataSource::Manifest(LockTarget::Workspace(project.workspace()))
+                }
+                DiscoveredProject::Lockfile(workspace) => MetadataSource::Lockfile(workspace),
             }
-            DiscoveredProject::Lockfile(workspace) => MetadataSource::Lockfile(workspace),
         }
     };
+    let script_item = script.as_ref().map(Pep723ItemRef::from);
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
@@ -108,7 +135,7 @@ pub async fn metadata(
             } else {
                 interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
-                        script.into(),
+                        script_item.unwrap_or_else(|| script.into()),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
                         python_preference,
@@ -156,6 +183,8 @@ pub async fn metadata(
 
                 if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
+                } else if stdin {
+                    LockMode::Ephemeral(&interpreter)
                 } else if sync.is_none()
                     || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
                 {
@@ -233,7 +262,7 @@ pub async fn metadata(
                 .into_environment()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
-                (*script).into(),
+                script_item.unwrap_or_else(|| (*script).into()),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
                 python_preference,
@@ -279,7 +308,11 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => {
-                ScriptInterpreter::discover_existing((*script).into(), active, cache)
+                ScriptInterpreter::discover_existing(
+                    script_item.unwrap_or_else(|| (*script).into()),
+                    active,
+                    cache,
+                )
             }
             MetadataSource::Lockfile(workspace) => {
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
