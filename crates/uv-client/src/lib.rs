@@ -22,6 +22,7 @@ mod cached_client;
 mod error;
 mod file_hash;
 mod flat_index;
+pub mod headers;
 mod html;
 mod httpcache;
 mod linehaul;
