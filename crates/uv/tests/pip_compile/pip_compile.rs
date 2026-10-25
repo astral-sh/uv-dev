@@ -14874,8 +14874,10 @@ fn git_source_refs() -> Result<()> {
 #[cfg(feature = "test-git")]
 #[cfg_attr(windows, ignore = "Git error messages differ on Windows")]
 fn git_source_missing_tag() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"`.*/git(?:\.exe)? -c core\.fsmonitor=false fetch (.*)`",
+        "`git -c core.fsmonitor=false fetch $1`",
+    ));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -14910,6 +14912,8 @@ fn git_source_missing_tag() -> Result<()> {
 #[test]
 #[cfg(all(unix, feature = "test-git", feature = "test-universal"))]
 fn git_checkout_fsmonitor() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
     let context = uv_test::test_context!("3.12");
     let repository = context.temp_dir.child("repository");
     repository.child("pyproject.toml").write_str(indoc! {r#"
@@ -14948,8 +14952,6 @@ fn git_checkout_fsmonitor() -> Result<()> {
         .temp_dir
         .child("requirements.in")
         .write_str(&format!("example @ git+{url}"))?;
-
-    use std::os::unix::fs::PermissionsExt;
 
     let hook = context.temp_dir.child("monitor");
     let called = context.temp_dir.child("called");

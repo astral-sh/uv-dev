@@ -3640,7 +3640,10 @@ fn update_ref_git_public_https() {
 fn install_git_public_https_missing_branch_or_tag() {
     // Windows does not style the command the same as Unix, so we must omit it from the snapshot
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
-        .with_filter(("`.*/git(.exe)? fetch .*`", "`git fetch [...]`"))
+        .with_filter((
+            r"`.*/git(?:\.exe)? -c core\.fsmonitor=false fetch .*`",
+            "`git -c core.fsmonitor=false fetch [...]`",
+        ))
         .with_filter(("exit status", "exit code"));
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -3824,7 +3827,10 @@ async fn install_git_public_rate_limited_by_github_rest_api_429_response() {
 fn install_git_public_https_missing_commit() {
     // Windows does not style the command the same as Unix, so we must omit it from the snapshot
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
-        .with_filter(("`.*/git(.exe)? fetch .*`", "`git fetch [...]`"))
+        .with_filter((
+            r"`.*/git(?:\.exe)? -c core\.fsmonitor=false fetch .*`",
+            "`git -c core.fsmonitor=false fetch [...]`",
+        ))
         .with_filter(("exit status", "exit code"))
         // There are flakes on Windows where this irrelevant error is appended
         .with_filter((
@@ -4028,8 +4034,10 @@ fn install_git_private_https_pat_and_username() {
 #[test]
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_pat_not_authorized() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
-        .with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_filter((
+        r"`.*/git(?:\.exe)? -c core\.fsmonitor=false fetch (.*)`",
+        "`git -c core.fsmonitor=false fetch $1`",
+    ));
 
     // A revoked token
     let token = "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";
@@ -4133,7 +4141,7 @@ fn install_git_private_https_interactive() {
     error: Failed to download and build `uv-private-pypackage @ git+https://github.com/astral-test/uv-private-pypackage`
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8401f5508e3e612d
-      cause: process didn't exit successfully: `/usr/bin/git fetch --force --update-head-ok 'https://github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
+      cause: process didn't exit successfully: `/usr/bin/git -c core.fsmonitor=false fetch --force --update-head-ok 'https://github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
              --- stderr
              fatal: could not read Username for 'https://github.com': terminal prompts disabled
     ");
