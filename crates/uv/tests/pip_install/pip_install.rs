@@ -17740,6 +17740,93 @@ fn overlapping_packages_warning() -> Result<()> {
     Ok(())
 }
 
+/// Equal-length top-level modules can contain different code.
+#[test]
+fn overlapping_equal_size_modules() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    // Put the differing byte beyond the first buffered read.
+    let padding = "#".repeat(16 * 1024);
+    let (first, wheel) = generate_wheel_with_files(
+        &"conflict-a".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[("shared.py", &format!("{padding}\nVALUE = 1\n"))],
+    );
+    fs::write(context.temp_dir.join(&first), wheel)?;
+    let (second, wheel) = generate_wheel_with_files(
+        &"conflict-b".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[("shared.py", &format!("{padding}\nVALUE = 2\n"))],
+    );
+    fs::write(context.temp_dir.join(&second), wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
+        .arg(&first)
+        .arg(&second), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    warning: The file `shared.py` is provided by more than one package, which causes an install race condition and can result in a broken module. Packages containing the file:
+    * conflict-a (conflict_a-1.0.0-py3-none-any.whl)
+    * conflict-b (conflict_b-1.0.0-py3-none-any.whl)
+    Installed 2 packages in [TIME]
+     + conflict-a==1.0.0 (from file://[TEMP_DIR]/conflict_a-1.0.0-py3-none-any.whl)
+     + conflict-b==1.0.0 (from file://[TEMP_DIR]/conflict_b-1.0.0-py3-none-any.whl)
+    ");
+    Ok(())
+}
+
+/// Namespace packages can share the same nonempty initializer without conflicting.
+#[test]
+fn overlapping_identical_nonempty_init_py() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (first, wheel) = generate_wheel_with_files(
+        &"namespace-a".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[("shared/__init__.py", "# Shared namespace initializer.\n")],
+    );
+    fs::write(context.temp_dir.join(&first), wheel)?;
+    let (second, wheel) = generate_wheel_with_files(
+        &"namespace-b".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[("shared/__init__.py", "# Shared namespace initializer.\n")],
+    );
+    fs::write(context.temp_dir.join(&second), wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
+        .arg(&first)
+        .arg(&second), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + namespace-a==1.0.0 (from file://[TEMP_DIR]/namespace_a-1.0.0-py3-none-any.whl)
+     + namespace-b==1.0.0 (from file://[TEMP_DIR]/namespace_b-1.0.0-py3-none-any.whl)
+    ");
+    Ok(())
+}
+
 /// Don't warn for improperly built namespace packages with overlapping empty `__init__.py`.
 #[test]
 fn overlapping_empty_init_py() -> Result<()> {
