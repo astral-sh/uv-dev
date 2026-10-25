@@ -6,9 +6,10 @@ use rustc_hash::FxHashSet;
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_cache::Cache;
-use uv_client::BaseClientBuilder;
-use uv_configuration::AuditOutputFormat;
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification};
+use uv_client::{BaseClientBuilder, CachedClient};
+use uv_configuration::{
+    AuditOutputFormat, Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification,
+};
 use uv_fs::Simplified;
 use uv_lock::{Lock, LockParseError};
 use uv_normalize::{DefaultExtras, PackageName};
@@ -119,6 +120,7 @@ pub async fn audit(
     let groups = DependencyGroupsWithDefaults::none();
     let mut audits = Vec::new();
     let mut matched_ignores = FxHashSet::default();
+    let osv_client = CachedClient::new(client_builder.clone().build()?);
 
     for (name, tool) in tools {
         let tool = match tool {
@@ -209,6 +211,7 @@ pub async fn audit(
             &settings.resolver.index_locations,
             settings.resolver.keyring_provider,
             client_builder.clone(),
+            osv_client.clone(),
             concurrency.clone(),
             cache,
             printer,
