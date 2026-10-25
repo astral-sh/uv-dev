@@ -54,6 +54,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RegistryClientBuilder<'a> {
     index_locations: IndexLocations,
+    index_credentials_cached: bool,
     index_strategy: IndexStrategy,
     torch_backend: Option<TorchStrategy>,
     cache: Cache,
@@ -66,6 +67,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let metadata_range_request = base_client_builder.configured_metadata_range_request();
         Self {
             index_locations: IndexLocations::default(),
+            index_credentials_cached: false,
             index_strategy: IndexStrategy::default(),
             torch_backend: None,
             cache,
@@ -83,6 +85,7 @@ impl<'a> RegistryClientBuilder<'a> {
     #[must_use]
     pub fn index_locations(mut self, index_locations: IndexLocations) -> Self {
         self.index_locations = index_locations;
+        self.index_credentials_cached = false;
         self
     }
 
@@ -146,8 +149,13 @@ impl<'a> RegistryClientBuilder<'a> {
         self
     }
 
-    /// Add all authenticated sources to the cache.
-    fn cache_index_credentials(&mut self) -> Result<(), ClientBuildError> {
+    /// Cache configured index credentials without constructing an HTTP client.
+    ///
+    /// Seed each configuration once so later authenticated requests can update the shared cache.
+    pub fn cache_index_credentials(&mut self) -> Result<(), ClientBuildError> {
+        if self.index_credentials_cached {
+            return Ok(());
+        }
         for index in self.index_locations.known_indexes() {
             if let Some(credentials) = index.credentials()? {
                 trace!(
@@ -166,6 +174,7 @@ impl<'a> RegistryClientBuilder<'a> {
                     .store_credentials(index.raw_url(), credentials);
             }
         }
+        self.index_credentials_cached = true;
         Ok(())
     }
 
@@ -2066,6 +2075,42 @@ mod tests {
 
         assert_no_index(&registry_client, "validation", None).await?;
         assert_no_requests(&server).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn changed_indexes_reseed_cached_credentials() -> Result<(), Error> {
+        let server = start_test_server("updated-user", "updated-password").await;
+        let initial_index = Index::from_index_url(IndexUrl::from_str(&format!(
+            "{}/private/simple",
+            server
+                .uri()
+                .replace("http://", "http://original-user:original-password@"),
+        ))?);
+        let mut builder = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(vec![initial_index], vec![], false));
+        builder.cache_index_credentials()?;
+
+        let updated_index = Index::from_index_url(IndexUrl::from_str(&format!(
+            "{}/private/simple",
+            server
+                .uri()
+                .replace("http://", "http://updated-user:updated-password@"),
+        ))?);
+        let client = builder
+            .clone()
+            .index_locations(IndexLocations::new(vec![updated_index], vec![], false))
+            .build()?;
+        let url = SafeUrl::parse(&format!("{}/files/package.whl", server.uri()))?;
+        assert_eq!(
+            client
+                .uncached_client(&url)
+                .get(url.clone())
+                .send()
+                .await?
+                .status(),
+            200
+        );
         Ok(())
     }
 
