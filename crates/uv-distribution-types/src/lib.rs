@@ -85,6 +85,7 @@ pub use crate::index_url::*;
 pub use crate::installed::*;
 pub use crate::minimum_libc_version::MinimumLibcVersion;
 pub use crate::origin::*;
+pub use crate::package_role::PackageRole;
 pub use crate::pip_index::*;
 pub use crate::requested::*;
 pub use crate::requirement::*;
@@ -121,6 +122,7 @@ mod installed;
 mod installed_modules;
 mod minimum_libc_version;
 mod origin;
+mod package_role;
 mod pip_index;
 mod requested;
 mod requirement;
@@ -389,13 +391,6 @@ pub struct PathSourceDist {
     pub url: VerbatimUrl,
 }
 
-/// Whether a source distribution is a first-party workspace member.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum FirstParty {
-    Yes,
-    No,
-}
-
 /// A source distribution that exists in a local directory.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DirectorySourceDist {
@@ -406,8 +401,10 @@ pub struct DirectorySourceDist {
     pub editable: Option<bool>,
     /// Whether the package should be built and installed.
     pub r#virtual: Option<bool>,
-    /// Whether the package is a first-party workspace member.
-    pub first_party: FirstParty,
+    /// The source's role in the supplied project and workspace, if verified.
+    ///
+    /// Constructors without project or workspace context leave this as `None`.
+    pub role: Option<PackageRole>,
     /// The URL as it was provided by the user.
     pub url: VerbatimUrl,
 }
@@ -547,7 +544,7 @@ impl Dist {
             install_path: install_path.into_boxed_path(),
             editable,
             r#virtual,
-            first_party: FirstParty::No,
+            role: None,
             url,
         })))
     }
@@ -808,18 +805,13 @@ impl SourceDist {
         }
     }
 
-    /// Returns `true` if the distribution is a first-party workspace member.
-    pub fn is_first_party(&self) -> bool {
+    /// Returns `true` if the source is a verified member of the supplied workspace.
+    pub fn is_workspace_member(&self) -> bool {
         match self {
-            Self::Directory(DirectorySourceDist {
-                first_party: FirstParty::Yes,
-                ..
-            }) => true,
-            Self::Directory(DirectorySourceDist {
-                first_party: FirstParty::No,
-                ..
-            })
-            | Self::Registry(_)
+            Self::Directory(DirectorySourceDist { role, .. }) => {
+                role.is_some_and(PackageRole::is_workspace_member)
+            }
+            Self::Registry(_)
             | Self::DirectUrl(_)
             | Self::GitDirectory(_)
             | Self::GitPath(_)

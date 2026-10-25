@@ -28,17 +28,18 @@ use uv_configuration::{
     ScopedOverrideSourceError, Upgrade,
 };
 use uv_distribution::{
-    DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
+    BuildPurpose, DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata,
+    RequiresDist,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, WheelFilename,
 };
 use uv_distribution_types::{
-    ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
-    DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
-    FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
+    ArchiveHashPolicy, BuildableSource, BuiltDist, DependencyMetadata, DirectUrlBuiltDist,
+    DirectUrlSourceDist, DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan,
+    ExcludeNewerValue, FileLocation, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
     HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
+    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PackageRole, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
     StaticMetadata, ToUrlError, UrlString, VersionId,
@@ -62,7 +63,7 @@ use uv_pypi_types::{
 };
 use uv_redacted::{SafeUrl, SafeUrlError};
 use uv_resolver_types::{
-    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse, PackageRole,
+    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse,
     ResolutionGraphNode, ResolverOutput, UniversalMarker,
 };
 use uv_small_str::SmallString;
@@ -3249,6 +3250,19 @@ impl Lock {
             .is_some_and(|&index| self.package(index).id == package.id)
     }
 
+    /// Classify a locked package relative to the selected project and the locked workspace.
+    fn package_role(&self, package: &Package, project: Option<&PackageName>) -> PackageRole {
+        match (
+            project == Some(package.name()),
+            self.is_workspace_member(package),
+        ) {
+            (true, true) => PackageRole::WorkspaceProject,
+            (true, false) => PackageRole::Project,
+            (false, true) => PackageRole::WorkspaceMember,
+            (false, false) => PackageRole::Dependency,
+        }
+    }
+
     /// Return the workspace packages, including the implicit single-project root.
     fn workspace_packages(&self) -> impl Iterator<Item = &Package> {
         self.workspace_members
@@ -5895,26 +5909,19 @@ impl Lock {
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<DistributionMetadata, LockError> {
-        let first_party = match &package.id.source {
-            Source::Editable(path) | Source::Directory(path)
-                if database.is_first_party(&package.id.name, &root.join(path)) =>
-            {
-                FirstParty::Yes
+        let package_role = match &package.id.source {
+            Source::Editable(path) | Source::Directory(path) | Source::Virtual(path) => {
+                database.package_role(&package.id.name, &root.join(path))
             }
-            Source::Editable(_)
-            | Source::Directory(_)
-            | Source::Virtual(_)
-            | Source::Path(_)
-            | Source::Direct(..)
-            | Source::Git(..)
-            | Source::Registry(_) => FirstParty::No,
+            Source::Path(_) | Source::Direct(..) | Source::Git(..) | Source::Registry(_) => None,
         };
         let HashedDist { dist, hashes } = package.to_dist(
             root,
             TagPolicy::Preferred(tags),
             build_options,
             markers,
-            first_party,
+            package_role,
+            database.metadata_build_purpose(),
         )?;
         let locked_hashes = match (&package.id.source, &dist) {
             (Source::Direct(..) | Source::Path(_), Dist::Source(_)) if !hashes.is_empty() => {
@@ -6714,7 +6721,8 @@ impl Package {
         tag_policy: TagPolicy<'_>,
         build_options: &BuildOptions,
         markers: &MarkerEnvironment,
-        first_party: FirstParty,
+        package_role: Option<PackageRole>,
+        build_purpose: BuildPurpose<'_>,
     ) -> Result<HashedDist, LockError> {
         let no_binary = build_options.no_binary_package(&self.id.name);
         let no_build = build_options.no_build_package(&self.id.name);
@@ -6838,11 +6846,14 @@ impl Package {
             }
         }
 
-        if let Some(sdist) = self.to_source_dist(workspace_root, first_party)? {
-            // Even with `--no-build`, allow virtual packages and first-party workspace members. In
-            // the future, we may want to allow any local source tree, or at least editable source
-            // trees, as we do in `uv pip`.
-            if !no_build || sdist.is_virtual() || sdist.is_first_party() {
+        if let Some(sdist) = self.to_source_dist(workspace_root, package_role)? {
+            // With `--no-build`, allow virtual packages and workspace members permitted by the
+            // build purpose. In the future, we may want to allow any local source tree, or at least
+            // editable source trees, as we do in `uv pip`.
+            if !no_build
+                || sdist.is_virtual()
+                || build_purpose.allows_workspace_build(&BuildableSource::Dist(&sdist))
+            {
                 let hashes = self
                     .sdist
                     .as_ref()
@@ -6915,7 +6926,7 @@ impl Package {
     fn to_source_dist(
         &self,
         workspace_root: &Path,
-        first_party: FirstParty,
+        package_role: Option<PackageRole>,
     ) -> Result<Option<uv_distribution_types::SourceDist>, LockError> {
         let sdist = match &self.id.source {
             Source::Path(path) => {
@@ -6955,7 +6966,7 @@ impl Package {
                     install_path: install_path.into_boxed_path(),
                     editable: Some(false),
                     r#virtual: Some(false),
-                    first_party,
+                    role: package_role,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
             }
@@ -6968,7 +6979,7 @@ impl Package {
                     install_path: install_path.into_boxed_path(),
                     editable: Some(true),
                     r#virtual: Some(false),
-                    first_party,
+                    role: package_role,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
             }
@@ -6981,7 +6992,7 @@ impl Package {
                     install_path: install_path.into_boxed_path(),
                     editable: Some(false),
                     r#virtual: Some(true),
-                    first_party,
+                    role: package_role,
                 };
                 uv_distribution_types::SourceDist::Directory(dir_dist)
             }
@@ -7482,7 +7493,9 @@ impl PackageMetadata {
         let relative_requirement = |requirement: &Requirement| {
             let mut requirement = requirement.clone();
             match package_role {
-                PackageRole::Project | PackageRole::WorkspaceMember => {
+                PackageRole::Project
+                | PackageRole::WorkspaceProject
+                | PackageRole::WorkspaceMember => {
                     requirement.set_force_relative(false);
                 }
                 PackageRole::Dependency => {}

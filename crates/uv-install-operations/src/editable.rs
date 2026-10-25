@@ -18,7 +18,7 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
             install_path,
             editable: current_editable,
             r#virtual,
-            first_party,
+            role,
             url,
         })) = dist.as_ref()
         else {
@@ -36,7 +36,7 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
                 install_path: install_path.clone(),
                 editable: Some(editable),
                 r#virtual: *r#virtual,
-                first_party: *first_party,
+                role: *role,
                 url: url.clone(),
             }))),
             version: version.clone(),
