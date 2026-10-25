@@ -891,6 +891,7 @@ mod tests {
             "result": "success",
             "platform": {"os": {"name": "manylinux", "major": 2, "minor": 38}, "arch": "x86_64"},
             "manylinux_compatible": true,
+            "manylinux_compatibility_override": false,
             "standalone": false,
             "markers": {
                 "implementation_name": "cpython",
