@@ -30,6 +30,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageNa
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
@@ -274,6 +275,7 @@ pub async fn export(
             } else {
                 Some(match target {
                     ExportTarget::Script(script) => ScriptInterpreter::discover(
+                        ScriptEnvironmentMode::Isolated,
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
