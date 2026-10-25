@@ -14331,8 +14331,11 @@ fn install_gitoxide_lfs_without_git() {
         .pip_install()
         .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
         .env(EnvVars::UV_GIT_LFS, "true")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf")
+        .env("GIT_CONFIG_VALUE_0", "http://127.0.0.1:1/")
         .env(EnvVars::PATH, venv_bin_path(&context.venv))
-        .arg("git+https://github.com/astral-sh/test-lfs-repo.git@261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        .arg("git+http://127.0.0.1:1/astral-sh/test-lfs-repo.git@261c828b8e05251f3a3e4f6b47b149d691c7efbb")
         .assert()
         .success();
     context

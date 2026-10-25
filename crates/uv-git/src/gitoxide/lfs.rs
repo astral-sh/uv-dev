@@ -182,11 +182,21 @@ pub(crate) fn fetch(
     if missing.is_empty() {
         return Ok(true);
     }
-    if !matches!(url.scheme(), "http" | "https") {
+    let (remote, _) = repo
+        .remote_at(url.as_str())?
+        .sanitized_url_and_version(gix::remote::Direction::Fetch)?;
+    if !matches!(
+        remote.scheme,
+        gix::url::Scheme::Http | gix::url::Scheme::Https
+    ) {
         return Ok(false);
     }
     if offline {
         return Err(GitError::TransportNotAllowed.into());
+    }
+    let url = SafeUrl::parse(remote.to_bstring().to_str()?)?;
+    if !super::Backend::supports(&url, false) {
+        return Ok(false);
     }
 
     let mut endpoint = url.without_credentials().into_owned();
@@ -207,7 +217,7 @@ pub(crate) fn fetch(
     }
     let client = builder.build()?;
     let pointers = missing.into_values().collect::<Vec<_>>();
-    let credentials = uv_auth::Credentials::from_url(url)?;
+    let credentials = uv_auth::Credentials::from_url(&url)?;
     for batch in pointers.chunks(100) {
         let mut request = client
             .post(endpoint.as_str())
