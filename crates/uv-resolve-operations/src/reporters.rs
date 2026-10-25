@@ -40,12 +40,14 @@ impl From<Printer> for ResolverReporter {
 
 impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_progress(&self, name: &PackageName, version_or_url: &VersionOrUrlRef) {
-        match version_or_url {
-            VersionOrUrlRef::Version(version) => {
-                self.reporter.root.set_message(format!("{name}=={version}"));
-            }
-            VersionOrUrlRef::Url(url) => {
-                self.reporter.root.set_message(format!("{name} @ {url}"));
+        if !self.reporter.root.is_hidden() {
+            match version_or_url {
+                VersionOrUrlRef::Version(version) => {
+                    self.reporter.root.set_message(format!("{name}=={version}"));
+                }
+                VersionOrUrlRef::Url(url) => {
+                    self.reporter.root.set_message(format!("{name} @ {url}"));
+                }
             }
         }
     }
@@ -151,3 +153,6 @@ impl LatestVersionReporter {
         self.progress.finish_and_clear();
     }
 }
+
+#[cfg(test)]
+mod resolver_progress_tests;
