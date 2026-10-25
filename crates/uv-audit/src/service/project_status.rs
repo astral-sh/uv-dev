@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 use tracing::trace;
 
 use uv_client::{MetadataFormat, RegistryClient};
-use uv_configuration::Concurrency;
+use uv_configuration::ConcurrencyState;
 use uv_distribution_types::{IndexCapabilities, IndexMetadataRef, IndexUrl};
 use uv_normalize::PackageName;
 use uv_pypi_types::{ProjectStatus as PypiProjectStatus, Status};
@@ -18,7 +18,7 @@ use crate::types::{self, AdverseStatus, Finding};
 pub struct ProjectStatusAudit<'a> {
     client: &'a RegistryClient,
     capabilities: &'a IndexCapabilities,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
 }
 
 impl<'a> ProjectStatusAudit<'a> {
@@ -26,7 +26,7 @@ impl<'a> ProjectStatusAudit<'a> {
     pub fn new(
         client: &'a RegistryClient,
         capabilities: &'a IndexCapabilities,
-        concurrency: Concurrency,
+        concurrency: ConcurrencyState,
     ) -> Self {
         Self {
             client,
@@ -45,14 +45,14 @@ impl<'a> ProjectStatusAudit<'a> {
             return Vec::new();
         }
 
-        let semaphore = self.concurrency.downloads_semaphore.clone();
+        let semaphore = self.concurrency.downloads_semaphore();
 
         stream::iter(projects)
             .map(|(name, index)| {
                 let semaphore = semaphore.clone();
                 async move { self.query_one(name, index, semaphore.as_ref()).await }
             })
-            .buffer_unordered(self.concurrency.downloads)
+            .buffer_unordered(self.concurrency.limits().downloads)
             .filter_map(|finding| async move { finding })
             .collect()
             .await
