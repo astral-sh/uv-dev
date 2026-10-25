@@ -39,6 +39,11 @@ path = "benches/uv_pypi_types.rs"
 harness = false
 
 [[bench]]
+name = "dependency_metadata"
+path = "benches/dependency_metadata.rs"
+harness = false
+
+[[bench]]
 name = "uv_python"
 path = "benches/uv_python.rs"
 harness = false
