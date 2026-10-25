@@ -3652,7 +3652,7 @@ fn install_git_public_https_missing_branch_or_tag() {
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8dab139913c4b566
       cause: failed to fetch branch or tag `2.0.0`
-      cause: process didn't exit successfully: `git fetch [...]` (exit code: 128)
+      cause: process didn't exit successfully: `git -c core.fsmonitor=false fetch [...]` (exit code: 128)
              --- stderr
              fatal: couldn't find remote ref refs/tags/2.0.0
     ");
@@ -3842,7 +3842,7 @@ fn install_git_public_https_missing_commit() {
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8dab139913c4b566
       cause: failed to fetch commit `79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b`
-      cause: process didn't exit successfully: `git fetch [...]` (exit code: 128)
+      cause: process didn't exit successfully: `git -c core.fsmonitor=false fetch [...]` (exit code: 128)
              --- stderr
              fatal: remote error: upload-pack: not our ref 79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b
     ");
@@ -4044,7 +4044,7 @@ fn install_git_private_https_pat_not_authorized() {
     error: Failed to download and build `uv-private-pypackage @ git+https://git:****@github.com/astral-test/uv-private-pypackage`
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8401f5508e3e612d
-      cause: process didn't exit successfully: `git fetch --force --update-head-ok 'https://git:****@github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
+      cause: process didn't exit successfully: `git -c core.fsmonitor=false fetch --force --update-head-ok 'https://git:****@github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
              --- stderr
              remote: Invalid username or token. Password authentication is not supported for Git operations.
              fatal: Authentication failed for 'https://github.com/astral-test/uv-private-pypackage/'

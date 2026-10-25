@@ -64,6 +64,13 @@ pub static GIT: LazyLock<Result<ProcessBuilder, GitError>> = LazyLock::new(|| {
     Ok(cmd)
 });
 
+/// Git commands that operate on uv's cached repositories do not need a working tree monitor.
+fn cache_git() -> Result<ProcessBuilder> {
+    let mut cmd = GIT.as_ref()?.clone();
+    cmd.arg("-c").arg("core.fsmonitor=false");
+    Ok(cmd)
+}
+
 /// Strategy when fetching refspecs for a [`GitReference`]
 enum RefspecStrategy {
     /// All refspecs should be fetched, if any fail then the fetch will fail.
@@ -110,11 +117,7 @@ impl GitRepository {
     /// Opens an existing Git repository at `path`.
     fn open(path: &Path) -> Result<Self> {
         // Make sure there is a Git repository at the specified path.
-        GIT.as_ref()
-            .cloned()?
-            .arg("rev-parse")
-            .cwd(path)
-            .exec_with_output()?;
+        cache_git()?.arg("rev-parse").cwd(path).exec_with_output()?;
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -130,11 +133,7 @@ impl GitRepository {
         // opts.external_template(false);
 
         // Initialize the repository.
-        GIT.as_ref()
-            .cloned()?
-            .arg("init")
-            .cwd(path)
-            .exec_with_output()?;
+        cache_git()?.arg("init").cwd(path).exec_with_output()?;
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -164,9 +163,7 @@ impl GitRepository {
 
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
-        let result = GIT
-            .as_ref()
-            .cloned()?
+        let result = cache_git()?
             .arg("rev-parse")
             .arg(refname)
             .cwd(&self.path)
@@ -326,9 +323,7 @@ impl GitDatabase {
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
-        let output = GIT
-            .as_ref()
-            .cloned()?
+        let output = cache_git()?
             .arg("rev-parse")
             .arg("--short")
             .arg(revision.as_str())
@@ -399,9 +394,7 @@ impl GitCheckout {
         // Perform a local clone of the repository, which will attempt to use
         // hardlinks to set up the repository. This should speed up the clone operation
         // quite a bit if it works.
-        let res = GIT
-            .as_ref()
-            .cloned()?
+        let res = cache_git()?
             .arg("clone")
             .arg("--local")
             // Make sure to pass the local file path and not a file://... url. If given a url,
@@ -414,8 +407,7 @@ impl GitCheckout {
         if let Err(e) = res {
             debug!("Cloning git repo with --local failed, retrying without hardlinks: {e}");
 
-            GIT.as_ref()
-                .cloned()?
+            cache_git()?
                 .arg("clone")
                 .arg("--no-hardlinks")
                 .arg(database.repo.path.simplified_display().to_string())
@@ -480,8 +472,7 @@ impl GitCheckout {
         debug!("Reset `{}` to {}", self.repo.path.display(), self.revision);
 
         // Perform the hard reset.
-        GIT.as_ref()
-            .cloned()?
+        cache_git()?
             .arg("reset")
             .arg("--hard")
             .arg(self.revision.as_str())
@@ -497,7 +488,7 @@ impl GitCheckout {
         // Do not use `--recursive` here: command-local `remote.origin.url` config is inherited by
         // Git commands run inside submodules, which would make nested relative URLs resolve against
         // the top-level remote instead of their immediate parent submodule.
-        let mut submodule_update = GIT.as_ref().cloned()?;
+        let mut submodule_update = cache_git()?;
         for config in submodule_update_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
         }
@@ -515,7 +506,7 @@ impl GitCheckout {
         // Recursively update nested submodules without overriding `remote.origin.url`, so each
         // nested relative URL resolves against its immediate parent submodule. The transient
         // credential rewrite is still safe to inherit because it only affects transport.
-        let mut submodule_update = GIT.as_ref().cloned()?;
+        let mut submodule_update = cache_git()?;
         for config in submodule_auth_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
         }
@@ -750,7 +741,7 @@ fn fetch_with_cli(
     disable_ssl: bool,
     offline: bool,
 ) -> Result<()> {
-    let mut cmd = GIT.as_ref().cloned()?;
+    let mut cmd = cache_git()?;
     // Disable interactive prompts in the terminal, as they'll be erased by the progress bar
     // animation and the process will "hang". Interactive prompts via the GUI like `SSH_ASKPASS`
     // are still usable.
@@ -803,7 +794,7 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
         return Err(anyhow!("Git LFS extension has been forcefully disabled."));
     }
 
-    let mut cmd = GIT.as_ref()?.clone();
+    let mut cmd = cache_git()?;
     cmd.arg("lfs");
 
     // Run a simple command to verify LFS is installed
