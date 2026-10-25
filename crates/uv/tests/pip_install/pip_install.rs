@@ -1513,7 +1513,7 @@ async fn pep_751_remote_cross_host_path() -> Result<()> {
             name = "leaf"
             version = "1.0"
             [[packages.wheels]]
-            path = "//elsewhere.invalid/leaf-1.0-py3-none-any.whl"
+            path = "//elsewhere.invalid/artifacts/leaf-1.0-py3-none-any.whl"
             hashes = { sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
         "#}))
         .mount(&server)
@@ -1522,7 +1522,7 @@ async fn pep_751_remote_cross_host_path() -> Result<()> {
         .arg("--no-index").arg("-r").arg(format!("{}/pylock.toml", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Expected a relative artifact path in remote `pylock.toml`, found: //elsewhere.invalid/leaf-1.0-py3-none-any.whl
+    error: Expected a relative artifact path in remote `pylock.toml`, found: //elsewhere.invalid/artifacts/leaf-1.0-py3-none-any.whl
     ");
     Ok(())
 }
