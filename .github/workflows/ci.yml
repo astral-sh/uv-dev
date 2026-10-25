@@ -154,6 +154,31 @@ jobs:
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
       test-macos: ${{ needs.plan.outputs.test-macos }}
 
+  test-inventory-revision:
+    needs: plan
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Record the tested merge revision
+        run: |
+          jq --null-input \
+            --arg merge "$(git rev-parse HEAD)" \
+            --arg base "$(git rev-parse HEAD^1)" \
+            --arg head "$(git rev-parse HEAD^2)" \
+            '{merge: $merge, base: $base, head: $head}' > revision.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-inventory-revision
+          path: revision.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
   test-windows-trampolines:
     needs: plan
     if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}

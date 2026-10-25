@@ -206,6 +206,40 @@
         "run": "/workflow_run/id",
         "head_sha": "/workflow_run/head_sha"
       }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "workflow_run": ["completed"]
+      },
+      "conditions": {
+        "/workflow_run/event": "pull_request",
+        "/workflow_run/conclusion": "success",
+        "/workflow/path": ".github/workflows/ci.yml"
+      },
+      "workflow": "publish-test-inventory.yml",
+      "inputs": {
+        "run": "/workflow_run/id",
+        "run_attempt": "/workflow_run/run_attempt",
+        "head_sha": "/workflow_run/head_sha"
+      }
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "workflow_run": ["completed"]
+      },
+      "conditions": {
+        "/workflow_run/event": "pull_request",
+        "/workflow_run/conclusion": "success",
+        "/workflow/path": ".github/workflows/ci.yml"
+      },
+      "workflow": "publish-test-inventory.yml",
+      "inputs": {
+        "run": "/workflow_run/id",
+        "run_attempt": "/workflow_run/run_attempt",
+        "head_sha": "/workflow_run/head_sha"
+      }
     }
   ]
 }
