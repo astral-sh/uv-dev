@@ -1,5 +1,7 @@
+use std::cell::OnceCell;
 use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
@@ -9,11 +11,12 @@ use uv_python_managed::downloads::ManagedPythonDownloadList;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
+use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
-use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_discovery::{PythonInstallation, PythonSelectionError};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -97,11 +100,13 @@ pub async fn pin(
         return Ok(ExitStatus::Success);
     }
 
+    let compatibility = virtual_project.as_ref().map(PinCompatibility::new);
+
     let Some(request) = request else {
         // Display the current pinned Python version
         if let Some(file) = version_file? {
             let mut pins = file.versions().peekable();
-            let download_list = if virtual_project.is_some() && pins.peek().is_some() {
+            let download_list = if compatibility.is_some() && pins.peek().is_some() {
                 Some(
                     ManagedPythonDownloadList::new(
                         &client_builder,
@@ -116,12 +121,12 @@ pub async fn pin(
 
             for pin in pins {
                 writeln!(printer.stdout(), "{}", pin.to_canonical_string())?;
-                if let Some(virtual_project) = &virtual_project
+                if let Some(compatibility) = &compatibility
                     && let Some(download_list) = &download_list
                 {
                     warn_if_existing_pin_incompatible_with_project(
                         pin,
-                        virtual_project,
+                        compatibility,
                         python_preference,
                         python_arch,
                         download_list,
@@ -137,6 +142,21 @@ pub async fn pin(
 
     if let PythonRequest::ExecutableName(name) = request {
         bail!("Requests for arbitrary names (e.g., `{name}`) are not supported in version files");
+    }
+
+    let request_version = request.as_pep440_version();
+    if let Some(compatibility) = &compatibility
+        && let Some(request_version) = &request_version
+    {
+        assert_pin_compatible_with_project(
+            &Pin {
+                request: &request,
+                version: request_version,
+                resolved: false,
+                existing: false,
+            },
+            compatibility,
+        )?;
     }
 
     let reporter = PythonDownloadReporter::single(printer);
@@ -171,35 +191,24 @@ pub async fn pin(
         Err(err) => return Err(err.into()),
     };
 
-    if let Some(virtual_project) = &virtual_project {
-        if let Some(request_version) = request.as_pep440_version() {
-            assert_pin_compatible_with_project(
-                &Pin {
-                    request: &request,
-                    version: &request_version,
-                    resolved: false,
-                    existing: false,
-                },
-                virtual_project,
-            )?;
-        } else {
-            if let Some(python) = &python {
-                // Warn if the resolved Python is incompatible with the Python requirement unless --resolved is used
-                if let Err(err) = assert_pin_compatible_with_project(
-                    &Pin {
-                        request: &request,
-                        version: python.python_version(),
-                        resolved: true,
-                        existing: false,
-                    },
-                    virtual_project,
-                ) {
-                    if resolved {
-                        return Err(err);
-                    }
-                    warn_user_once!("{err}");
-                }
+    if let Some(compatibility) = &compatibility
+        && request_version.is_none()
+        && let Some(python) = &python
+    {
+        // Ranges and paths need an interpreter before compatibility can be checked.
+        if let Err(err) = assert_pin_compatible_with_project(
+            &Pin {
+                request: &request,
+                version: python.python_version(),
+                resolved: true,
+                existing: false,
+            },
+            compatibility,
+        ) {
+            if resolved {
+                return Err(err);
             }
+            warn_user_once!("{err}");
         }
     }
 
@@ -262,7 +271,7 @@ pub async fn pin(
 /// Check if pinned request is compatible with the workspace/project's `Requires-Python`.
 fn warn_if_existing_pin_incompatible_with_project(
     pin: &PythonRequest,
-    virtual_project: &VirtualProject,
+    compatibility: &PinCompatibility<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     downloads_list: &ManagedPythonDownloadList,
@@ -277,7 +286,7 @@ fn warn_if_existing_pin_incompatible_with_project(
                 resolved: false,
                 existing: true,
             },
-            virtual_project,
+            compatibility,
         ) {
             warn_user_once!("{err}");
             return;
@@ -308,7 +317,7 @@ fn warn_if_existing_pin_incompatible_with_project(
                     resolved: true,
                     existing: true,
                 },
-                virtual_project,
+                compatibility,
             ) {
                 warn_user_once!("{err}");
             }
@@ -334,30 +343,62 @@ struct Pin<'a> {
     existing: bool,
 }
 
+/// Reuse the immutable workspace requirement across requested and resolved pin checks.
+struct PinCompatibility<'a> {
+    virtual_project: &'a VirtualProject,
+    requires_python: OnceCell<Result<Option<RequiresPython>, Arc<PythonSelectionError>>>,
+}
+
+impl<'a> PinCompatibility<'a> {
+    fn new(virtual_project: &'a VirtualProject) -> Self {
+        Self {
+            virtual_project,
+            requires_python: OnceCell::new(),
+        }
+    }
+
+    fn requires_python(&self) -> Result<Option<&RequiresPython>> {
+        self.requires_python
+            .get_or_init(|| {
+                // Don't factor in requires-python settings on dependency-groups
+                let groups = DependencyGroupsWithDefaults::none();
+
+                let requires_python = match self.virtual_project {
+                    VirtualProject::Project(project_workspace) => {
+                        debug!(
+                            "Discovered project `{}` at: {}",
+                            project_workspace.project_name(),
+                            project_workspace.workspace().install_path().display()
+                        );
+
+                        find_requires_python(project_workspace.workspace(), &groups)
+                    }
+                    VirtualProject::NonProject(workspace) => {
+                        debug!(
+                            "Discovered virtual workspace at: {}",
+                            workspace.install_path().display()
+                        );
+                        find_requires_python(workspace, &groups)
+                    }
+                };
+
+                requires_python.map_err(Arc::new)
+            })
+            .as_ref()
+            .map(Option::as_ref)
+            .map_err(|error| anyhow::Error::new(Arc::clone(error)))
+    }
+}
+
 /// Checks if the pinned Python version is compatible with the workspace/project's `Requires-Python`.
-fn assert_pin_compatible_with_project(pin: &Pin, virtual_project: &VirtualProject) -> Result<()> {
-    // Don't factor in requires-python settings on dependency-groups
-    let groups = DependencyGroupsWithDefaults::none();
-
-    let (requires_python, project_type) = match virtual_project {
-        VirtualProject::Project(project_workspace) => {
-            debug!(
-                "Discovered project `{}` at: {}",
-                project_workspace.project_name(),
-                project_workspace.workspace().install_path().display()
-            );
-
-            let requires_python = find_requires_python(project_workspace.workspace(), &groups)?;
-            (requires_python, "project")
-        }
-        VirtualProject::NonProject(workspace) => {
-            debug!(
-                "Discovered virtual workspace at: {}",
-                workspace.install_path().display()
-            );
-            let requires_python = find_requires_python(workspace, &groups)?;
-            (requires_python, "workspace")
-        }
+fn assert_pin_compatible_with_project(
+    pin: &Pin,
+    compatibility: &PinCompatibility<'_>,
+) -> Result<()> {
+    let requires_python = compatibility.requires_python()?;
+    let project_type = match compatibility.virtual_project {
+        VirtualProject::Project(_) => "project",
+        VirtualProject::NonProject(_) => "workspace",
     };
 
     let Some(requires_python) = requires_python else {
