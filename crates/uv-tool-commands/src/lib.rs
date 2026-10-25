@@ -12,6 +12,7 @@ pub mod dir;
 mod error;
 pub mod install;
 pub mod list;
+mod lock;
 mod requirements;
 pub mod run;
 pub mod uninstall;
