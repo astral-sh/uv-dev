@@ -30,3 +30,11 @@ pub enum Error {
     )]
     NotPep625Filename(String),
 }
+
+/// A wheel selection that does not point into the distribution's wheel collection.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Selected wheel index {index} is out of bounds for {wheels} wheels")]
+pub struct InvalidWheelSelection {
+    pub(crate) index: usize,
+    pub(crate) wheels: usize,
+}
