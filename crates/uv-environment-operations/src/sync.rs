@@ -228,6 +228,7 @@ pub async fn sync_from_lock(
     let site_packages = SitePackages::from_environment(venv)?;
     let installation_plan = InstallationPlan::build(
         &resolution,
+        client_builder.has_checksum_authority(),
         site_packages,
         InstallationStrategy::Strict,
         reinstall,
