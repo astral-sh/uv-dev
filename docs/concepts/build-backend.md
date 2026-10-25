@@ -95,6 +95,19 @@ module-name = "FOO"
 module-root = ""
 ```
 
+The `module-name` and `module-root` settings control the packaged module layout. To also record the
+project's import names in its [core metadata](https://peps.python.org/pep-0794/), explicitly set
+[`project.import-names`](https://packaging.python.org/en/latest/specifications/pyproject-toml/#import-names)
+for names provided exclusively by the project, and
+[`project.import-namespaces`](https://packaging.python.org/en/latest/specifications/pyproject-toml/#import-namespaces)
+for shared namespaces. The uv build backend does not infer these fields from `module-name`. For the
+preceding example:
+
+```toml title="pyproject.toml"
+[project]
+import-names = ["FOO"]
+```
+
 ## Namespace packages
 
 Namespace packages are intended for use-cases where multiple packages write modules into a shared
