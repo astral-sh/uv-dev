@@ -49,7 +49,7 @@ impl PythonInstallationKey {
         }
     }
 
-    pub fn new_from_version(
+    pub(crate) fn new_from_version(
         implementation: LenientImplementationName,
         version: &PythonVersion,
         platform: Platform,
