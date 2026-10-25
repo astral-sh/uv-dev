@@ -38,9 +38,12 @@ enabled = true
 
 [permissions.reproduce-bug.network.domains]
 "api.github.com" = "allow"
+"downloads.python.org" = "allow"
 "files.pythonhosted.org" = "allow"
 "github.com" = "allow"
 "pypi.org" = "allow"
+"release-assets.githubusercontent.com" = "allow"
+"releases.astral.sh" = "allow"
 
 [permissions.create-bug-test]
 description = "Bug integration-test creation with workspace and dependency-registry access."
