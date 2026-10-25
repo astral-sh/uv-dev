@@ -630,6 +630,7 @@ pub async fn install(
                 // editable-mode drift for implicit workspace members.
                 let already_installed = matches!(
                     site_packages.satisfies_requirements(
+                        &cache,
                         requirements.iter(),
                         receipt_constraints.iter().chain(latest.iter()),
                         &DependencyModifiers::new(
