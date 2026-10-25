@@ -6,11 +6,11 @@ use futures::{StreamExt as _, stream};
 use tokio::sync::Semaphore;
 use tracing::trace;
 
-use uv_client::{MetadataFormat, RegistryClient};
+use uv_client::RegistryClient;
 use uv_configuration::Concurrency;
-use uv_distribution_types::{IndexCapabilities, IndexMetadataRef, IndexUrl};
+use uv_distribution_types::{IndexCapabilities, IndexUrl};
 use uv_normalize::PackageName;
-use uv_pypi_types::{ProjectStatus as PypiProjectStatus, Status};
+use uv_pypi_types::Status;
 
 use crate::types::{self, AdverseStatus, Finding};
 
@@ -64,43 +64,17 @@ impl<'a> ProjectStatusAudit<'a> {
         index: &IndexUrl,
         semaphore: &Semaphore,
     ) -> Option<Finding> {
-        let results = match self
+        let project_status = match self
             .client
-            .simple_detail(
-                name,
-                Some(IndexMetadataRef::from(index)),
-                self.capabilities,
-                semaphore,
-            )
+            .project_status(name, index, self.capabilities, semaphore)
             .await
         {
-            Ok(results) => results,
+            Ok(status) => status,
             Err(err) => {
                 trace!("Skipping project-status check for `{name}`: {err}");
                 return None;
             }
         };
-
-        let archive = results
-            .into_iter()
-            .map(|(_, format)| match format {
-                MetadataFormat::Simple(archive) => archive,
-                MetadataFormat::Flat(_) => {
-                    unreachable!("Flat metadata should not be returned by `simple_detail`")
-                }
-            })
-            .next()?;
-
-        let project_status: PypiProjectStatus =
-            match rkyv::deserialize::<PypiProjectStatus, rkyv::rancor::Error>(
-                archive.project_status(),
-            ) {
-                Ok(project_status) => project_status,
-                Err(err) => {
-                    trace!("Failed to read archived project status for `{name}`: {err}");
-                    return None;
-                }
-            };
 
         let status = to_adverse(project_status.status)?;
         let reason = project_status.reason.map(|reason| reason.to_string());

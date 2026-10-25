@@ -32,7 +32,6 @@ futures = { workspace = true }
 indexmap = { workspace = true }
 jiff = { workspace = true }
 reqwest-middleware = { workspace = true, features = ["json"] }
-rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
