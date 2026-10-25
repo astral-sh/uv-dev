@@ -814,6 +814,7 @@ fn lock_baseline() {
     }
     LockSettings {
         lock_check: Disabled,
+        check_packages: [],
         frozen: None,
         dry_run: Disabled,
         script: None,
