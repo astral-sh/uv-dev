@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use uv_configuration::{Constraints, HashCheckingMode};
+use uv_configuration::{Constraints, HashCheckingMode, RequirementsInput};
 use uv_distribution_types::{
     ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, MetadataHashPolicy,
     Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement, VersionId,
 };
+use uv_errors::{Hinted, Hints};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
 use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, HashError, ResolverMarkerEnvironment};
@@ -317,6 +318,7 @@ impl HashStrategy {
                     return Err(HashStrategyError::UnpinnedRequirement(
                         requirement.to_string(),
                         mode,
+                        None,
                     ));
                 }
                 continue;
@@ -363,6 +365,7 @@ impl HashStrategy {
                             return Err(HashStrategyError::UnpinnedRequirement(
                                 requirement.to_string(),
                                 mode,
+                                None,
                             ));
                         }
                         continue;
@@ -413,11 +416,13 @@ impl HashStrategy {
                             requirement.to_string(),
                             HashAlgorithm::Md5,
                             mode,
+                            None,
                         ));
                     }
                     return Err(HashStrategyError::MissingHashes(
                         requirement.to_string(),
                         mode,
+                        None,
                     ));
                 }
                 continue;
@@ -468,6 +473,7 @@ impl HashStrategy {
                     return Err(HashStrategyError::MissingHashes(
                         dist.name().to_string(),
                         mode,
+                        None,
                     ));
                 }
                 continue;
@@ -610,6 +616,7 @@ fn combine_constraint_hashes(
                 return Err(HashStrategyError::NoIntersection(
                     requirement.to_string(),
                     mode,
+                    None,
                 ));
             }
         }
@@ -690,17 +697,63 @@ pub enum HashStrategyError {
     #[error(
         "In `{1}` mode, all requirements must have their versions pinned with `==`, but found: {0}"
     )]
-    UnpinnedRequirement(String, HashCheckingMode),
+    UnpinnedRequirement(String, HashCheckingMode, Option<Box<RequirementsInput>>),
     #[error(
         "`{1}` hashes are insecure and cannot be used with `{2}` but no other hashes are available for: {0}"
     )]
-    InsecureHashAlgorithm(String, HashAlgorithm, HashCheckingMode),
+    InsecureHashAlgorithm(
+        String,
+        HashAlgorithm,
+        HashCheckingMode,
+        Option<Box<RequirementsInput>>,
+    ),
     #[error("In `{1}` mode, all requirements must have a hash, but none were provided for: {0}")]
-    MissingHashes(String, HashCheckingMode),
+    MissingHashes(String, HashCheckingMode, Option<Box<RequirementsInput>>),
     #[error(
         "In `{1}` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: {0}"
     )]
-    NoIntersection(String, HashCheckingMode),
+    NoIntersection(String, HashCheckingMode, Option<Box<RequirementsInput>>),
+}
+
+impl HashStrategyError {
+    /// Attach the input that enabled `--require-hashes` to errors caused by that mode.
+    #[must_use]
+    pub fn with_require_hashes_source(mut self, source: Option<RequirementsInput>) -> Self {
+        match &mut self {
+            Self::UnpinnedRequirement(_, mode, origin)
+            | Self::InsecureHashAlgorithm(_, _, mode, origin)
+            | Self::MissingHashes(_, mode, origin)
+            | Self::NoIntersection(_, mode, origin) => {
+                if mode.is_require() {
+                    *origin = source.map(Box::new);
+                }
+            }
+            Self::Hash(_) | Self::ConflictingArchiveUrlHashes(..) => {}
+        }
+        self
+    }
+}
+
+impl Hinted for HashStrategyError {
+    fn hints(&self) -> Hints<'_> {
+        let origin = match self {
+            Self::UnpinnedRequirement(_, _, origin)
+            | Self::InsecureHashAlgorithm(_, _, _, origin)
+            | Self::MissingHashes(_, _, origin)
+            | Self::NoIntersection(_, _, origin) => origin,
+            Self::Hash(_) | Self::ConflictingArchiveUrlHashes(..) => return Hints::none(),
+        };
+        match origin.as_deref() {
+            Some(RequirementsInput::Stdin) => {
+                Hints::from("`--require-hashes` was enabled in requirements read from stdin")
+            }
+            Some(origin) => Hints::from(format!(
+                "`--require-hashes` was enabled in `{}`",
+                origin.user_display()
+            )),
+            None => Hints::none(),
+        }
+    }
 }
 
 #[cfg(test)]
