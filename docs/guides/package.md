@@ -45,6 +45,10 @@ Alternatively, `uv build <SRC>` will build the package in the specified director
     running `uv build --no-sources` to ensure that the package builds correctly when `tool.uv.sources`
     is disabled, as is the case when using other build tools, like [`pypa/build`](https://github.com/pypa/build).
 
+    This only controls how build dependencies are resolved; it does not change the package's
+    published runtime dependencies. See [dependency sources](../concepts/projects/dependencies.md#dependency-sources)
+    for the distinction between development sources and published metadata.
+
 ## Updating your version
 
 The `uv version` command provides conveniences for updating the version of your package before you
