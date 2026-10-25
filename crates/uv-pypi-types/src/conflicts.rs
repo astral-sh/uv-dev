@@ -456,7 +456,7 @@ impl ConflictKind {
     }
 
     /// Returns this conflict as a new type with its fields borrowed.
-    pub fn as_ref(&self) -> ConflictKindRef<'_> {
+    fn as_ref(&self) -> ConflictKindRef<'_> {
         match self {
             Self::Extra(extra) => ConflictKindRef::Extra(extra),
             Self::Group(group) => ConflictKindRef::Group(group),
