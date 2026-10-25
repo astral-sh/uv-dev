@@ -14912,8 +14912,6 @@ fn git_source_missing_tag() -> Result<()> {
 #[test]
 #[cfg(all(unix, feature = "test-git", feature = "test-universal"))]
 fn git_checkout_fsmonitor() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let context = uv_test::test_context!("3.12");
     let repository = context.temp_dir.child("repository");
     repository.child("pyproject.toml").write_str(indoc! {r#"
@@ -14956,13 +14954,25 @@ fn git_checkout_fsmonitor() -> Result<()> {
     let hook = context.temp_dir.child("monitor");
     let called = context.temp_dir.child("called");
     hook.write_str("#!/bin/sh\ntouch \"$MONITOR_LOG\"\nprintf 'fixture\\0'\n")?;
-    fs_err::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    let monitor = r#"sh "$MONITOR_HOOK""#;
+    Command::new("git")
+        .current_dir(repository.path())
+        .arg("-c")
+        .arg(format!("core.fsmonitor={monitor}"))
+        .args(["status", "--porcelain"])
+        .env("MONITOR_HOOK", hook.path())
+        .env("MONITOR_LOG", called.path())
+        .assert()
+        .success();
+    assert!(called.exists());
+    fs_err::remove_file(called.path())?;
     context
         .pip_compile()
         .arg("requirements.in")
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
-        .env("GIT_CONFIG_VALUE_0", hook.path())
+        .env("GIT_CONFIG_VALUE_0", monitor)
+        .env("MONITOR_HOOK", hook.path())
         .env("MONITOR_LOG", called.path())
         .assert()
         .success();
