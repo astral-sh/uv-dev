@@ -26,6 +26,7 @@ uv-version = { workspace = true }
 uv-warnings = { workspace = true }
 
 anyhow = { workspace = true }
+cap-std = { workspace = true }
 cargo-util = { workspace = true }
 gix = { workspace = true }
 gix-lfs = { workspace = true }

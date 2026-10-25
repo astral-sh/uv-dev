@@ -7846,6 +7846,7 @@ version = "0.0.97"
 dependencies = [
  "anyhow",
  "astral-reqwest-middleware",
+ "cap-std",
  "cargo-util",
  "fs-err",
  "gix",

@@ -90,16 +90,15 @@ fn entries(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Vec<E
     Ok(Some(files))
 }
 
-fn object_path(repo: &gix::Repository, oid: &str) -> PathBuf {
-    repo.common_dir()
-        .join("lfs/objects")
+fn object_path(oid: &str) -> PathBuf {
+    Path::new("lfs/objects")
         .join(&oid[..2])
         .join(&oid[2..4])
         .join(oid)
 }
 
 fn cached(repo: &gix::Repository, pointer: Pointer<'_>) -> Result<bool> {
-    let path = object_path(repo, pointer.oid);
+    let path = repo.common_dir().join(object_path(pointer.oid));
     let file = match fs_err::File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -119,8 +118,9 @@ pub(super) fn checkout(
     for entry in
         entries(source, commit)?.context("Git LFS checkout requires an extension filter")?
     {
-        let from = object_path(source, &entry.oid);
-        let local = object_path(checkout, &entry.oid);
+        let path = object_path(&entry.oid);
+        let from = source.common_dir().join(&path);
+        let local = checkout.common_dir().join(&path);
         if !local.try_exists()? {
             fs_err::create_dir_all(local.parent().unwrap())?;
             if fs_err::hard_link(&from, &local).is_err() {
@@ -185,6 +185,9 @@ pub(crate) fn fetch(
     let (remote, _) = repo
         .remote_at(url.as_str())?
         .sanitized_url_and_version(gix::remote::Direction::Fetch)?;
+    if remote.scheme == gix::url::Scheme::File && remote.host().is_none() {
+        return fetch_local(&repo, &remote, missing.into_values());
+    }
     if !matches!(
         remote.scheme,
         gix::url::Scheme::Http | gix::url::Scheme::Https
@@ -250,15 +253,68 @@ pub(crate) fn fetch(
         for &pointer in batch {
             let action = &actions[pointer.oid];
             let response = get_object(&client, &endpoint, action)?;
-            let path = object_path(&repo, pointer.oid);
-            let parent = path.parent().unwrap();
-            fs_err::create_dir_all(parent)?;
-            let mut file = uv_fs::tempfile_in(parent)?;
-            download::copy_verified(pointer, response, &mut file)?;
-            file.persist(path)?;
+            store(&repo, pointer, response)?;
         }
     }
     Ok(true)
+}
+
+fn fetch_local<'a>(
+    repo: &gix::Repository,
+    remote: &gix::Url,
+    missing: impl Iterator<Item = Pointer<'a>>,
+) -> Result<bool> {
+    let source = gix::open_opts(
+        gix::path::from_bstr(&remote.path)?,
+        super::options().bail_if_untrusted(true),
+    )?;
+    if source
+        .config_snapshot()
+        .plumbing()
+        .sections_by_name("lfs")
+        .is_some()
+        || source
+            .workdir()
+            .map(|dir| dir.join(".lfsconfig").try_exists())
+            .transpose()?
+            .unwrap_or(false)
+        || (!source.head()?.is_unborn()
+            && source
+                .head_tree()?
+                .lookup_entry_by_path(".lfsconfig")?
+                .is_some())
+    {
+        return Ok(false);
+    }
+    // Keep object paths inside the source's common Git directory, even through directory symlinks.
+    let dir =
+        cap_std::fs::Dir::open_ambient_dir(source.common_dir(), cap_std::ambient_authority())?;
+    for pointer in missing {
+        let path = object_path(pointer.oid);
+        ensure!(
+            dir.symlink_metadata(&path)?.is_file(),
+            "Git LFS object {} is not a regular file",
+            pointer.oid
+        );
+        let file = dir.open(&path)?;
+        ensure!(
+            file.metadata()?.is_file(),
+            "Git LFS object {} is not a regular file",
+            pointer.oid
+        );
+        store(repo, pointer, file)?;
+    }
+    Ok(true)
+}
+
+fn store(repo: &gix::Repository, pointer: Pointer<'_>, reader: impl Read) -> Result<()> {
+    let path = repo.common_dir().join(object_path(pointer.oid));
+    let parent = path.parent().unwrap();
+    fs_err::create_dir_all(parent)?;
+    let mut file = uv_fs::tempfile_in(parent)?;
+    download::copy_verified(pointer, reader, &mut file)?;
+    file.persist(path)?;
+    Ok(())
 }
 
 fn get_object(client: &Client, endpoint: &SafeUrl, action: &download::Action) -> Result<Response> {

@@ -24100,22 +24100,59 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_repository_without_git() -> Result<()> {
+    lock_gitoxide_local_repository(false)
+}
+
+#[cfg(feature = "test-git")]
+#[test]
+fn lock_gitoxide_local_lfs_without_git() -> Result<()> {
+    lock_gitoxide_local_repository(true)
+}
+
+#[cfg(feature = "test-git")]
+fn lock_gitoxide_local_repository(lfs: bool) -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let repository = context.temp_dir.child("local dependency");
-    repository.child("pyproject.toml").write_str(indoc! {r#"
+    let pyproject = indoc! {r#"
         [project]
         name = "local-package"
         version = "1.2.3"
         requires-python = ">=3.13"
-    "#})?;
+    "#};
     Command::new("git")
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
+    if lfs {
+        let oid = hex::encode(Sha256::digest(pyproject));
+        repository
+            .child(format!(
+                ".git/lfs/objects/{}/{}/{oid}",
+                &oid[..2],
+                &oid[2..4]
+            ))
+            .write_str(pyproject)?;
+        repository.child("pyproject.toml").write_str(&format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+            pyproject.len()
+        ))?;
+        repository
+            .child(".gitattributes")
+            .write_str("pyproject.toml filter=lfs\n")?;
+    } else {
+        repository.child("pyproject.toml").write_str(pyproject)?;
+    }
     Command::new("git")
         .current_dir(repository.path())
-        .args(["add", "pyproject.toml"])
+        .args([
+            "-c",
+            "filter.lfs.process=",
+            "-c",
+            "filter.lfs.required=false",
+            "add",
+            ".",
+        ])
         .assert()
         .success();
     Command::new("git")
@@ -24146,6 +24183,7 @@ fn lock_gitoxide_local_repository_without_git() -> Result<()> {
         .lock()
         .arg("--offline")
         .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .env(EnvVars::UV_GIT_LFS, lfs.to_string())
         .env(EnvVars::PATH, context.bin_dir.path())
         .assert()
         .success();

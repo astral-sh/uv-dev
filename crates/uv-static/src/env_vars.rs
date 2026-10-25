@@ -1413,9 +1413,11 @@ impl EnvVars {
     /// needs a host, no password, and either no username or the username `git`. SSH fetches
     /// run the configured SSH command or `ssh`. URLs with a query or fragment, requests
     /// with disabled TLS verification and local repositories that require upload-pack use
-    /// the Git executable. Supported HTTP(S) Git LFS repositories use the basic transfer
-    /// protocol. SSH LFS downloads, submodules with LFS enabled, custom transfers, pointer
-    /// extensions and authentication that needs a credential helper use the Git LFS executable.
+    /// the Git executable. For supported Git LFS repositories, gitoxide uses the basic
+    /// transfer protocol over HTTP(S) and reads verified objects from the default LFS
+    /// store for hostless `file://` sources. SSH LFS downloads, submodules with LFS enabled,
+    /// custom transfers, pointer extensions and authentication that needs a credential
+    /// helper can require the Git LFS executable.
     #[attr_added_in("next release")]
     pub const UV_GIT_BACKEND: &'static str = "UV_GIT_BACKEND";
 
