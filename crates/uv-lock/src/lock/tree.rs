@@ -24,8 +24,8 @@ use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
 
 use crate::lock::export::{
-    MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
-    MetadataWorkspaceMember,
+    MarkerTreeFormatter, MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript,
+    MetadataWorkspace, MetadataWorkspaceMember,
 };
 use crate::lock::{Package, PackageId, PackageIndex};
 use crate::{Lock, PackageMap};
@@ -1104,6 +1104,7 @@ struct JsonGraphBuilder<'tree, 'env> {
     tree: &'tree TreeDisplay<'env>,
     workspace_root: PortablePathBuf,
     resolution: BTreeMap<String, MetadataNode>,
+    marker_formatter: MarkerTreeFormatter,
 }
 
 impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
@@ -1112,6 +1113,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             tree,
             workspace_root,
             resolution: BTreeMap::new(),
+            marker_formatter: MarkerTreeFormatter::default(),
         }
     }
 
@@ -1268,11 +1270,9 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         }
     }
 
-    fn marker(&self, edge: &Edge<'_>) -> Option<String> {
-        self.tree
-            .lock
-            .simplify_environment(edge.marker().pep508())
-            .try_to_string()
+    fn marker(&mut self, edge: &Edge<'_>) -> Option<String> {
+        let marker = self.tree.lock.simplify_environment(edge.marker().pep508());
+        self.marker_formatter.format(marker)
     }
 
     fn add_link(&mut self, source: String, target: String, link: JsonLink) {

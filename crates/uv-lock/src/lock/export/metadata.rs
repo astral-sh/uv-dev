@@ -1,6 +1,9 @@
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
 use std::path::Path;
+
+use rustc_hash::FxHashMap;
 
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
@@ -26,6 +29,35 @@ enum MetadataErrorKind {
     Serialize(#[from] serde_json::error::Error),
     #[error(transparent)]
     Lock(#[from] LockError),
+}
+
+#[derive(Default)]
+pub(crate) struct MarkerTreeFormatter {
+    cache: FxHashMap<MarkerTree, MarkerTreeCacheEntry>,
+}
+
+enum MarkerTreeCacheEntry {
+    Seen,
+    Formatted(Option<String>),
+}
+
+impl MarkerTreeFormatter {
+    pub(crate) fn format(&mut self, marker: MarkerTree) -> Option<String> {
+        match self.cache.entry(marker) {
+            Entry::Occupied(mut entry) => match entry.get() {
+                MarkerTreeCacheEntry::Formatted(formatted) => formatted.clone(),
+                MarkerTreeCacheEntry::Seen => {
+                    let formatted = marker.try_to_string();
+                    entry.insert(MarkerTreeCacheEntry::Formatted(formatted.clone()));
+                    formatted
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(MarkerTreeCacheEntry::Seen);
+                marker.try_to_string()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -420,10 +452,11 @@ impl MetadataNode {
         workspace_root: &PortablePathBuf,
         dependency: &Dependency,
         parent_reachability: MarkerTree,
+        marker_formatter: &mut MarkerTreeFormatter,
     ) {
         let mut marker = dependency.simplified_marker.as_simplified_marker_tree();
         marker = marker.and(parent_reachability);
-        let marker = marker.try_to_string();
+        let marker = marker_formatter.format(marker);
         let extras = dependency.extra();
         if extras.is_empty() {
             let id = MetadataNodeId::from_package_id(
@@ -513,6 +546,7 @@ fn root_dependencies<'lock>(
     workspace_root: &PortablePathBuf,
     lock: &'lock Lock,
     requirements: impl IntoIterator<Item = &'lock Requirement>,
+    marker_formatter: &mut MarkerTreeFormatter,
 ) -> Vec<MetadataDependency> {
     let mut dependencies = Vec::new();
 
@@ -528,7 +562,7 @@ fn root_dependencies<'lock>(
                 continue;
             };
 
-            let marker = marker.try_to_string();
+            let marker = marker_formatter.format(marker);
             let mut has_extra_node = false;
             for extra in requirement
                 .extras
@@ -1349,6 +1383,7 @@ impl Metadata {
                 MetadataWorkspaceMember::from_locked_package(&workspace_root, &package.id)
             })
             .collect::<Vec<_>>();
+        let mut marker_formatter = MarkerTreeFormatter::default();
 
         for lock_package in lock.packages() {
             let mut meta_package = MetadataNode::from_package_id(
@@ -1363,7 +1398,12 @@ impl Metadata {
 
             // Direct dependencies go on the package node
             for dependency in &lock_package.dependencies {
-                meta_package.add_dependency(&workspace_root, dependency, package_reachability);
+                meta_package.add_dependency(
+                    &workspace_root,
+                    dependency,
+                    package_reachability,
+                    &mut marker_formatter,
+                );
             }
 
             // Extras get their own nodes
@@ -1383,7 +1423,12 @@ impl Metadata {
                     marker: None,
                 });
                 for dependency in dependencies {
-                    meta_extra.add_dependency(&workspace_root, dependency, extra_reachability);
+                    meta_extra.add_dependency(
+                        &workspace_root,
+                        dependency,
+                        extra_reachability,
+                        &mut marker_formatter,
+                    );
                 }
 
                 meta_package.optional_dependencies.push(MetadataExtra {
@@ -1407,7 +1452,12 @@ impl Metadata {
                     .unwrap_or(MarkerTree::FALSE);
                 // Groups *do not* depend on the base package, so don't add that
                 for dependency in dependencies {
-                    meta_group.add_dependency(&workspace_root, dependency, group_reachability);
+                    meta_group.add_dependency(
+                        &workspace_root,
+                        dependency,
+                        group_reachability,
+                        &mut marker_formatter,
+                    );
                 }
 
                 meta_package.dependency_groups.push(MetadataGroup {
@@ -1432,7 +1482,12 @@ impl Metadata {
             let path = PortablePathBuf::from(path);
             let node = MetadataNode::from_script(
                 path.clone(),
-                root_dependencies(&workspace_root, lock, lock.requirements()),
+                root_dependencies(
+                    &workspace_root,
+                    lock,
+                    lock.requirements(),
+                    &mut marker_formatter,
+                ),
             );
             let id = node.id.to_flat();
             resolve.insert(id.clone(), node);
@@ -1449,7 +1504,12 @@ impl Metadata {
                     let node = MetadataNode::from_workspace_group(
                         workspace_root.clone(),
                         group.clone(),
-                        root_dependencies(&workspace_root, lock, requirements),
+                        root_dependencies(
+                            &workspace_root,
+                            lock,
+                            requirements,
+                            &mut marker_formatter,
+                        ),
                     );
                     let id = node.id.to_flat();
                     resolve.insert(id.clone(), node);
@@ -1544,5 +1604,37 @@ impl Metadata {
 
     pub fn write_json(&self, writer: impl std::io::Write) -> Result<(), MetadataError> {
         Ok(serde_json::to_writer_pretty(writer, self)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_pep508::MarkerTree;
+
+    use super::MarkerTreeFormatter;
+
+    #[test]
+    fn marker_tree_formatter_preserves_final_markers() {
+        let markers = [
+            MarkerTree::TRUE,
+            MarkerTree::FALSE,
+            MarkerTree::from_str("sys_platform == 'linux' and platform_machine == 'x86_64'")
+                .expect("valid marker"),
+            MarkerTree::from_str("platform_machine == 'x86_64' and sys_platform == 'linux'")
+                .expect("valid marker"),
+            MarkerTree::from_str("sys_platform == 'win32' or platform_machine == 'aarch64'")
+                .expect("valid marker"),
+        ];
+        let mut formatter = MarkerTreeFormatter::default();
+
+        for marker in markers {
+            assert_eq!(formatter.format(marker), marker.try_to_string());
+            assert_eq!(formatter.format(marker), marker.try_to_string());
+            assert_eq!(formatter.format(marker), marker.try_to_string());
+        }
+
+        assert_eq!(formatter.cache.len(), 4);
     }
 }
