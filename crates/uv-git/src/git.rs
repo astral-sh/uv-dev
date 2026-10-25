@@ -324,13 +324,13 @@ impl GitDatabase {
         Ok(checkout)
     }
 
-    /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
+    /// Get a unique OID prefix of at least seven characters, independent of `core.abbrev`.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
         let output = GIT
             .as_ref()
             .cloned()?
             .arg("rev-parse")
-            .arg("--short")
+            .arg("--short=7")
             .arg(revision.as_str())
             .cwd(&self.repo.path)
             .exec_with_output()?;

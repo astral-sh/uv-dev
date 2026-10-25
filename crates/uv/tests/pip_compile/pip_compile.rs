@@ -14906,6 +14906,74 @@ fn git_source_missing_tag() -> Result<()> {
     Ok(())
 }
 
+/// A personal `core.abbrev` setting must not change the checkout for the same Git revision.
+#[test]
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+fn git_checkout_abbreviation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ])
+        .assert()
+        .success();
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("example @ git+{url}"))?;
+
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .stdout;
+    let commit = std::str::from_utf8(&commit)?.trim();
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.abbrev")
+        .env("GIT_CONFIG_VALUE_0", "12")
+        .assert()
+        .success();
+
+    let checkouts = fs_err::read_dir(context.cache_dir.join("git-v1/checkouts"))?
+        .next()
+        .context("missing repository checkouts")??
+        .path();
+    assert!(checkouts.join(&commit[..7]).is_dir());
+    assert!(!checkouts.join(&commit[..12]).exists());
+    Ok(())
+}
+
 /// Checkout readiness must not overwrite a repository's own `.ok` file.
 #[test]
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
