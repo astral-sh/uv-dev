@@ -2,6 +2,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod archive;
+mod endpoint_filters;
 pub mod find_links;
 mod http_server;
 pub mod package_server;
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write as _;
 use std::iter::Iterator;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::str::FromStr;
@@ -777,6 +779,15 @@ impl TestContext {
             versions.iter().join(" ").into(),
         ));
 
+        self
+    }
+
+    /// Label an endpoint in displayed URLs and keyring requests before the localhost fallback.
+    ///
+    /// Role labels replace authorities; other context filters still apply to credentials and paths.
+    #[must_use]
+    pub fn with_endpoint_role(mut self, address: &SocketAddr, label: &str) -> Self {
+        endpoint_filters::add_endpoint_role(&mut self.filters, address, label);
         self
     }
 
