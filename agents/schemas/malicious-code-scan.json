@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["CLEAN", "SUSPICIOUS", "INCONCLUSIVE"]
+    },
+    "summary": { "type": "string" },
+    "reviewed_commits": { "type": "array", "items": { "type": "string" } },
+    "reviewed_net_diff": { "type": "boolean" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "severity": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+          "commit_sha": { "type": "string" },
+          "path": { "type": "string" },
+          "line": { "type": ["integer", "null"], "minimum": 1 }
+        },
+        "required": ["title", "body", "severity", "commit_sha", "path", "line"]
+      }
+    },
+    "coverage_gaps": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": [
+    "outcome",
+    "summary",
+    "reviewed_commits",
+    "reviewed_net_diff",
+    "findings",
+    "coverage_gaps"
+  ]
+}
