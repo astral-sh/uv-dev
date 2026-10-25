@@ -518,7 +518,7 @@ pub async fn sync(
         }
     }
 
-    let state = state.fork();
+    let state = state.into_platform();
 
     // Perform the sync operation.
     let changelog = match sync_from_lock(

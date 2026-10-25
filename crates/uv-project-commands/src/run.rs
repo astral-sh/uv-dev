@@ -961,6 +961,10 @@ pub async fn run(
         }
     };
 
+    // Drop resolution and download cache owners while keeping build directories alive for the child.
+    let _build_arena = sync_state.into_build_arena();
+    drop(lock_state);
+
     // If we're layering requirements atop the project environment, run the command in an ephemeral,
     // isolated environment. Otherwise, modifications to the "active virtual environment" would
     // poison the cache.
