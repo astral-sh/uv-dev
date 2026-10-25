@@ -72,6 +72,9 @@ pub use crate::cached::*;
 pub use crate::config_settings::*;
 pub use crate::dependency_metadata::*;
 pub use crate::diagnostic::*;
+pub use crate::directory_mode::{
+    DirectoryInstallMode, DirectorySourceMode, DirectorySourcePreference,
+};
 pub use crate::dist_error::*;
 pub use crate::error::*;
 pub use crate::exclude_newer::*;
@@ -107,6 +110,7 @@ mod cached;
 mod config_settings;
 mod dependency_metadata;
 mod diagnostic;
+mod directory_mode;
 mod dist_error;
 mod error;
 mod exclude_newer;
@@ -402,10 +406,8 @@ pub struct DirectorySourceDist {
     pub name: PackageName,
     /// The absolute path to the distribution which we use for installing.
     pub install_path: Box<Path>,
-    /// Whether the package should be installed in editable mode.
-    pub editable: Option<bool>,
-    /// Whether the package should be built and installed.
-    pub r#virtual: Option<bool>,
+    /// The resolved installation mode or preferences still awaiting discovery.
+    pub mode: DirectorySourceMode,
     /// Whether the package is a first-party workspace member.
     pub first_party: FirstParty,
     /// The URL as it was provided by the user.
@@ -545,8 +547,7 @@ impl Dist {
         Ok(Self::Source(SourceDist::Directory(DirectorySourceDist {
             name,
             install_path: install_path.into_boxed_path(),
-            editable,
-            r#virtual,
+            mode: DirectorySourceMode::from_flags(editable, r#virtual)?,
             first_party: FirstParty::No,
             url,
         })))
@@ -795,7 +796,7 @@ impl SourceDist {
     /// Returns `true` if the distribution is editable.
     pub fn is_editable(&self) -> bool {
         match self {
-            Self::Directory(DirectorySourceDist { editable, .. }) => editable.unwrap_or(false),
+            Self::Directory(DirectorySourceDist { mode, .. }) => mode.editable().unwrap_or(false),
             _ => false,
         }
     }
@@ -803,7 +804,9 @@ impl SourceDist {
     /// Returns `true` if the distribution is virtual.
     pub fn is_virtual(&self) -> bool {
         match self {
-            Self::Directory(DirectorySourceDist { r#virtual, .. }) => r#virtual.unwrap_or(false),
+            Self::Directory(DirectorySourceDist { mode, .. }) => {
+                mode.virtual_project().unwrap_or(false)
+            }
             _ => false,
         }
     }
@@ -938,8 +941,8 @@ impl DirectorySourceDist {
     pub fn to_parsed_url(&self) -> ParsedUrl {
         ParsedUrl::Directory(ParsedDirectoryUrl::from_source(
             self.install_path.clone(),
-            self.editable,
-            self.r#virtual,
+            self.mode.editable(),
+            self.mode.virtual_project(),
             self.url.to_url(),
         ))
     }
