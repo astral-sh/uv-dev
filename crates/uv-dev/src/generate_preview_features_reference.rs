@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn generates_preview_feature_reference() {
-        assert_snapshot!(generate(), @r##"
+        assert_snapshot!(generate(), @r#"
         ### `add-bounds` {#add-bounds}
 
         The [`add-bounds`](../reference/settings.md#add-bounds) setting controls the default version
@@ -205,6 +205,11 @@ mod tests {
         uv identifies cached wheel archives by a digest of their contents. Matching archive contents
         can share a cache entry, reducing duplication when the same wheel contents are encountered
         more than once.
+
+        ### `cross-builds` {#cross-builds}
+
+        `uv build` supports target requirements and an explicit `build-details.json` for
+        cross-builds. This is an experimental extension to PEP 517.
 
         ### `detect-module-conflicts` {#detect-module-conflicts}
 
@@ -444,6 +449,6 @@ mod tests {
         The `uv workspace metadata` command exposes structured information about a workspace and its
         resolved dependencies for use by other tools. Its output is experimental and may change; use
         `--sync` to include a mapping from importable modules to the packages that provide them.
-        "##);
+        "#);
     }
 }

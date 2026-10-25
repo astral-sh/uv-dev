@@ -39,6 +39,13 @@ You can limit `uv build` to building a source distribution with `uv build --sdis
 distribution with `uv build --wheel`, or build both distributions from source with
 `uv build --sdist --wheel`.
 
+## Experimental cross-builds
+
+The `cross-builds` preview feature separates executable build dependencies from target wheel
+artifacts. An opted-in backend can receive a `build-details.json` path for a Python installation
+that cannot run on the build machine. See the [draft protocol](../../reference/cross-builds.md) for
+the hook interface, command-line usage, and current limitations.
+
 ## Build constraints
 
 `uv build` accepts `--build-constraint`, which can be used to constrain the versions of any build

@@ -4198,6 +4198,8 @@ impl PipCheckSettings {
 /// The resolved settings to use for a `build` invocation.
 #[derive(Debug, Clone)]
 pub struct BuildSettings {
+    pub target: Option<PathBuf>,
+    pub python_platform: Option<TargetTriple>,
     pub skip_dependency_check: bool,
     pub src: Option<PathBuf>,
     pub package: Option<PackageName>,
@@ -4227,6 +4229,8 @@ impl BuildSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let BuildArgs {
+            target,
+            python_platform,
             skip_dependency_check,
             src,
             out_dir,
@@ -4280,6 +4284,8 @@ impl BuildSettings {
 
         Ok(Self {
             skip_dependency_check,
+            target,
+            python_platform,
             src,
             package,
             all_packages,

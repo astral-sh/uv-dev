@@ -1,0 +1,10 @@
+[project]
+name = "cross-poc"
+version = "0.1.0"
+requires-python = ">=3.14"
+
+[build-system]
+requires = ["uv-build", "poc-sdk==1.0.0"]
+target-requires = ["poc-sdk==2.0.0; sys_platform == 'darwin'"]
+build-backend = "backend"
+backend-path = ["."]

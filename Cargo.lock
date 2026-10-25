@@ -6016,13 +6016,17 @@ name = "uv-build-commands"
 version = "0.0.97"
 dependencies = [
  "anyhow",
+ "astral_async_zip",
  "fs-err",
  "futures",
  "owo-colors",
+ "serde",
+ "serde_json",
  "tar-codec",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "uv-auth",
  "uv-build-backend",
@@ -6041,9 +6045,13 @@ dependencies = [
  "uv-fs",
  "uv-install-wheel",
  "uv-installer",
+ "uv-metadata",
  "uv-normalize",
  "uv-pep440",
+ "uv-pep508",
+ "uv-platform-tags",
  "uv-preview",
+ "uv-pypi-types",
  "uv-python-discovery",
  "uv-python-interpreter",
  "uv-python-types",
@@ -6055,6 +6063,7 @@ dependencies = [
  "uv-version",
  "uv-warnings",
  "uv-workspace",
+ "walkdir",
 ]
 
 [[package]]
@@ -6435,6 +6444,7 @@ dependencies = [
  "uv-git",
  "uv-install-wheel",
  "uv-installer",
+ "uv-pep508",
  "uv-platform-tags",
  "uv-preview",
  "uv-pypi-types",

@@ -4031,6 +4031,7 @@ fn preview_features() {
     +            FrozenLockfile,
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
+    +            CrossBuilds,
     +            BuildLazyImports,
     +            BuildDependencyHashes,
     +            WheelVariants,

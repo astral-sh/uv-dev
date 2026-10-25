@@ -125,6 +125,8 @@ pub enum ValidationError {
 /// as an error.
 #[derive(Debug, Error)]
 pub enum DirectBuildIncompatibility {
+    #[error("`build-system.target-requires` needs PEP 517 dependency resolution")]
+    TargetRequirements,
     #[error("its `pyproject.toml` failed to parse: {0}")]
     PyprojectToml(String),
     #[error("`build_system.build-backend` is not `uv_build`, but `{0}`")]
@@ -289,6 +291,10 @@ pub fn check_direct_build(
                 .clone()
                 .unwrap_or_default(),
         ));
+    }
+
+    if !pyproject_toml.build_system.target_requires.is_empty() {
+        return Err(DirectBuildIncompatibility::TargetRequirements);
     }
 
     let compatible: Vec<Version> = COMPATIBLE_VERSIONS
@@ -1223,6 +1229,8 @@ pub(crate) struct ToolUv {
 struct BuildSystem<T: Pep508Url = VerbatimUrl> {
     /// PEP 508 dependencies required to execute the build system.
     requires: Vec<SerdeVerbatim<Requirement<T>>>,
+    #[serde(default)]
+    target_requires: Vec<SerdeVerbatim<Requirement<T>>>,
     /// A string naming a Python object that will be used to perform the build.
     build_backend: Option<String>,
     /// <https://peps.python.org/pep-0517/#in-tree-build-backends>

@@ -1,5 +1,9 @@
 //! Commands for building Python distributions.
 
+mod target;
+
+use crate::target::{BuildTarget, wheel_archives};
+
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -18,6 +22,7 @@ use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
+use uv_configuration::TargetTriple;
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -33,7 +38,7 @@ use uv_distribution_types::{
     NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist,
 };
 use uv_errors::{Hinted, Hints};
-use uv_fs::{Simplified, normalize_path, relative_to};
+use uv_fs::{Simplified, normalize_path, relative_to, rename_with_retry};
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -51,7 +56,10 @@ use uv_requirements::RequirementsSource;
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
-use uv_types::{AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{
+    AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceBuildTrait,
+    SourceTreeEditablePolicy,
+};
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
@@ -89,6 +97,8 @@ pub enum Error {
     BuildDispatch(AnyErrorBuild),
     #[error(transparent)]
     BuildFrontend(#[from] uv_build_frontend::Error),
+    #[error(transparent)]
+    TargetBuild(anyhow::Error),
     #[error("Failed to check build requirements")]
     RequirementsCheck(#[source] anyhow::Error),
     #[error("Build requirement is not satisfied: `{0}`")]
@@ -217,6 +227,8 @@ impl Hinted for Error {
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn build_frontend(
     project_dir: &Path,
+    target: Option<PathBuf>,
+    python_platform: Option<TargetTriple>,
     skip_dependency_check: bool,
     src: Option<PathBuf>,
     package: Option<PackageName>,
@@ -247,6 +259,17 @@ pub async fn build_frontend(
     preview: Preview,
     render_error: fn(&anyhow::Error, Printer) -> std::fmt::Result,
 ) -> Result<ExitStatus> {
+    let target = match (target, python_platform) {
+        (Some(path), Some(platform)) => {
+            anyhow::ensure!(
+                preview.is_enabled(PreviewFeature::CrossBuilds),
+                "`--target` requires `--preview-features cross-builds`"
+            );
+            Some(BuildTarget::read(&path, platform)?)
+        }
+        (None, None) => None,
+        _ => anyhow::bail!("`--target` and `--python-platform` must be used together"),
+    };
     // Extract the resolver settings.
     let ResolverSettings {
         index_locations,
@@ -448,6 +471,7 @@ pub async fn build_frontend(
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
+            target.as_ref(),
             skip_dependency_check,
             &output_dir,
             python.as_deref(),
@@ -521,6 +545,7 @@ pub async fn build_frontend(
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
+    target: Option<&BuildTarget>,
     skip_dependency_check: bool,
     output_dir: &Path,
     python_request: Option<&str>,
@@ -573,8 +598,8 @@ async fn build_package(
         .and_then(PythonVersionFile::into_version);
     }
 
-    // (3) `Requires-Python` in `pyproject.toml`
-    if interpreter_request.is_none() {
+    // (3) `Requires-Python` describes the runtime target, so it only constrains native builds.
+    if interpreter_request.is_none() && target.is_none() {
         if let Ok(workspace) = workspace {
             let groups = DependencyGroupsWithDefaults::none();
             interpreter_request =
@@ -846,6 +871,7 @@ async fn build_package(
             };
 
             let wheel_build = build_wheel(
+                target,
                 &extracted,
                 output_dir,
                 build_action,
@@ -885,6 +911,7 @@ async fn build_package(
         }
         BuildPlan::Wheel => {
             let wheel_build = build_wheel(
+                target,
                 source.path(),
                 output_dir,
                 build_action,
@@ -922,6 +949,7 @@ async fn build_package(
             .await?;
 
             let wheel_build = build_wheel(
+                target,
                 source.path(),
                 output_dir,
                 build_action,
@@ -973,6 +1001,7 @@ async fn build_package(
             };
 
             let wheel_build = build_wheel(
+                target,
                 &extracted,
                 output_dir,
                 build_action,
@@ -1208,6 +1237,7 @@ async fn build_sdist(
 /// Build a wheel, either through PEP 517 or through a direct build.
 #[instrument(skip_all)]
 async fn build_wheel(
+    target: Option<&BuildTarget>,
     source_tree: &Path,
     output_dir: &Path,
     action: BuildAction,
@@ -1225,7 +1255,17 @@ async fn build_wheel(
     // Used for checking source distribution and wheel consistency
     source_dist: Option<&DistFilename>,
 ) -> Result<BuildMessage, Error> {
-    let build_message = match action {
+    let cross_builds = uv_preview::is_enabled(PreviewFeature::CrossBuilds);
+    let destination = output_dir;
+    let staging = cross_builds
+        .then(|| tempfile::tempdir_in(destination))
+        .transpose()?;
+    let output_dir = staging
+        .as_ref()
+        .map_or(destination, |directory| directory.path());
+    let mut native_target = None;
+    let mut metadata_directory = None;
+    let mut build_message = match action {
         BuildAction::List => {
             let source_tree_ = source_tree.to_path_buf();
             let sources_enabled = sources.is_none();
@@ -1284,7 +1324,7 @@ async fn build_wheel(
                 )
                 .bold()
             )?;
-            let builder = build_dispatch
+            let mut builder = build_dispatch
                 .setup_build(
                     source_tree,
                     subdirectory,
@@ -1304,7 +1344,53 @@ async fn build_wheel(
                     .check(&builder, source.path(), sources.clone())
                     .await?;
             }
+            if cross_builds {
+                if let Some(target) = target {
+                    target.check_unchanged().map_err(Error::TargetBuild)?;
+                }
+                let requirements = build_dispatch
+                    .target_requirements(&builder, source.path(), sources.clone())
+                    .await?;
+                if let Some(requirements) = requirements {
+                    if target.is_none() {
+                        native_target = Some(
+                            BuildTarget::native(build_dispatch.interpreter().await)
+                                .map_err(Error::TargetBuild)?,
+                        );
+                    }
+                    if let Some(target) = target.or(native_target.as_ref()) {
+                        let wheels = build_dispatch
+                            .target_wheels(&requirements, target.markers(), target.tags())
+                            .await
+                            .map_err(Error::TargetBuild)?;
+                        let paths = wheel_archives(wheels, &builder.target_wheel_directory())
+                            .await
+                            .map_err(Error::TargetBuild)?;
+                        target.check_unchanged().map_err(Error::TargetBuild)?;
+                        builder.set_target(target.path().map(Path::to_path_buf), paths)?;
+                        metadata_directory =
+                            builder.metadata().await.map_err(Error::BuildDispatch)?;
+                        target.check_unchanged().map_err(Error::TargetBuild)?;
+                    }
+                } else if target.is_some() {
+                    return Err(Error::TargetBuild(anyhow::anyhow!(
+                        "The build backend does not support cross-builds: missing `get_requires_for_target_wheel`"
+                    )));
+                }
+            }
             let filename = builder.build(output_dir).await?;
+            if let Some(target) = target.or(native_target.as_ref()) {
+                target.check_unchanged().map_err(Error::TargetBuild)?;
+                target
+                    .validate_wheel(
+                        &output_dir.join(&filename),
+                        &WheelFilename::from_str(&filename)
+                            .map_err(Error::InvalidBuiltWheelFilename)?,
+                        metadata_directory.as_deref(),
+                    )
+                    .await
+                    .map_err(Error::TargetBuild)?;
+            }
             BuildMessage::Build {
                 normalized_filename: DistFilename::WheelFilename(
                     WheelFilename::from_str(&filename).map_err(Error::InvalidBuiltWheelFilename)?,
@@ -1328,6 +1414,34 @@ async fn build_wheel(
                 actual.version().clone(),
             ));
         }
+    }
+    if let Some(target) = target
+        && let BuildAction::DirectBuild = action
+        && let BuildMessage::Build {
+            normalized_filename: DistFilename::WheelFilename(filename),
+            raw_filename,
+            ..
+        } = &build_message
+    {
+        target.check_unchanged().map_err(Error::TargetBuild)?;
+        target
+            .validate_wheel(&output_dir.join(raw_filename), filename, None)
+            .await
+            .map_err(Error::TargetBuild)?;
+    }
+    if let Some(staging) = &staging
+        && let BuildMessage::Build {
+            output_dir,
+            raw_filename,
+            ..
+        } = &mut build_message
+    {
+        rename_with_retry(
+            staging.path().join(&*raw_filename),
+            destination.join(&*raw_filename),
+        )
+        .await?;
+        *output_dir = destination.to_path_buf();
     }
     Ok(build_message)
 }
