@@ -101,14 +101,41 @@ struct BatchExport {
     no_default_groups: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ExportManifestError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("Failed to parse export manifest `{}`", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("Export manifest must contain at least one `[[export]]` entry")]
+    Empty,
+    #[error("Duplicate export output: {}", .0.display())]
+    DuplicateOutput(PathBuf),
+    #[error("`all-packages` cannot be combined with `package`")]
+    ConflictingPackages,
+    #[error("`all-extras` cannot be combined with `extra`")]
+    ConflictingExtras,
+    #[error("`only-group` cannot be combined with `extra` or `all-extras`")]
+    OnlyGroupWithExtras,
+    #[error("`only-group` cannot be combined with `group` or `all-groups`")]
+    ConflictingGroups,
+}
+
 impl ExportBatch {
     /// Read and validate the manifest, resolving output paths relative to its directory.
-    async fn read(path: &Path) -> Result<Self> {
+    async fn read(path: &Path) -> Result<Self, ExportManifestError> {
         let contents = fs_err::tokio::read_to_string(path).await?;
-        let mut batch: Self = toml::from_str(&contents)
-            .with_context(|| format!("Failed to parse export manifest `{}`", path.display()))?;
+        let mut batch: Self =
+            toml::from_str(&contents).map_err(|source| ExportManifestError::Parse {
+                path: path.to_path_buf(),
+                source,
+            })?;
         if batch.export.is_empty() {
-            bail!("Export manifest must contain at least one `[[export]]` entry");
+            return Err(ExportManifestError::Empty);
         }
         let parent = path.parent().unwrap_or(Path::new("."));
         let mut outputs = FxHashSet::default();
@@ -117,19 +144,21 @@ impl ExportBatch {
                 parent.join(&entry.output_file),
             )?)?;
             if !outputs.insert(entry.output_file.clone()) {
-                bail!("Duplicate export output: {}", entry.output_file.display());
+                return Err(ExportManifestError::DuplicateOutput(
+                    entry.output_file.clone(),
+                ));
             }
             if entry.all_packages && !entry.package.is_empty() {
-                bail!("`all-packages` cannot be combined with `package`");
+                return Err(ExportManifestError::ConflictingPackages);
             }
             if entry.all_extras && !entry.extra.is_empty() {
-                bail!("`all-extras` cannot be combined with `extra`");
+                return Err(ExportManifestError::ConflictingExtras);
             }
             if !entry.only_group.is_empty() && (!entry.extra.is_empty() || entry.all_extras) {
-                bail!("`only-group` cannot be combined with `extra` or `all-extras`");
+                return Err(ExportManifestError::OnlyGroupWithExtras);
             }
             if !entry.only_group.is_empty() && (!entry.group.is_empty() || entry.all_groups) {
-                bail!("`only-group` cannot be combined with `group` or `all-groups`");
+                return Err(ExportManifestError::ConflictingGroups);
             }
         }
         Ok(batch)
