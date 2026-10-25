@@ -2,11 +2,9 @@
 
 # Platform-independent secure storage model
 
-This module defines a plug and play model for platform-specific credential stores.
-The model comprises two traits: [`CredentialBuilderApi`] for the underlying store
-and [`CredentialApi`] for the entries in the store.  These traits must be implemented
-in a thread-safe way, a requirement captured in the [`CredentialBuilder`] and
-[`Credential`] types that wrap them.
+This module defines the [`CredentialApi`] trait for entries in platform-specific
+credential stores. Implementations must be thread-safe, a requirement captured
+in the [`Credential`] type that wraps the trait.
  */
 use std::any::Any;
 use std::collections::HashMap;
@@ -114,68 +112,4 @@ impl std::fmt::Debug for Credential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.debug_fmt(f)
     }
-}
-
-/// The API that [credential builders](CredentialBuilder) implement.
-pub(crate) trait CredentialBuilderApi {
-    /// Create a credential identified by the given target, service, and user.
-    ///
-    /// This typically has no effect on the content of the underlying store.
-    /// A credential need not be persisted until its password is set.
-    fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>>;
-
-    /// Return the underlying concrete object cast to [Any].
-    ///
-    /// Because credential builders need not have any internal structure,
-    /// this call is not so much for clients
-    /// as it is to allow automatic derivation of a Debug trait for builders.
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl std::fmt::Debug for CredentialBuilder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_any().fmt(f)
-    }
-}
-
-/// A thread-safe implementation of the [`CredentialBuilder` API](CredentialBuilderApi).
-pub(crate) type CredentialBuilder = dyn CredentialBuilderApi + Send + Sync;
-
-#[cfg(not(any(
-    all(target_os = "linux", feature = "secret-service"),
-    all(target_os = "freebsd", feature = "secret-service"),
-    all(target_os = "openbsd", feature = "secret-service"),
-    all(target_os = "macos", feature = "apple-native"),
-    all(target_os = "windows", feature = "windows-native"),
-)))]
-struct NopCredentialBuilder;
-
-#[cfg(not(any(
-    all(target_os = "linux", feature = "secret-service"),
-    all(target_os = "freebsd", feature = "secret-service"),
-    all(target_os = "openbsd", feature = "secret-service"),
-    all(target_os = "macos", feature = "apple-native"),
-    all(target_os = "windows", feature = "windows-native"),
-)))]
-impl CredentialBuilderApi for NopCredentialBuilder {
-    fn build(&self, _: Option<&str>, _: &str, _: &str) -> Result<Box<Credential>> {
-        Err(super::Error::NoDefaultCredentialBuilder)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-// Return a credential builder that always fails. This is the builder
-// used if none of the crate-supplied keystores were included in the build.
-#[cfg(not(any(
-    all(target_os = "linux", feature = "secret-service"),
-    all(target_os = "freebsd", feature = "secret-service"),
-    all(target_os = "openbsd", feature = "secret-service"),
-    all(target_os = "macos", feature = "apple-native"),
-    all(target_os = "windows", feature = "windows-native"),
-)))]
-pub(crate) fn nop_credential_builder() -> Box<CredentialBuilder> {
-    Box::new(NopCredentialBuilder)
 }

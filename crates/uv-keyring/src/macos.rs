@@ -30,7 +30,7 @@ Credentials on macOS can have a large number of _key/value_ attributes,
 but this module controls the _account_ and _name_ attributes and
 ignores all the others. so clients can't use it to access or update any attributes.
  */
-use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
+use crate::credential::{Credential, CredentialApi};
 use crate::error::{Error as ErrorCode, Result, decode_password};
 use security_framework::base::Error;
 use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
@@ -221,40 +221,25 @@ impl MacCredential {
     }
 }
 
-/// The builder for Mac keychain credentials
-struct MacCredentialBuilder;
-
-/// Returns an instance of the Mac credential builder.
+/// Build a [`MacCredential`] for the given target, service, and user.
 ///
-/// On Mac, with default features enabled,
-/// this is called once when an entry is first created.
-pub(crate) fn default_credential_builder() -> Box<CredentialBuilder> {
-    Box::new(MacCredentialBuilder {})
-}
-
-impl CredentialBuilderApi for MacCredentialBuilder {
-    /// Build a [`MacCredential`] for the given target, service, and user.
-    ///
-    /// If a target is specified but not recognized as a keychain name,
-    /// the User keychain is selected.
-    fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>> {
-        let domain: MacKeychainDomain = if let Some(target) = target {
-            target.parse().unwrap_or(MacKeychainDomain::User)
-        } else {
-            MacKeychainDomain::User
-        };
-        Ok(Box::new(MacCredential::new_with_target(
-            Some(domain),
-            service,
-            user,
-        )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`MacCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+/// If a target is specified but not recognized as a keychain name,
+/// the User keychain is selected.
+pub(crate) fn build_credential(
+    target: Option<&str>,
+    service: &str,
+    user: &str,
+) -> Result<Box<Credential>> {
+    let domain: MacKeychainDomain = if let Some(target) = target {
+        target.parse().unwrap_or(MacKeychainDomain::User)
+    } else {
+        MacKeychainDomain::User
+    };
+    Ok(Box::new(MacCredential::new_with_target(
+        Some(domain),
+        service,
+        user,
+    )?))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
