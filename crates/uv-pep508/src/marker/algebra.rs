@@ -398,8 +398,14 @@ impl InternerGuard<'_> {
                         });
                         platforms = self.or(platforms, platform);
                     }
-                    let version = self.and(platforms, version);
-                    let string = self.and(platforms.not(), string);
+                    // Explicit targets can leave the release or build version unknown.
+                    let nonempty = self.create_node(
+                        Variable::String(key),
+                        Edges::from_string(MarkerOperator::NotEqual, arcstr::literal!("")),
+                    );
+                    let version_field = self.and(platforms, nonempty);
+                    let version = self.and(version_field, version);
+                    let string = self.and(version_field.not(), string);
                     return self.or(version, string);
                 }
                 return string;

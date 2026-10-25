@@ -16,14 +16,14 @@ use uv_pep440::{Version, VersionParseError, VersionSpecifier};
 use super::algebra::{Edges, INTERNER, NodeId, Variable};
 use super::simplify;
 #[cfg(test)]
-use crate::Pep508ErrorSource;
-#[cfg(test)]
 use crate::cursor::Cursor;
 use crate::marker::lowering::{
     CanonicalMarkerListPair, CanonicalMarkerValueString, CanonicalMarkerValueVersion,
 };
 use crate::marker::parse;
-use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, Reporter, TracingReporter};
+use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, TracingReporter};
+#[cfg(test)]
+use crate::{Pep508ErrorSource, Reporter};
 
 /// Ways in which marker evaluation can fail
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -2871,6 +2871,28 @@ mod test {
     }
 
     #[test]
+    fn unknown_target_release_uses_string_comparisons() {
+        for platform in ["darwin", "ios", "android"] {
+            let env = env37()
+                .with_sys_platform(platform)
+                .with_platform_release("");
+            for (source, expected) in [
+                ("platform_release != '14'", true),
+                ("platform_release == '14'", false),
+                ("platform_release >= '14'", false),
+                ("platform_release < '14'", false),
+            ] {
+                let marker = m(source);
+                assert_eq!(marker.evaluate(&env, &[]), expected, "{source}");
+                assert_eq!(marker.negate().evaluate(&env, &[]), !expected, "{source}");
+                for tree in [marker, marker.negate()] {
+                    assert_eq!(m(&tree.try_to_string().unwrap()), tree);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_not_in() {
         MarkerTree::from_str("'posix' not in os_name").unwrap();
     }
@@ -3693,7 +3715,7 @@ mod test {
                 or (os_name != 'nt' and platform_version == '1' and (sys_platform == 'win32' or sys_platform == 'win64'))",
             "(os_name != 'nt' and platform_version == '1' and sys_platform == 'win64') \
                 or (os_name == 'nt' and sys_platform == 'win32') \
-                or (platform_version == '1' and sys_platform == 'win32')",
+                or (platform_version != '' and platform_version == '1' and sys_platform == 'win32')",
         );
 
         assert_simplifies(

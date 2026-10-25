@@ -13532,6 +13532,27 @@ fn emit_marker_expression_direct() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn unknown_target_platform_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("requirements.in").write_str(
+        "ok==1.0.0 ; platform_version != '10.0.22631'\nok==2.0.0 ; platform_version == '10.0.22631'\n",
+    )?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--python-platform").arg("windows")
+        .arg("--no-index").arg("--find-links").arg(context.workspace_root.join("test/links"))
+        .arg("--no-header").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 /// This tests that the marker expression emitted accounts for markers directly
 /// in `requirements.in`, even when the marker evaluates to false on the
 /// current platform. In this case, we set `sys_platform == 'macos'` so that on
