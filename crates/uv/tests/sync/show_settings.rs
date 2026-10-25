@@ -4014,6 +4014,7 @@ fn preview_features() {
     +            MalwareCheck,
     +            VenvSafeClear,
     +            CheckCommand,
+    +            RunProfile,
     +            PackagedInit,
     +            CentralizedProjectEnvs,
     +            ToolInstallLocks,
