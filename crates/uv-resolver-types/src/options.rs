@@ -1,4 +1,7 @@
-use uv_configuration::{BuildOptions, IndexStrategy};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use uv_configuration::{BuildOptions, IndexStrategy, RequiredEnvironmentsMode};
 use uv_distribution_types::MinimumLibcVersion;
 use uv_pypi_types::SupportedEnvironments;
 use uv_torch::TorchStrategy;
@@ -17,6 +20,9 @@ pub struct Options {
     pub index_strategy: IndexStrategy,
     pub artifact_environments: SupportedEnvironments,
     pub minimum_libc_version: Option<MinimumLibcVersion>,
+    pub required_environments: SupportedEnvironments,
+    pub required_environments_mode: Option<RequiredEnvironmentsMode>,
+    pub workspace_wheel_exemptions: BTreeSet<PathBuf>,
     pub flexibility: Flexibility,
     pub build_options: BuildOptions,
     pub torch_backend: Option<TorchStrategy>,
@@ -33,6 +39,8 @@ pub struct OptionsBuilder {
     index_strategy: IndexStrategy,
     artifact_environments: SupportedEnvironments,
     minimum_libc_version: Option<MinimumLibcVersion>,
+    required_environments: SupportedEnvironments,
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
     flexibility: Flexibility,
     build_options: BuildOptions,
     torch_backend: Option<TorchStrategy>,
@@ -103,6 +111,23 @@ impl OptionsBuilder {
         self
     }
 
+    /// Sets the required environments for the resolution.
+    #[must_use]
+    pub fn required_environments(mut self, required_environments: SupportedEnvironments) -> Self {
+        self.required_environments = required_environments;
+        self
+    }
+
+    /// Sets the policy used to satisfy required environments.
+    #[must_use]
+    pub fn required_environments_mode(
+        mut self,
+        required_environments_mode: Option<RequiredEnvironmentsMode>,
+    ) -> Self {
+        self.required_environments_mode = required_environments_mode;
+        self
+    }
+
     /// Sets the [`Flexibility`].
     #[must_use]
     pub fn flexibility(mut self, flexibility: Flexibility) -> Self {
@@ -126,6 +151,12 @@ impl OptionsBuilder {
 
     /// Builds the options.
     pub fn build(self) -> Options {
+        let mut artifact_environments = self.artifact_environments.into_markers();
+        for marker in &self.required_environments {
+            if !artifact_environments.contains(marker) {
+                artifact_environments.push(*marker);
+            }
+        }
         Options {
             resolution_mode: self.resolution_mode,
             prerelease: self.prerelease,
@@ -133,8 +164,11 @@ impl OptionsBuilder {
             fork_strategy: self.fork_strategy,
             exclude_newer: self.exclude_newer,
             index_strategy: self.index_strategy,
-            artifact_environments: self.artifact_environments,
+            artifact_environments: SupportedEnvironments::from_markers(artifact_environments),
             minimum_libc_version: self.minimum_libc_version,
+            required_environments: self.required_environments,
+            required_environments_mode: self.required_environments_mode,
+            workspace_wheel_exemptions: BTreeSet::new(),
             flexibility: self.flexibility,
             build_options: self.build_options,
             torch_backend: self.torch_backend,

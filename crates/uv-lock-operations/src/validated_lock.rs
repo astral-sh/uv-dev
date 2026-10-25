@@ -116,6 +116,15 @@ impl ValidatedLock {
             return Ok(Self::Unusable(lock));
         }
 
+        if lock.required_environments_mode() != options.required_environments_mode {
+            debug!(
+                "Resolving despite existing lockfile due to change in required environments mode: `{:?}` vs. `{:?}`",
+                lock.required_environments_mode(),
+                options.required_environments_mode
+            );
+            return Ok(Self::Versions(lock));
+        }
+
         // NOTE: It's important that this appears before any possible path that
         // returns `Self::Preferable`. In particular, if our fork markers are
         // bunk, then we shouldn't return a result that indicates we should try
