@@ -39,6 +39,7 @@ pub(crate) async fn compile(args: CompileArgs) -> anyhow::Result<()> {
         &interpreter,
         &Concurrency::default(),
         cache.root(),
+        uv_installer::CompileMode::Environment,
     )
     .await?;
     info!("Compiled {files} files");

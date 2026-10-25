@@ -153,9 +153,15 @@ with the same interpreter and wheel selection can reuse those files, including i
 scripts.
 
 This optimization requires a persistent cache. Every distribution selected for installation must be
-a registry wheel with a recorded hash in the lockfile. Runs that need to build or refresh packages,
-compile bytecode, or use `--link-mode copy` use the regular private installation. uv also uses that
-installation when the runner cannot create the mounts.
+a registry wheel with a recorded hash in the lockfile. Runs that need to build or refresh packages
+or use `--link-mode copy` use the regular private installation. uv also uses that installation when
+the runner cannot create the mounts.
+
+On CPython 3.7 and later, `--compile-bytecode` can prepare bytecode once for subsequent private
+runs. By default, Python checks the source hash on import, so edits within a run take effect even if
+the source size and timestamp stay the same. Compilation uses the regular private installation when
+you request another `PYC_INVALIDATION_MODE` or set `PYTHONOPTIMIZE`, `PYTHONPYCACHEPREFIX`, or
+`PYTHONNODEBUGRANGES` to a nonempty value.
 
 ## Signal handling
 

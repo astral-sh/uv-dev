@@ -630,7 +630,6 @@ pub async fn run(
                 && !cache.is_temporary()
                 && python_platform.is_none()
                 && settings.reinstall.is_none()
-                && !settings.compile_bytecode
                 && settings.resolver.link_mode != LinkMode::Copy
                 && private_overlay::supported();
             #[cfg(not(target_os = "linux"))]
@@ -861,6 +860,8 @@ pub async fn run(
                 let prepared = if try_prepared
                     && let Some(resolution) = &resolution
                     && private_overlay::eligible(resolution, &cache)
+                    && (!settings.compile_bytecode
+                        || private_overlay::can_compile(venv.interpreter()))
                 {
                     let client = client_builder
                         .clone()

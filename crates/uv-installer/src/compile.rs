@@ -26,6 +26,14 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
 type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
 
+#[derive(Clone, Copy, Debug)]
+pub enum CompileMode {
+    /// Use the environment's Python startup and bytecode settings.
+    Environment,
+    /// Compile checked-hash bytecode without loading installed packages.
+    Prepared,
+}
+
 #[derive(DebugNoInline, Error)]
 pub enum CompileError {
     #[error("Failed to list files in `site-packages`")]
@@ -99,6 +107,7 @@ fn spawn_workers(
     receiver: &Receiver<PathBuf>,
     worker_count: usize,
     timeout: Option<Duration>,
+    mode: CompileMode,
 ) -> Vec<WorkerHandle> {
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
@@ -111,6 +120,7 @@ fn spawn_workers(
             pip_compileall_py.to_path_buf(),
             receiver.clone(),
             timeout,
+            mode,
         );
 
         // Spawn each worker on a dedicated thread.
@@ -176,6 +186,7 @@ pub async fn compile_tree(
     python_executable: &Path,
     concurrency: &Concurrency,
     cache: &Path,
+    mode: CompileMode,
 ) -> Result<usize, CompileError> {
     debug_assert!(
         dir.is_absolute(),
@@ -198,6 +209,7 @@ pub async fn compile_tree(
         &receiver,
         worker_count,
         timeout,
+        mode,
     );
     // Make sure the channel gets closed when all workers exit.
     drop(receiver);
@@ -280,6 +292,7 @@ pub async fn compile_files(
         &receiver,
         worker_count,
         timeout,
+        CompileMode::Environment,
     );
     drop(receiver);
 
@@ -321,6 +334,7 @@ async fn worker(
     pip_compileall_py: PathBuf,
     receiver: Receiver<PathBuf>,
     timeout: Option<Duration>,
+    mode: CompileMode,
 ) -> Result<(), CompileError> {
     fs_err::tokio::write(&pip_compileall_py, COMPILEALL_SCRIPT)
         .await
@@ -334,7 +348,7 @@ async fn worker(
         loop {
             // If the interpreter started successful, return it, else retry.
             if let Some(child) =
-                launch_bytecode_compiler(&dir, &interpreter, &pip_compileall_py).await?
+                launch_bytecode_compiler(&dir, &interpreter, &pip_compileall_py, mode).await?
             {
                 break Ok::<_, CompileError>(child);
             }
@@ -403,6 +417,7 @@ async fn launch_bytecode_compiler(
     dir: &Path,
     interpreter: &Path,
     pip_compileall_py: &Path,
+    mode: CompileMode,
 ) -> Result<
     Option<(
         Child,
@@ -413,7 +428,14 @@ async fn launch_bytecode_compiler(
     CompileError,
 > {
     // We input the paths through stdin and get the successful paths returned through stdout.
-    let mut bytecode_compiler = Command::new(interpreter)
+    let mut command = Command::new(interpreter);
+    if matches!(mode, CompileMode::Prepared) {
+        // The prepared tree is shared. Exclude package startup hooks and the working
+        // directory from the compiler's import path, and validate bytecode against source.
+        command.args(["-I", "-S", "-u"]);
+        command.env(EnvVars::PYC_INVALIDATION_MODE, "CHECKED_HASH");
+    }
+    let mut bytecode_compiler = command
         .arg(pip_compileall_py)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
