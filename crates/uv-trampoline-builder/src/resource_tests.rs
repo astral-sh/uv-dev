@@ -1,6 +1,5 @@
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use assert_cmd::prelude::OutputAssertExt;
@@ -12,6 +11,8 @@ use windows::Win32::System::LibraryLoader::{
     BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
 };
 use windows::core::PCWSTR;
+
+use super::test::{python_command, test_python};
 
 use super::{
     Launcher, LauncherKind, RESOURCE_PYTHON_PATH, RESOURCE_SCRIPT_DATA, RESOURCE_TRAMPOLINE_KIND,
@@ -270,7 +271,7 @@ fn large_script_survives_launcher_rewrites() -> Result<()> {
     let rewritten_path = temp_dir.child("rewritten.exe");
     let repeated_path = temp_dir.child("repeated.exe");
     let original_python = Path::new(r"C:\old Python\π\python.exe");
-    let python = which::which("python")?;
+    let python = test_python()?;
 
     let script = format!(
         "{}print('large trampoline')\n",
@@ -306,7 +307,7 @@ fn large_script_survives_launcher_rewrites() -> Result<()> {
     }
 
     for path in [rewritten_path.path(), repeated_path.path()] {
-        Command::new(path)
+        python_command(path)
             .assert()
             .success()
             .stdout("large trampoline\r\n");
