@@ -11,10 +11,11 @@ use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
+use tokio::sync::AcquireError;
 use tracing::{debug, instrument, trace};
 
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
-use uv_build_frontend::{SourceBuild, SourceBuildContext};
+use uv_build_frontend::{SourceBuild, SourceBuildContext, spawn_native_build};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
@@ -74,6 +75,9 @@ pub enum BuildDispatchError {
     Join(#[from] tokio::task::JoinError),
 
     #[error(transparent)]
+    BuildPermit(#[from] AcquireError),
+
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
     #[error(transparent)]
@@ -101,6 +105,7 @@ impl uv_errors::Hinted for BuildDispatchError {
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
+            | Self::BuildPermit(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
             | Self::UninstallBuildDependencies(_)
@@ -122,6 +127,7 @@ impl IsBuildBackendError for BuildDispatchError {
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
+            | Self::BuildPermit(_)
             | Self::Anyhow(_)
             | Self::UninstallBuildDependencies(_)
             | Self::InstallBuildDependencies(_)
@@ -136,6 +142,7 @@ impl IsBuildBackendError for BuildDispatchError {
             | Self::Resolve(_)
             | Self::ResolveRequirements { .. }
             | Self::Join(_)
+            | Self::BuildPermit(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
             | Self::UninstallBuildDependencies(_)
@@ -690,41 +697,45 @@ impl BuildContext for BuildDispatch<'_> {
 
         let output_dir = output_dir.to_path_buf();
         let tar_backend = self.tar_backend;
-        let filename = tokio::task::spawn_blocking(move || -> Result<_, BuildBackendError> {
-            let filename = match build_kind {
-                BuildKind::Wheel => {
-                    let wheel = uv_build_backend::build_wheel(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
-                BuildKind::Sdist => {
-                    let source_dist = uv_build_backend::build_source_dist(
-                        &source_tree,
-                        &output_dir,
-                        uv_version::version(),
-                        sources.is_none(),
-                        tar_backend,
-                    )?;
-                    DistFilename::SourceDistFilename(source_dist)
-                }
-                BuildKind::Editable => {
-                    let wheel = uv_build_backend::build_editable(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
-            };
-            Ok(filename)
-        })
+        let filename = spawn_native_build(
+            self.concurrency.builds_semaphore.clone(),
+            move || -> Result<_, BuildBackendError> {
+                let filename = match build_kind {
+                    BuildKind::Wheel => {
+                        let wheel = uv_build_backend::build_wheel(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                    BuildKind::Sdist => {
+                        let source_dist = uv_build_backend::build_source_dist(
+                            &source_tree,
+                            &output_dir,
+                            uv_version::version(),
+                            sources.is_none(),
+                            tar_backend,
+                        )?;
+                        DistFilename::SourceDistFilename(source_dist)
+                    }
+                    BuildKind::Editable => {
+                        let wheel = uv_build_backend::build_editable(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                };
+                Ok(filename)
+            },
+        )
+        .await?
         .await??;
 
         Ok(Some(filename))
