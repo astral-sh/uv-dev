@@ -1,0 +1,2942 @@
+{
+  "repository": "astral-sh/uv-dev",
+  "action": "8139eb474ac22fe39bb1e33b50afa426dcdaf455",
+  "measurement_window": {
+    "parent": "a7aa382e69a6fd455cc515f7926fe1202dc2ad8e",
+    "first": "848d639727161f9482f209992f21d087096e2783",
+    "last": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596"
+  },
+  "source_history": [
+    {
+      "index": 0,
+      "sha": "a7aa382e69a6fd455cc515f7926fe1202dc2ad8e",
+      "subject": "Box workspace discovery on cache misses (#22864)",
+      "date": "2026-10-23T13:41:33+00:00",
+      "changed_files": [],
+      "categories": [],
+      "pr_eligible": true
+    },
+    {
+      "index": 1,
+      "sha": "848d639727161f9482f209992f21d087096e2783",
+      "subject": "Share parsed URLs across resolver forks (#22863)",
+      "date": "2026-10-23T13:56:03+00:00",
+      "changed_files": [
+        "crates/uv-resolver/src/fork_urls.rs",
+        "crates/uv-resolver/src/resolution/output.rs",
+        "crates/uv-resolver/src/resolver/mod.rs",
+        "crates/uv-resolver/src/resolver/resolution.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 2,
+      "sha": "503ac8d6447be901210fe43c58e5479097631aca",
+      "subject": "fix(python): preserve variant in `uv python upgrade` (#22836)",
+      "date": "2026-10-23T10:36:39-04:00",
+      "changed_files": [
+        "crates/uv-python-managed/src/managed.rs",
+        "crates/uv/tests/python/python_upgrade.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 3,
+      "sha": "d36bf23fd2441279f6756113a178a37bfeef504d",
+      "subject": "Update the Docker guide and reproduction examples to uv 0.13.5 (#22867)",
+      "date": "2026-10-23T10:42:09-04:00",
+      "changed_files": [
+        "docs/guides/integration/docker.md",
+        "docs/reference/troubleshooting/reproducible-examples.md",
+        "pyproject.toml"
+      ],
+      "categories": [],
+      "pr_eligible": true
+    },
+    {
+      "index": 4,
+      "sha": "f8c2aff33f0e1964f74d47b2fdf797f52dea9769",
+      "subject": "Skip registry requirements when filling the lookahead queue (#22866)",
+      "date": "2026-10-23T10:55:49-04:00",
+      "changed_files": [
+        "crates/uv-requirements/src/lookahead.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 5,
+      "sha": "35b0794369b9128ce6f97e09adcdd740005f5cbe",
+      "subject": "Handle AI policy labels through Actions (#22857)",
+      "date": "2026-10-23T09:09:42-07:00",
+      "changed_files": [
+        ".github/automations-dispatch.json",
+        ".github/secure-token-service.json",
+        ".github/workflows/ai-policy.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 6,
+      "sha": "3a0e63ed902b79fac1a7c66581eb2d4a13aec801",
+      "subject": "Box optional uv settings in project manifests (#22870)",
+      "date": "2026-10-23T13:00:02-04:00",
+      "changed_files": [
+        "crates/uv-workspace/src/pyproject.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 7,
+      "sha": "0df7120c1e47ff42cd49c2daaa7cbd1dfbb38536",
+      "subject": "Enable opt-in code quality reviews (#22881)",
+      "date": "2026-10-23T10:08:13-07:00",
+      "changed_files": [
+        ".github/secure-token-service.json",
+        ".github/workflows/ci.yml",
+        ".github/workflows/pull-request-code-quality-review.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 8,
+      "sha": "fc17caa96ecb44b0466b51cef629dd1054211325",
+      "subject": "Protect non-virtualenv directories with --active --script (#21464)",
+      "date": "2026-10-23T18:23:29+01:00",
+      "changed_files": [
+        "crates/uv-environment-operations/src/error.rs",
+        "crates/uv-environment-operations/src/lib.rs",
+        "crates/uv/tests/project/run.rs",
+        "crates/uv/tests/sync/sync.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 9,
+      "sha": "e96aa6932bb860f3b950ddb46d1646d45e09315d",
+      "subject": "Reuse environments when PEP 723 dependencies are omitted (#21458)",
+      "date": "2026-10-23T18:23:29+01:00",
+      "changed_files": [
+        "crates/uv-environment-operations/src/install_target.rs",
+        "crates/uv-lock-operations/src/lock_target.rs",
+        "crates/uv-project-commands/src/run.rs",
+        "crates/uv-project-commands/src/sync.rs",
+        "crates/uv-requirements/src/script.rs",
+        "crates/uv-requirements/src/specification.rs",
+        "crates/uv-scripts/src/lib.rs",
+        "crates/uv/tests/project/run.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 10,
+      "sha": "09280503abab324ef6095cb54588363e6637b9b5",
+      "subject": "Benchmark build dependency settings deserialization (#22849)",
+      "date": "2026-10-23T15:01:31-04:00",
+      "changed_files": [
+        ".github/workflows/bench.yml",
+        "Cargo.lock",
+        "crates/uv-bench/Cargo.toml",
+        "crates/uv-bench/benches/fixtures/build-dependencies/uv.toml",
+        "crates/uv-bench/benches/uv_settings.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 11,
+      "sha": "4be0efcf1d5c5f958ee819fdfec598d1e81bbaf9",
+      "subject": "Deserialize build dependency settings in one pass (#22848)",
+      "date": "2026-10-23T16:03:31-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-workspace/Cargo.toml",
+        "crates/uv-workspace/src/pyproject.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 12,
+      "sha": "fc7f936e906ba98274926c3a79fdda4e5b07bcc0",
+      "subject": "Derive single-pass deserialization for untagged enums (#22871)",
+      "date": "2026-10-23T16:03:32-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-macros/Cargo.toml",
+        "crates/uv-macros/src/deserialize_untagged.rs",
+        "crates/uv-macros/src/lib.rs",
+        "crates/uv-macros/tests/deserialize_untagged.rs",
+        "crates/uv-workspace/src/pyproject.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 13,
+      "sha": "d952be66482a298658f39f314ba8c337154ed0e7",
+      "subject": "Derive deserialization for PyPI core metadata (#22874)",
+      "date": "2026-10-23T16:03:32-04:00",
+      "changed_files": [
+        "crates/uv-pypi-types/src/simple_json.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 14,
+      "sha": "8b504b11fb61b16598dbed549705404a8df74042",
+      "subject": "Derive deserialization for PyPI yanked metadata (#22875)",
+      "date": "2026-10-23T16:03:32-04:00",
+      "changed_files": [
+        "crates/uv-pypi-types/src/simple_json.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 15,
+      "sha": "f9f28d1785fb548007e9241e06b0ccf735c7afd0",
+      "subject": "Derive deserialization for dependency exclusions (#22876)",
+      "date": "2026-10-23T16:03:33-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-configuration/Cargo.toml",
+        "crates/uv-configuration/src/excludes.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 16,
+      "sha": "5563290e5b847dd83fef3a31ef4c584fb0e0d17e",
+      "subject": "Derive deserialization for Git cache patterns (#22877)",
+      "date": "2026-10-23T16:03:33-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-cache-info/Cargo.toml",
+        "crates/uv-cache-info/src/cache_info.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 17,
+      "sha": "f96c64e8a062ef3b483aba6901780965ee91c95f",
+      "subject": "Derive deserialization for preview feature settings (#22878)",
+      "date": "2026-10-23T16:03:34-04:00",
+      "changed_files": [
+        "crates/uv-settings/src/settings.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 18,
+      "sha": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+      "subject": "Derive deserialization for build backend config settings (#22879)",
+      "date": "2026-10-23T16:03:34-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-distribution-types/Cargo.toml",
+        "crates/uv-distribution-types/src/config_settings.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 19,
+      "sha": "834e65e7b43f6a20b595dd6a93c342f09df2590f",
+      "subject": "Derive deserialization for project source entries (#22880)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": [
+        "crates/uv-workspace/src/pyproject.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 20,
+      "sha": "28ab1fa4d1fffbe6f62296fd8eeebd030a1c4dec",
+      "subject": "Derive deserialization for workspace references (#22883)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": [
+        "crates/uv-workspace/src/pyproject.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 21,
+      "sha": "f7a4df41ee3fdf3b80746ecb6b5473f26b560d7b",
+      "subject": "Derive deserialization for build backend module names (#22884)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "crates/uv-build-backend/src/settings.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 22,
+      "sha": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+      "subject": "Derive deserialization for tool receipt requirements (#22885)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-tool/Cargo.toml",
+        "crates/uv-tool/src/tool.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 23,
+      "sha": "ef5b724387cd61466d825b3fdda18ed318489ff6",
+      "subject": "Derive deserialization for exclude-newer values (#22887)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "crates/uv-distribution-types/src/exclude_newer.rs",
+        "crates/uv/tests/lock_scenarios/lock_exclude_newer_relative.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 24,
+      "sha": "c5fed68440e161dfd18b2c2b2dd5a8744ef824a5",
+      "subject": "Document when to use DeserializeUntagged (#22889)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": [
+        "AGENTS.md"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": false
+    },
+    {
+      "index": 25,
+      "sha": "f158ef25a3cf2fb9bc089ca38cc06f659066f566",
+      "subject": "Emit DeserializeUntagged scalar callbacks directly (#22890)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": [
+        "crates/uv-macros/src/deserialize_untagged.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 26,
+      "sha": "e46bedbacb91322b32e76b797f8828910b1b0dea",
+      "subject": "Skip the Azure APT mirror in ARMv7 CI (#22895)",
+      "date": "2026-10-23T21:22:51+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 27,
+      "sha": "f912bc5d57c126cdf1e333518c5c4f2ca21cb29a",
+      "subject": "Remove the unused `Deserialize` derive from `WheelWireSource` (#22891)",
+      "date": "2026-10-23T18:02:04-04:00",
+      "changed_files": [
+        "crates/uv-lock/src/lock/mod.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 28,
+      "sha": "15689c8dd573ad32e009d0fdb50ec3fb70315f01",
+      "subject": "Skip the Azure APT mirror for Wine, deadsnakes, and musl (#22896)",
+      "date": "2026-10-23T18:02:27-04:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test-integration.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 29,
+      "sha": "1cd8cf12bd622f2815406f29e3168d7f052bf1b3",
+      "subject": "Use `DeserializeUntagged` for Packse artifact settings (#22892)",
+      "date": "2026-10-23T22:21:25+00:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-test/Cargo.toml",
+        "crates/uv-test/src/packse/scenario.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true
+    },
+    {
+      "index": 30,
+      "sha": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596",
+      "subject": "Restore build-script input timestamps in Linux CI (#22904)",
+      "date": "2026-10-24T04:00:52+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true
+    }
+  ],
+  "initial_cache_source": "8b7edb87b9cf22b465139cce232f82f9ad1e6e7f",
+  "initial_cache_age_before_window": 8,
+  "initial_seed_execution": {
+    "historical": "compile-only",
+    "window_boundary_sensitivity": "full-job"
+  },
+  "workflow_heads": [
+    "ae2731bdf19e2e6be8bc9885f55249792da023e3",
+    "fd25527e61e8ee90600f2654af1462a7ab53c2a3"
+  ],
+  "variants": {
+    "before": "Dependency-only cache",
+    "after": "Full workspace cache"
+  },
+  "replicas_per_commit": 3,
+  "timing_basis": "First to last runner-log timestamp, including setup and post steps, excluding queue time.",
+  "interval_method": "90% percentile intervals from 50,000 circular moving-block bootstrap resamples of paired per-commit means, block length 5 commits. Repetitions are averaged within each commit; they are not treated as independent source changes. Intervals describe the observed histories, not arbitrary future workloads.",
+  "bootstrap_block_length": 5,
+  "cohort_join": {
+    "replace_indices": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "overlap_index": 11,
+    "overlap_audit": {
+      "project": "uv",
+      "index": 11,
+      "source": "4be0efcf1d5c5f958ee819fdfec598d1e81bbaf9",
+      "variants": {
+        "before": {
+          "cache_source_sha": "09280503abab324ef6095cb54588363e6637b9b5",
+          "archive_bytes_original_corrected": [
+            424821472,
+            424826035
+          ],
+          "archive_size_relative_change": 1.0740982508528063e-05,
+          "workspace_compilation_multisets_equal": true,
+          "workspace_compilation_multisets": [
+            [
+              [
+                [
+                  "uv",
+                  1
+                ],
+                [
+                  "uv-audit",
+                  1
+                ],
+                [
+                  "uv-audit-operations",
+                  1
+                ],
+                [
+                  "uv-auth",
+                  1
+                ],
+                [
+                  "uv-bin-install",
+                  1
+                ],
+                [
+                  "uv-build",
+                  1
+                ],
+                [
+                  "uv-build-backend",
+                  1
+                ],
+                [
+                  "uv-build-commands",
+                  1
+                ],
+                [
+                  "uv-build-frontend",
+                  1
+                ],
+                [
+                  "uv-cache",
+                  1
+                ],
+                [
+                  "uv-cache-info",
+                  1
+                ],
+                [
+                  "uv-cache-key",
+                  1
+                ],
+                [
+                  "uv-cli",
+                  1
+                ],
+                [
+                  "uv-client",
+                  1
+                ],
+                [
+                  "uv-command-support",
+                  1
+                ],
+                [
+                  "uv-configuration",
+                  1
+                ],
+                [
+                  "uv-console",
+                  1
+                ],
+                [
+                  "uv-dev",
+                  1
+                ],
+                [
+                  "uv-dirs",
+                  1
+                ],
+                [
+                  "uv-dispatch",
+                  1
+                ],
+                [
+                  "uv-distribution",
+                  1
+                ],
+                [
+                  "uv-distribution-filename",
+                  1
+                ],
+                [
+                  "uv-distribution-types",
+                  1
+                ],
+                [
+                  "uv-environment-operations",
+                  1
+                ],
+                [
+                  "uv-errors",
+                  1
+                ],
+                [
+                  "uv-extract",
+                  1
+                ],
+                [
+                  "uv-fastid",
+                  1
+                ],
+                [
+                  "uv-flags",
+                  1
+                ],
+                [
+                  "uv-fs",
+                  1
+                ],
+                [
+                  "uv-git",
+                  1
+                ],
+                [
+                  "uv-git-types",
+                  1
+                ],
+                [
+                  "uv-globfilter",
+                  1
+                ],
+                [
+                  "uv-install-operations",
+                  1
+                ],
+                [
+                  "uv-install-wheel",
+                  1
+                ],
+                [
+                  "uv-installer",
+                  1
+                ],
+                [
+                  "uv-keyring",
+                  1
+                ],
+                [
+                  "uv-lock",
+                  1
+                ],
+                [
+                  "uv-lock-operations",
+                  1
+                ],
+                [
+                  "uv-logging",
+                  1
+                ],
+                [
+                  "uv-macros",
+                  1
+                ],
+                [
+                  "uv-metadata",
+                  1
+                ],
+                [
+                  "uv-netrc",
+                  1
+                ],
+                [
+                  "uv-normalize",
+                  1
+                ],
+                [
+                  "uv-once-map",
+                  1
+                ],
+                [
+                  "uv-options-metadata",
+                  1
+                ],
+                [
+                  "uv-pep440",
+                  1
+                ],
+                [
+                  "uv-pep508",
+                  1
+                ],
+                [
+                  "uv-performance-memory-allocator",
+                  1
+                ],
+                [
+                  "uv-pip-commands",
+                  1
+                ],
+                [
+                  "uv-platform",
+                  1
+                ],
+                [
+                  "uv-platform-tags",
+                  1
+                ],
+                [
+                  "uv-preview",
+                  1
+                ],
+                [
+                  "uv-project-commands",
+                  1
+                ],
+                [
+                  "uv-project-edit",
+                  1
+                ],
+                [
+                  "uv-publish",
+                  1
+                ],
+                [
+                  "uv-publish-commands",
+                  1
+                ],
+                [
+                  "uv-pypi-types",
+                  1
+                ],
+                [
+                  "uv-python-commands",
+                  1
+                ],
+                [
+                  "uv-python-discovery",
+                  1
+                ],
+                [
+                  "uv-python-interpreter",
+                  1
+                ],
+                [
+                  "uv-python-managed",
+                  1
+                ],
+                [
+                  "uv-python-types",
+                  1
+                ],
+                [
+                  "uv-redacted",
+                  1
+                ],
+                [
+                  "uv-requirements",
+                  1
+                ],
+                [
+                  "uv-requirements-txt",
+                  1
+                ],
+                [
+                  "uv-resolve-operations",
+                  1
+                ],
+                [
+                  "uv-resolver",
+                  1
+                ],
+                [
+                  "uv-resolver-types",
+                  1
+                ],
+                [
+                  "uv-scripts",
+                  1
+                ],
+                [
+                  "uv-settings",
+                  1
+                ],
+                [
+                  "uv-shell",
+                  1
+                ],
+                [
+                  "uv-small-str",
+                  1
+                ],
+                [
+                  "uv-state",
+                  1
+                ],
+                [
+                  "uv-static",
+                  1
+                ],
+                [
+                  "uv-test",
+                  1
+                ],
+                [
+                  "uv-threads",
+                  1
+                ],
+                [
+                  "uv-toml",
+                  1
+                ],
+                [
+                  "uv-tool",
+                  1
+                ],
+                [
+                  "uv-tool-commands",
+                  1
+                ],
+                [
+                  "uv-torch",
+                  1
+                ],
+                [
+                  "uv-trampoline-builder",
+                  1
+                ],
+                [
+                  "uv-types",
+                  1
+                ],
+                [
+                  "uv-unix",
+                  1
+                ],
+                [
+                  "uv-version",
+                  1
+                ],
+                [
+                  "uv-virtualenv",
+                  1
+                ],
+                [
+                  "uv-warnings",
+                  1
+                ],
+                [
+                  "uv-workspace",
+                  1
+                ],
+                [
+                  "uv-workspace-commands",
+                  1
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  "uv",
+                  1
+                ],
+                [
+                  "uv-audit",
+                  1
+                ],
+                [
+                  "uv-audit-operations",
+                  1
+                ],
+                [
+                  "uv-auth",
+                  1
+                ],
+                [
+                  "uv-bin-install",
+                  1
+                ],
+                [
+                  "uv-build",
+                  1
+                ],
+                [
+                  "uv-build-backend",
+                  1
+                ],
+                [
+                  "uv-build-commands",
+                  1
+                ],
+                [
+                  "uv-build-frontend",
+                  1
+                ],
+                [
+                  "uv-cache",
+                  1
+                ],
+                [
+                  "uv-cache-info",
+                  1
+                ],
+                [
+                  "uv-cache-key",
+                  1
+                ],
+                [
+                  "uv-cli",
+                  1
+                ],
+                [
+                  "uv-client",
+                  1
+                ],
+                [
+                  "uv-command-support",
+                  1
+                ],
+                [
+                  "uv-configuration",
+                  1
+                ],
+                [
+                  "uv-console",
+                  1
+                ],
+                [
+                  "uv-dev",
+                  1
+                ],
+                [
+                  "uv-dirs",
+                  1
+                ],
+                [
+                  "uv-dispatch",
+                  1
+                ],
+                [
+                  "uv-distribution",
+                  1
+                ],
+                [
+                  "uv-distribution-filename",
+                  1
+                ],
+                [
+                  "uv-distribution-types",
+                  1
+                ],
+                [
+                  "uv-environment-operations",
+                  1
+                ],
+                [
+                  "uv-errors",
+                  1
+                ],
+                [
+                  "uv-extract",
+                  1
+                ],
+                [
+                  "uv-fastid",
+                  1
+                ],
+                [
+                  "uv-flags",
+                  1
+                ],
+                [
+                  "uv-fs",
+                  1
+                ],
+                [
+                  "uv-git",
+                  1
+                ],
+                [
+                  "uv-git-types",
+                  1
+                ],
+                [
+                  "uv-globfilter",
+                  1
+                ],
+                [
+                  "uv-install-operations",
+                  1
+                ],
+                [
+                  "uv-install-wheel",
+                  1
+                ],
+                [
+                  "uv-installer",
+                  1
+                ],
+                [
+                  "uv-keyring",
+                  1
+                ],
+                [
+                  "uv-lock",
+                  1
+                ],
+                [
+                  "uv-lock-operations",
+                  1
+                ],
+                [
+                  "uv-logging",
+                  1
+                ],
+                [
+                  "uv-macros",
+                  1
+                ],
+                [
+                  "uv-metadata",
+                  1
+                ],
+                [
+                  "uv-netrc",
+                  1
+                ],
+                [
+                  "uv-normalize",
+                  1
+                ],
+                [
+                  "uv-once-map",
+                  1
+                ],
+                [
+                  "uv-options-metadata",
+                  1
+                ],
+                [
+                  "uv-pep440",
+                  1
+                ],
+                [
+                  "uv-pep508",
+                  1
+                ],
+                [
+                  "uv-performance-memory-allocator",
+                  1
+                ],
+                [
+                  "uv-pip-commands",
+                  1
+                ],
+                [
+                  "uv-platform",
+                  1
+                ],
+                [
+                  "uv-platform-tags",
+                  1
+                ],
+                [
+                  "uv-preview",
+                  1
+                ],
+                [
+                  "uv-project-commands",
+                  1
+                ],
+                [
+                  "uv-project-edit",
+                  1
+                ],
+                [
+                  "uv-publish",
+                  1
+                ],
+                [
+                  "uv-publish-commands",
+                  1
+                ],
+                [
+                  "uv-pypi-types",
+                  1
+                ],
+                [
+                  "uv-python-commands",
+                  1
+                ],
+                [
+                  "uv-python-discovery",
+                  1
+                ],
+                [
+                  "uv-python-interpreter",
+                  1
+                ],
+                [
+                  "uv-python-managed",
+                  1
+                ],
+                [
+                  "uv-python-types",
+                  1
+                ],
+                [
+                  "uv-redacted",
+                  1
+                ],
+                [
+                  "uv-requirements",
+                  1
+                ],
+                [
+                  "uv-requirements-txt",
+                  1
+                ],
+                [
+                  "uv-resolve-operations",
+                  1
+                ],
+                [
+                  "uv-resolver",
+                  1
+                ],
+                [
+                  "uv-resolver-types",
+                  1
+                ],
+                [
+                  "uv-scripts",
+                  1
+                ],
+                [
+                  "uv-settings",
+                  1
+                ],
+                [
+                  "uv-shell",
+                  1
+                ],
+                [
+                  "uv-small-str",
+                  1
+                ],
+                [
+                  "uv-state",
+                  1
+                ],
+                [
+                  "uv-static",
+                  1
+                ],
+                [
+                  "uv-test",
+                  1
+                ],
+                [
+                  "uv-threads",
+                  1
+                ],
+                [
+                  "uv-toml",
+                  1
+                ],
+                [
+                  "uv-tool",
+                  1
+                ],
+                [
+                  "uv-tool-commands",
+                  1
+                ],
+                [
+                  "uv-torch",
+                  1
+                ],
+                [
+                  "uv-trampoline-builder",
+                  1
+                ],
+                [
+                  "uv-types",
+                  1
+                ],
+                [
+                  "uv-unix",
+                  1
+                ],
+                [
+                  "uv-version",
+                  1
+                ],
+                [
+                  "uv-virtualenv",
+                  1
+                ],
+                [
+                  "uv-warnings",
+                  1
+                ],
+                [
+                  "uv-workspace",
+                  1
+                ],
+                [
+                  "uv-workspace-commands",
+                  1
+                ]
+              ]
+            ]
+          ],
+          "job_seconds_original_corrected": [
+            198.23169966666666,
+            193.32919533333333
+          ],
+          "main_build_seconds_original_corrected": [
+            49.27,
+            47.806666666666665
+          ],
+          "runs_original_corrected": [
+            [
+              40163008738,
+              40163010628,
+              40163012493
+            ],
+            [
+              40168897716,
+              40168899784,
+              40168902534
+            ]
+          ]
+        },
+        "after": {
+          "cache_source_sha": "09280503abab324ef6095cb54588363e6637b9b5",
+          "archive_bytes_original_corrected": [
+            824145381,
+            824143100
+          ],
+          "archive_size_relative_change": -2.767715566398543e-06,
+          "workspace_compilation_multisets_equal": true,
+          "workspace_compilation_multisets": [
+            [
+              [
+                [
+                  "uv",
+                  1
+                ],
+                [
+                  "uv-audit-operations",
+                  1
+                ],
+                [
+                  "uv-build-commands",
+                  1
+                ],
+                [
+                  "uv-build-frontend",
+                  1
+                ],
+                [
+                  "uv-cli",
+                  1
+                ],
+                [
+                  "uv-dev",
+                  1
+                ],
+                [
+                  "uv-dispatch",
+                  1
+                ],
+                [
+                  "uv-distribution",
+                  1
+                ],
+                [
+                  "uv-environment-operations",
+                  1
+                ],
+                [
+                  "uv-install-operations",
+                  1
+                ],
+                [
+                  "uv-installer",
+                  1
+                ],
+                [
+                  "uv-lock",
+                  1
+                ],
+                [
+                  "uv-lock-operations",
+                  1
+                ],
+                [
+                  "uv-pip-commands",
+                  1
+                ],
+                [
+                  "uv-project-commands",
+                  1
+                ],
+                [
+                  "uv-project-edit",
+                  1
+                ],
+                [
+                  "uv-publish-commands",
+                  1
+                ],
+                [
+                  "uv-python-commands",
+                  1
+                ],
+                [
+                  "uv-python-discovery",
+                  1
+                ],
+                [
+                  "uv-requirements",
+                  1
+                ],
+                [
+                  "uv-resolve-operations",
+                  1
+                ],
+                [
+                  "uv-resolver",
+                  1
+                ],
+                [
+                  "uv-resolver-types",
+                  1
+                ],
+                [
+                  "uv-scripts",
+                  1
+                ],
+                [
+                  "uv-settings",
+                  1
+                ],
+                [
+                  "uv-test",
+                  1
+                ],
+                [
+                  "uv-tool",
+                  1
+                ],
+                [
+                  "uv-tool-commands",
+                  1
+                ],
+                [
+                  "uv-types",
+                  1
+                ],
+                [
+                  "uv-workspace",
+                  1
+                ],
+                [
+                  "uv-workspace-commands",
+                  1
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  "uv",
+                  1
+                ],
+                [
+                  "uv-audit-operations",
+                  1
+                ],
+                [
+                  "uv-build-commands",
+                  1
+                ],
+                [
+                  "uv-build-frontend",
+                  1
+                ],
+                [
+                  "uv-cli",
+                  1
+                ],
+                [
+                  "uv-dev",
+                  1
+                ],
+                [
+                  "uv-dispatch",
+                  1
+                ],
+                [
+                  "uv-distribution",
+                  1
+                ],
+                [
+                  "uv-environment-operations",
+                  1
+                ],
+                [
+                  "uv-install-operations",
+                  1
+                ],
+                [
+                  "uv-installer",
+                  1
+                ],
+                [
+                  "uv-lock",
+                  1
+                ],
+                [
+                  "uv-lock-operations",
+                  1
+                ],
+                [
+                  "uv-pip-commands",
+                  1
+                ],
+                [
+                  "uv-project-commands",
+                  1
+                ],
+                [
+                  "uv-project-edit",
+                  1
+                ],
+                [
+                  "uv-publish-commands",
+                  1
+                ],
+                [
+                  "uv-python-commands",
+                  1
+                ],
+                [
+                  "uv-python-discovery",
+                  1
+                ],
+                [
+                  "uv-requirements",
+                  1
+                ],
+                [
+                  "uv-resolve-operations",
+                  1
+                ],
+                [
+                  "uv-resolver",
+                  1
+                ],
+                [
+                  "uv-resolver-types",
+                  1
+                ],
+                [
+                  "uv-scripts",
+                  1
+                ],
+                [
+                  "uv-settings",
+                  1
+                ],
+                [
+                  "uv-test",
+                  1
+                ],
+                [
+                  "uv-tool",
+                  1
+                ],
+                [
+                  "uv-tool-commands",
+                  1
+                ],
+                [
+                  "uv-types",
+                  1
+                ],
+                [
+                  "uv-workspace",
+                  1
+                ],
+                [
+                  "uv-workspace-commands",
+                  1
+                ]
+              ]
+            ]
+          ],
+          "job_seconds_original_corrected": [
+            193.13307233333333,
+            191.60904633333334
+          ],
+          "main_build_seconds_original_corrected": [
+            36.50666666666667,
+            36.53333333333333
+          ],
+          "runs_original_corrected": [
+            [
+              40163008738,
+              40163010628,
+              40163012493
+            ],
+            [
+              40168897716,
+              40168899784,
+              40168902534
+            ]
+          ]
+        }
+      }
+    },
+    "overlap_audit_sha256": "2c405851577fc8e3247e28eda19a6914a658b776cb3b94694b418ff73b78c195",
+    "overlap_review": "At the overlapping commit, both cohorts restore the same cache source and cache keys apart from isolation prefixes, use the same compiler, run the same test count, and compile the same workspace crates. Archive sizes differ by less than 0.002% in both modes. Full-cache compilation averages 36.51 s and 36.53 s in the two cohorts. The later cohort therefore supplies the remaining history after this cache refresh."
+  },
+  "unmeasured_failed_attempts": [
+    {
+      "run_id": 40165435117,
+      "phase": "seed",
+      "reason": "Both seed jobs compiled all Rust targets, then failed three TestPyPI snapshots because the service changed its documentation URLs. Build the unmeasured initial seed with --no-run; retain the same source and cache keys, and execute complete measured jobs and later producers.",
+      "superseded": true
+    }
+  ],
+  "sample_selection": {
+    "writer_indices": [
+      10,
+      11,
+      12,
+      15,
+      16,
+      18,
+      22,
+      29
+    ],
+    "selected_job_ids": [
+      121087274735,
+      121087274743,
+      121087280981,
+      121087281089,
+      121087288423,
+      121087288636,
+      121088009956,
+      121088010155,
+      121088017939,
+      121088018124,
+      121088026459,
+      121088026579,
+      121088748681,
+      121088748824,
+      121088754952,
+      121088755085,
+      121088760174,
+      121088760345,
+      121089573385,
+      121089573592,
+      121089580131,
+      121089580286,
+      121089587783,
+      121089587905,
+      121090312398,
+      121090312549,
+      121090317736,
+      121090317871,
+      121090324901,
+      121090325098,
+      121091097707,
+      121091097859,
+      121091103000,
+      121091103081,
+      121091108877,
+      121091109058,
+      121091915200,
+      121091915385,
+      121091920882,
+      121091921056,
+      121091927010,
+      121091927146,
+      121092668553,
+      121092668787,
+      121092674452,
+      121092674682,
+      121092686385,
+      121092686514,
+      121093385287,
+      121093385446,
+      121093392217,
+      121093392414,
+      121093399184,
+      121093399344,
+      121094829960,
+      121094830139,
+      121079058312,
+      121079058344,
+      121080520316,
+      121080520410,
+      121081355976,
+      121081356114,
+      121081363648,
+      121081363804,
+      121081370154,
+      121081370334,
+      121082117144,
+      121082117209,
+      121082122031,
+      121082122222,
+      121082131167,
+      121082131273,
+      121083725183,
+      121083725235,
+      121085321893,
+      121085321911,
+      121086127196,
+      121086127344,
+      121086134434,
+      121086134575,
+      121086140900,
+      121086141059,
+      121087645316,
+      121087645462,
+      121088455896,
+      121088455990,
+      121088461444,
+      121088461580,
+      121088467660,
+      121088467814,
+      121089186049,
+      121089186294,
+      121089191971,
+      121089192090,
+      121089198001,
+      121089198138,
+      121089918008,
+      121089918298,
+      121089926438,
+      121089926596,
+      121089932710,
+      121089932848,
+      121091401813,
+      121091401973,
+      121092155486,
+      121092155585,
+      121092163273,
+      121092163350,
+      121092171429,
+      121092171563,
+      121092904625,
+      121092904729,
+      121092909607,
+      121092909664,
+      121092915871,
+      121092915992,
+      121093608570,
+      121093608733,
+      121093613226,
+      121093613442,
+      121093619195,
+      121093619327,
+      121094341501,
+      121094341685,
+      121094347770,
+      121094347934,
+      121094352545,
+      121094352650,
+      121095323267,
+      121095323475,
+      121095329949,
+      121095329958,
+      121095335778,
+      121095336001,
+      121096863434,
+      121096863576,
+      121097665924,
+      121097666388,
+      121097672845,
+      121097672893,
+      121097680715,
+      121097680849
+    ],
+    "sample_description": "For each source change, use one measured cache-producing pair when the uv PR planner enables saves and the cache key is not an exact hit; otherwise use the mean of three read-only pairs. Each source change has equal weight in the aggregate."
+  },
+  "timing": {
+    "commits": 29,
+    "before_mean": 201.83953225287362,
+    "after_mean": 203.2642887241379,
+    "saved": -1.4247564712642884,
+    "speedup": 0.9929906208306079,
+    "block_length": 5,
+    "resamples": 50000,
+    "before_ci90": [
+      199.1588401511494,
+      204.31081351551728
+    ],
+    "after_ci90": [
+      200.1582154643678,
+      206.1049983494253
+    ],
+    "saved_ci90": [
+      -4.752637687356369,
+      1.772760313218332
+    ],
+    "speedup_ci90": [
+      0.9767922071196575,
+      1.0088176633363504
+    ],
+    "paired_runs": 71
+  },
+  "components": {
+    "job_seconds": {
+      "commits": 29,
+      "before_mean": 201.83953225287362,
+      "after_mean": 203.2642887241379,
+      "saved": -1.4247564712642884,
+      "speedup": 0.9929906208306079,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        199.1588401511494,
+        204.31081351551728
+      ],
+      "after_ci90": [
+        200.1582154643678,
+        206.1049983494253
+      ],
+      "saved_ci90": [
+        -4.752637687356369,
+        1.772760313218332
+      ],
+      "speedup_ci90": [
+        0.9767922071196575,
+        1.0088176633363504
+      ]
+    },
+    "restore_seconds": {
+      "commits": 29,
+      "before_mean": 2.804597701149425,
+      "after_mean": 4.609195402298851,
+      "saved": -1.8045977011494259,
+      "speedup": 0.6084788029925186,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        2.67816091954023,
+        2.931034482758621
+      ],
+      "after_ci90": [
+        4.540229885057472,
+        4.666666666666668
+      ],
+      "saved_ci90": [
+        -1.9425287356321843,
+        -1.6551724137931032
+      ],
+      "speedup_ci90": [
+        0.5806451612903225,
+        0.6390977443609022
+      ]
+    },
+    "main_build_seconds": {
+      "commits": 29,
+      "before_mean": 49.294022988505745,
+      "after_mean": 43.05931034482759,
+      "saved": 6.234712643678158,
+      "speedup": 1.1447936019817626,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        48.740114942528734,
+        49.93978160919539
+      ],
+      "after_ci90": [
+        40.46892528735632,
+        45.5168103448276
+      ],
+      "saved_ci90": [
+        3.8125229885057412,
+        8.775528735632191
+      ],
+      "speedup_ci90": [
+        1.0838536877353926,
+        1.2164525740131733
+      ]
+    },
+    "nextest_seconds": {
+      "commits": 29,
+      "before_mean": 94.24728735632183,
+      "after_mean": 93.87558620689657,
+      "saved": 0.3717011494252631,
+      "speedup": 1.0039595081580215,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        93.36894942528737,
+        95.23248965517242
+      ],
+      "after_ci90": [
+        93.48643333333331,
+        94.27095459770115
+      ],
+      "saved_ci90": [
+        -0.655867241379324,
+        1.4674379310344956
+      ],
+      "speedup_ci90": [
+        0.9930287367231256,
+        1.015656226114591
+      ]
+    },
+    "mdtest_step_seconds": {
+      "commits": 29,
+      "before_mean": 0.0,
+      "after_mean": 0.0,
+      "saved": 0.0,
+      "speedup": null,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        0.0,
+        0.0
+      ],
+      "after_ci90": [
+        0.0,
+        0.0
+      ],
+      "saved_ci90": [
+        0.0,
+        0.0
+      ],
+      "speedup_ci90": null
+    },
+    "apt_seconds": {
+      "commits": 29,
+      "before_mean": 28.20689655172414,
+      "after_mean": 35.3448275862069,
+      "saved": -7.137931034482758,
+      "speedup": 0.7980487804878049,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        27.068390804597698,
+        29.58620689655173
+      ],
+      "after_ci90": [
+        35.08045977011494,
+        35.643678160919535
+      ],
+      "saved_ci90": [
+        -8.252873563218383,
+        -5.770114942528739
+      ],
+      "speedup_ci90": [
+        0.7666333774086708,
+        0.836554208974779
+      ]
+    },
+    "other_seconds": {
+      "commits": 29,
+      "before_mean": 27.28672765517242,
+      "after_mean": 26.375369183908038,
+      "saved": 0.9113584712643821,
+      "speedup": 1.0345533920268466,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        26.079934599425286,
+        28.55296434827586
+      ],
+      "after_ci90": [
+        24.95326311321839,
+        27.881543609195397
+      ],
+      "saved_ci90": [
+        -0.37712176494253064,
+        2.225561557471254
+      ],
+      "speedup_ci90": [
+        0.9862330382963415,
+        1.0867495572915462
+      ]
+    }
+  },
+  "interval_sensitivity": {
+    "1": {
+      "commits": 29,
+      "before_mean": 201.83953225287362,
+      "after_mean": 203.2642887241379,
+      "saved": -1.4247564712642884,
+      "speedup": 0.9929906208306079,
+      "block_length": 1,
+      "resamples": 50000,
+      "before_ci90": [
+        199.6041152448276,
+        204.25653207701149
+      ],
+      "after_ci90": [
+        199.57781828793105,
+        206.47435133850573
+      ],
+      "saved_ci90": [
+        -4.668307216666709,
+        2.19473925287353
+      ],
+      "speedup_ci90": [
+        0.9772942449794263,
+        1.01094966912376
+      ]
+    },
+    "3": {
+      "commits": 29,
+      "before_mean": 201.83953225287362,
+      "after_mean": 203.2642887241379,
+      "saved": -1.4247564712642884,
+      "speedup": 0.9929906208306079,
+      "block_length": 3,
+      "resamples": 50000,
+      "before_ci90": [
+        199.29814293678166,
+        204.39907976724135
+      ],
+      "after_ci90": [
+        199.95811670114944,
+        206.0758867982759
+      ],
+      "saved_ci90": [
+        -4.438634970114999,
+        1.575165298850585
+      ],
+      "speedup_ci90": [
+        0.97833550608714,
+        1.0078464372916243
+      ]
+    },
+    "10": {
+      "commits": 29,
+      "before_mean": 201.83953225287362,
+      "after_mean": 203.2642887241379,
+      "saved": -1.4247564712642884,
+      "speedup": 0.9929906208306079,
+      "block_length": 10,
+      "resamples": 50000,
+      "before_ci90": [
+        199.091962962069,
+        204.0282402183908
+      ],
+      "after_ci90": [
+        200.6250721494253,
+        206.00474843678165
+      ],
+      "saved_ci90": [
+        -4.533443379310315,
+        1.5121172316092544
+      ],
+      "speedup_ci90": [
+        0.9778619816294966,
+        1.0075233583317635
+      ]
+    }
+  },
+  "read_only_timing": {
+    "commits": 29,
+    "before_mean": 199.5148086781609,
+    "after_mean": 199.65272891954027,
+    "saved": -0.1379202413793621,
+    "speedup": 0.9993091993176064,
+    "block_length": 5,
+    "resamples": 50000,
+    "before_ci90": [
+      197.65826700862067,
+      201.36080721264364
+    ],
+    "after_ci90": [
+      196.8103838505747,
+      202.42247036149428
+    ],
+    "saved_ci90": [
+      -3.7755248879311196,
+      3.2192823465517377
+    ],
+    "speedup_ci90": [
+      0.9813246553729199,
+      1.0163260480048335
+    ],
+    "paired_runs": 87
+  },
+  "read_only_fresh_initial_cache_sensitivity": {
+    "commits": 29,
+    "before_mean": 200.98034220689655,
+    "after_mean": 196.65863889655174,
+    "saved": 4.321703310344816,
+    "speedup": 1.0219756596231613,
+    "block_length": 5,
+    "resamples": 50000,
+    "before_ci90": [
+      199.8185390821839,
+      202.22709823505753
+    ],
+    "after_ci90": [
+      193.36494328793103,
+      199.69952294540232
+    ],
+    "saved_ci90": [
+      1.6504920609195668,
+      7.2072014408046225
+    ],
+    "speedup_ci90": [
+      1.0082708478817661,
+      1.0372532371181165
+    ],
+    "paired_runs": 87
+  },
+  "read_only_components": {
+    "job_seconds": {
+      "commits": 29,
+      "before_mean": 199.5148086781609,
+      "after_mean": 199.65272891954027,
+      "saved": -0.1379202413793621,
+      "speedup": 0.9993091993176064,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        197.65826700862067,
+        201.36080721264364
+      ],
+      "after_ci90": [
+        196.8103838505747,
+        202.42247036149428
+      ],
+      "saved_ci90": [
+        -3.7755248879311196,
+        3.2192823465517377
+      ],
+      "speedup_ci90": [
+        0.9813246553729199,
+        1.0163260480048335
+      ]
+    },
+    "restore_seconds": {
+      "commits": 29,
+      "before_mean": 2.7471264367816093,
+      "after_mean": 4.5632183908045985,
+      "saved": -1.8160919540229892,
+      "speedup": 0.6020151133501259,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        2.6551724137931036,
+        2.8505747126436782
+      ],
+      "after_ci90": [
+        4.494252873563218,
+        4.632183908045978
+      ],
+      "saved_ci90": [
+        -1.9425287356321843,
+        -1.6896551724137923
+      ],
+      "speedup_ci90": [
+        0.5785536159600996,
+        0.6275510204081631
+      ]
+    },
+    "main_build_seconds": {
+      "commits": 29,
+      "before_mean": 49.38425287356323,
+      "after_mean": 42.919080459770115,
+      "saved": 6.465172413793113,
+      "speedup": 1.1506363217602762,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        48.72908045977012,
+        50.09195977011494
+      ],
+      "after_ci90": [
+        40.312609195402295,
+        45.38551724137932
+      ],
+      "saved_ci90": [
+        4.1250517241379185,
+        8.946833333333316
+      ],
+      "speedup_ci90": [
+        1.091019638336014,
+        1.2216420877925271
+      ]
+    },
+    "nextest_seconds": {
+      "commits": 29,
+      "before_mean": 94.17424137931035,
+      "after_mean": 93.79287356321841,
+      "saved": 0.38136781609193804,
+      "speedup": 1.0040660638874113,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        93.183991954023,
+        95.25534885057472
+      ],
+      "after_ci90": [
+        93.45322988505748,
+        94.16183218390805
+      ],
+      "saved_ci90": [
+        -0.7178281609195786,
+        1.558877586206891
+      ],
+      "speedup_ci90": [
+        0.9923680484759911,
+        1.0166330542906492
+      ]
+    },
+    "mdtest_step_seconds": {
+      "commits": 29,
+      "before_mean": 0.0,
+      "after_mean": 0.0,
+      "saved": 0.0,
+      "speedup": null,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        0.0,
+        0.0
+      ],
+      "after_ci90": [
+        0.0,
+        0.0
+      ],
+      "saved_ci90": [
+        0.0,
+        0.0
+      ],
+      "speedup_ci90": null
+    },
+    "apt_seconds": {
+      "commits": 29,
+      "before_mean": 27.816091954022987,
+      "after_mean": 35.03448275862068,
+      "saved": -7.218390804597696,
+      "speedup": 0.793963254593176,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        27.045977011494255,
+        28.563218390804604
+      ],
+      "after_ci90": [
+        34.77011494252873,
+        35.321839080459775
+      ],
+      "saved_ci90": [
+        -8.045977011494259,
+        -6.379310344827587
+      ],
+      "speedup_ci90": [
+        0.770717327219129,
+        0.8171054572271389
+      ]
+    },
+    "other_seconds": {
+      "commits": 29,
+      "before_mean": 25.393096034482756,
+      "after_mean": 23.343073747126436,
+      "saved": 2.0500222873563203,
+      "speedup": 1.0878214372950212,
+      "block_length": 5,
+      "resamples": 50000,
+      "before_ci90": [
+        24.774054754022988,
+        26.087815901149423
+      ],
+      "after_ci90": [
+        23.00835197988507,
+        23.747975172413796
+      ],
+      "saved_ci90": [
+        1.4490428856321875,
+        2.770747719540232
+      ],
+      "speedup_ci90": [
+        1.0617638195942058,
+        1.119335421516044
+      ]
+    }
+  },
+  "read_only_interval_sensitivity": {
+    "1": {
+      "commits": 29,
+      "before_mean": 199.5148086781609,
+      "after_mean": 199.65272891954027,
+      "saved": -0.1379202413793621,
+      "speedup": 0.9993091993176064,
+      "block_length": 1,
+      "resamples": 50000,
+      "before_ci90": [
+        197.78605908505736,
+        201.5391886
+      ],
+      "after_ci90": [
+        196.4182633189655,
+        202.2860491304598
+      ],
+      "saved_ci90": [
+        -3.269655596551729,
+        3.3085244045976534
+      ],
+      "speedup_ci90": [
+        0.9838173445479957,
+        1.0167743255772193
+      ]
+    },
+    "3": {
+      "commits": 29,
+      "before_mean": 199.5148086781609,
+      "after_mean": 199.65272891954027,
+      "saved": -0.1379202413793621,
+      "speedup": 0.9993091993176064,
+      "block_length": 3,
+      "resamples": 50000,
+      "before_ci90": [
+        197.6438123373563,
+        201.5330917758621
+      ],
+      "after_ci90": [
+        196.50286610344824,
+        202.43727623620686
+      ],
+      "saved_ci90": [
+        -3.403037722413793,
+        3.0134550568965697
+      ],
+      "speedup_ci90": [
+        0.9831464131770916,
+        1.015288566636388
+      ]
+    },
+    "10": {
+      "commits": 29,
+      "before_mean": 199.5148086781609,
+      "after_mean": 199.65272891954027,
+      "saved": -0.1379202413793621,
+      "speedup": 0.9993091993176064,
+      "block_length": 10,
+      "resamples": 50000,
+      "before_ci90": [
+        197.6441199425287,
+        201.11726273563215
+      ],
+      "after_ci90": [
+        197.8336953563218,
+        201.77396581609196
+      ],
+      "saved_ci90": [
+        -3.662404160919578,
+        2.8262789195402434
+      ],
+      "speedup_ci90": [
+        0.9818245323581835,
+        1.0142629860015941
+      ]
+    }
+  },
+  "read_only_cache": {
+    "before": {
+      "reads": 87,
+      "hit_types": {
+        "exact": 63,
+        "fallback": 24
+      },
+      "archive_bytes": [
+        424818717,
+        424821472,
+        424866667,
+        454060437,
+        454060824,
+        454069046,
+        454069295,
+        454072404,
+        454072601
+      ],
+      "ages": [
+        9,
+        9,
+        9,
+        10,
+        10,
+        10,
+        11,
+        11,
+        11,
+        12,
+        12,
+        12,
+        13,
+        13,
+        13,
+        14,
+        14,
+        14,
+        15,
+        15,
+        15,
+        16,
+        16,
+        16,
+        17,
+        17,
+        17,
+        18,
+        18,
+        18,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        1,
+        1,
+        1,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        5,
+        5,
+        5,
+        6,
+        6,
+        6,
+        7,
+        7,
+        7,
+        1,
+        1,
+        1
+      ],
+      "workspace_compile_counts": [
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88,
+        88
+      ],
+      "mean_fetch_seconds": 0.8322558045977011,
+      "mean_extract_seconds": 1.0663610459770114,
+      "producer_cache_saves": 9,
+      "mean_producer_post_seconds": 6.222222222222222,
+      "refresh_cache_saves": 8,
+      "mean_refresh_post_seconds": 6.25
+    },
+    "after": {
+      "reads": 87,
+      "hit_types": {
+        "exact": 63,
+        "fallback": 24
+      },
+      "archive_bytes": [
+        824145381,
+        824692436,
+        825327014,
+        851792349,
+        852428854,
+        854329737,
+        854391760,
+        854524660,
+        854621283
+      ],
+      "ages": [
+        9,
+        9,
+        9,
+        10,
+        10,
+        10,
+        11,
+        11,
+        11,
+        12,
+        12,
+        12,
+        13,
+        13,
+        13,
+        14,
+        14,
+        14,
+        15,
+        15,
+        15,
+        16,
+        16,
+        16,
+        17,
+        17,
+        17,
+        18,
+        18,
+        18,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        1,
+        1,
+        1,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        5,
+        5,
+        5,
+        6,
+        6,
+        6,
+        7,
+        7,
+        7,
+        1,
+        1,
+        1
+      ],
+      "workspace_compile_counts": [
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        31,
+        31,
+        31,
+        73,
+        73,
+        73,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        45,
+        45,
+        45,
+        22,
+        22,
+        22,
+        44,
+        44,
+        44,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        44,
+        44,
+        44,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        71,
+        0,
+        0,
+        0
+      ],
+      "mean_fetch_seconds": 1.1807938045977011,
+      "mean_extract_seconds": 2.1190437931034483,
+      "producer_cache_saves": 9,
+      "mean_producer_post_seconds": 10.666666666666666,
+      "refresh_cache_saves": 8,
+      "mean_refresh_post_seconds": 10.625
+    }
+  },
+  "seed_boundary": {
+    "project": "uv",
+    "original_seed": "a7aa382e69a6fd455cc515f7926fe1202dc2ad8e",
+    "historical_producer": "8b7edb87b9cf22b465139cce232f82f9ad1e6e7f",
+    "prehistory_commits": 8,
+    "dependency_digest": "ead09fe2eea070b2357e",
+    "prior_dependency_digest": "81c63faabb5f7560e3d3",
+    "config_matches": true,
+    "cache_key_inputs_unchanged_since_producer": true
+  },
+  "runners": [
+    [
+      "depot-ubuntu-24.04-16"
+    ]
+  ],
+  "compilers": [
+    "rustc 1.99.0 (b940084d7 2026-09-28)"
+  ],
+  "refreshes": [
+    {
+      "index": 10,
+      "source": "09280503abab324ef6095cb54588363e6637b9b5",
+      "run_id": 40168656598,
+      "rows": [
+        {
+          "variant": "before",
+          "job_id": 121094829960,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40168656598/job/121094829960",
+          "primary_key": "uv-history-origin-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-7916d209fb3061ec3df0",
+          "restored_key": "uv-history-origin-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-ead09fe2eea070b2357e",
+          "pruning": []
+        },
+        {
+          "variant": "after",
+          "job_id": 121094830139,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40168656598/job/121094830139",
+          "primary_key": "uv-history-origin-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-7916d209fb3061ec3df0",
+          "restored_key": "uv-history-origin-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-ead09fe2eea070b2357e",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 0,
+              "removed_paths": 0,
+              "active_fingerprints": 818
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "source": "4be0efcf1d5c5f958ee819fdfec598d1e81bbaf9",
+      "run_id": 40163262751,
+      "rows": [
+        {
+          "variant": "after",
+          "job_id": 121079058312,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40163262751/job/121079058312",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-a7c3635681b559b36ab6",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-7916d209fb3061ec3df0",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 1,
+              "removed_paths": 3,
+              "active_fingerprints": 818
+            }
+          ]
+        },
+        {
+          "variant": "before",
+          "job_id": 121079058344,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40163262751/job/121079058344",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-a7c3635681b559b36ab6",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-7916d209fb3061ec3df0",
+          "pruning": []
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "source": "fc7f936e906ba98274926c3a79fdda4e5b07bcc0",
+      "run_id": 40163765830,
+      "rows": [
+        {
+          "variant": "before",
+          "job_id": 121080520316,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40163765830/job/121080520316",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-8ec119459c8a13040d12",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-a7c3635681b559b36ab6",
+          "pruning": []
+        },
+        {
+          "variant": "after",
+          "job_id": 121080520410,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40163765830/job/121080520410",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-8ec119459c8a13040d12",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-a7c3635681b559b36ab6",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 109,
+              "removed_paths": 371,
+              "active_fingerprints": 833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "source": "f9f28d1785fb548007e9241e06b0ccf735c7afd0",
+      "run_id": 40164860916,
+      "rows": [
+        {
+          "variant": "before",
+          "job_id": 121083725183,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40164860916/job/121083725183",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-d1ccff7a96925d33d028",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-8ec119459c8a13040d12",
+          "pruning": []
+        },
+        {
+          "variant": "after",
+          "job_id": 121083725235,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40164860916/job/121083725235",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-d1ccff7a96925d33d028",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-8ec119459c8a13040d12",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 86,
+              "removed_paths": 296,
+              "active_fingerprints": 833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "source": "5563290e5b847dd83fef3a31ef4c584fb0e0d17e",
+      "run_id": 40165407394,
+      "rows": [
+        {
+          "variant": "before",
+          "job_id": 121085321893,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40165407394/job/121085321893",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-4dc6bd54488c2b19f946",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-d1ccff7a96925d33d028",
+          "pruning": []
+        },
+        {
+          "variant": "after",
+          "job_id": 121085321911,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40165407394/job/121085321911",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-4dc6bd54488c2b19f946",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-d1ccff7a96925d33d028",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 100,
+              "removed_paths": 344,
+              "active_fingerprints": 833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "source": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+      "run_id": 40166199596,
+      "rows": [
+        {
+          "variant": "after",
+          "job_id": 121087645316,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40166199596/job/121087645316",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-49d41ad730e4cc0f5f57",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-4dc6bd54488c2b19f946",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 98,
+              "removed_paths": 337,
+              "active_fingerprints": 833
+            }
+          ]
+        },
+        {
+          "variant": "before",
+          "job_id": 121087645462,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40166199596/job/121087645462",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-49d41ad730e4cc0f5f57",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-4dc6bd54488c2b19f946",
+          "pruning": []
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "source": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+      "run_id": 40167483298,
+      "rows": [
+        {
+          "variant": "before",
+          "job_id": 121091401813,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40167483298/job/121091401813",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-42fba8de6ec203cebd19",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-49d41ad730e4cc0f5f57",
+          "pruning": []
+        },
+        {
+          "variant": "after",
+          "job_id": 121091401973,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40167483298/job/121091401973",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-42fba8de6ec203cebd19",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-49d41ad730e4cc0f5f57",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 23,
+              "removed_paths": 73,
+              "active_fingerprints": 833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 29,
+      "source": "1cd8cf12bd622f2815406f29e3168d7f052bf1b3",
+      "run_id": 40169352148,
+      "rows": [
+        {
+          "variant": "after",
+          "job_id": 121096863434,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40169352148/job/121096863434",
+          "primary_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-960798422c762453f8d4",
+          "restored_key": "uv-history-20261025-v1-after-native-v1-Linux-X64-2557f8f8f426cf0d16fb-42fba8de6ec203cebd19",
+          "pruning": [
+            {
+              "superseded_workspace_fingerprints": 18,
+              "removed_paths": 55,
+              "active_fingerprints": 833
+            }
+          ]
+        },
+        {
+          "variant": "before",
+          "job_id": 121096863576,
+          "url": "https://github.com/astral-sh/uv-dev/actions/runs/40169352148/job/121096863576",
+          "primary_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-960798422c762453f8d4",
+          "restored_key": "uv-history-20261025-v1-before-native-v1-Linux-X64-026add19a44370d177e7-42fba8de6ec203cebd19",
+          "pruning": []
+        }
+      ]
+    }
+  ],
+  "refresh_timing": {
+    "commits": 8,
+    "before_mean": 208.46643024999997,
+    "after_mean": 212.72720375000003,
+    "saved": -4.260773500000056,
+    "speedup": 0.9799707163687096
+  }
+}

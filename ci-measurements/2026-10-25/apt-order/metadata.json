@@ -1,0 +1,718 @@
+{
+  "repository": "astral-sh/uv-dev",
+  "action": "8139eb474ac22fe39bb1e33b50afa426dcdaf455",
+  "workflow_head": "f862312d40231f2b7731dc99cce01e35fc5bc2af",
+  "source_history": [
+    {
+      "index": 0,
+      "sha": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+      "subject": "Derive deserialization for tool receipt requirements (#22885)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-tool/Cargo.toml",
+        "crates/uv-tool/src/tool.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 22
+    },
+    {
+      "index": 1,
+      "sha": "f158ef25a3cf2fb9bc089ca38cc06f659066f566",
+      "subject": "Emit DeserializeUntagged scalar callbacks directly (#22890)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": [
+        "crates/uv-macros/src/deserialize_untagged.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 25
+    },
+    {
+      "index": 2,
+      "sha": "e46bedbacb91322b32e76b797f8828910b1b0dea",
+      "subject": "Skip the Azure APT mirror in ARMv7 CI (#22895)",
+      "date": "2026-10-23T21:22:51+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 26
+    },
+    {
+      "index": 3,
+      "sha": "f912bc5d57c126cdf1e333518c5c4f2ca21cb29a",
+      "subject": "Remove the unused `Deserialize` derive from `WheelWireSource` (#22891)",
+      "date": "2026-10-23T18:02:04-04:00",
+      "changed_files": [
+        "crates/uv-lock/src/lock/mod.rs"
+      ],
+      "categories": [
+        "rust-source"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 27
+    },
+    {
+      "index": 4,
+      "sha": "15689c8dd573ad32e009d0fdb50ec3fb70315f01",
+      "subject": "Skip the Azure APT mirror for Wine, deadsnakes, and musl (#22896)",
+      "date": "2026-10-23T18:02:27-04:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test-integration.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 28
+    },
+    {
+      "index": 5,
+      "sha": "1cd8cf12bd622f2815406f29e3168d7f052bf1b3",
+      "subject": "Use `DeserializeUntagged` for Packse artifact settings (#22892)",
+      "date": "2026-10-23T22:21:25+00:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-test/Cargo.toml",
+        "crates/uv-test/src/packse/scenario.rs"
+      ],
+      "categories": [
+        "cargo-dependencies",
+        "rust-source"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 29
+    },
+    {
+      "index": 6,
+      "sha": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596",
+      "subject": "Restore build-script input timestamps in Linux CI (#22904)",
+      "date": "2026-10-24T04:00:52+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test.yml"
+      ],
+      "categories": [
+        "docs-or-ci-only"
+      ],
+      "pr_eligible": true,
+      "original_history_index": 30
+    }
+  ],
+  "initial_cache_source": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+  "initial_cache_age_before_window": 2,
+  "variants": {
+    "before": "Rust cache and Python before APT",
+    "after": "APT before Rust cache and Python"
+  },
+  "replicas_per_commit": 3,
+  "timing_basis": "First to last runner-log timestamp, including setup and post steps, excluding queue time.",
+  "interval_method": "90% percentile intervals from 50,000 circular moving-block bootstrap resamples of paired per-commit means, block length 2 commits. Repetitions are averaged within each commit; they are not treated as independent source changes. Intervals describe the observed histories, not arbitrary future workloads.",
+  "bootstrap_block_length": 2,
+  "sample_selection": {
+    "writer_indices": [
+      5
+    ],
+    "selected_job_ids": [
+      121094608205,
+      121094608308,
+      121094613556,
+      121094613697,
+      121094619630,
+      121094619840,
+      121095326517,
+      121095326605,
+      121095332383,
+      121095332514,
+      121095339054,
+      121095339295,
+      121096041798,
+      121096041803,
+      121096047731,
+      121096047856,
+      121096054518,
+      121096054628,
+      121096769187,
+      121096769470,
+      121096774357,
+      121096774573,
+      121096782555,
+      121096782773,
+      121098229485,
+      121098229794,
+      121099049097,
+      121099049197,
+      121099055367,
+      121099055512,
+      121099062362,
+      121099062452
+    ],
+    "sample_description": "For each source change, use one measured cache-producing pair when the uv PR planner enables saves and the cache key is not an exact hit; otherwise use the mean of three read-only pairs. Each source change has equal weight in the aggregate."
+  },
+  "timing": {
+    "commits": 6,
+    "before_mean": 197.16460722222223,
+    "after_mean": 188.93195833333334,
+    "saved": 8.232648888888889,
+    "speedup": 1.0435746760977516,
+    "block_length": 2,
+    "resamples": 50000,
+    "before_ci90": [
+      187.87805833333334,
+      204.59002438888888
+    ],
+    "after_ci90": [
+      177.43278344444445,
+      198.4016858888889
+    ],
+    "saved_ci90": [
+      6.151261833333336,
+      10.312141499999967
+    ],
+    "speedup_ci90": [
+      1.0310040804631984,
+      1.0580250208236648
+    ],
+    "paired_runs": 16
+  },
+  "components": {
+    "job_seconds": {
+      "commits": 6,
+      "before_mean": 197.16460722222223,
+      "after_mean": 188.93195833333334,
+      "saved": 8.232648888888889,
+      "speedup": 1.0435746760977516,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        187.87805833333334,
+        204.59002438888888
+      ],
+      "after_ci90": [
+        177.43278344444445,
+        198.4016858888889
+      ],
+      "saved_ci90": [
+        6.151261833333336,
+        10.312141499999967
+      ],
+      "speedup_ci90": [
+        1.0310040804631984,
+        1.0580250208236648
+      ]
+    },
+    "restore_seconds": {
+      "commits": 6,
+      "before_mean": 4.5,
+      "after_mean": 4.5,
+      "saved": 0.0,
+      "speedup": 1.0,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        4.277777777777778,
+        4.722222222222222
+      ],
+      "after_ci90": [
+        4.277777777777778,
+        4.722222222222222
+      ],
+      "saved_ci90": [
+        -0.3888888888888893,
+        0.3888888888888893
+      ],
+      "speedup_ci90": [
+        0.9166666666666666,
+        1.092105263157895
+      ]
+    },
+    "main_build_seconds": {
+      "commits": 6,
+      "before_mean": 40.12833333333333,
+      "after_mean": 40.26777777777778,
+      "saved": -0.13944444444445026,
+      "speedup": 0.9965370712728676,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        32.04,
+        48.12055555555556
+      ],
+      "after_ci90": [
+        32.196666666666665,
+        48.338888888888896
+      ],
+      "saved_ci90": [
+        -0.5472222222222314,
+        0.3583333333333414
+      ],
+      "speedup_ci90": [
+        0.9827993541259455,
+        1.0082261420929877
+      ]
+    },
+    "nextest_seconds": {
+      "commits": 6,
+      "before_mean": 92.64366666666666,
+      "after_mean": 94.3165,
+      "saved": -1.6728333333333438,
+      "speedup": 0.982263619479801,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        92.3775,
+        92.93411111111111
+      ],
+      "after_ci90": [
+        92.765,
+        95.83416666666666
+      ],
+      "saved_ci90": [
+        -2.9610555555555607,
+        -0.3431111111111136
+      ],
+      "speedup_ci90": [
+        0.9691022976611797,
+        0.9963012870035993
+      ]
+    },
+    "mdtest_step_seconds": {
+      "commits": 6,
+      "before_mean": 0.0,
+      "after_mean": 0.0,
+      "saved": 0.0,
+      "speedup": null,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        0.0,
+        0.0
+      ],
+      "after_ci90": [
+        0.0,
+        0.0
+      ],
+      "saved_ci90": [
+        0.0,
+        0.0
+      ],
+      "speedup_ci90": null
+    },
+    "apt_seconds": {
+      "commits": 6,
+      "before_mean": 34.77777777777778,
+      "after_mean": 24.888888888888886,
+      "saved": 9.888888888888893,
+      "speedup": 1.3973214285714288,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        34.44444444444444,
+        35.166666666666664
+      ],
+      "after_ci90": [
+        22.833333333333332,
+        26.777777777777782
+      ],
+      "saved_ci90": [
+        7.944444444444443,
+        11.833333333333329
+      ],
+      "speedup_ci90": [
+        1.2948453608247423,
+        1.5182481751824817
+      ]
+    },
+    "other_seconds": {
+      "commits": 6,
+      "before_mean": 25.11482944444444,
+      "after_mean": 24.958791666666674,
+      "saved": 0.15603777777776529,
+      "speedup": 1.0062518161881273,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        22.50891205555555,
+        27.720746833333322
+      ],
+      "after_ci90": [
+        22.996203666666673,
+        26.91399772222223
+      ],
+      "saved_ci90": [
+        -0.8285368888889018,
+        1.2653817777777654
+      ],
+      "speedup_ci90": [
+        0.9683498470983204,
+        1.0548412449478957
+      ]
+    }
+  },
+  "interval_sensitivity": {
+    "1": {
+      "commits": 6,
+      "before_mean": 197.16460722222223,
+      "after_mean": 188.93195833333334,
+      "saved": 8.232648888888889,
+      "speedup": 1.0435746760977516,
+      "block_length": 1,
+      "resamples": 50000,
+      "before_ci90": [
+        182.51351805555555,
+        206.58469761111112
+      ],
+      "after_ci90": [
+        171.00992777777776,
+        201.2559748888889
+      ],
+      "saved_ci90": [
+        5.175763222222258,
+        11.531806944444412
+      ],
+      "speedup_ci90": [
+        1.0257173146043477,
+        1.06721177786072
+      ]
+    },
+    "2": {
+      "commits": 6,
+      "before_mean": 197.16460722222223,
+      "after_mean": 188.93195833333334,
+      "saved": 8.232648888888889,
+      "speedup": 1.0435746760977516,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        187.87805833333334,
+        204.59002438888888
+      ],
+      "after_ci90": [
+        177.43278344444445,
+        198.4016858888889
+      ],
+      "saved_ci90": [
+        6.151261833333336,
+        10.312141499999967
+      ],
+      "speedup_ci90": [
+        1.0310040804631984,
+        1.0580250208236648
+      ]
+    },
+    "3": {
+      "commits": 6,
+      "before_mean": 197.16460722222223,
+      "after_mean": 188.93195833333334,
+      "saved": 8.232648888888889,
+      "speedup": 1.0435746760977516,
+      "block_length": 3,
+      "resamples": 50000,
+      "before_ci90": [
+        189.89214955555556,
+        204.4370648888889
+      ],
+      "after_ci90": [
+        180.0672345,
+        197.79668216666667
+      ],
+      "saved_ci90": [
+        6.6306737222222125,
+        9.834624055555537
+      ],
+      "speedup_ci90": [
+        1.0335226741398782,
+        1.0546163997179372
+      ]
+    }
+  },
+  "read_only_timing": {
+    "commits": 6,
+    "before_mean": 194.82690244444447,
+    "after_mean": 186.1022297777778,
+    "saved": 8.724672666666663,
+    "speedup": 1.046881075401862,
+    "block_length": 2,
+    "resamples": 50000,
+    "before_ci90": [
+      186.96198888888887,
+      202.42297366666665
+    ],
+    "after_ci90": [
+      176.56355266666665,
+      195.2749123333333
+    ],
+    "saved_ci90": [
+      6.870937055555572,
+      10.44527488888886
+    ],
+    "speedup_ci90": [
+      1.0352251391512408,
+      1.058893446949685
+    ],
+    "paired_runs": 18
+  },
+  "read_only_components": {
+    "job_seconds": {
+      "commits": 6,
+      "before_mean": 194.82690244444447,
+      "after_mean": 186.1022297777778,
+      "saved": 8.724672666666663,
+      "speedup": 1.046881075401862,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        186.96198888888887,
+        202.42297366666665
+      ],
+      "after_ci90": [
+        176.56355266666665,
+        195.2749123333333
+      ],
+      "saved_ci90": [
+        6.870937055555572,
+        10.44527488888886
+      ],
+      "speedup_ci90": [
+        1.0352251391512408,
+        1.058893446949685
+      ]
+    },
+    "restore_seconds": {
+      "commits": 6,
+      "before_mean": 4.5,
+      "after_mean": 4.333333333333333,
+      "saved": 0.16666666666666696,
+      "speedup": 1.0384615384615385,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        4.277777777777778,
+        4.722222222222222
+      ],
+      "after_ci90": [
+        4.222222222222221,
+        4.500000000000001
+      ],
+      "saved_ci90": [
+        -0.055555555555556246,
+        0.3888888888888893
+      ],
+      "speedup_ci90": [
+        0.9871794871794872,
+        1.092105263157895
+      ]
+    },
+    "main_build_seconds": {
+      "commits": 6,
+      "before_mean": 39.931111111111115,
+      "after_mean": 40.42611111111111,
+      "saved": -0.49499999999999744,
+      "speedup": 0.9877554385916694,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        31.825555555555557,
+        48.04888888888888
+      ],
+      "after_ci90": [
+        32.196666666666665,
+        48.61333333333334
+      ],
+      "saved_ci90": [
+        -1.3172222222222203,
+        0.3583333333333414
+      ],
+      "speedup_ci90": [
+        0.9623370514715763,
+        1.0081008940123322
+      ]
+    },
+    "nextest_seconds": {
+      "commits": 6,
+      "before_mean": 92.39833333333333,
+      "after_mean": 93.45438888888889,
+      "saved": -1.0560555555555595,
+      "speedup": 0.9886997757075793,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        92.36161111111112,
+        92.44344444444444
+      ],
+      "after_ci90": [
+        92.765,
+        94.10994444444445
+      ],
+      "saved_ci90": [
+        -1.7275000000000063,
+        -0.3431111111111136
+      ],
+      "speedup_ci90": [
+        0.9816438102243298,
+        0.9963012870035993
+      ]
+    },
+    "mdtest_step_seconds": {
+      "commits": 6,
+      "before_mean": 0.0,
+      "after_mean": 0.0,
+      "saved": 0.0,
+      "speedup": null,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        0.0,
+        0.0
+      ],
+      "after_ci90": [
+        0.0,
+        0.0
+      ],
+      "saved_ci90": [
+        0.0,
+        0.0
+      ],
+      "speedup_ci90": null
+    },
+    "apt_seconds": {
+      "commits": 6,
+      "before_mean": 34.55555555555555,
+      "after_mean": 24.888888888888886,
+      "saved": 9.666666666666664,
+      "speedup": 1.3883928571428572,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        34.166666666666664,
+        34.888888888888886
+      ],
+      "after_ci90": [
+        22.833333333333332,
+        26.777777777777782
+      ],
+      "saved_ci90": [
+        7.944444444444443,
+        11.38888888888889
+      ],
+      "speedup_ci90": [
+        1.2948453608247423,
+        1.4987834549878345
+      ]
+    },
+    "other_seconds": {
+      "commits": 6,
+      "before_mean": 23.441902444444437,
+      "after_mean": 22.999507555555564,
+      "saved": 0.4423948888888738,
+      "speedup": 1.019234972219308,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        22.49574294444444,
+        24.400851166666655
+      ],
+      "after_ci90": [
+        22.79753361111112,
+        23.206073333333336
+      ],
+      "saved_ci90": [
+        -0.5778060555555733,
+        1.5154319999999863
+      ],
+      "speedup_ci90": [
+        0.9750917788303608,
+        1.0664735065578055
+      ]
+    }
+  },
+  "read_only_interval_sensitivity": {
+    "1": {
+      "commits": 6,
+      "before_mean": 194.82690244444447,
+      "after_mean": 186.1022297777778,
+      "saved": 8.724672666666663,
+      "speedup": 1.046881075401862,
+      "block_length": 1,
+      "resamples": 50000,
+      "before_ci90": [
+        180.62501866666665,
+        202.53885649999998
+      ],
+      "after_ci90": [
+        168.2023937777778,
+        195.83696539444438
+      ],
+      "saved_ci90": [
+        6.168723777777785,
+        11.985905055555548
+      ],
+      "speedup_ci90": [
+        1.0314924357946706,
+        1.0712682296191014
+      ]
+    },
+    "2": {
+      "commits": 6,
+      "before_mean": 194.82690244444447,
+      "after_mean": 186.1022297777778,
+      "saved": 8.724672666666663,
+      "speedup": 1.046881075401862,
+      "block_length": 2,
+      "resamples": 50000,
+      "before_ci90": [
+        186.96198888888887,
+        202.42297366666665
+      ],
+      "after_ci90": [
+        176.56355266666665,
+        195.2749123333333
+      ],
+      "saved_ci90": [
+        6.870937055555572,
+        10.44527488888886
+      ],
+      "speedup_ci90": [
+        1.0352251391512408,
+        1.058893446949685
+      ]
+    },
+    "3": {
+      "commits": 6,
+      "before_mean": 194.82690244444447,
+      "after_mean": 186.1022297777778,
+      "saved": 8.724672666666663,
+      "speedup": 1.046881075401862,
+      "block_length": 3,
+      "resamples": 50000,
+      "before_ci90": [
+        187.24936955555555,
+        202.40443533333334
+      ],
+      "after_ci90": [
+        177.23750594444445,
+        194.9669536111111
+      ],
+      "saved_ci90": [
+        7.122697499999958,
+        10.326647833333311
+      ],
+      "speedup_ci90": [
+        1.0365328450184803,
+        1.05826446145417
+      ]
+    }
+  },
+  "unmeasured_failed_attempts": []
+}
