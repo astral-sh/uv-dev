@@ -55,19 +55,15 @@ impl ResolutionMetadata {
                 .ok_or(MetadataError::FieldNotFound("Version"))?,
         )
         .map_err(MetadataError::Pep440VersionError)?;
-        let requires_dist = headers
-            .get_all_values("Requires-Dist")?
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
-            .collect::<Result<Box<_>, _>>()?;
+        let requires_dist = parse_requires_dist(&headers)?;
         let requires_python = headers
             .get_first_value("Requires-Python")?
             .map(|requires_python| LenientVersionSpecifiers::from_str(&requires_python))
             .transpose()?
             .map(VersionSpecifiers::from);
         let provides_extra = headers
-            .get_all_values("Provides-Extra")?
-            .filter_map(
+            .get_all_values("Provides-Extra")
+            .filter_map_ok(
                 |provides_extra| match ExtraName::from_owned(provides_extra) {
                     Ok(extra_name) => Some(extra_name),
                     Err(err) => {
@@ -76,10 +72,13 @@ impl ResolutionMetadata {
                     }
                 },
             )
-            .collect::<Box<_>>();
-        let dynamic = headers
-            .get_all_values("Dynamic")?
-            .any(|field| field == "Version");
+            .collect::<Result<Box<_>, _>>()?;
+        let mut dynamic = false;
+        for field in headers.get_all_values("Dynamic") {
+            if field? == "Version" {
+                dynamic = true;
+            }
+        }
 
         Ok(Self {
             name,
@@ -111,14 +110,25 @@ impl ResolutionMetadata {
 
         // If any of the fields we need are marked as dynamic, we can't use the `PKG-INFO` file.
         let mut dynamic = false;
-        for field in headers.get_all_values("Dynamic")? {
+        let mut dynamic_field = None;
+        for field in headers.get_all_values("Dynamic") {
+            let field = field?;
             match field.as_str() {
-                "Requires-Python" => return Err(MetadataError::DynamicField("Requires-Python")),
-                "Requires-Dist" => return Err(MetadataError::DynamicField("Requires-Dist")),
-                "Provides-Extra" => return Err(MetadataError::DynamicField("Provides-Extra")),
+                "Requires-Python" => {
+                    dynamic_field.get_or_insert("Requires-Python");
+                }
+                "Requires-Dist" => {
+                    dynamic_field.get_or_insert("Requires-Dist");
+                }
+                "Provides-Extra" => {
+                    dynamic_field.get_or_insert("Provides-Extra");
+                }
                 "Version" => dynamic = true,
                 _ => (),
             }
+        }
+        if let Some(field) = dynamic_field {
+            return Err(MetadataError::DynamicField(field));
         }
 
         // The `Name` and `Version` fields are required, and can't be dynamic.
@@ -135,19 +145,15 @@ impl ResolutionMetadata {
         .map_err(MetadataError::Pep440VersionError)?;
 
         // The remaining fields are required to be present.
-        let requires_dist = headers
-            .get_all_values("Requires-Dist")?
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
-            .collect::<Result<Box<_>, _>>()?;
+        let requires_dist = parse_requires_dist(&headers)?;
         let requires_python = headers
             .get_first_value("Requires-Python")?
             .map(|requires_python| LenientVersionSpecifiers::from_str(&requires_python))
             .transpose()?
             .map(VersionSpecifiers::from);
         let provides_extra = headers
-            .get_all_values("Provides-Extra")?
-            .filter_map(
+            .get_all_values("Provides-Extra")
+            .filter_map_ok(
                 |provides_extra| match ExtraName::from_owned(provides_extra) {
                     Ok(extra_name) => Some(extra_name),
                     Err(err) => {
@@ -156,7 +162,7 @@ impl ResolutionMetadata {
                     }
                 },
             )
-            .collect::<Box<_>>();
+            .collect::<Result<Box<_>, _>>()?;
 
         Ok(Self {
             name,
@@ -270,6 +276,23 @@ impl ResolutionMetadata {
     }
 }
 
+/// Decode every requirement header before returning a requirement parsing error.
+fn parse_requires_dist(
+    headers: &Headers<'_>,
+) -> Result<Box<[Requirement<VerbatimParsedUrl>]>, MetadataError> {
+    let mut requirements = Ok(Vec::new());
+    for requires_dist in headers.get_all_values("Requires-Dist") {
+        let requires_dist = requires_dist?;
+        if let Ok(parsed) = &mut requirements {
+            match LenientRequirement::from_str(&requires_dist) {
+                Ok(requirement) => parsed.push(Requirement::from(requirement)),
+                Err(error) => requirements = Err(error),
+            }
+        }
+    }
+    Ok(requirements?.into_boxed_slice())
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
@@ -333,6 +356,42 @@ mod tests {
         "};
         let meta = ResolutionMetadata::parse_metadata(s.as_bytes());
         assert_matches!(meta, Err(MetadataError::InvalidName(_)));
+    }
+
+    #[test]
+    fn metadata_dynamic_decoding_error() {
+        let metadata = b"Metadata-Version: 2.2\nName: example\nVersion: 1.0\nDynamic: Version\nDynamic: =?utf-8?b?Y?=\n";
+        assert_matches!(
+            ResolutionMetadata::parse_metadata(metadata),
+            Err(MetadataError::Decode(_))
+        );
+    }
+
+    #[test]
+    fn pkg_info_dynamic_decoding_error() {
+        let metadata = b"Metadata-Version: 2.2\nName: example\nVersion: 1.0\nDynamic: Requires-Dist\nDynamic: =?utf-8?b?Y?=\n";
+        assert_matches!(
+            ResolutionMetadata::parse_pkg_info(metadata),
+            Err(MetadataError::Decode(_))
+        );
+    }
+
+    #[test]
+    fn metadata_requirement_decoding_error() {
+        let metadata = b"Metadata-Version: 2.2\nName: example\nVersion: 1.0\nRequires-Dist: invalid!\nRequires-Dist: =?utf-8?b?Y?=\n";
+        assert_matches!(
+            ResolutionMetadata::parse_metadata(metadata),
+            Err(MetadataError::Decode(_))
+        );
+    }
+
+    #[test]
+    fn pkg_info_requirement_decoding_error() {
+        let metadata = b"Metadata-Version: 2.2\nName: example\nVersion: 1.0\nRequires-Dist: invalid!\nRequires-Dist: =?utf-8?b?Y?=\n";
+        assert_matches!(
+            ResolutionMetadata::parse_pkg_info(metadata),
+            Err(MetadataError::Decode(_))
+        );
     }
 
     #[test]
