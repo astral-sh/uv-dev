@@ -160,6 +160,13 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
+      - name: "Check macOS SDK"
+        run: |
+          sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          if ! head -c 1 "$sdk/usr/lib/system/libdyld.tbd" > /dev/null; then
+            sudo xcode-select --switch /Library/Developer/CommandLineTools
+          fi
+
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
           prefix-key: v1-rust-workspace
