@@ -3159,6 +3159,29 @@ mod test {
         );
     }
 
+    /// Replacing multiple extras with intersecting version and platform conditions must preserve a
+    /// canonical diagram.
+    #[test]
+    fn resolve_extras_preserves_canonical_ranges() {
+        let marker = m("(python_version >= '3.10' or sys_platform == 'linux') \
+             and extra != 'encoded' and extra == 'local'");
+        let known = [
+            (
+                ExtraName::from_str("encoded").expect("valid extra name"),
+                m("sys_platform == 'darwin'"),
+            ),
+            (
+                ExtraName::from_str("local").expect("valid extra name"),
+                m("python_version >= '3.12'"),
+            ),
+        ];
+
+        assert_eq!(
+            marker.resolve_extras(known),
+            m("python_version >= '3.12' and sys_platform != 'darwin'")
+        );
+    }
+
     #[test]
     fn test_marker_simplification() {
         assert_false("python_version == '3.9.1'");
