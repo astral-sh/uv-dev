@@ -116,6 +116,14 @@ pub struct Metadata23 {
 }
 
 impl Metadata23 {
+    /// Line boundaries recognized by Python's `str.splitlines()` when reading metadata headers.
+    pub fn is_header_line_break(character: char) -> bool {
+        matches!(
+            character,
+            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c'..='\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    }
+
     /// Parse distribution metadata from metadata `MetadataError`
     pub fn parse(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content)?;
@@ -220,11 +228,9 @@ impl Metadata23 {
     /// ```
     pub fn core_metadata_format(&self) -> String {
         fn write_str(writer: &mut String, key: &str, value: impl Display) {
-            // Rust's `str::lines` only splits LF and CRLF, while Python's `compat32` email parser
-            // also splits a bare CR. Normalize it before folding so a value cannot introduce a
-            // second header, while preserving legitimate multiline fields like `License`.
-            let value = value.to_string().replace("\r\n", "\n").replace('\r', "\n");
-            let mut lines = value.lines();
+            // CRLF is one boundary; each additional line is a continuation of this field.
+            let value = value.to_string().replace("\r\n", "\n");
+            let mut lines = value.split_terminator(Metadata23::is_header_line_break);
             if let Some(line) = lines.next() {
                 let _ = writeln!(writer, "{key}: {line}");
             } else {

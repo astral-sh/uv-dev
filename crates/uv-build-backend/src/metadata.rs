@@ -433,9 +433,8 @@ impl PyProjectToml {
     /// <https://packaging.python.org/en/latest/specifications/core-metadata/>
     pub(crate) fn to_metadata(&self, root: &Path) -> Result<Metadata23, Error> {
         let summary = if let Some(description) = &self.project.description {
-            // `project.description` becomes the one-line `Summary` header. Python's email parser
-            // also treats a bare carriage return as a line ending, so reject both forms here.
-            if description.contains(['\r', '\n']) {
+            // The core metadata Summary must fit on one line.
+            if description.contains(Metadata23::is_header_line_break) {
                 return Err(ValidationError::DescriptionNewlines.into());
             }
             Some(description.clone())
