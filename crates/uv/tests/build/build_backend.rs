@@ -1623,9 +1623,7 @@ fn build_with_all_metadata() -> Result<()> {
     Ok(())
 }
 
-/// A bare carriage return must be folded as part of the metadata field, not interpreted as a new
-/// header by Python's reference email parser. Keep a dependency-shaped continuation in each field
-/// so the regression also documents the installer discrepancy this prevents.
+/// A line break in a metadata value must start a continuation of the same field.
 #[test]
 fn build_metadata_header_injection() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1640,11 +1638,11 @@ fn build_metadata_header_injection() -> Result<()> {
         version = "1.0.0"
         description = "A package"
         requires-python = ">=3.12"
-        keywords = ["example\rRequires-Dist: keyword-injected"]
+        keywords = ["example\u2028Requires-Dist: keyword-injected"]
         classifiers = ["Programming Language :: Python :: 3\rRequires-Dist: classifier-injected"]
         authors = [{name = "Jane\rRequires-Dist: author-injected", email = "jane@example.com"}]
         maintainers = [{email = "maintainer@example.com\rRequires-Dist: maintainer-injected"}]
-        license = {text = "line one\rRequires-Dist: license-injected\rline three"}
+        license = {text = "line one\r\nRequires-Dist: license-injected\u0085line three"}
 
         [project.urls]
         Homepage = "https://example.com\rRequires-Dist: url-injected"
@@ -1708,7 +1706,7 @@ fn build_metadata_header_injection() -> Result<()> {
 /// `project.description` maps to the one-line `Summary`, so a bare carriage return must be
 /// rejected instead of being serialized as a second metadata header.
 #[test]
-fn build_metadata_summary_carriage_return() -> Result<()> {
+fn build_metadata_summary_line_break() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context
@@ -1727,6 +1725,20 @@ fn build_metadata_summary_carriage_return() -> Result<()> {
     "#})?;
     context.temp_dir.child("src/foo/__init__.py").touch()?;
 
+    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel (uv build backend)...
+    error: Failed to build `[TEMP_DIR]/`
+      Caused by: Invalid project metadata
+      Caused by: `project.description` must be a single line
+    ");
+
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&context.read("pyproject.toml").replace(r"\r", r"\u2029"))?;
     uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
     success: false
     exit_code: 2
