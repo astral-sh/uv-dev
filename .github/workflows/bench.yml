@@ -80,10 +80,15 @@ jobs:
           retention-days: 1
 
   benchmarks-walltime-run:
-    name: "walltime on x86_64 linux"
+    name: ${{ matrix.group == 'all' && 'walltime on x86_64 linux' || format('walltime {0} on x86_64 linux', matrix.group) }}
     runs-on: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
     needs: benchmarks-walltime-build
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # A single job on main keeps profile capture compatible with the uv-dev importer.
+        group: ${{ fromJSON(github.event_name == 'pull_request' && '["core", "git-cold", "git-warm"]' || '["all"]') }}
     permissions:
       contents: read
       id-token: write # for codspeed authentication
@@ -123,8 +128,29 @@ jobs:
 
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
+        env:
+          BENCHMARK_GROUP: ${{ matrix.group }}
         with:
-          run: uv run --only-dev cargo codspeed run
+          run: |
+            case "$BENCHMARK_GROUP" in
+              all)
+                uv run --only-dev cargo codspeed run
+                ;;
+              core)
+                rm target/codspeed/walltime/uv-bench/git_fetch
+                uv run --only-dev cargo codspeed run -m walltime -p uv-bench
+                ;;
+              git-cold)
+                uv run --only-dev cargo codspeed run -m walltime -p uv-bench --bench git_fetch 'git_fetch_(cold_precise|revision_history)/'
+                ;;
+              git-warm)
+                uv run --only-dev cargo codspeed run -m walltime -p uv-bench --bench git_fetch 'git_fetch_warm_'
+                ;;
+              *)
+                echo "Unknown benchmark group: $BENCHMARK_GROUP" >&2
+                exit 1
+                ;;
+            esac
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
