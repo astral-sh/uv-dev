@@ -44,25 +44,6 @@ pub async fn pin(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let virtual_project = if no_project {
-        None
-    } else {
-        match VirtualProject::discover(
-            project_dir,
-            &DiscoveryOptions::default(),
-            cache,
-            workspace_cache,
-        )
-        .await
-        {
-            Ok(virtual_project) => Some(virtual_project),
-            Err(err) => {
-                debug!("Failed to discover virtual project: {err}");
-                None
-            }
-        }
-    };
-
     // Search for an existing file, we won't necessarily write to this, we'll construct a target
     // path if there's a request later on.
     let version_file = PythonVersionFile::discover(
@@ -96,6 +77,25 @@ pub async fn pin(
         )?;
         return Ok(ExitStatus::Success);
     }
+
+    let virtual_project = if no_project {
+        None
+    } else {
+        match VirtualProject::discover(
+            project_dir,
+            &DiscoveryOptions::default(),
+            cache,
+            workspace_cache,
+        )
+        .await
+        {
+            Ok(virtual_project) => Some(virtual_project),
+            Err(err) => {
+                debug!("Failed to discover virtual project: {err}");
+                None
+            }
+        }
+    };
 
     let Some(request) = request else {
         // Display the current pinned Python version
