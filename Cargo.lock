@@ -7258,6 +7258,7 @@ version = "0.0.97"
 dependencies = [
  "anstream",
  "anyhow",
+ "astral-reqwest-retry",
  "astral_async_zip",
  "clap",
  "ctrlc",

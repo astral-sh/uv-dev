@@ -4,9 +4,8 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
-use tracing::debug;
 
-use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matching_version};
+use uv_bin_install::{BinVersion, Binary, bin_install};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, child::run_to_completion};
@@ -14,6 +13,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+use crate::binary::resolve_version;
 use crate::reporters::BinaryDownloadReporter;
 
 /// Run the formatter.
@@ -104,68 +104,14 @@ pub async fn format(
             .transpose()?
             .unwrap_or(BinVersion::Default);
 
-        let resolved = match bin_version {
-            BinVersion::Default => {
-                // Find the best version matching the default constraints
-                let constraints = Binary::Ruff.default_constraints();
-                let resolved = find_matching_version(
-                    Binary::Ruff,
-                    Some(&constraints),
-                    exclude_newer,
-                    &client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to find ruff version matching default constraints: {constraints}"
-                    )
-                })?;
-                debug!(
-                    "Resolved `ruff@{constraints}` to `ruff=={}`",
-                    resolved.version
-                );
-                resolved
-            }
-            BinVersion::Pinned(version) => {
-                // Use the exact version directly without manifest lookup.
-                if exclude_newer.is_some() {
-                    debug!("`--exclude-newer` is ignored for pinned version `{version}`");
-                }
-                ResolvedVersion::from_version(Binary::Ruff, version)?
-            }
-            BinVersion::Latest => {
-                // Fetch the latest version from the manifest
-                let resolved = find_matching_version(
-                    Binary::Ruff,
-                    None,
-                    exclude_newer,
-                    &client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| "Failed to find latest ruff version")?;
-                debug!("Resolved `ruff@latest` to `ruff=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Constraint(constraints) => {
-                // Find the best version matching the constraints
-                let resolved = find_matching_version(
-                    Binary::Ruff,
-                    Some(&constraints),
-                    exclude_newer,
-                    &client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| format!("Failed to find ruff version matching: {constraints}"))?;
-                debug!(
-                    "Resolved `ruff@{constraints}` to `ruff=={}`",
-                    resolved.version
-                );
-                resolved
-            }
-        };
+        let resolved = resolve_version(
+            Binary::Ruff,
+            bin_version,
+            exclude_newer,
+            &client,
+            &retry_policy,
+        )
+        .await?;
 
         if show_version {
             writeln!(printer.stderr(), "ruff {}", resolved.version)?;
