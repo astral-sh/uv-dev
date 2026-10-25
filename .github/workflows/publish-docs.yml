@@ -88,6 +88,9 @@ jobs:
           enable-cache: false
 
       - name: "Build docs"
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+          DISABLE_MKDOCS_2_WARNING: "true"
         run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml
 
       - name: "Get docs token"
