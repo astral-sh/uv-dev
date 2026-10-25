@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, anyhow};
 use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_cache::Cache;
@@ -22,7 +21,7 @@ use uv_distribution_types::{
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
-use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
+use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages, SourceFilesError};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::VerbatimUrl;
@@ -534,30 +533,32 @@ impl InstallationPlan {
     }
 }
 
-type PythonSourceFileIterator = Box<dyn Iterator<Item = anyhow::Result<PathBuf>>>;
+type PythonSourceFileIterator = Box<dyn Iterator<Item = Result<PathBuf, SourceFilesError>>>;
 
 /// Return the Python source files owned by the distributions installed by this operation.
 fn python_source_files_for_installs<'a>(
     venv: &'a PythonEnvironment,
     installs: &'a [CachedDist],
-) -> impl Iterator<Item = anyhow::Result<PathBuf>> + 'a {
+) -> impl Iterator<Item = Result<PathBuf, SourceFilesError>> + 'a {
     let layout = venv.interpreter().layout();
     let site_packages = [
         CWD.join(&layout.scheme.purelib),
         CWD.join(&layout.scheme.platlib),
     ];
     installs.iter().flat_map(move |install| {
-        let dist_info = match installed_dist_info_path(&layout, install.path()).with_context(|| {
-            format!("Failed to locate installed distribution for bytecode compilation: {install}")
+        let dist_info = match installed_dist_info_path(&layout, install.path()).map_err(|source| {
+            SourceFilesError::LocateDistribution {
+                distribution: Box::new(install.clone()),
+                source,
+            }
         }) {
             Ok(dist_info) => dist_info,
             Err(err) => return Box::new(std::iter::once(Err(err))) as PythonSourceFileIterator,
         };
         let Some(record_root) = dist_info.parent().map(|path| CWD.join(path)) else {
-            return Box::new(std::iter::once(Err(anyhow!(
-                "Invalid installed distribution path: {}",
-                dist_info.user_display()
-            ))));
+            return Box::new(std::iter::once(Err(
+                SourceFilesError::InvalidDistributionPath(dist_info),
+            )));
         };
         let record_path = dist_info.join("RECORD");
         let record_file = match fs_err::File::open(&record_path) {
@@ -567,8 +568,9 @@ fn python_source_files_for_installs<'a>(
                 return Box::new(std::iter::empty());
             }
             Err(err) => {
-                return Box::new(std::iter::once(Err(err).with_context(|| {
-                    format!("Failed to read `{}`", record_path.user_display())
+                return Box::new(std::iter::once(Err(SourceFilesError::ReadRecord {
+                    path: record_path,
+                    source: err,
                 })));
             }
         };
@@ -578,8 +580,9 @@ fn python_source_files_for_installs<'a>(
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    return Some(Err(err).with_context(|| {
-                        format!("Failed to read `{}`", record_path.user_display())
+                    return Some(Err(SourceFilesError::ParseRecord {
+                        path: record_path.clone(),
+                        source: err,
                     }));
                 }
             };
