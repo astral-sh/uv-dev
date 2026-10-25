@@ -54,6 +54,7 @@ pub async fn check(
     fix: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
+    isolated_lock: bool,
     no_sync: bool,
     no_install_project: bool,
     isolated: bool,
@@ -398,7 +399,7 @@ pub async fn check(
             LockMode::Frozen(frozen_source.into())
         } else if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(venv.interpreter(), lock_check)
-        } else if isolated || !lock_target.lock_path().is_file() {
+        } else if isolated || isolated_lock || !lock_target.lock_path().is_file() {
             LockMode::DryRun(venv.interpreter())
         } else {
             LockMode::Write(venv.interpreter())
@@ -574,7 +575,7 @@ pub async fn check(
             LockMode::Frozen(frozen_source.into())
         } else if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(lock_interpreter, lock_check)
-        } else if isolated {
+        } else if isolated || isolated_lock {
             LockMode::DryRun(lock_interpreter)
         } else {
             LockMode::Write(lock_interpreter)

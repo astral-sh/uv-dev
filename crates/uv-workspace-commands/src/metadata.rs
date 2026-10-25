@@ -45,6 +45,7 @@ pub async fn metadata(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
+    isolated_lock: bool,
     refresh: Refresh,
     sync: Option<Modifications>,
     active: ActiveEnvironment,
@@ -156,7 +157,7 @@ pub async fn metadata(
 
                 if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
-                } else if sync.is_none()
+                } else if isolated_lock
                     || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
                 {
                     LockMode::DryRun(&interpreter)
