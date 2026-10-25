@@ -300,7 +300,6 @@ impl<'a> ComponentBuilder<'a> {
             for (url, hash) in source_dist.chain(wheels) {
                 if UriReferenceStr::new(url.as_ref()).is_ok() {
                     let alg = match hash.algorithm() {
-                        HashAlgorithm::Md5 => "MD5",
                         HashAlgorithm::Sha256 => "SHA-256",
                         HashAlgorithm::Sha384 => "SHA-384",
                         HashAlgorithm::Sha512 => "SHA-512",
