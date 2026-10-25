@@ -511,7 +511,7 @@ pub async fn pip_install(
     );
 
     let (resolution, hasher) = if let Some(pylock) = pylock {
-        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
+        let (location, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
         // Convert the extras and groups specifications into a concrete form.
         let extras = extras.with_defaults(DefaultExtras::default());
@@ -536,7 +536,7 @@ pub async fn pip_install(
 
         resolve_pylock_toml(
             lock,
-            &install_path,
+            &location,
             interpreter,
             python_version.as_ref(),
             python_platform.as_ref(),

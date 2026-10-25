@@ -17,7 +17,7 @@ use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    InstallOptions, RequirementsInput,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -147,6 +147,12 @@ pub enum PylockTomlErrorKind {
     WheelNameMismatch(WheelFilename, PackageName),
     #[error("Wheel filename `{0}` does not match package version `{1}`")]
     WheelVersionMismatch(WheelFilename, Version),
+    #[error("Expected a relative artifact path in remote `pylock.toml`, found: {0}")]
+    InvalidRemotePath(PortablePathBuf),
+    #[error("A remote `pylock.toml` cannot reference a local directory for `{0}`")]
+    RemoteDirectory(PackageName),
+    #[error("A remote `pylock.toml` cannot reference a `file:` or `git+file:` URL")]
+    RemoteFileUrl,
     #[error("Failed to convert path to URL")]
     PathToUrl,
     #[error(
@@ -1256,7 +1262,7 @@ impl<'lock> PylockToml {
     /// Convert the [`PylockToml`] to a [`Resolution`].
     pub fn to_resolution(
         self,
-        install_path: &Path,
+        location: &RequirementsInput,
         markers: &MarkerEnvironment,
         extras: &[ExtraName],
         groups: &[GroupName],
@@ -1374,7 +1380,7 @@ impl<'lock> PylockToml {
                 let hashes = HashDigests::from(best_wheel.hashes.clone());
                 let built_dist = Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
                     wheels: vec![best_wheel.to_registry_wheel(
-                        install_path,
+                        location,
                         &package.name,
                         package.version.as_ref(),
                         package.index.as_ref().map(SafeUrl::as_url),
@@ -1394,7 +1400,7 @@ impl<'lock> PylockToml {
             } else if let Some(sdist) = package.sdist.as_ref().filter(|_| !no_build) {
                 let hashes = HashDigests::from(sdist.hashes.clone());
                 let sdist = Dist::Source(SourceDist::Registry(sdist.to_sdist(
-                    install_path,
+                    location,
                     &package.name,
                     package.version.as_ref(),
                     package.index.as_ref().map(SafeUrl::as_url),
@@ -1411,7 +1417,7 @@ impl<'lock> PylockToml {
             } else if let Some(sdist) = package.directory.as_ref().filter(|_| !no_build) {
                 let hashes = HashDigests::empty();
                 let sdist = Dist::Source(SourceDist::Directory(
-                    sdist.to_sdist(install_path, &package.name)?,
+                    sdist.to_sdist(location, &package.name)?,
                 ));
                 let dist = ResolvedDist::Installable {
                     dist: Arc::new(sdist),
@@ -1425,7 +1431,7 @@ impl<'lock> PylockToml {
             } else if let Some(sdist) = package.vcs.as_ref().filter(|_| !no_build) {
                 let hashes = HashDigests::empty();
                 let sdist = Dist::Source(SourceDist::GitDirectory(
-                    sdist.to_sdist(install_path, &package.name)?,
+                    sdist.to_sdist(location, &package.name)?,
                 ));
                 let dist = ResolvedDist::Installable {
                     dist: Arc::new(sdist),
@@ -1442,7 +1448,7 @@ impl<'lock> PylockToml {
                 .filter(|_| if is_wheel { !no_binary } else { !no_build })
             {
                 let hashes = HashDigests::from(dist.hashes.clone());
-                let dist = dist.to_dist(install_path, &package.name, package.version.as_ref())?;
+                let dist = dist.to_dist(location, &package.name, package.version.as_ref())?;
                 let dist = ResolvedDist::Installable {
                     dist: Arc::new(dist),
                     version: package.version,
@@ -1640,6 +1646,76 @@ impl PylockTomlPackage {
     }
 }
 
+enum PylockSource {
+    Path(PathBuf),
+    Url(SafeUrl),
+}
+
+impl PylockSource {
+    fn artifact_url(self, size: Option<u64>) -> Result<UrlString, PylockTomlErrorKind> {
+        match self {
+            Self::Path(path) => {
+                validate_path_size(&path, size)?;
+                Ok(UrlString::from(
+                    SafeUrl::from_file_path(path).map_err(|()| PylockTomlErrorKind::PathToUrl)?,
+                ))
+            }
+            Self::Url(url) => Ok(UrlString::from(url)),
+        }
+    }
+}
+
+fn resolve_pylock_source(
+    location: &RequirementsInput,
+    path: Option<&PortablePathBuf>,
+    url: Option<&SafeUrl<Raw>>,
+) -> Result<Option<PylockSource>, PylockTomlErrorKind> {
+    if let Some(path) = path {
+        if let Some(local) = location.resolve_local_path(path.as_ref(), &uv_fs::CWD) {
+            return Ok(Some(PylockSource::Path(local)));
+        }
+        let RequirementsInput::Remote(base) = location else {
+            return Err(PylockTomlErrorKind::PathToUrl);
+        };
+        let portable = path.to_string();
+        if portable.starts_with(['/', '\\']) || uv_pep508::split_scheme(&portable).is_some() {
+            return Err(PylockTomlErrorKind::InvalidRemotePath(path.clone()));
+        }
+        let mut url = base.clone();
+        url.set_query(None);
+        url.set_fragment(None);
+        {
+            // Percent-encode URL metacharacters such as `#`, `?`, and `%` as path characters,
+            // retaining the origin of the document that supplied the path.
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| PylockTomlErrorKind::PathToUrl)?;
+            segments.pop();
+            for segment in portable.split('/') {
+                match segment {
+                    "" | "." => {}
+                    ".." => {
+                        segments.pop();
+                    }
+                    segment => {
+                        segments.push(segment);
+                    }
+                }
+            }
+        }
+        Ok(Some(PylockSource::Url(url)))
+    } else if let Some(url) = url {
+        if matches!(location, RequirementsInput::Remote(_))
+            && matches!(url.scheme(), "file" | "git+file")
+        {
+            return Err(PylockTomlErrorKind::RemoteFileUrl);
+        }
+        Ok(Some(PylockSource::Url(url.as_url().clone())))
+    } else {
+        Ok(None)
+    }
+}
+
 impl PylockTomlWheel {
     /// Return the [`WheelFilename`] for this wheel.
     fn filename(&self, name: &PackageName) -> Result<Cow<'_, WheelFilename>, PylockTomlErrorKind> {
@@ -1667,7 +1743,7 @@ impl PylockTomlWheel {
     /// Convert the wheel to a [`RegistryBuiltWheel`].
     fn to_registry_wheel(
         &self,
-        install_path: &Path,
+        location: &RequirementsInput,
         name: &PackageName,
         version: Option<&Version>,
         index: Option<&SafeUrl>,
@@ -1675,16 +1751,9 @@ impl PylockTomlWheel {
         let filename = self.filename(name)?.into_owned();
         validate_wheel_filename(&filename, name, version)?;
 
-        let file_url = if let Some(path) = self.path.as_ref() {
-            let path = install_path.join(path);
-            validate_path_size(&path, self.size)?;
-            let url = SafeUrl::from_file_path(path).map_err(|()| PylockTomlErrorKind::PathToUrl)?;
-            UrlString::from(url)
-        } else if let Some(url) = self.url.as_ref().map(SafeUrl::as_url) {
-            UrlString::from(url)
-        } else {
-            return Err(PylockTomlErrorKind::WheelMissingPathUrl(name.clone()));
-        };
+        let source = resolve_pylock_source(location, self.path.as_ref(), self.url.as_ref())?
+            .ok_or_else(|| PylockTomlErrorKind::WheelMissingPathUrl(name.clone()))?;
+        let file_url = source.artifact_url(self.size)?;
 
         let index = if let Some(index) = index {
             IndexUrl::from(VerbatimUrl::from_url(index.clone()))
@@ -1725,13 +1794,16 @@ impl PylockTomlDirectory {
     /// Convert the sdist to a [`DirectorySourceDist`].
     fn to_sdist(
         &self,
-        install_path: &Path,
+        location: &RequirementsInput,
         name: &PackageName,
     ) -> Result<DirectorySourceDist, PylockTomlErrorKind> {
+        let path = location
+            .resolve_local_path(self.path.as_ref(), &uv_fs::CWD)
+            .ok_or_else(|| PylockTomlErrorKind::RemoteDirectory(name.clone()))?;
         let path = if let Some(subdirectory) = self.subdirectory.as_ref() {
-            install_path.join(&self.path).join(subdirectory)
+            path.join(subdirectory)
         } else {
-            install_path.join(&self.path)
+            path
         };
         let path = normalize_path(path);
         let url =
@@ -1751,21 +1823,21 @@ impl PylockTomlVcs {
     /// Convert the sdist to a [`GitDirectorySourceDist`].
     fn to_sdist(
         &self,
-        install_path: &Path,
+        location: &RequirementsInput,
         name: &PackageName,
     ) -> Result<GitDirectorySourceDist, PylockTomlErrorKind> {
         let subdirectory = self.subdirectory.clone().map(Box::<Path>::from);
 
         // Reconstruct the `GitUrl` from the individual fields.
         let git_url = {
-            let mut url = if let Some(url) = self.url.as_ref().map(SafeUrl::as_url) {
-                url.clone()
-            } else if let Some(path) = self.path.as_ref() {
-                SafeUrl::from_directory_path(install_path.join(path))
-                    .map_err(|()| PylockTomlErrorKind::PathToUrl)?
-            } else {
-                return Err(PylockTomlErrorKind::VcsMissingPathUrl(name.clone()));
-            };
+            let mut url =
+                match resolve_pylock_source(location, self.path.as_ref(), self.url.as_ref())?
+                    .ok_or_else(|| PylockTomlErrorKind::VcsMissingPathUrl(name.clone()))?
+                {
+                    PylockSource::Path(path) => SafeUrl::from_directory_path(path)
+                        .map_err(|()| PylockTomlErrorKind::PathToUrl)?,
+                    PylockSource::Url(url) => url,
+                };
             url.set_fragment(None);
             url.set_query(None);
 
@@ -1820,7 +1892,7 @@ impl PylockTomlSdist {
     /// Convert the sdist to a [`RegistrySourceDist`].
     fn to_sdist(
         &self,
-        install_path: &Path,
+        location: &RequirementsInput,
         name: &PackageName,
         version: Option<&Version>,
         index: Option<&SafeUrl>,
@@ -1835,16 +1907,9 @@ impl PylockTomlSdist {
             Cow::Owned(filename.version)
         };
 
-        let file_url = if let Some(path) = self.path.as_ref() {
-            let path = install_path.join(path);
-            validate_path_size(&path, self.size)?;
-            let url = SafeUrl::from_file_path(path).map_err(|()| PylockTomlErrorKind::PathToUrl)?;
-            UrlString::from(url)
-        } else if let Some(url) = self.url.as_ref().map(SafeUrl::as_url) {
-            UrlString::from(url)
-        } else {
-            return Err(PylockTomlErrorKind::SdistMissingPathUrl(name.clone()));
-        };
+        let source = resolve_pylock_source(location, self.path.as_ref(), self.url.as_ref())?
+            .ok_or_else(|| PylockTomlErrorKind::SdistMissingPathUrl(name.clone()))?;
+        let file_url = source.artifact_url(self.size)?;
 
         let index = if let Some(index) = index {
             IndexUrl::from(VerbatimUrl::from_url(index.clone()))
@@ -1887,78 +1952,80 @@ impl PylockTomlSdist {
 impl PylockTomlArchive {
     fn to_dist(
         &self,
-        install_path: &Path,
+        location: &RequirementsInput,
         name: &PackageName,
         version: Option<&Version>,
     ) -> Result<Dist, PylockTomlErrorKind> {
-        if let Some(path) = self.path.as_ref() {
-            let filename = path
-                .as_ref()
-                .file_name()
-                .and_then(OsStr::to_str)
-                .ok_or_else(|| {
-                    PylockTomlErrorKind::PathMissingFilename(Box::<Path>::from(path.clone()))
-                })?;
+        let source = resolve_pylock_source(location, self.path.as_ref(), self.url.as_ref())?
+            .ok_or_else(|| PylockTomlErrorKind::ArchiveMissingPathUrl(name.clone()))?;
+        match source {
+            PylockSource::Path(install_path) => {
+                let filename = install_path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .ok_or_else(|| {
+                        PylockTomlErrorKind::PathMissingFilename(
+                            install_path.clone().into_boxed_path(),
+                        )
+                    })?;
 
-            let ext = DistExtension::from_path(filename)?;
-            match ext {
-                DistExtension::Wheel => {
-                    let filename = WheelFilename::from_str(filename)?;
-                    validate_wheel_filename(&filename, name, version)?;
-                    let install_path = install_path.join(path);
-                    validate_path_size(&install_path, self.size)?;
-                    let url = VerbatimUrl::from_absolute_path(&install_path)
-                        .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
-                    Ok(Dist::Built(BuiltDist::Path(PathBuiltDist {
-                        filename,
-                        install_path: install_path.into_boxed_path(),
-                        url,
-                    })))
-                }
-                DistExtension::Source(ext) => {
-                    let install_path = install_path.join(path);
-                    validate_path_size(&install_path, self.size)?;
-                    let url = VerbatimUrl::from_absolute_path(&install_path)
-                        .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
-                    Ok(Dist::Source(SourceDist::Path(PathSourceDist {
-                        name: name.clone(),
-                        version: version.cloned(),
-                        install_path: install_path.into_boxed_path(),
-                        ext,
-                        url,
-                    })))
+                let ext = DistExtension::from_path(filename)?;
+                match ext {
+                    DistExtension::Wheel => {
+                        let filename = WheelFilename::from_str(filename)?;
+                        validate_wheel_filename(&filename, name, version)?;
+                        validate_path_size(&install_path, self.size)?;
+                        let url = VerbatimUrl::from_absolute_path(&install_path)
+                            .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
+                        Ok(Dist::Built(BuiltDist::Path(PathBuiltDist {
+                            filename,
+                            install_path: install_path.into_boxed_path(),
+                            url,
+                        })))
+                    }
+                    DistExtension::Source(ext) => {
+                        validate_path_size(&install_path, self.size)?;
+                        let url = VerbatimUrl::from_absolute_path(&install_path)
+                            .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
+                        Ok(Dist::Source(SourceDist::Path(PathSourceDist {
+                            name: name.clone(),
+                            version: version.cloned(),
+                            install_path: install_path.into_boxed_path(),
+                            ext,
+                            url,
+                        })))
+                    }
                 }
             }
-        } else if let Some(url) = self.url.as_ref().map(SafeUrl::as_url) {
-            let filename = url
-                .filename()
-                .map_err(|_| PylockTomlErrorKind::UrlMissingFilename(url.clone()))?;
+            PylockSource::Url(url) => {
+                let filename = url
+                    .filename()
+                    .map_err(|_| PylockTomlErrorKind::UrlMissingFilename(url.clone()))?;
 
-            let ext = DistExtension::from_path(filename.as_ref())?;
-            match ext {
-                DistExtension::Wheel => {
-                    let filename = WheelFilename::from_str(&filename)?;
-                    validate_wheel_filename(&filename, name, version)?;
-                    Ok(Dist::Built(BuiltDist::DirectUrl(DirectUrlBuiltDist {
-                        filename,
-                        location: Box::new(url.clone()),
-                        url: VerbatimUrl::from_url(url.clone()),
-                        size: self.size,
-                    })))
-                }
-                DistExtension::Source(ext) => {
-                    Ok(Dist::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
-                        name: name.clone(),
-                        location: Box::new(url.clone()),
-                        subdirectory: self.subdirectory.clone().map(Box::<Path>::from),
-                        ext,
-                        url: VerbatimUrl::from_url(url.clone()),
-                        size: self.size,
-                    })))
+                let ext = DistExtension::from_path(filename.as_ref())?;
+                match ext {
+                    DistExtension::Wheel => {
+                        let filename = WheelFilename::from_str(&filename)?;
+                        validate_wheel_filename(&filename, name, version)?;
+                        Ok(Dist::Built(BuiltDist::DirectUrl(DirectUrlBuiltDist {
+                            filename,
+                            location: Box::new(url.clone()),
+                            url: VerbatimUrl::from_url(url.clone()),
+                            size: self.size,
+                        })))
+                    }
+                    DistExtension::Source(ext) => {
+                        Ok(Dist::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
+                            name: name.clone(),
+                            location: Box::new(url.clone()),
+                            subdirectory: self.subdirectory.clone().map(Box::<Path>::from),
+                            ext,
+                            url: VerbatimUrl::from_url(url.clone()),
+                            size: self.size,
+                        })))
+                    }
                 }
             }
-        } else {
-            Err(PylockTomlErrorKind::ArchiveMissingPathUrl(name.clone()))
         }
     }
 
