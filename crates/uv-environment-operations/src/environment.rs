@@ -8,7 +8,7 @@ use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, HashCheckingMode, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
 use uv_install_operations::loggers::InstallLogger;
-use uv_resolve_operations::loggers::ResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_settings::ResolverInstallerSettings;
 use uv_virtualenv::UpgradePolicy;
 
@@ -67,7 +67,7 @@ impl CachedEnvironment {
         settings: &ResolverInstallerSettings,
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
-        resolve: Box<dyn ResolveLogger>,
+        resolve: ResolveSummary,
         install: Box<dyn InstallLogger>,
         installer_metadata: bool,
         concurrency: &Concurrency,

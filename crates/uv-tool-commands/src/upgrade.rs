@@ -40,7 +40,7 @@ use uv_environment_operations::{
 };
 use uv_install_operations::loggers::{DefaultInstallLogger, UpgradeInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
-use uv_resolve_operations::loggers::SummaryResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::resolution_tags;
 use uv_settings::ResolverInstallerSettings;
 
@@ -400,7 +400,7 @@ async fn upgrade_tool(
             &settings.resolver,
             client_builder,
             &state,
-            Box::new(SummaryResolveLogger),
+            ResolveSummary::Suppress,
             concurrency,
             cache,
             workspace_cache,
@@ -529,7 +529,7 @@ async fn upgrade_tool(
             &settings.resolver,
             client_builder,
             &state,
-            Box::new(SummaryResolveLogger),
+            ResolveSummary::Suppress,
             concurrency,
             cache,
             workspace_cache,
@@ -572,7 +572,7 @@ async fn upgrade_tool(
             &settings,
             client_builder,
             &state,
-            Box::new(SummaryResolveLogger),
+            ResolveSummary::Suppress,
             Box::new(UpgradeInstallLogger::new(name.clone())),
             installer_metadata,
             concurrency,
