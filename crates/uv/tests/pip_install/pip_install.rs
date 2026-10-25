@@ -6686,6 +6686,89 @@ build-backend = "uv_build"
     Ok(())
 }
 
+/// Removing an older declared input must rebuild the wheel even when the newest input is unchanged.
+#[test]
+fn invalidate_path_on_removed_glob_match() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("source-probe @ ./project")?;
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! { r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv]
+        cache-keys = ["inputs/*.txt"]
+    "# })?;
+    project.child("backend.py").write_str(indoc! { r#"
+        import pathlib
+        import zipfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            inputs = sorted(path.name for path in pathlib.Path("inputs").glob("*.txt"))
+            files = {
+                "source_probe.py": f"INPUTS = {inputs!r}\n",
+                "source_probe-1.0.0.dist-info/METADATA":
+                    "Metadata-Version: 2.1\nName: source-probe\nVersion: 1.0.0\n",
+                "source_probe-1.0.0.dist-info/WHEEL":
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            }
+            files["source_probe-1.0.0.dist-info/RECORD"] = (
+                "".join(f"{name},,\n" for name in files)
+                + "source_probe-1.0.0.dist-info/RECORD,,\n"
+            )
+            name = "source_probe-1.0.0-py3-none-any.whl"
+            with zipfile.ZipFile(pathlib.Path(wheel_directory) / name, "w") as archive:
+                for path, contents in files.items():
+                    archive.writestr(path, contents)
+            return name
+    "# })?;
+    project.child("inputs/older.txt").write_str("older")?;
+    project.child("inputs/newer.txt").write_str("newer")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index").arg("-r").arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-probe==1.0.0 (from file://[TEMP_DIR]/project)
+    ");
+    context
+        .assert_command(
+            "from source_probe import INPUTS; assert INPUTS == ['newer.txt', 'older.txt']",
+        )
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index").arg("-r").arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+
+    fs::remove_file(project.child("inputs/older.txt"))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index").arg("-r").arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ source-probe==1.0.0 (from file://[TEMP_DIR]/project)
+    ");
+    context
+        .assert_command("from source_probe import INPUTS; assert INPUTS == ['newer.txt']")
+        .success();
+    Ok(())
+}
+
 #[test]
 fn invalidate_path_on_cache_key() -> Result<()> {
     let context = uv_test::test_context!("3.12");
