@@ -10,15 +10,15 @@ use tracing::{debug, trace};
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
     HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, NameRequirementSpecification, Requirement, RequirementSource,
+    UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -45,7 +45,7 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_names;
+use crate::requirements::{latest_registry_client, resolve_latest_constraint, resolve_names};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -54,7 +54,6 @@ use uv_environment_operations::{
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
-use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
@@ -290,59 +289,15 @@ pub async fn install(
         ..
     } = &request
     {
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
+        let client =
+            latest_registry_client(&interpreter, &settings.resolver, &client_builder, &cache)?;
+        resolve_latest_constraint(
+            name,
+            &client,
+            &settings.resolver,
+            &concurrency.downloads_semaphore,
         )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, None, &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
+        .await?
     } else {
         None
     };
