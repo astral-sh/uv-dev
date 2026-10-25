@@ -51,7 +51,7 @@ jobs:
       run: rustup toolchain install --profile minimal
     - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-history-20261025-v1-before
+        prefix-key: uv-history-origin-20261025-v1-before
         key: ${{ hashFiles('Cargo.toml') }}
         profile: fast-build-nightly
         save-if: ${{ inputs.phase == 'seed' }}
@@ -178,7 +178,7 @@ jobs:
       run: rustup toolchain install --profile minimal
     - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-history-20261025-v1-after
+        prefix-key: uv-history-origin-20261025-v1-after
         key: ${{ hashFiles('Cargo.toml') }}
         profile: fast-build-nightly
         save-if: ${{ inputs.phase == 'seed' }}
