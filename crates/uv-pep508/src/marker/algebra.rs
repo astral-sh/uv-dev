@@ -1109,6 +1109,11 @@ impl InternerGuard<'_> {
         }
 
         let py_range = Ranges::from_range_bounds((py_lower.cloned(), py_upper.cloned()));
+        if py_range.is_empty() {
+            // Oops, the bounds imply there is nothing that can match,
+            // so we always evaluate to false.
+            return NodeId::FALSE;
+        }
         let versions = self.create_node(
             Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
             Edges::Version {
