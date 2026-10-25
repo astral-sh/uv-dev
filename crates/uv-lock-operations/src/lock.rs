@@ -35,7 +35,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use crate::lock_target::find_lock_format_error;
+use crate::lock_target::{encode_lock, find_lock_format_error, uses_crlf};
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
 /// The result of running a lock operation.
@@ -239,6 +239,7 @@ impl<'env> LockOperation<'env> {
                     Err(err) => return Err(err),
                 };
 
+                let crlf = existing_contents.as_deref().is_some_and(uses_crlf);
                 let check_lockfile_contents = if self.check_lockfile_contents {
                     existing_contents
                 } else {
@@ -270,7 +271,7 @@ impl<'env> LockOperation<'env> {
                 // If the lockfile changed, write it to disk.
                 if !matches!(self.mode, LockMode::DryRun(_)) {
                     if let LockResult::Changed(_, lock) = &result {
-                        target.commit(lock).await?;
+                        target.commit(lock, crlf).await?;
                     }
                 }
 
@@ -1028,7 +1029,9 @@ async fn do_lock(
             };
 
             let unchanged = if let Some(check_lockfile_contents) = check_lockfile_contents {
-                previous.is_some() && check_lockfile_contents == lock.to_toml()?.as_str()
+                previous.is_some()
+                    && check_lockfile_contents
+                        == encode_lock(&lock, uses_crlf(&check_lockfile_contents))?
             } else {
                 previous.as_ref().is_some_and(|previous| *previous == lock)
             };
