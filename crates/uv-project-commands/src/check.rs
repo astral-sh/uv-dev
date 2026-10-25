@@ -658,6 +658,7 @@ pub async fn check(
                     cache,
                     printer,
                     preview,
+                    |root| Ok(PythonEnvironment::from_root(root, cache)?),
                 )
                 .await
                 {
@@ -665,7 +666,7 @@ pub async fn check(
                     Err(err) => return Err(UvError::from(err).into()),
                 };
                 malware_context.record_resolution(&resolution);
-                PythonEnvironment::from(environment)
+                environment
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
             });

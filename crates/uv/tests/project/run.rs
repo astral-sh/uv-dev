@@ -10,6 +10,7 @@ use predicates::{
     str::contains,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::io;
 use std::path::Path;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -1951,27 +1952,35 @@ fn run_private_environment_preview() -> Result<()> {
         .assert()
         .success();
     let lock = context.temp_dir.child("uv.lock");
-    let contents = fs_err::read(lock.path())?;
-    context.run().args(["--offline", "--no-index", "--find-links"]).arg(&links)
+    let wheel = "ok-1.0.0-py3-none-any.whl";
+    let hash = "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f";
+    let contents = fs_err::read_to_string(lock.path())?.replace(
+        &format!("{wheel}\" }}"),
+        &format!("{wheel}\", hash = \"sha256:{hash}\" }}"),
+    );
+    assert!(contents.contains(hash));
+    lock.write_str(&contents)?;
+    context.run().args(["--locked", "--offline", "--no-index", "--find-links"]).arg(&links)
         .args(["--link-mode", "hardlink", "python", "-IBc", indoc! {r#"
             import ok, pathlib, subprocess, sys
             root = pathlib.Path(sys.prefix)
             source = pathlib.Path(ok.__file__)
-            cached, = pathlib.Path(sys.argv[1]).glob("archive-v0/*/ok/__init__.py")
-            assert source.is_relative_to(root) and not source.samefile(cached)
+            cached = list(pathlib.Path(sys.argv[1]).glob("archive-v0/*/ok/__init__.py"))
+            assert cached and source.is_relative_to(root)
+            assert all(not source.samefile(path) for path in cached)
             pathlib.Path("first-prefix").write_text(str(root))
             with source.open("ab") as f:
                 f.write(b"\nprivate_marker = 37\n")
             subprocess.run([sys.executable, "-IBc", "import ok; assert ok.private_marker == 37"], check=True)
             source.unlink()
-            assert cached.is_file() and b"private_marker" not in cached.read_bytes()
+            assert all(b"private_marker" not in path.read_bytes() for path in cached)
             (root / "sentinel").touch()
         "#}]).arg(context.cache_dir.path()).assert().success();
     let first = fs_err::read_to_string(context.temp_dir.child("first-prefix").path())?;
     assert!(!Path::new(&first).exists());
     context
         .run()
-        .args(["--offline", "--no-index", "--find-links"])
+        .args(["--locked", "--offline", "--no-index", "--find-links"])
         .arg(&links)
         .args([
             "python",
@@ -1992,7 +2001,88 @@ fn run_private_environment_preview() -> Result<()> {
         .failure()
         .stdout("")
         .stderr(contains("requires environment synchronization"));
-    assert_eq!(fs_err::read(lock.path())?, contents);
+    assert_eq!(fs_err::read_to_string(lock.path())?, contents);
+    // A previously prepared environment cannot satisfy a lock with a different wheel hash.
+    lock.write_str(&contents.replace(hash, &"0".repeat(64)))?;
+    context
+        .run()
+        .args(["--frozen", "--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .args(["python", "-c", "print('job started')"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(contains("hash").or(contains("Hash")));
+    Ok(())
+}
+
+/// Opening a prepared installation must not run its startup hooks outside the private prefix.
+#[test]
+fn run_private_environment_startup_hook() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let links = context.temp_dir.child("wheels");
+    links.create_dir_all()?;
+    let (filename, bytes) = WheelBuilder::new(&"hook".parse()?, &"1".parse()?)
+        .files(&[
+            ("hook.pth", "import hook.record\n"),
+            (
+                "hook/record.py",
+                indoc! {"
+                import os, sys
+                with open(os.environ['HOOK_LOG'], 'a') as log:
+                    print(sys.prefix, file=log)
+            "},
+            ),
+        ])
+        .build();
+    let hash = hex::encode(Sha256::digest(&bytes));
+    links.child(&filename).write_binary(&bytes)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1"
+        requires-python = "==3.12.*"
+        dependencies = ["hook==1"]
+        [tool.uv]
+        preview-features = ["run-private-environment"]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let lock = context.temp_dir.child("uv.lock");
+    let contents = fs_err::read_to_string(lock.path())?.replace(
+        &format!("{filename}\" }}"),
+        &format!("{filename}\", hash = \"sha256:{hash}\" }}"),
+    );
+    assert!(contents.contains(&hash));
+    lock.write_str(&contents)?;
+
+    let log = context.temp_dir.child("hook-log");
+    let script = indoc! {"
+        import sys
+        with open('commands', 'a') as commands:
+            print(sys.prefix, file=commands)
+    "};
+    context
+        .run()
+        .args(["--locked", "--offline", "python", "-Ic", script])
+        .env("HOOK_LOG", log.path())
+        .assert()
+        .success();
+    context
+        .run()
+        .args(["--locked", "--offline", "python", "-Ic", script])
+        .env("HOOK_LOG", log.path())
+        .assert()
+        .success();
+    let commands = fs_err::read_to_string(context.temp_dir.child("commands").path())?;
+    assert_eq!(fs_err::read_to_string(log.path())?, commands);
+    let prefixes: Vec<_> = commands.lines().collect();
+    assert_eq!(prefixes.len(), 2);
+    assert_ne!(prefixes[0], prefixes[1]);
     Ok(())
 }
 
