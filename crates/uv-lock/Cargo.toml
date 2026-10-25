@@ -66,6 +66,7 @@ toml_parser = { workspace = true }
 toml_writer = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+version-ranges = { workspace = true }
 
 [dev-dependencies]
 indoc = { workspace = true }

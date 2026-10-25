@@ -17,6 +17,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
+use version_ranges::Ranges;
 
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
@@ -48,7 +49,7 @@ use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_macros::DebugNoInline;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
-use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep440::{Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{
     MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
 };
@@ -6348,11 +6349,28 @@ fn nonstandard_member_default_groups(
 }
 
 /// Metadata for a dependency group.
-#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Deserialize, Eq)]
 #[serde(transparent)]
 pub struct GroupMetadata {
     /// The effective Python requirement, including requirements from included groups.
     pub requires_python: Option<VersionSpecifiers>,
+}
+
+impl GroupMetadata {
+    /// An absent or empty requirement leaves the group's Python versions unrestricted.
+    fn python_range(&self) -> Ranges<Version> {
+        let Self { requires_python } = self;
+        requires_python
+            .as_ref()
+            .map(|specifiers| release_specifiers_to_ranges(specifiers.clone()))
+            .unwrap_or_else(Ranges::full)
+    }
+}
+
+impl PartialEq for GroupMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.python_range() == other.python_range()
+    }
 }
 
 /// Collect metadata for each member's dependency groups.
@@ -10685,6 +10703,16 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn empty_group_python_requirement_is_unrestricted() {
+        assert_eq!(
+            GroupMetadata::default(),
+            GroupMetadata {
+                requires_python: Some(VersionSpecifiers::empty()),
+            }
+        );
     }
 
     #[test]

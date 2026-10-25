@@ -21,6 +21,9 @@ mod init;
 #[cfg(feature = "test-python")]
 mod lock;
 
+#[cfg(feature = "test-python")]
+mod group_python_semantics;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod run;
 
