@@ -117,7 +117,7 @@ pub struct Tags {
     /// `python_tag` |--> `abi_tag` |--> `platform_tag` |--> priority
     #[expect(clippy::type_complexity)]
     map: Arc<FxHashMap<LanguageTag, FxHashMap<AbiTag, FxHashMap<PlatformTag, TagPriority>>>>,
-    /// The highest-priority tag for the Python version and platform.
+    /// Python, ABI, and platform tags used to describe the interpreter in diagnostics.
     best: Option<(LanguageTag, AbiTag, PlatformTag)>,
     /// Python platform used to generate the tags, for error messages.
     python_platform: Platform,
@@ -138,12 +138,15 @@ impl Tags {
     fn new(
         tags: Vec<(LanguageTag, AbiTag, PlatformTag)>,
         python_platform: Platform,
+        diagnostic_platform: Option<PlatformTag>,
         python_version: (u8, u8),
         is_cross: bool,
         is_freethreaded: bool,
     ) -> Self {
-        // Store the highest-priority tag for each component.
-        let best = tags.first().cloned();
+        let best = tags
+            .first()
+            .zip(diagnostic_platform)
+            .map(|((py, abi, _), platform)| (*py, *abi, platform));
 
         // Index the tags by Python version, ABI, and platform.
         let mut map = FxHashMap::default();
@@ -203,19 +206,17 @@ impl Tags {
         let implementation = Implementation::parse(implementation_name, variant)?;
 
         // Determine the compatible tags for the current platform.
-        let platform_tags = {
-            let mut platform_tags = compatible_tags(&platform)?;
-            // A plain Linux tag identifies the OS and architecture without declaring a libc baseline.
-            if !options.prefer_portable_linux
-                && matches!(platform_tags.last(), Some(PlatformTag::Linux { .. }))
-            {
-                platform_tags.rotate_right(1);
-            }
-            if matches!(platform.os(), Os::Manylinux { .. }) && !options.manylinux_compatible {
-                platform_tags.retain(|tag| !tag.is_manylinux());
-            }
-            platform_tags
-        };
+        let mut platform_tags = compatible_tags(&platform)?;
+        if matches!(platform.os(), Os::Manylinux { .. }) && !options.manylinux_compatible {
+            platform_tags.retain(|tag| !tag.is_manylinux());
+        }
+        // Keep the libc baseline for diagnostics when available, even when a plain Linux wheel ranks first.
+        let diagnostic_platform = platform_tags.first().cloned();
+        if !options.prefer_portable_linux
+            && matches!(platform_tags.last(), Some(PlatformTag::Linux { .. }))
+        {
+            platform_tags.rotate_right(1);
+        }
 
         let mut tags = Vec::with_capacity(5 * platform_tags.len());
 
@@ -338,6 +339,7 @@ impl Tags {
         Ok(Self::new(
             tags,
             platform,
+            diagnostic_platform,
             python_version,
             options.is_cross,
             options.gil_disabled,
@@ -455,7 +457,7 @@ impl Tags {
         self.best.as_ref().map(|(_, abi, _)| *abi)
     }
 
-    /// Return the highest-priority platform tag for the [`Tags`].
+    /// Return the platform tag that describes the interpreter for diagnostics.
     pub fn platform_tag(&self) -> Option<&PlatformTag> {
         self.best.as_ref().map(|(_, _, platform)| platform)
     }
@@ -1305,6 +1307,8 @@ mod tests {
             let linux = PlatformTag::Linux { arch };
             let native = tags(false);
             let target = tags(true);
+            assert_eq!(native.platform_tag(), Some(&portable));
+            assert_eq!(target.platform_tag(), Some(&portable));
             let language = "py3".parse::<LanguageTag>().unwrap();
             assert!(
                 native.compatibility_tag(&language, &AbiTag::None, &linux)
