@@ -10,6 +10,7 @@ use cargo_util::{ProcessBuilder, ProcessError, paths};
 use owo_colors::OwoColorize;
 use tracing::{debug, instrument, warn};
 
+use crate::gitoxide::Backend;
 use uv_fs::Simplified;
 use uv_git_types::{GitOid, GitReference};
 use uv_redacted::SafeUrl;
@@ -77,6 +78,7 @@ enum RefspecStrategy {
 pub(crate) struct GitRemote {
     /// URL to a remote repository.
     url: SafeUrl,
+    backend: Backend,
 }
 
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
@@ -104,11 +106,19 @@ pub(crate) struct GitCheckout {
 pub(crate) struct GitRepository {
     /// Path to the underlying Git repository on the local filesystem.
     path: PathBuf,
+    backend: Backend,
 }
 
 impl GitRepository {
     /// Opens an existing Git repository at `path`.
-    fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path, backend: Backend) -> Result<Self> {
+        if backend == Backend::Gitoxide {
+            gix::open(path)?;
+            return Ok(Self {
+                path: path.to_owned(),
+                backend,
+            });
+        }
         // Make sure there is a Git repository at the specified path.
         GIT.as_ref()
             .cloned()?
@@ -118,11 +128,19 @@ impl GitRepository {
 
         Ok(Self {
             path: path.to_path_buf(),
+            backend,
         })
     }
 
     /// Initializes a Git repository at `path`.
-    fn init(path: &Path) -> Result<Self> {
+    fn init(path: &Path, backend: Backend) -> Result<Self> {
+        if backend == Backend::Gitoxide {
+            gix::init(path)?;
+            return Ok(Self {
+                path: path.to_owned(),
+                backend,
+            });
+        }
         // TODO(ibraheem): see if this still necessary now that we no longer use libgit2
         // Skip anything related to templates, they just call all sorts of issues as
         // we really don't want to use them yet they insist on being used. See #6240
@@ -138,6 +156,7 @@ impl GitRepository {
 
         Ok(Self {
             path: path.to_path_buf(),
+            backend,
         })
     }
 
@@ -164,6 +183,12 @@ impl GitRepository {
 
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
+        if self.backend == Backend::Gitoxide {
+            return Ok(gix::open(&self.path)?
+                .rev_parse_single(refname)?
+                .to_string()
+                .parse()?);
+        }
         let result = GIT
             .as_ref()
             .cloned()?
@@ -217,8 +242,9 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(url: SafeUrl) -> Self {
-        Self { url }
+    pub(crate) fn new(url: SafeUrl, with_lfs: bool, disable_ssl: bool) -> Result<Self> {
+        let backend = Backend::for_remote(&url, with_lfs, disable_ssl)?;
+        Ok(Self { url, backend })
     }
 
     /// Gets the remote repository URL.
@@ -274,7 +300,7 @@ impl GitRemote {
         }
 
         fs_err::create_dir_all(into)?;
-        let mut repo = GitRepository::init(into)?;
+        let mut repo = GitRepository::init(into, self.backend)?;
         fetch(&mut repo, &self.url, reference, disable_ssl, offline)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
@@ -297,7 +323,7 @@ impl GitRemote {
 
     /// Creates a [`GitDatabase`] of this remote at `db_path`.
     pub(crate) fn db_at(&self, db_path: &Path) -> Result<GitDatabase> {
-        let repo = GitRepository::open(db_path)?;
+        let repo = GitRepository::open(db_path, self.backend)?;
         Ok(GitDatabase {
             remote: self.clone(),
             repo,
@@ -313,7 +339,7 @@ impl GitDatabase {
         // A non-fresh checkout can happen if the checkout operation was
         // interrupted. In that case, the checkout gets deleted and a new
         // clone is created.
-        let checkout = match GitRepository::open(destination)
+        let checkout = match GitRepository::open(destination, self.repo.backend)
             .ok()
             .map(|repo| GitCheckout::new(rev, repo))
             .filter(GitCheckout::is_fresh)
@@ -326,6 +352,13 @@ impl GitDatabase {
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
+        if self.repo.backend == Backend::Gitoxide {
+            let repo = gix::open(&self.repo.path)?;
+            return Ok(repo
+                .rev_parse_single(revision.as_str())?
+                .shorten()?
+                .to_string());
+        }
         let output = GIT
             .as_ref()
             .cloned()?
@@ -423,7 +456,7 @@ impl GitCheckout {
                 .exec_with_output()?;
         }
 
-        let repo = GitRepository::open(into)?;
+        let repo = GitRepository::open(into, database.repo.backend)?;
         let checkout = Self::new(revision, repo);
         let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url)?;
         Ok(checkout.with_lfs_ready(lfs_ready))
@@ -676,28 +709,21 @@ fn fetch(
     }
 
     debug!("Performing a Git fetch for: {remote_url}");
+    let mut fetch_refspecs = |refspecs: &[String]| match repo.backend {
+        Backend::Cli => fetch_with_cli(repo, remote_url, refspecs, tags, disable_ssl, offline),
+        Backend::Gitoxide => {
+            crate::gitoxide::fetch(&repo.path, remote_url, refspecs, tags, offline)
+                .map_err(|err| redact_git_error(err, remote_url))
+        }
+    };
     let result = match refspec_strategy {
-        RefspecStrategy::All => fetch_with_cli(
-            repo,
-            remote_url,
-            refspecs.as_slice(),
-            tags,
-            disable_ssl,
-            offline,
-        ),
+        RefspecStrategy::All => fetch_refspecs(&refspecs),
         RefspecStrategy::First => {
             // Try each refspec
             let mut errors = refspecs
                 .iter()
                 .map_while(|refspec| {
-                    let fetch_result = fetch_with_cli(
-                        repo,
-                        remote_url,
-                        std::slice::from_ref(refspec),
-                        tags,
-                        disable_ssl,
-                        offline,
-                    );
+                    let fetch_result = fetch_refspecs(std::slice::from_ref(refspec));
 
                     // Stop after the first success and log failures
                     match fetch_result {

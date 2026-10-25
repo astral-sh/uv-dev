@@ -29,6 +29,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "ambient-authority"
 version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -117,6 +123,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -433,9 +448,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "autocfg"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
@@ -922,6 +937,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "clru"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "197fd99cb113a8d5d9b6376f3aa817f32c1078f2343b714fff7d2ca44fdf67d5"
+dependencies = [
+ "hashbrown 0.16.1",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1172,6 +1196,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e71406cd8807725f7ac2f999a4cdd32e98f829fdf65f528343cebf945e41df1e"
+dependencies = [
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1195,6 +1232,15 @@ name = "crossbeam-epoch"
 version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-queue"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1272,6 +1318,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1306,6 +1366,15 @@ name = "debug-ignore"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffe7ed1d93f4553003e20b629abe9085e1e81b1429520f897f8f8860bc6dfc21"
+
+[[package]]
+name = "defmt"
+version = "0.3.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4deef977660e373c458df605a913d4ab121db0ccd18d1ad6976dff7d37cddb53"
+dependencies = [
+ "defmt 1.1.0",
+]
 
 [[package]]
 name = "defmt"
@@ -1479,6 +1548,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
+name = "dua-core"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d687862f3206e7c660daeb6ab0200c65e58fccd7e508819e4bd9949304c640a8"
+dependencies = [
+ "crossbeam",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1644,6 +1724,18 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "faster-hex"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04839bdf9d8c10f66806fad16b852fc72aab80873aebc3cb69d85b4fa41543ed"
+dependencies = [
+ "autocfg",
+ "defmt 0.3.101",
+ "heapless",
+ "serde",
 ]
 
 [[package]]
@@ -1915,6 +2007,942 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix"
+version = "0.90.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-actor",
+ "gix-archive",
+ "gix-attributes",
+ "gix-blame",
+ "gix-bundle",
+ "gix-command",
+ "gix-commitgraph",
+ "gix-config",
+ "gix-credentials",
+ "gix-date",
+ "gix-diff",
+ "gix-dir",
+ "gix-discover",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-glob",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-ignore",
+ "gix-index",
+ "gix-lock",
+ "gix-merge",
+ "gix-negotiate",
+ "gix-note",
+ "gix-object",
+ "gix-odb",
+ "gix-pack",
+ "gix-parallel",
+ "gix-path",
+ "gix-pathspec",
+ "gix-prompt",
+ "gix-protocol",
+ "gix-quote",
+ "gix-ref",
+ "gix-refspec",
+ "gix-revision",
+ "gix-revwalk",
+ "gix-sec",
+ "gix-shallow",
+ "gix-status",
+ "gix-submodule",
+ "gix-tempfile",
+ "gix-trace",
+ "gix-transport",
+ "gix-traverse",
+ "gix-url",
+ "gix-utils",
+ "gix-validate",
+ "gix-worktree",
+ "gix-worktree-state",
+ "gix-worktree-stream",
+ "gix-zlib",
+ "nonempty",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-actor"
+version = "0.44.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-date",
+ "gix-error",
+]
+
+[[package]]
+name = "gix-archive"
+version = "0.39.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-date",
+ "gix-error",
+ "gix-object",
+ "gix-worktree-stream",
+]
+
+[[package]]
+name = "gix-attributes"
+version = "0.37.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-glob",
+ "gix-parallel",
+ "gix-path",
+ "gix-quote",
+ "gix-trace",
+ "smallvec",
+ "unicode-bom",
+]
+
+[[package]]
+name = "gix-bitmap"
+version = "0.6.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-error",
+]
+
+[[package]]
+name = "gix-blame"
+version = "0.20.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-commitgraph",
+ "gix-date",
+ "gix-diff",
+ "gix-error",
+ "gix-hash",
+ "gix-object",
+ "gix-revwalk",
+ "gix-trace",
+ "gix-traverse",
+ "gix-worktree",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-bundle"
+version = "0.1.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-hash",
+ "gix-validate",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-chunk"
+version = "0.10.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-error",
+]
+
+[[package]]
+name = "gix-command"
+version = "0.12.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-path",
+ "gix-quote",
+ "gix-trace",
+]
+
+[[package]]
+name = "gix-commitgraph"
+version = "0.42.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-chunk",
+ "gix-error",
+ "gix-hash",
+ "memmap2",
+ "nonempty",
+]
+
+[[package]]
+name = "gix-config"
+version = "0.62.2"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-config-value",
+ "gix-error",
+ "gix-glob",
+ "gix-parallel",
+ "gix-path",
+ "gix-ref",
+ "gix-sec",
+ "gix-trace",
+ "gix-utils",
+ "smallvec",
+ "unicode-bom",
+]
+
+[[package]]
+name = "gix-config-value"
+version = "0.21.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bstr",
+ "gix-date",
+ "gix-error",
+ "gix-path",
+ "gix-utils",
+ "libc",
+]
+
+[[package]]
+name = "gix-credentials"
+version = "0.42.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-command",
+ "gix-config-value",
+ "gix-date",
+ "gix-error",
+ "gix-path",
+ "gix-prompt",
+ "gix-quote",
+ "gix-sec",
+ "gix-trace",
+ "gix-url",
+ "percent-encoding",
+]
+
+[[package]]
+name = "gix-date"
+version = "0.18.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "itoa",
+ "jiff",
+]
+
+[[package]]
+name = "gix-diff"
+version = "0.70.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-attributes",
+ "gix-command",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-hash",
+ "gix-imara-diff",
+ "gix-index",
+ "gix-object",
+ "gix-path",
+ "gix-pathspec",
+ "gix-tempfile",
+ "gix-trace",
+ "gix-traverse",
+ "gix-worktree",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-dir"
+version = "0.32.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-discover",
+ "gix-error",
+ "gix-fs",
+ "gix-ignore",
+ "gix-index",
+ "gix-object",
+ "gix-path",
+ "gix-pathspec",
+ "gix-trace",
+ "gix-utils",
+ "gix-worktree",
+]
+
+[[package]]
+name = "gix-discover"
+version = "0.57.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "dunce",
+ "gix-error",
+ "gix-fs",
+ "gix-path",
+ "gix-ref",
+ "gix-sec",
+]
+
+[[package]]
+name = "gix-error"
+version = "0.5.2"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+]
+
+[[package]]
+name = "gix-filter"
+version = "0.36.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "encoding_rs",
+ "gix-attributes",
+ "gix-command",
+ "gix-error",
+ "gix-hash",
+ "gix-object",
+ "gix-packetline",
+ "gix-path",
+ "gix-quote",
+ "gix-trace",
+ "gix-utils",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-fs"
+version = "0.24.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-parallel",
+ "gix-path",
+ "gix-utils",
+ "libc",
+ "walkdir",
+]
+
+[[package]]
+name = "gix-glob"
+version = "0.29.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bstr",
+ "gix-fs",
+ "gix-path",
+ "gix-trace",
+ "gix-utils",
+]
+
+[[package]]
+name = "gix-hash"
+version = "0.28.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "faster-hex",
+ "gix-error",
+ "gix-utils",
+ "sha1dc",
+]
+
+[[package]]
+name = "gix-hashtable"
+version = "0.18.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-hash",
+ "hashbrown 0.17.1",
+ "parking_lot",
+]
+
+[[package]]
+name = "gix-ignore"
+version = "0.24.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-glob",
+ "gix-path",
+ "gix-trace",
+ "unicode-bom",
+]
+
+[[package]]
+name = "gix-imara-diff"
+version = "0.3.3"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "gix-index"
+version = "0.58.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bstr",
+ "filetime",
+ "fnv",
+ "gix-bitmap",
+ "gix-error",
+ "gix-fs",
+ "gix-hash",
+ "gix-lock",
+ "gix-object",
+ "gix-parallel",
+ "gix-trace",
+ "gix-traverse",
+ "gix-utils",
+ "gix-validate",
+ "hashbrown 0.17.1",
+ "itoa",
+ "libc",
+ "memmap2",
+ "rustix",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-lock"
+version = "26.0.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-error",
+ "gix-fs",
+ "gix-tempfile",
+ "gix-utils",
+]
+
+[[package]]
+name = "gix-macros"
+version = "0.2.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "gix-merge"
+version = "0.23.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-command",
+ "gix-diff",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-hash",
+ "gix-imara-diff",
+ "gix-index",
+ "gix-object",
+ "gix-path",
+ "gix-quote",
+ "gix-revision",
+ "gix-revwalk",
+ "gix-tempfile",
+ "gix-trace",
+ "gix-worktree",
+ "nonempty",
+]
+
+[[package]]
+name = "gix-negotiate"
+version = "0.38.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "gix-commitgraph",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-object",
+ "gix-revwalk",
+]
+
+[[package]]
+name = "gix-note"
+version = "0.3.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-error",
+ "gix-hash",
+ "gix-object",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-object"
+version = "0.66.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-actor",
+ "gix-command",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-path",
+ "gix-tempfile",
+ "gix-utils",
+ "gix-validate",
+ "itoa",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-odb"
+version = "0.87.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "arc-swap",
+ "crc32fast",
+ "gix-error",
+ "gix-fs",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-object",
+ "gix-pack",
+ "gix-parallel",
+ "gix-path",
+ "gix-quote",
+ "gix-trace",
+ "gix-utils",
+ "gix-zlib",
+ "memmap2",
+ "parking_lot",
+ "tempfile",
+]
+
+[[package]]
+name = "gix-pack"
+version = "0.77.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "clru",
+ "crc32fast",
+ "gix-chunk",
+ "gix-diff",
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-object",
+ "gix-parallel",
+ "gix-path",
+ "gix-tempfile",
+ "gix-trace",
+ "gix-traverse",
+ "gix-utils",
+ "gix-zlib",
+ "memmap2",
+ "parking_lot",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-packetline"
+version = "0.24.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "faster-hex",
+ "gix-error",
+ "gix-trace",
+]
+
+[[package]]
+name = "gix-parallel"
+version = "0.50.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "crossbeam-channel",
+ "gix-trace",
+ "once_cell",
+ "parking_lot",
+]
+
+[[package]]
+name = "gix-path"
+version = "0.14.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-trace",
+ "gix-validate",
+]
+
+[[package]]
+name = "gix-pathspec"
+version = "0.22.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bstr",
+ "gix-attributes",
+ "gix-config-value",
+ "gix-error",
+ "gix-glob",
+ "gix-path",
+ "gix-quote",
+]
+
+[[package]]
+name = "gix-prompt"
+version = "0.19.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-command",
+ "gix-config-value",
+ "gix-error",
+ "parking_lot",
+ "rustix",
+]
+
+[[package]]
+name = "gix-protocol"
+version = "0.68.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-credentials",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-lock",
+ "gix-macros",
+ "gix-negotiate",
+ "gix-object",
+ "gix-ref",
+ "gix-refspec",
+ "gix-revwalk",
+ "gix-shallow",
+ "gix-trace",
+ "gix-transport",
+ "gix-utils",
+ "nonempty",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-quote"
+version = "0.10.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-utils",
+]
+
+[[package]]
+name = "gix-ref"
+version = "0.69.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-actor",
+ "gix-error",
+ "gix-fs",
+ "gix-hash",
+ "gix-lock",
+ "gix-object",
+ "gix-parallel",
+ "gix-path",
+ "gix-tempfile",
+ "gix-utils",
+ "gix-validate",
+ "memmap2",
+]
+
+[[package]]
+name = "gix-refspec"
+version = "0.47.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-hash",
+ "gix-validate",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-revision"
+version = "0.52.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bstr",
+ "gix-commitgraph",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-object",
+ "gix-revwalk",
+ "gix-trace",
+ "nonempty",
+]
+
+[[package]]
+name = "gix-revwalk"
+version = "0.38.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-commitgraph",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-object",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-sec"
+version = "0.16.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "gix-path",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "gix-shallow"
+version = "0.15.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-hash",
+ "gix-lock",
+ "nonempty",
+]
+
+[[package]]
+name = "gix-status"
+version = "0.37.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "filetime",
+ "gix-diff",
+ "gix-dir",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-hash",
+ "gix-index",
+ "gix-object",
+ "gix-parallel",
+ "gix-path",
+ "gix-pathspec",
+ "gix-trace",
+ "gix-utils",
+ "gix-worktree",
+ "hashbrown 0.16.1",
+ "portable-atomic",
+]
+
+[[package]]
+name = "gix-submodule"
+version = "0.36.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-config",
+ "gix-error",
+ "gix-path",
+ "gix-pathspec",
+ "gix-refspec",
+ "gix-url",
+]
+
+[[package]]
+name = "gix-tempfile"
+version = "26.0.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "dashmap",
+ "gix-fs",
+ "libc",
+ "parking_lot",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "gix-trace"
+version = "0.3.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+
+[[package]]
+name = "gix-transport"
+version = "0.62.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "base64 0.22.1",
+ "bstr",
+ "gix-command",
+ "gix-credentials",
+ "gix-error",
+ "gix-packetline",
+ "gix-path",
+ "gix-quote",
+ "gix-sec",
+ "gix-trace",
+ "gix-url",
+ "gix-utils",
+ "parking_lot",
+ "reqwest",
+]
+
+[[package]]
+name = "gix-traverse"
+version = "0.64.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bitflags 2.13.2",
+ "gix-commitgraph",
+ "gix-date",
+ "gix-error",
+ "gix-hash",
+ "gix-hashtable",
+ "gix-object",
+ "gix-revwalk",
+ "smallvec",
+]
+
+[[package]]
+name = "gix-url"
+version = "0.40.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-path",
+ "gix-utils",
+ "percent-encoding",
+]
+
+[[package]]
+name = "gix-utils"
+version = "0.5.2"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "bytes",
+ "fastrand",
+ "getrandom 0.4.3",
+ "gix-error",
+ "prodash",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "gix-validate"
+version = "0.13.1"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+]
+
+[[package]]
+name = "gix-worktree"
+version = "0.59.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "dua-core",
+ "gix-attributes",
+ "gix-error",
+ "gix-fs",
+ "gix-glob",
+ "gix-hash",
+ "gix-ignore",
+ "gix-index",
+ "gix-object",
+ "gix-path",
+ "gix-trace",
+ "gix-utils",
+ "gix-validate",
+]
+
+[[package]]
+name = "gix-worktree-state"
+version = "0.37.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "bstr",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-index",
+ "gix-object",
+ "gix-parallel",
+ "gix-path",
+ "gix-trace",
+ "gix-utils",
+ "gix-worktree",
+ "io-close",
+]
+
+[[package]]
+name = "gix-worktree-stream"
+version = "0.39.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-attributes",
+ "gix-error",
+ "gix-filter",
+ "gix-fs",
+ "gix-hash",
+ "gix-object",
+ "gix-parallel",
+ "gix-path",
+ "gix-trace",
+ "gix-traverse",
+ "gix-utils",
+ "parking_lot",
+]
+
+[[package]]
+name = "gix-zlib"
+version = "0.4.0"
+source = "git+https://github.com/zanieb/gitoxide?rev=b0474efcfbf7266c968611072dbc8ac0db7b00f6#b0474efcfbf7266c968611072dbc8ac0db7b00f6"
+dependencies = [
+ "gix-error",
+ "zlib-rs",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1986,6 +3014,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2002,11 +3039,34 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
  "equivalent",
+ "foldhash 0.2.0",
+]
+
+[[package]]
+name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -2386,6 +3446,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-close"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cadcf447f06744f8ce713d2d6239bb5bde2c357a452397a9ed90c625da390bc"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "io-extras"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2470,7 +3540,7 @@ version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ab1baf72f08796de0260609515130699b890ac25f30e610ad894bc5856cafdb"
 dependencies = [
- "defmt",
+ "defmt 1.1.0",
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
@@ -2487,7 +3557,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
 dependencies = [
- "defmt",
+ "defmt 1.1.0",
 ]
 
 [[package]]
@@ -2737,9 +3807,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "memmap2"
-version = "0.9.10"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
 ]
@@ -2909,6 +3979,12 @@ dependencies = [
  "memchr",
  "minimal-lexical",
 ]
+
+[[package]]
+name = "nonempty"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
 
 [[package]]
 name = "nu-ansi-term"
@@ -3513,6 +4589,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "prodash"
+version = "31.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf52d87428247c5aa3760ac8e7d8b13ec7b3579b955a8c3f311668b6860acba5"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
 name = "ptr_meta"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3969,6 +5054,8 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -3980,6 +5067,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "mime_guess",
  "percent-encoding",
  "pin-project-lite",
@@ -4565,6 +5653,12 @@ dependencies = [
  "cpufeatures 0.3.0",
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "sha1dc"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5b0ebf6537e3e8db8bb7d21ecb6d7399738c953c757945c6b95e46c4e95df7b"
 
 [[package]]
 name = "sha2"
@@ -5516,6 +6610,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dfa6e8c60bb66d49db113e0125ee8711b7647b5579dc7f5f19c42357ed039fe"
 
 [[package]]
+name = "unicode-bom"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eec5d1121208364f6793f7d2e222bf75a915c19557537745b195b253dd64217"
+
+[[package]]
 name = "unicode-ccc"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5532,6 +6632,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-properties"
@@ -6727,6 +7836,7 @@ dependencies = [
  "astral-reqwest-middleware",
  "cargo-util",
  "fs-err",
+ "gix",
  "indoc",
  "owo-colors",
  "papaya",
@@ -8488,6 +9598,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8495,6 +9621,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"

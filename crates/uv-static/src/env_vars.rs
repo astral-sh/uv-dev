@@ -1408,6 +1408,11 @@ impl EnvVars {
     #[attr_added_in("0.5.7")]
     pub const UV_NO_INSTALLER_METADATA: &'static str = "UV_NO_INSTALLER_METADATA";
 
+    /// Selects the Git dependency backend. Defaults to `cli`. Set to `gitoxide` to use the
+    /// experimental Rust backend for HTTP(S) dependencies. Git LFS uses the Git executable.
+    #[attr_added_in("next release")]
+    pub const UV_GIT_BACKEND: &'static str = "UV_GIT_BACKEND";
+
     /// Enables fetching files stored in Git LFS when installing a package from a Git repository.
     #[attr_added_in("0.5.19")]
     pub const UV_GIT_LFS: &'static str = "UV_GIT_LFS";

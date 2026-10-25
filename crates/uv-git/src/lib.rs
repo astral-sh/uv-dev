@@ -9,6 +9,7 @@ pub use crate::source::{Fetch, Reporter};
 
 mod credentials;
 mod git;
+mod gitoxide;
 mod rate_limit;
 mod resolver;
 mod source;
