@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16726,
+        "title": "UV Python SIGKILL Issue on macOS",
+        "url": "https://github.com/astral-sh/uv/issues/16726",
+        "state": "open",
+        "reason": "Closest managed-Python execution failure discussion. It reports SIGKILL and a later hang when importing native extensions, while bare print succeeds in that example. Re-signing reportedly helps those cases; here bare interpreter initialization hangs specifically under launchd despite re-signing. A maintainer reproduced the signature/provenance metadata without reproducing the failure, so that metadata does not establish a shared cause."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17123,
+        "title": "fix: add ad-hoc code signing for Python binaries on macOS",
+        "url": "https://github.com/astral-sh/uv/pull/17123",
+        "state": "closed",
+        "reason": "Proposed installation-time Python re-signing for astral-sh/uv#16726 and astral-sh/uv#16003. Closed without merging on December 13, 2025, contrary to a later issue comment claiming it shipped. It does not establish a previous fix or regression, and the reporter already tried its re-signing approach unsuccessfully."
+      },
+      {
+        "kind": "issue",
+        "number": 17371,
+        "title": "first run after `uv sync` is ~20x slower in MacOs; subsequent runs fast (not reproduced on Linux / miniconda)",
+        "url": "https://github.com/astral-sh/uv/issues/17371",
+        "state": "open",
+        "reason": "Canonical macOS cold-start discussion: maintainers closed the explicit syspolicyd-rescan report astral-sh/uv#18577 into this issue. It concerns finite delays loading dependencies after environment recreation, reduced by hardlinks. That differs from an indefinite launchd-only hang in a bare managed interpreter."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18596,
+        "title": "Prefer hardlinks over reflinks for Mach-O executables to reduce security scanning overhead",
+        "url": "https://github.com/astral-sh/uv/pull/18596",
+        "state": "open",
+        "reason": "Proposed fix for astral-sh/uv#17371 preserves Mach-O file inodes during package installation to avoid repeated security scans. It remains unmerged and addresses environment recreation/import overhead, not the reported direct launchd invocation of an already installed interpreter."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separate literal searches covered qtn_proc, dispatch_mig_server, getpath_readlines, _PyConfig_InitPathConfig, EX_CONFIG, spawn scheduled, launchd, launchctl, and LaunchAgent; exact diagnostic fragments found only the new issue. Conceptual searches covered Python hangs/startup/freezes, daemons, macOS cold starts, and area:macos startup reports, including queries without platform or version restrictions. Separate cause-oriented searches covered syspolicyd, Gatekeeper, provenance, codesign, keychain signing/ACLs, and install_name_tool. PR searches covered signing, Mach-O, launchd, and interpreter startup; keyword searches returned no candidates, so referenced PRs were inspected directly. Followed comments and duplicate chains through astral-sh/uv#16003, astral-sh/uv#16297, astral-sh/uv#18577, and astral-sh/uv#20792. Ruled out astral-sh/uv#10613 (transient terminal/Homebrew-Python hang), astral-sh/uv#14843 (installation-time binary corruption), and astral-sh/uv#22627 with merged astral-sh/uv#22648 (uv/uvx signing identity, not managed Python). No matching shipped startup fix was established."
+  },
+  "type": "bug",
+  "type_reason": "A managed interpreter hanging before executing a bare print command under launchd is incorrect behavior. Existing reports overlap in platform and security-related observations, but do not establish the same initialization failure: the closest hang report requires extension imports, and re-signing helps there but fails here. Keep this separate pending evidence of a shared mechanism. No previously merged fix for this failure was found, so a regression is not established.",
+  "summary": "astral-sh/uv#16726 and its unmerged signing proposal astral-sh/uv#17123 are closest. astral-sh/uv#17371 and astral-sh/uv#18596 concern adjacent cold-start scan overhead. No established duplicate or shipped fix for the launchd startup hang was found.",
+  "draft_response": "Your bare-interpreter reproduction and the terminal-versus-launchd comparison support keeping this separate for now. astral-sh/uv#16726 also contains an extension-import hang report, but bare print works in that example and re-signing reportedly helps. The proposed Python re-signing change, astral-sh/uv#17123, was closed without merging. The signature metadata and syspolicyd messages do not yet establish the cause of this hang.\n\nPlease attach the complete minimal LaunchAgent plist, the full process sample from the hung interpreter, and a short timestamp-matched syspolicyd log excerpt. Please also include the exact macOS version/build from `sw_vers`, the SDK version from `xcrun --show-sdk-version`, and whether the machine has MDM policies or third-party antivirus/EDR. For the fresh 3.12 case, include the relevant `launchctl print` state so we can distinguish failure to spawn from a running interpreter blocked during initialization."
+}
