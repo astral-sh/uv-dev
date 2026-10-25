@@ -896,6 +896,9 @@ impl EnvVars {
     pub const UV_UPLOAD_HTTP_TIMEOUT: &'static str = "UV_UPLOAD_HTTP_TIMEOUT";
 
     /// Timeout (in seconds) for HTTP reads. (default: 30 s)
+    ///
+    /// Also sets the total request timeout for the default CPython mirror when a fallback is
+    /// available. The GitHub fallback and explicitly configured mirrors only use the read timeout.
     #[attr_added_in("0.1.7")]
     pub const UV_HTTP_TIMEOUT: &'static str = "UV_HTTP_TIMEOUT";
 
