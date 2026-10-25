@@ -687,11 +687,7 @@ mod resolver {
             &hashes,
             &build_context,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                &build_context,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, &build_context, &concurrency),
         )?;
 
         Ok(resolver.resolve().await?)

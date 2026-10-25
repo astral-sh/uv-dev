@@ -27,6 +27,7 @@ use uv_distribution_types::{
     Name, RegistryBuiltWheel,
 };
 use uv_extract::hash::Hasher;
+use uv_fs::LockedFile;
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_archive_metadata, read_metadata_async_stream};
 use uv_normalize::PackageName;
@@ -1012,6 +1013,7 @@ impl RegistryClient {
         built_dist: &BuiltDist,
         git: &GitResolver,
         capabilities: &IndexCapabilities,
+        download_concurrency: &Semaphore,
         reporter: Option<Arc<dyn Reporter>>,
     ) -> Result<ResolutionMetadata, Error> {
         let metadata = match &built_dist {
@@ -1038,12 +1040,18 @@ impl RegistryClient {
 
                 match location {
                     WheelLocation::Path(path) => {
+                        let _permit = download_concurrency.acquire().await;
                         Self::wheel_metadata_local(&path, &path, &wheel.filename, built_dist)
                             .await?
                     }
                     WheelLocation::Url(url) => {
-                        self.wheel_metadata_registry(wheel, &url, capabilities)
-                            .await?
+                        self.wheel_metadata_registry(
+                            wheel,
+                            &url,
+                            capabilities,
+                            download_concurrency,
+                        )
+                        .await?
                     }
                 }
             }
@@ -1054,10 +1062,12 @@ impl RegistryClient {
                     None,
                     WheelCache::Url(&wheel.url),
                     capabilities,
+                    download_concurrency,
                 )
                 .await?
             }
             BuiltDist::Path(wheel) => {
+                let _permit = download_concurrency.acquire().await;
                 Self::wheel_metadata_local(
                     &wheel.install_path,
                     &wheel.install_path,
@@ -1067,6 +1077,7 @@ impl RegistryClient {
                 .await?
             }
             BuiltDist::GitPath(wheel) => {
+                let _permit = download_concurrency.acquire().await;
                 // Fetch the Git repository.
                 let fetch = git
                     .fetch(
@@ -1139,12 +1150,25 @@ impl RegistryClient {
         .map_err(|err| ErrorKind::Io(err.into()))?
     }
 
+    /// Acquire an advisory lock for a wheel metadata cache entry.
+    ///
+    /// Callers hold the lock across freshness checks, HTTP requests, and cache publication so
+    /// a process that waited for another request can reuse the completed metadata entry.
+    async fn lock_wheel_metadata(
+        cache_entry: &CacheEntry,
+        filename: &WheelFilename,
+    ) -> Result<LockedFile, Error> {
+        let lock_entry = cache_entry.with_file(format!("{}.lock", filename.cache_key()));
+        Ok(lock_entry.lock().await.map_err(ErrorKind::CacheLock)?)
+    }
+
     /// Fetch the metadata from a wheel file.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
         url: &SafeUrl,
         capabilities: &IndexCapabilities,
+        download_concurrency: &Semaphore,
     ) -> Result<ResolutionMetadata, Error> {
         let RegistryBuiltWheel {
             filename,
@@ -1164,6 +1188,12 @@ impl RegistryClient {
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
                 format!("{}.msgpack", filename.cache_key()),
             );
+
+            // Acquire an advisory lock, to guard against concurrent writes.
+            let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+            // Wheel downloads take the same file lock before requesting a download slot.
+            let _permit = download_concurrency.acquire().await;
+
             let cache_control = match self.connectivity {
                 Connectivity::Online
                     if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
@@ -1176,13 +1206,6 @@ impl RegistryClient {
                         .map_err(ErrorKind::Io)?,
                 ),
                 Connectivity::Offline => CacheControl::AllowStale,
-            };
-
-            // Acquire an advisory lock, to guard against concurrent writes.
-            #[cfg(windows)]
-            let _lock = {
-                let lock_entry = cache_entry.with_file(format!("{}.lock", filename.cache_key()));
-                lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
             };
 
             let response_callback = async |response: Response, _: &mut RetryState| {
@@ -1223,6 +1246,7 @@ impl RegistryClient {
                 Some(index),
                 WheelCache::Index(index),
                 capabilities,
+                download_concurrency,
             )
             .await
         }
@@ -1236,12 +1260,19 @@ impl RegistryClient {
         index: Option<&'data IndexUrl>,
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
+        download_concurrency: &Semaphore,
     ) -> Result<ResolutionMetadata, Error> {
         let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),
             format!("{}.msgpack", filename.cache_key()),
         );
+
+        // Acquire an advisory lock, to guard against concurrent writes.
+        let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+        // Wheel downloads take the same file lock before requesting a download slot.
+        let _permit = download_concurrency.acquire().await;
+
         let cache_control = match self.connectivity {
             Connectivity::Online
                 if let Some(index) = index
@@ -1255,13 +1286,6 @@ impl RegistryClient {
                     .map_err(ErrorKind::Io)?,
             ),
             Connectivity::Offline => CacheControl::AllowStale,
-        };
-
-        // Acquire an advisory lock, to guard against concurrent writes.
-        #[cfg(windows)]
-        let _lock = {
-            let lock_entry = cache_entry.with_file(format!("{}.lock", filename.cache_key()));
-            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
         };
 
         // Attempt to fetch via a range request.
