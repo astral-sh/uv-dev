@@ -253,7 +253,7 @@ impl Options {
 }
 
 /// Global settings, relevant to all invocations.
-#[derive(Debug, Clone, Default, Deserialize, CombineOptions, OptionsMetadata)]
+#[derive(Debug, Clone, Default, Deserialize, OptionsMetadata)]
 #[serde(try_from = "GlobalOptionsWire", rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(!try_from))]
