@@ -1456,7 +1456,7 @@ async fn install_remote_requirements_txt() -> Result<()> {
 /// A redirected remote lock resolves artifact paths beside the final document.
 #[tokio::test]
 async fn pep_751_remote_relative_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     let server = MockServer::start().await;
     let (filename, bytes) = WheelBuilder::new(&"leaf".parse()?, &"1.0".parse()?).build();
     let hash = hex::encode(Sha256::digest(&bytes));
@@ -1502,7 +1502,7 @@ async fn pep_751_remote_relative_wheel() -> Result<()> {
 /// Reject network-path references in a remote lock's artifact path.
 #[tokio::test]
 async fn pep_751_remote_cross_host_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/pylock.toml"))
