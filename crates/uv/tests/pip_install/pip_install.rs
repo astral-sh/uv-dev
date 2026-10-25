@@ -11331,7 +11331,7 @@ fn create_local_index_with_tqdm(context: &TestContext, root: &Path) -> Result<()
     Ok(())
 }
 
-/// Indexes differing only by a Git repository suffix can serve different wheels.
+/// Indexes whose paths differ only by a `.git` suffix can serve different wheels.
 #[test]
 fn local_index_git_suffix_uses_separate_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
