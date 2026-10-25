@@ -60,41 +60,44 @@ impl SelectedDistribution {
         index: &InMemoryIndex,
         git: &GitResolver,
     ) -> Result<Self, ResolveError> {
-        let source = if let Some(url) = package.url.as_deref() {
-            let metadata_id = Dist::from_url(package.name.clone(), url.clone())?.distribution_id();
-            let response = index.distributions().get(&metadata_id).ok_or_else(|| {
-                ResolveError::UnregisteredTask(format!("{} @ {}", package.name, url.verbatim))
-            })?;
-            let MetadataResponse::Found(_) = response.as_ref() else {
-                return Err(ResolveError::PackageUnavailable(package.name.clone()));
-            };
-            SelectedSource::Url {
-                dist: ResolvedDist::Installable {
-                    dist: Arc::new(Dist::from_url(
-                        package.name.clone(),
-                        url_to_precise(url.clone(), git),
-                    )?),
-                    version: Some(version.clone()),
-                },
-                metadata_id,
-                metadata: response,
-            }
-        } else {
-            let (dist, metadata_id) =
-                pins.dist_and_id(&package.name, &version).ok_or_else(|| {
-                    ResolveError::UnregisteredTask(format!("{}=={version}", package.name))
+        let source = match &package.source {
+            ResolutionSource::Url(url) => {
+                let metadata_id =
+                    Dist::from_url(package.name.clone(), url.as_ref().clone())?.distribution_id();
+                let response = index.distributions().get(&metadata_id).ok_or_else(|| {
+                    ResolveError::UnregisteredTask(format!("{} @ {}", package.name, url.verbatim))
                 })?;
-            let metadata =
-                index.distributions().get(metadata_id).and_then(|response| {
+                let MetadataResponse::Found(_) = response.as_ref() else {
+                    return Err(ResolveError::PackageUnavailable(package.name.clone()));
+                };
+                SelectedSource::Url {
+                    dist: ResolvedDist::Installable {
+                        dist: Arc::new(Dist::from_url(
+                            package.name.clone(),
+                            url_to_precise(url.as_ref().clone(), git),
+                        )?),
+                        version: Some(version.clone()),
+                    },
+                    metadata_id,
+                    metadata: response,
+                }
+            }
+            ResolutionSource::Registry(_) => {
+                let (dist, metadata_id) =
+                    pins.dist_and_id(&package.name, &version).ok_or_else(|| {
+                        ResolveError::UnregisteredTask(format!("{}=={version}", package.name))
+                    })?;
+                let metadata = index.distributions().get(metadata_id).and_then(|response| {
                     match response.as_ref() {
                         MetadataResponse::Found(_) => Some(response),
                         MetadataResponse::Unavailable(_) | MetadataResponse::Error(..) => None,
                     }
                 });
-            SelectedSource::Registry {
-                dist: dist.clone(),
-                metadata_id: metadata_id.clone(),
-                metadata,
+                SelectedSource::Registry {
+                    dist: dist.clone(),
+                    metadata_id: metadata_id.clone(),
+                    metadata,
+                }
             }
         };
         Ok(Self { version, source })
@@ -186,10 +189,15 @@ impl Resolution<'_> {
 pub(crate) struct ResolutionPackage {
     pub(crate) name: PackageName,
     pub(crate) kind: PackageNodeKind,
-    /// For registry packages, this is `None`; otherwise, the direct URL of the distribution.
-    pub(crate) url: Option<Arc<VerbatimParsedUrl>>,
-    /// For URL packages, this is `None`; otherwise, the index URL of the distribution.
-    pub(crate) index: Option<IndexUrl>,
+    pub(crate) source: ResolutionSource,
+}
+
+/// The source identifying a package in a completed resolution.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ResolutionSource {
+    Url(Arc<VerbatimParsedUrl>),
+    /// Installed distributions can be selected without a registry index.
+    Registry(Option<IndexUrl>),
 }
 
 /// A package identity and version, including source and node kind, used when merging nodes.

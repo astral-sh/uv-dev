@@ -9,13 +9,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution_types::{
-    DistributionId, HashCollection, IndexUrl, Name, Requirement, RequiresPython,
-    ResolutionDiagnostic, parse_url_hashes,
+    DistributionId, HashCollection, Name, Requirement, RequiresPython, ResolutionDiagnostic,
+    parse_url_hashes,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier};
-use uv_pypi_types::{Conflicts, HashDigests, ParsedUrl, VerbatimParsedUrl, Yanked};
+use uv_pypi_types::{Conflicts, HashDigests, ParsedUrl, Yanked};
 use uv_resolver_types::PackageRole;
 use uv_types::HashStrategy;
 
@@ -24,7 +24,8 @@ use crate::preferences::Preferences;
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode, ResolverOutput};
 use crate::resolution_mode::ResolutionStrategy;
 use crate::resolver::{
-    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, SelectedDistribution,
+    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolutionSource,
+    SelectedDistribution,
 };
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 use crate::{InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResponse};
@@ -284,16 +285,10 @@ fn add_version(
     selected: SelectedDistribution,
     package_role: PackageRole,
 ) -> NodeIndex {
-    let ResolutionPackage {
-        name,
-        kind,
-        url,
-        index,
-    } = &package;
+    let ResolutionPackage { name, kind, source } = &package;
     let hashes = get_hashes(
         name,
-        index.as_ref(),
-        url.as_deref(),
+        source,
         &selected.hashes_id(),
         selected.version(),
         preferences,
@@ -357,8 +352,7 @@ fn add_version(
 /// by the lockfile.
 fn get_hashes(
     name: &PackageName,
-    index: Option<&IndexUrl>,
-    url: Option<&VerbatimParsedUrl>,
+    source: &ResolutionSource,
     metadata_id: &DistributionId,
     version: &Version,
     preferences: &Preferences,
@@ -374,7 +368,7 @@ fn get_hashes(
 
     // 2. Preserve trusted hashes for this URL or path. Wheel metadata lookup does not always
     // hash the archive, so installation still needs the original hashes to verify its contents.
-    if let Some(url) = url {
+    if let ResolutionSource::Url(url) = source {
         let policy = hasher.archive_policy_for_url(&url.verbatim);
         if !policy.digests().is_empty() {
             return HashDigests::from(policy.digests());
@@ -382,7 +376,7 @@ fn get_hashes(
     }
 
     // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
-    if let Some(url) = url
+    if let ResolutionSource::Url(url) = source
         && let ParsedUrl::Archive(_) = &url.parsed_url
         && hasher.collection() != HashCollection::None
         && !hasher
@@ -405,7 +399,8 @@ fn get_hashes(
     }
 
     // 5. Look for hashes from the registry, which are served at the package level.
-    if url.is_none() {
+    if let ResolutionSource::Registry(index) = source {
+        let index = index.as_ref();
         // Query the implicit and explicit indexes (lazily) for the hashes.
         let implicit_response = in_memory.implicit().get(name);
         let mut explicit_response = None;

@@ -94,7 +94,7 @@ use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, Vers
 pub(crate) use provider::MetadataUnavailable;
 pub(crate) use resolution::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionNodeId, ResolutionPackage,
-    SelectedDistribution,
+    ResolutionSource, SelectedDistribution,
 };
 use uv_configuration::ForkStrategy;
 
@@ -513,7 +513,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 for (package, version) in &resolution.nodes {
                                     preferences.insert(
                                         package.name.clone(),
-                                        package.index.clone(),
+                                        match &package.source {
+                                            ResolutionSource::Url(_) => None,
+                                            ResolutionSource::Registry(index) => index.clone(),
+                                        },
                                         marker,
                                         version.clone(),
                                         PreferenceSource::Resolver,
@@ -3282,25 +3285,19 @@ impl<'index> ForkState<'index> {
         self
     }
 
-    /// Returns the URL or index for a package and version.
-    ///
-    /// In practice, exactly one of the returned values will be `Some`.
-    fn source(
-        &self,
-        name: &PackageName,
-        version: &Version,
-    ) -> (Option<&Arc<VerbatimParsedUrl>>, Option<&IndexUrl>) {
-        let url = self.fork_urls.get(name);
-        let index = url
-            .is_none()
-            .then(|| {
+    /// Return the selected source for a package and version.
+    fn source(&self, name: &PackageName, version: &Version) -> ResolutionSource {
+        if let Some(url) = self.fork_urls.get(name) {
+            ResolutionSource::Url(url.clone())
+        } else {
+            ResolutionSource::Registry(
                 self.pins
                     .get(name, version)
                     .expect("Every package should be pinned")
                     .index()
-            })
-            .flatten();
-        (url, index)
+                    .cloned(),
+            )
+        }
     }
 
     fn into_resolution(
@@ -3321,13 +3318,12 @@ impl<'index> ForkState<'index> {
                     marker: MarkerTree::TRUE,
                 } = &*self.pubgrub.package_store[package]
                 {
-                    let (url, index) = self.source(name, version);
+                    let source = self.source(name, version);
                     Some((
                         ResolutionPackage {
                             name: name.clone(),
                             kind: kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
+                            source,
                         },
                         version.clone(),
                     ))
@@ -3342,13 +3338,7 @@ impl<'index> ForkState<'index> {
             .enumerate()
             .map(|(index, (package, version))| {
                 (
-                    (
-                        &package.name,
-                        &package.kind,
-                        package.url.as_ref(),
-                        package.index.as_ref(),
-                        version,
-                    ),
+                    (&package.name, &package.kind, &package.source, version),
                     ResolutionNodeId(index),
                 )
             })
@@ -3370,8 +3360,8 @@ impl<'index> ForkState<'index> {
                 | PubGrubPackageInner::Group { .. } => continue,
             };
             let from = self_name.map(|name| {
-                let (url, index) = self.source(name, self_version);
-                node_indices[&(name, self_kind, url, index, self_version)]
+                let source = self.source(name, self_version);
+                node_indices[&(name, self_kind, &source, self_version)]
             });
             for dependency in self.pubgrub.dependencies(*package) {
                 if *package != dependency.dependent {
@@ -3431,10 +3421,10 @@ impl<'index> ForkState<'index> {
                     | PubGrubPackageInner::Python(_)
                     | PubGrubPackageInner::System(_) => continue,
                 };
-                let (url, index) = self.source(name, dependency_version);
+                let source = self.source(name, dependency_version);
                 edges.push(ResolutionDependencyEdge {
                     from,
-                    to: node_indices[&(name, &kind, url, index, dependency_version)],
+                    to: node_indices[&(name, &kind, &source, dependency_version)],
                     marker,
                 });
 
@@ -3444,7 +3434,7 @@ impl<'index> ForkState<'index> {
                     edges.push(ResolutionDependencyEdge {
                         from,
                         to: node_indices
-                            [&(name, &PackageNodeKind::Base, url, index, dependency_version)],
+                            [&(name, &PackageNodeKind::Base, &source, dependency_version)],
                         marker,
                     });
                 }
