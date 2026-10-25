@@ -1090,6 +1090,8 @@ fn license_file_must_be_utf8() -> Result<()> {
 }
 
 /// License globs must exclude unrelated files and symlinks that do not resolve to regular files.
+///
+/// Regression test for astral-sh/uv#22579.
 #[test]
 fn license_glob_excludes_nonmatching_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
