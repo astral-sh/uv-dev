@@ -147,6 +147,8 @@ pub enum PylockTomlErrorKind {
     WheelNameMismatch(WheelFilename, PackageName),
     #[error("Wheel filename `{0}` does not match package version `{1}`")]
     WheelVersionMismatch(WheelFilename, Version),
+    #[error("Source distribution filename `{0}` does not match package version `{1}`")]
+    SdistVersionMismatch(SmallString, Version),
     #[error("Failed to convert path to URL")]
     PathToUrl,
     #[error(
@@ -1358,6 +1360,25 @@ impl<'lock> PylockToml {
                 validate_wheel_filename(&filename, &package.name, package.version.as_ref())?;
             }
 
+            let sdist = package
+                .sdist
+                .as_ref()
+                .map(|sdist| {
+                    let filename = sdist.filename(&package.name)?.into_owned();
+                    let extension = SourceDistExtension::from_path(filename.as_ref())?;
+                    let parsed = SourceDistFilename::parse(&filename, extension, &package.name)?;
+                    if let Some(version) = &package.version
+                        && parsed.version != *version
+                    {
+                        return Err(PylockTomlErrorKind::SdistVersionMismatch(
+                            filename,
+                            version.clone(),
+                        ));
+                    }
+                    Ok((sdist, filename, parsed))
+                })
+                .transpose()?;
+
             let no_binary = build_options.no_binary_package(&package.name);
             let no_build = build_options.no_build_package(&package.name);
             let is_wheel = package
@@ -1391,12 +1412,12 @@ impl<'lock> PylockToml {
                     hashes,
                     install: true,
                 }
-            } else if let Some(sdist) = package.sdist.as_ref().filter(|_| !no_build) {
+            } else if let Some((sdist, filename, parsed)) = sdist.filter(|_| !no_build) {
                 let hashes = HashDigests::from(sdist.hashes.clone());
                 let sdist = Dist::Source(SourceDist::Registry(sdist.to_sdist(
                     install_path,
-                    &package.name,
-                    package.version.as_ref(),
+                    filename,
+                    parsed,
                     package.index.as_ref().map(SafeUrl::as_url),
                 )?));
                 let dist = ResolvedDist::Installable {
@@ -1821,20 +1842,10 @@ impl PylockTomlSdist {
     fn to_sdist(
         &self,
         install_path: &Path,
-        name: &PackageName,
-        version: Option<&Version>,
+        filename: SmallString,
+        parsed: SourceDistFilename,
         index: Option<&SafeUrl>,
     ) -> Result<RegistrySourceDist, PylockTomlErrorKind> {
-        let filename = self.filename(name)?.into_owned();
-        let ext = SourceDistExtension::from_path(filename.as_ref())?;
-
-        let version = if let Some(version) = version {
-            Cow::Borrowed(version)
-        } else {
-            let filename = SourceDistFilename::parse(&filename, ext, name)?;
-            Cow::Owned(filename.version)
-        };
-
         let file_url = if let Some(path) = self.path.as_ref() {
             let path = install_path.join(path);
             validate_path_size(&path, self.size)?;
@@ -1843,7 +1854,7 @@ impl PylockTomlSdist {
         } else if let Some(url) = self.url.as_ref().map(SafeUrl::as_url) {
             UrlString::from(url)
         } else {
-            return Err(PylockTomlErrorKind::SdistMissingPathUrl(name.clone()));
+            return Err(PylockTomlErrorKind::SdistMissingPathUrl(parsed.name));
         };
 
         let index = if let Some(index) = index {
@@ -1873,10 +1884,10 @@ impl PylockTomlSdist {
         });
 
         Ok(RegistrySourceDist {
-            name: name.clone(),
-            version: version.into_owned(),
+            name: parsed.name,
+            version: parsed.version,
             file,
-            ext,
+            ext: parsed.extension,
             index,
             wheels: vec![],
             size_is_authoritative: true,

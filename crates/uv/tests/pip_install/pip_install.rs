@@ -15421,6 +15421,50 @@ fn pep_751_hash_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// A compatible wheel must not mask a bad sdist in the same package entry.
+#[test]
+fn pep_751_rejects_mismatched_sdist_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "demo"
+        version = "1.0"
+        sdist = { path = "demo-2.0.tar.gz", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
+        wheels = [{ path = "demo-1.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview").arg("--offline").arg("--dry-run").arg("-r").arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Source distribution filename `demo-2.0.tar.gz` does not match package version `1.0`
+    ");
+    Ok(())
+}
+
+#[test]
+fn pep_751_rejects_mismatched_sdist_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "demo"
+        version = "1.0"
+        sdist = { name = "wrong-1.0.tar.gz", path = "demo-1.0.tar.gz", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
+    "#)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview").arg("--offline").arg("--dry-run").arg("-r").arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse source distribution filename `wrong-1.0.tar.gz`: Name doesn't start with package name demo
+    ");
+    Ok(())
+}
+
 #[test]
 fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
     let context = uv_test::test_context!("3.12");
