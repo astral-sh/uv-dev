@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -74,11 +75,99 @@ pub(crate) fn fetch(
     if all_tags {
         remote = remote.with_fetch_tags(gix::remote::fetch::Tags::All);
     }
-    remote
+    let outcome = remote
         .connect(Direction::Fetch)?
         .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?
+        .with_filter(gix::remote::fetch::Filter::TreeDepth(0))
         .receive(Discard, &AtomicBool::new(false))?;
+    if let gix::remote::fetch::Status::Change {
+        write_pack_bundle, ..
+    } = outcome.status
+        && write_pack_bundle
+            .data_path
+            .is_some_and(|pack| pack.with_extension("promisor").is_file())
+    {
+        set_promisor(&mut repo, url)?;
+    }
     Ok(())
+}
+
+fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
+    let mut config = repo.config_edit()?;
+    config.set_raw_value("remote.uv-promisor.url", url.without_credentials().as_str())?;
+    config.set_raw_value("remote.uv-promisor.promisor", "true")?;
+    config.set_raw_value("remote.uv-promisor.partialclonefilter", "tree:0")?;
+    config.commit()?;
+    Ok(())
+}
+
+/// Fetch the missing part of the selected tree before copying the database into a checkout.
+fn materialize_tree(
+    repo: &gix::Repository,
+    commit: gix::ObjectId,
+    url: &SafeUrl,
+    offline: bool,
+) -> Result<()> {
+    let root = repo.find_commit(commit)?.tree_id()?.detach();
+    loop {
+        let mut trees = vec![root];
+        let mut seen = HashSet::new();
+        let mut missing = Vec::new();
+        while let Some(tree_id) = trees.pop() {
+            if !seen.insert(tree_id) {
+                continue;
+            }
+            if !repo.has_object(tree_id) {
+                missing.push(tree_id);
+                continue;
+            }
+            for entry in repo.find_tree(tree_id)?.iter() {
+                let entry = entry?;
+                if entry.mode().is_tree() {
+                    trees.push(entry.object_id());
+                } else if entry.mode().is_blob_or_symlink()
+                    && !repo.has_object(entry.object_id())
+                    && seen.insert(entry.object_id())
+                {
+                    missing.push(entry.object_id());
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        if offline {
+            return Err(GitError::TransportNotAllowed.into());
+        }
+        // Commits in a partial clone can have incomplete trees. Advertising them as haves
+        // would let the server omit the very objects required for the checkout.
+        let repo = gix::open_opts(
+            repo.git_dir(),
+            options().config_overrides([
+                "fetch.negotiationAlgorithm=noop",
+                "gitoxide.credentials.terminalPrompt=false",
+            ]),
+        )?;
+        let objects = missing.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let outcome = repo
+            .remote_at(url.as_str())?
+            .with_refspecs(objects.iter().map(String::as_str), Direction::Fetch)?
+            .with_fetch_tags(gix::remote::fetch::Tags::None)
+            .connect(Direction::Fetch)?
+            .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?
+            .receive(Discard, &AtomicBool::new(false))?;
+        anyhow::ensure!(
+            missing.iter().all(|id| repo.has_object(id)),
+            "Git server did not supply the requested checkout objects"
+        );
+        if let gix::remote::fetch::Status::Change {
+            write_pack_bundle, ..
+        } = outcome.status
+            && let Some(keep) = write_pack_bundle.keep_path
+        {
+            fs_err::remove_file(keep)?;
+        }
+    }
 }
 
 pub(crate) fn checkout(
@@ -89,8 +178,19 @@ pub(crate) fn checkout(
     offline: bool,
 ) -> Result<()> {
     let source = open(database)?;
+    let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
+    let partial = source
+        .config_snapshot()
+        .boolean("remote.uv-promisor.promisor")
+        == Some(true);
+    if partial {
+        materialize_tree(&source, commit, url, offline)?;
+    }
     let mut repo = init(destination)?;
     copy_cached_objects(&source, &repo)?;
+    if partial {
+        set_promisor(&mut repo, url)?;
+    }
     repo.committer_or_set_generic_fallback()?;
     let mut config = repo.config_edit()?;
     config.set_raw_value("remote.origin.url", gix::path::into_bstr(database)?)?;
@@ -121,7 +221,6 @@ pub(crate) fn checkout(
         options(crate::git::submodule_update_config(url)),
     )?;
     repo.committer_or_set_generic_fallback()?;
-    let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
     repo.reset(commit, gix::repository::reset::ResetMode::Hard)?;
     if let Some(modules) = repo.submodules()? {
         for module in modules {
@@ -183,6 +282,7 @@ fn copy_cached_objects(source: &gix::Repository, destination: &gix::Repository) 
                     let Some(stem) = name
                         .strip_suffix(".pack")
                         .or_else(|| name.strip_suffix(".idx"))
+                        .or_else(|| name.strip_suffix(".promisor"))
                     else {
                         continue;
                     };
