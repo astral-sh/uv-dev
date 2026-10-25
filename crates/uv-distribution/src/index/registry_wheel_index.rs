@@ -15,6 +15,7 @@ use uv_distribution_types::{
 use uv_fs::{directories, files};
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
+use uv_pypi_types::HashDigests;
 use uv_types::HashStrategy;
 
 use crate::Error;
@@ -136,7 +137,7 @@ impl<'a> RegistryWheelIndex<'a> {
                 return false;
             }
             // A wheel built from source is a different artifact; this sidecar cannot validate it.
-            !entry.built || wheel.file.dist_info_metadata.as_ref().is_none_or(|hashes| hashes.is_empty())
+            !entry.built || wheel.file.dist_info_metadata.as_ref().is_none_or(HashDigests::is_empty)
         }) else {
             return Ok(None);
         };
