@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11743,
+        "title": "How to specify that a distribution package is for manylinux, not musllinux?",
+        "url": "https://github.com/astral-sh/uv/issues/11743",
+        "state": "open",
+        "reason": "Tracks the same request: exclude musllinux through tool.uv.environments because dependencies lack compatible wheels. Maintainer comments confirm that PEP 508 markers cannot distinguish libc implementations and that a new configuration mechanism needs design."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21671,
+        "title": "Add minimum libc versions to supported and required environments",
+        "url": "https://github.com/astral-sh/uv/pull/21671",
+        "state": "closed",
+        "reason": "Proposed libc configuration in environments that would exclude wheels for omitted libc implementations, directly addressing the requested capability. Closed without merging on 2026-09-18, so its exclusion syntax is not available."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21651,
+        "title": "Add minimum libc versions for universal resolution",
+        "url": "https://github.com/astral-sh/uv/pull/21651",
+        "state": "merged",
+        "reason": "Introduced the preview setting used by the reporter; merged on 2026-09-18 and present in uv 0.13.5. It requires compatible artifacts for configured libc baselines and retains other wheels. Specifying musl adds a coverage requirement rather than excluding musl."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Separately searched libc exclusion/markers (platform_libc, musl, musllinux, libc marker, musl environments, manylinux) and resolution/preview behavior (minimum-libc-version, required-environments, musl resolution). Broadened beyond platform/version details and inspected maintainer comments, timelines, linked PRs, and uv 0.13.5 documentation. PR keyword searches returned no hits, so supplemented them with the 1,000 most recent PRs across all states and direct reference traversal. Followed astral-sh/uv#12597 to the preview implementations. Ruled out astral-sh/uv#7816 (missing-wheel warnings), astral-sh/uv#8449 (disable manylinux at installation), astral-sh/uv#17178 (Termux dependency selection), and astral-sh/uv#14407 (platform-specific pip compilation) as duplicate targets."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#11743 already tracks the same missing capability to exclude musllinux from supported environments when dependencies lack musl wheels. The preview setting adds libc coverage requirements and does not implement exclusion; the alternative exclusion PR was never merged. The report supplies no error or dependency reproduction establishing a separate correctness bug or regression.",
+  "summary": "Duplicate of astral-sh/uv#11743. astral-sh/uv#21671 proposed libc exclusions but closed unmerged; merged astral-sh/uv#21651 provides coverage requirements only.",
+  "draft_response": "You cannot currently exclude musl through `tool.uv.environments`: PEP 508 has no libc marker. This request is tracked in astral-sh/uv#11743; let's keep the discussion there.\n\n`minimum-libc-version` controls required artifact coverage. Setting `musl`, even to a very high version, still requires musl-compatible artifacts. To require only glibc coverage, configure your Linux `required-environments` and set only the desired `glibc` baseline, leaving `musl` unset. This does not exclude musl or remove its wheels from the lockfile. The `environments` configuration you posted does not itself require musl wheels.\n\nIf resolution still fails after removing the musl requirement, please share the complete error and a minimal `pyproject.toml` including the affected dependencies in that discussion."
+}
