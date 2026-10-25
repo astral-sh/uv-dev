@@ -80,6 +80,17 @@ class Benchmark(enum.Enum):
 INCREMENTAL_REQUIREMENT = "django"
 
 
+def create_lockfile(command: list[str], *, cwd: str, lockfile: str) -> None:
+    """Run an initial resolution and verify that it created the lockfile."""
+    subprocess.check_call(
+        command,
+        cwd=cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    assert os.path.exists(lockfile), f"Lockfile doesn't exist at: {lockfile}"
+
+
 class Suite(abc.ABC):
     """Abstract base class for packaging tools."""
 
@@ -208,7 +219,7 @@ class PipCompile(Suite):
 
         # First, perform a cold resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [
                 self.path,
                 os.path.abspath(requirements_file),
@@ -218,10 +229,8 @@ class PipCompile(Suite):
                 baseline,
             ],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=baseline,
         )
-        assert os.path.exists(baseline), f"Lockfile doesn't exist at: {baseline}"
 
         input_file = os.path.join(cwd, "requirements.in")
         output_file = os.path.join(cwd, "requirements.txt")
@@ -251,7 +260,7 @@ class PipCompile(Suite):
 
         # First, perform a cold resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [
                 self.path,
                 os.path.abspath(requirements_file),
@@ -261,10 +270,8 @@ class PipCompile(Suite):
                 output_file,
             ],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=output_file,
         )
-        assert os.path.exists(output_file), f"Lockfile doesn't exist at: {output_file}"
 
         return Command(
             name=f"{self.name} ({Benchmark.RESOLVE_NOOP.value})",
@@ -451,13 +458,11 @@ class Poetry(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=poetry_lock,
         )
-        assert os.path.exists(poetry_lock), f"Lockfile doesn't exist at: {poetry_lock}"
 
         # Add a dependency to the requirements file.
         with open(os.path.join(cwd, "pyproject.toml"), "rb") as fp:
@@ -504,13 +509,11 @@ class Poetry(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=poetry_lock,
         )
-        assert os.path.exists(poetry_lock), f"Lockfile doesn't exist at: {poetry_lock}"
 
         config_dir = os.path.join(cwd, "config", "pypoetry")
         cache_dir = os.path.join(cwd, "cache", "pypoetry")
@@ -542,13 +545,11 @@ class Poetry(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=poetry_lock,
         )
-        assert os.path.exists(poetry_lock), f"Lockfile doesn't exist at: {poetry_lock}"
 
         config_dir = os.path.join(cwd, "config", "pypoetry")
         cache_dir = os.path.join(cwd, "cache", "pypoetry")
@@ -588,13 +589,11 @@ class Poetry(Suite):
         )
 
         # Run a resolution, to ensure that the lockfile exists.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=poetry_lock,
         )
-        assert os.path.exists(poetry_lock), f"Lockfile doesn't exist at: {poetry_lock}"
 
         config_dir = os.path.join(cwd, "config", "pypoetry")
         cache_dir = os.path.join(cwd, "cache", "pypoetry")
@@ -708,13 +707,11 @@ class Pdm(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=pdm_lock,
         )
-        assert os.path.exists(pdm_lock), f"Lockfile doesn't exist at: {pdm_lock}"
 
         # Add a dependency to the requirements file.
         with open(os.path.join(cwd, "pyproject.toml"), "rb") as fp:
@@ -753,13 +750,11 @@ class Pdm(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=pdm_lock,
         )
-        assert os.path.exists(pdm_lock), f"Lockfile doesn't exist at: {pdm_lock}"
 
         cache_dir = os.path.join(cwd, "cache", "pdm")
 
@@ -783,13 +778,11 @@ class Pdm(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=pdm_lock,
         )
-        assert os.path.exists(pdm_lock), f"Lockfile doesn't exist at: {pdm_lock}"
 
         venv_dir = os.path.join(cwd, ".venv")
         cache_dir = os.path.join(cwd, "cache", "pdm")
@@ -820,13 +813,11 @@ class Pdm(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=pdm_lock,
         )
-        assert os.path.exists(pdm_lock), f"Lockfile doesn't exist at: {pdm_lock}"
 
         venv_dir = os.path.join(cwd, ".venv")
         cache_dir = os.path.join(cwd, "cache", "pdm")
@@ -913,7 +904,7 @@ class UvPip(Suite):
 
         # First, perform a cold resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [
                 self.path,
                 "pip",
@@ -925,10 +916,8 @@ class UvPip(Suite):
                 baseline,
             ],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=baseline,
         )
-        assert os.path.exists(baseline), f"Lockfile doesn't exist at: {baseline}"
 
         input_file = os.path.join(cwd, "requirements.in")
         output_file = os.path.join(cwd, "requirements.txt")
@@ -1121,13 +1110,11 @@ class UvProject(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=uv_lock,
         )
-        assert os.path.exists(uv_lock), f"Lockfile doesn't exist at: {uv_lock}"
 
         # Add a dependency to the requirements file.
         with open(os.path.join(cwd, "pyproject.toml"), "rb") as fp:
@@ -1169,13 +1156,11 @@ class UvProject(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=uv_lock,
         )
-        assert os.path.exists(uv_lock), f"Lockfile doesn't exist at: {uv_lock}"
 
         cache_dir = os.path.join(cwd, ".cache")
 
@@ -1202,13 +1187,11 @@ class UvProject(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=uv_lock,
         )
-        assert os.path.exists(uv_lock), f"Lockfile doesn't exist at: {uv_lock}"
 
         cache_dir = os.path.join(cwd, ".cache")
         venv_dir = os.path.join(cwd, ".venv")
@@ -1242,13 +1225,11 @@ class UvProject(Suite):
 
         # Run a resolution, to ensure that the lockfile exists.
         # TODO(charlie): Make this a `setup`.
-        subprocess.check_call(
+        create_lockfile(
             [self.path, "lock"],
             cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            lockfile=uv_lock,
         )
-        assert os.path.exists(uv_lock), f"Lockfile doesn't exist at: {uv_lock}"
 
         cache_dir = os.path.join(cwd, ".cache")
         venv_dir = os.path.join(cwd, ".venv")
