@@ -58,7 +58,7 @@ use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_resolve_operations::{is_direct_wheel, resolution_markers, resolution_tags};
 
 /// The interpreter is externally managed and cannot be modified.
 #[derive(Debug, Error)]
@@ -463,8 +463,24 @@ pub async fn pip_install(
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options.combine(no_binary, no_build);
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
+    // Direct wheels with no dependencies need neither registry candidates nor build dependencies.
+    // Additional inputs can change their sources, so those still load the configured indexes.
+    let flat_index = if dependency_mode.is_direct()
+        && pylock.is_none()
+        && source_trees.is_empty()
+        && groups.is_empty()
+        && constraints.is_empty()
+        && upgrade.constraints().next().is_none()
+        && overrides.is_empty()
+        && override_dependencies.is_empty()
+        && requirements
+            .iter()
+            .all(|spec| is_direct_wheel(&spec.requirement))
+    {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, &cache, &index_locations).await?
+    };
 
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
