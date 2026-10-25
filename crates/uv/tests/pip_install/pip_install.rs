@@ -6109,35 +6109,99 @@ fn install_sdist_resolution_lowest() -> Result<()> {
     Ok(())
 }
 
-/// Tests that we can install a package from a zip file that has bunk
-/// permissions.
+/// ZIP entries from DOS archives with zero file attributes must extract to readable files.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/1453>
 #[test]
 fn direct_url_zip_file_bunk_permissions() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "opensafely-pipeline @ https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip",
-    )?;
+    let (wheel_filename, wheel) = generate_wheel(
+        &"bunk-permissions".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let source = context.temp_dir.child("source");
+    source.create_dir_all()?;
+    fs::write(source.child(&wheel_filename), wheel)?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    source.child("backend.py").write_str(&formatdoc! {r#"
+        import shutil
+        from pathlib import Path
 
-    uv_snapshot!(context.pip_install()
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "{wheel_filename}"
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+
+    let archive = context.temp_dir.child("bunk-permissions-1.0.0.zip");
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import sys
+            from pathlib import Path
+            from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+            source = Path(sys.argv[1])
+            archive_path = Path(sys.argv[2])
+            prefix = "bunk-permissions-1.0.0/"
+            with ZipFile(archive_path, "w") as archive:
+                directory = ZipInfo(prefix)
+                directory.create_system = 0
+                directory.external_attr = 0x10
+                archive.writestr(directory, b"")
+                for path in sorted(source.iterdir()):
+                    entry = ZipInfo(f"{prefix}{path.name}")
+                    entry.create_system = 0
+                    entry.compress_type = ZIP_DEFLATED
+                    archive.writestr(entry, path.read_bytes())
+                    # When `external_attr` is zero, `zipfile` supplies default permissions
+                    # while writing the entry. Clear it before the central directory is written.
+                    entry.external_attr = 0
+
+            with ZipFile(archive_path) as archive:
+                for entry in archive.infolist():
+                    assert entry.create_system == 0
+                    assert entry.external_attr == (0x10 if entry.is_dir() else 0)
+        "#})
+        .arg(source.path())
+        .arg(archive.path())
+        .assert()
+        .success();
+
+    let server = FindLinksServer::new(context.temp_dir.path());
+    let context = context.with_filter((server.url().to_string(), "http://[LOCALHOST]"));
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(&format!(
+        "bunk-permissions @ {}/bunk-permissions-1.0.0.zip",
+        server.url()
+    ))?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
+        .arg("--no-index")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + distro==1.9.0
-     + opensafely-pipeline==2023.11.6.145820 (from https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip)
-     + pydantic==1.10.14
-     + ruyaml==0.91.0
-     + setuptools==69.2.0
-     + typing-extensions==4.10.0
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + bunk-permissions==1.0.0 (from http://[LOCALHOST]/bunk-permissions-1.0.0.zip)
     "
     );
+
+    context.assert_command("import bunk_permissions").success();
 
     Ok(())
 }
