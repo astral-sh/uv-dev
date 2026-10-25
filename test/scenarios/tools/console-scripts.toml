@@ -1,0 +1,14 @@
+name = "console-scripts"
+description = "A package exposes two console scripts backed by the same nested callable."
+
+[root]
+requires = ["packse-tool"]
+
+[expected]
+satisfiable = true
+
+[packages.packse-tool.versions."1.2.3"]
+scripts = { packse-tool = "packse_tool.commands.cli:main", packse-alias = "packse_tool.commands.cli:main" }
+
+[testgen]
+disable = true

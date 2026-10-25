@@ -22,6 +22,8 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
 
+use super::scripts::GeneratedScripts;
+
 pub(super) const DEFAULT_WHEEL_TAG: &str = "py3-none-any";
 
 /// Build a wheel in memory. By default, it is a `py3-none-any` wheel with no dependencies.
@@ -35,6 +37,7 @@ pub struct WheelBuilder<'a> {
     requires_python: Option<&'a VersionSpecifiers>,
     tag: &'a str,
     entry_points: &'a [String],
+    scripts: Option<&'a GeneratedScripts>,
     files: &'a [(&'a str, &'a str)],
 }
 
@@ -48,6 +51,7 @@ impl<'a> WheelBuilder<'a> {
             requires_python: None,
             tag: DEFAULT_WHEEL_TAG,
             entry_points: &[],
+            scripts: None,
             files: &[],
         }
     }
@@ -77,6 +81,11 @@ impl<'a> WheelBuilder<'a> {
         self
     }
 
+    pub(super) fn scripts(mut self, scripts: &'a GeneratedScripts) -> Self {
+        self.scripts = Some(scripts);
+        self
+    }
+
     /// Include additional files as `(path, contents)` pairs.
     pub fn files(mut self, files: &'a [(&'a str, &'a str)]) -> Self {
         self.files = files;
@@ -85,10 +94,20 @@ impl<'a> WheelBuilder<'a> {
 
     /// Return the wheel's filename and ZIP archive contents.
     pub fn build(self) -> (String, Vec<u8>) {
+        let generated_scripts;
+        let scripts = if let Some(scripts) = self.scripts {
+            scripts
+        } else {
+            generated_scripts =
+                GeneratedScripts::new(self.name, self.version, self.entry_points, &BTreeMap::new())
+                    .expect("Packse package entry points should be valid");
+            &generated_scripts
+        };
         let normalized = self.name.as_dist_info_name();
         let version = self.version;
         let tag = self.tag;
         let dist_info = format!("{normalized}-{version}.dist-info");
+        let init_path = format!("{normalized}/__init__.py");
         let metadata = build_metadata(
             self.name,
             version,
@@ -98,8 +117,10 @@ impl<'a> WheelBuilder<'a> {
         );
         let mut entries = vec![
             (
-                format!("{normalized}/__init__.py"),
-                format!("__version__ = \"{version}\"\n"),
+                init_path.clone(),
+                scripts
+                    .source(&init_path)
+                    .map_or_else(|| format!("__version__ = \"{version}\"\n"), str::to_string),
             ),
             (format!("{dist_info}/METADATA"), metadata),
             (
@@ -113,14 +134,17 @@ impl<'a> WheelBuilder<'a> {
             ),
         ];
 
-        if !self.entry_points.is_empty() {
-            let mut scripts = String::from("[console_scripts]\n");
-            for script in self.entry_points {
-                writeln!(scripts, "{script} = {normalized}.cli:main")
-                    .expect("writing to a string should succeed");
-            }
-            entries.push((format!("{dist_info}/entry_points.txt"), scripts));
-            entries.push((format!("{normalized}/cli.py"), build_cli_module(self.name)));
+        entries.extend(
+            scripts
+                .files()
+                .filter(|(path, _)| *path != init_path)
+                .map(|(path, contents)| (path.to_string(), contents.to_string())),
+        );
+        if let Some(entry_points) = scripts.entry_points() {
+            entries.push((
+                format!("{dist_info}/entry_points.txt"),
+                entry_points.to_string(),
+            ));
         }
 
         entries.extend(
@@ -168,13 +192,13 @@ fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
 /// `PKG-INFO` with full metadata, and a stub module.
 ///
 /// Returns `(filename, bytes)`.
-pub fn generate_sdist(
+pub(super) fn generate_sdist_with_scripts(
     name: &PackageName,
     version: &Version,
     requires: &[Requirement],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
     requires_python: Option<&VersionSpecifiers>,
-    entry_points: &[String],
+    scripts: &GeneratedScripts,
 ) -> (String, Vec<u8>) {
     let normalized = name.as_dist_info_name();
     let prefix = format!("{normalized}-{version}");
@@ -182,14 +206,8 @@ pub fn generate_sdist(
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     let mut tar = TarEncoder::new(AllowStdIo::new(&mut encoder).compat_write()).builder();
 
-    let pyproject = build_pyproject_toml(
-        name,
-        version,
-        requires,
-        extras,
-        requires_python,
-        entry_points,
-    );
+    let mut pyproject = build_pyproject_toml(name, version, requires, extras, requires_python);
+    pyproject.push_str(scripts.pyproject());
     add_tar_file(
         &mut tar,
         &format!("{prefix}/pyproject.toml"),
@@ -199,17 +217,20 @@ pub fn generate_sdist(
     let pkg_info = build_metadata(name, version, requires, extras, requires_python);
     add_tar_file(&mut tar, &format!("{prefix}/PKG-INFO"), pkg_info.as_bytes());
 
-    let init_py = format!("__version__ = \"{version}\"\n");
-    add_tar_file(
-        &mut tar,
-        &format!("{prefix}/src/{normalized}/__init__.py"),
-        init_py.as_bytes(),
-    );
-    if !entry_points.is_empty() {
+    if scripts.entry_points().is_some() {
+        for (path, contents) in scripts.files() {
+            add_tar_file(
+                &mut tar,
+                &format!("{prefix}/src/{path}"),
+                contents.as_bytes(),
+            );
+        }
+    } else {
+        let init_py = format!("__version__ = \"{version}\"\n");
         add_tar_file(
             &mut tar,
-            &format!("{prefix}/src/{normalized}/cli.py"),
-            build_cli_module(name).as_bytes(),
+            &format!("{prefix}/src/{normalized}/__init__.py"),
+            init_py.as_bytes(),
         );
     }
 
@@ -219,14 +240,6 @@ pub fn generate_sdist(
         .expect("failed to finish in-memory gzip stream");
     let filename = format!("{normalized}-{version}.tar.gz");
     (filename, bytes)
-}
-
-/// Build the callable module used by generated console scripts.
-fn build_cli_module(name: &PackageName) -> String {
-    formatdoc! {"
-        def main():
-            print('Hello from {name}!')
-    "}
 }
 
 /// Build PEP 566 / PEP 643 metadata content.
@@ -275,7 +288,6 @@ fn build_pyproject_toml(
     requires: &[Requirement],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
     requires_python: Option<&VersionSpecifiers>,
-    entry_points: &[String],
 ) -> String {
     let normalized = name.as_dist_info_name();
     let dependencies = if requires.is_empty() {
@@ -308,17 +320,6 @@ fn build_pyproject_toml(
         optional_dependencies
     };
 
-    let scripts = if entry_points.is_empty() {
-        String::new()
-    } else {
-        let scripts: BTreeMap<_, _> = entry_points
-            .iter()
-            .map(|entry_point| (entry_point, format!("{normalized}.cli:main")))
-            .collect();
-        let scripts = toml::to_string(&scripts).expect("console scripts should serialize to TOML");
-        format!("\n[project.scripts]\n{scripts}")
-    };
-
     formatdoc! {
         r#"
         [build-system]
@@ -334,7 +335,7 @@ fn build_pyproject_toml(
         [project]
         name = "{name}"
         version = "{version}"
-        {dependencies}{requires_python}{optional_dependencies}{scripts}
+        {dependencies}{requires_python}{optional_dependencies}
         "#
     }
 }
@@ -360,10 +361,11 @@ mod tests {
     use std::io::Cursor;
     use std::str::FromStr;
 
-    use tar_codec::{Archive as _, Member, TarArchive};
+    use tar_codec::{Archive as _, Member, MemberPayload as _, TarArchive};
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use super::*;
+    use crate::packse::scenario::PackageMetadata;
 
     #[test]
     fn generate_simple_wheel() {
@@ -432,13 +434,13 @@ mod tests {
         let requires = vec![Requirement::from_str("dep>=1.0").expect("valid requirement")];
         let requires_python =
             VersionSpecifiers::from_str(">=3.12").expect("valid version specifier");
-        let (filename, bytes) = generate_sdist(
+        let (filename, bytes) = generate_sdist_with_scripts(
             &PackageName::from_str("my-package").expect("valid package name"),
             &Version::from_str("1.0.0").expect("valid version"),
             &requires,
             &BTreeMap::new(),
             Some(&requires_python),
-            &[],
+            &GeneratedScripts::default(),
         );
         assert_eq!(filename, "my_package-1.0.0.tar.gz");
 
@@ -462,6 +464,106 @@ mod tests {
         assert!(names.contains(&"my_package-1.0.0/pyproject.toml".to_string()));
         assert!(names.contains(&"my_package-1.0.0/PKG-INFO".to_string()));
         assert!(names.contains(&"my_package-1.0.0/src/my_package/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn generate_script_archives() -> anyhow::Result<()> {
+        let name = PackageName::from_str("my-package")?;
+        let version = Version::from_str("1.2.3")?;
+        let metadata: PackageMetadata = toml::from_str(
+            r#"scripts = { alias = "my_package.commands.cli:main", example = "my_package.commands.cli:main", root = "my_package:run" }"#,
+        )?;
+        let scripts = GeneratedScripts::new(&name, &version, &[], &metadata.scripts)?;
+
+        let (_, wheel) = WheelBuilder::new(&name, &version).scripts(&scripts).build();
+        let archive = block_on(async_zip::base::read::mem::ZipFileReader::new(wheel))?;
+        let wheel_files = block_on(async {
+            let mut files = BTreeMap::new();
+            for (index, entry) in archive.file().entries().iter().enumerate() {
+                let path = entry.filename().as_str()?.to_string();
+                let mut contents = String::new();
+                archive
+                    .reader_with_entry(index)
+                    .await?
+                    .read_to_string_checked(&mut contents)
+                    .await?;
+                files.insert(path, contents);
+            }
+            anyhow::Ok(files)
+        })?;
+        assert_eq!(
+            wheel_files["my_package-1.2.3.dist-info/entry_points.txt"],
+            "[console_scripts]\nalias = my_package.commands.cli:main\nexample = my_package.commands.cli:main\nroot = my_package:run\n"
+        );
+
+        // Every archive member, including the generated modules and entry points, is recorded.
+        let record_path = "my_package-1.2.3.dist-info/RECORD";
+        let record = &wheel_files[record_path];
+        assert_eq!(record.lines().count(), wheel_files.len());
+        insta::assert_snapshot!(record, @"
+        my_package/__init__.py,sha256=E44EfoNEJVgS_HVAsgNak4PUm0EnxS5Gn23Psivt3xA,95
+        my_package-1.2.3.dist-info/METADATA,sha256=9XdufOc_mUApNOOke1zP114TooYlmh_JbUPWvIxbVVY,54
+        my_package-1.2.3.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+        my_package/commands/__init__.py,sha256=C-D_WWrVkBDmQmApLcm0sWNh2CgIrwWfc8_sB5vvU-Q,22
+        my_package/commands/cli/__init__.py,sha256=WjcWAel2D_BC9c32M8BKlvl1WFAvOXorIUPMs2Aqizw,96
+        my_package-1.2.3.dist-info/entry_points.txt,sha256=oNS6X4b0V73FXIK3xiOr7Mkviu88GGmHfdFrU8WXSUA,116
+        my_package-1.2.3.dist-info/RECORD,,
+        ");
+
+        let (_, sdist) =
+            generate_sdist_with_scripts(&name, &version, &[], &BTreeMap::new(), None, &scripts);
+        let decoder = flate2::read::GzDecoder::new(Cursor::new(sdist));
+        let archive = TarArchive::new(AllowStdIo::new(decoder).compat());
+        let sdist_files = block_on(async {
+            let mut members = archive.members();
+            let mut files = BTreeMap::new();
+            while let Some(member) = members.next().await? {
+                if let Member::File {
+                    metadata,
+                    mut payload,
+                    ..
+                } = member
+                {
+                    let mut contents = Vec::new();
+                    while payload.next_chunk(&mut contents, 8192).await? {}
+                    files.insert(metadata.path, String::from_utf8(contents)?);
+                }
+            }
+            anyhow::Ok(files)
+        })?;
+        assert_eq!(
+            sdist_files.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "my_package-1.2.3/PKG-INFO",
+                "my_package-1.2.3/pyproject.toml",
+                "my_package-1.2.3/src/my_package/__init__.py",
+                "my_package-1.2.3/src/my_package/commands/__init__.py",
+                "my_package-1.2.3/src/my_package/commands/cli/__init__.py",
+            ]
+        );
+        let pyproject: toml::Value =
+            toml::from_str(&sdist_files["my_package-1.2.3/pyproject.toml"])?;
+        let entry_points = pyproject["project"]["scripts"]
+            .as_table()
+            .expect("scripts should be a table");
+        assert_eq!(entry_points.len(), metadata.scripts.len());
+        for (script, target) in &metadata.scripts {
+            assert_eq!(
+                entry_points[script].as_str(),
+                Some(target.to_string().as_str())
+            );
+        }
+        for path in [
+            "my_package/__init__.py",
+            "my_package/commands/__init__.py",
+            "my_package/commands/cli/__init__.py",
+        ] {
+            assert_eq!(
+                wheel_files[path],
+                sdist_files[&format!("my_package-1.2.3/src/{path}")]
+            );
+        }
+        Ok(())
     }
 
     #[test]

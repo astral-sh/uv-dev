@@ -27,7 +27,8 @@ use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 use super::scenario::{ArtifactMetadata, PackageMetadata, Scenario, WheelTag};
 use super::scenarios_dir;
-use super::wheel::{DEFAULT_WHEEL_TAG, WheelBuilder, generate_sdist, sha256_hex};
+use super::scripts::GeneratedScripts;
+use super::wheel::{DEFAULT_WHEEL_TAG, WheelBuilder, generate_sdist_with_scripts, sha256_hex};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
 
@@ -146,12 +147,15 @@ impl ServerIndex {
             index.packages.insert(package_name.clone(), Vec::new());
 
             for (version, meta) in &package.versions {
+                let scripts =
+                    GeneratedScripts::new(package_name, version, &meta.entry_points, &meta.scripts)
+                        .expect("Packse package scripts should be valid");
                 if let Some(wheel_metadata) = &meta.wheel {
                     let wheel = WheelBuilder::new(package_name, version)
                         .requires(&meta.requires)
                         .extras(&meta.extras)
                         .requires_python(meta.requires_python.as_ref())
-                        .entry_points(&meta.entry_points);
+                        .scripts(&scripts);
                     for tag in wheel_tags(&meta.wheel_tags) {
                         index.register_generated(
                             package_name,
@@ -164,13 +168,13 @@ impl ServerIndex {
                 if let Some(sdist_metadata) = &meta.sdist {
                     index.register_generated(
                         package_name,
-                        generate_sdist(
+                        generate_sdist_with_scripts(
                             package_name,
                             version,
                             &meta.requires,
                             &meta.extras,
                             meta.requires_python.as_ref(),
-                            &meta.entry_points,
+                            &scripts,
                         ),
                         (meta, sdist_metadata),
                     );
