@@ -150,7 +150,7 @@ impl GlobalSettings {
                 "python-downloads",
             )?
             .map(PythonDownloads::from)
-            .combine(env(env::UV_PYTHON_DOWNLOADS))
+            .or_else(|| env(env::UV_PYTHON_DOWNLOADS))
             .combine(workspace.and_then(|workspace| workspace.globals.python_downloads))
             .unwrap_or_default(),
             // Disable the progress bar with `RUST_LOG` to avoid progress fragments interleaving
