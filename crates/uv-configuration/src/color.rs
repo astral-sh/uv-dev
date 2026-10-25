@@ -25,8 +25,7 @@ impl ColorChoice {
 
     /// Combine self (higher priority) with an [`anstream::ColorChoice`] (lower priority).
     ///
-    /// This method allows prioritizing the user choice, while using the inferred choice for a
-    /// stream as default.
+    /// Prefer the user's choice. If the user does not choose, use the inferred stream setting.
     #[must_use]
     pub fn and_colorchoice(self, next: anstream::ColorChoice) -> Self {
         match self {

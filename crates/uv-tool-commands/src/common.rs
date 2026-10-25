@@ -56,17 +56,17 @@ use uv_workspace::WorkspaceCache;
 
 use uv_resolve_operations::{Error as ResolveError, resolution_markers, resolution_tags};
 
-/// An error raised when a tool package provides no executables.
+/// An error for a tool package that provides no executables.
 #[derive(Debug, Error)]
 pub enum NoExecutablesError {
-    /// A dependency was requested as a source of tool executables.
+    /// The requested dependency provides no tool executables.
     #[error("No executables are provided by package `{package}`")]
     Dependency { package: PackageName },
     /// The root package cannot be installed as a tool.
     #[error("Failed to install entrypoints for `{package}`")]
     Root {
         package: PackageName,
-        /// Executables found in dependencies of the package that match the package name.
+        /// Dependencies with executable names that match the root package name.
         matching_dependency_packages: Vec<PackageName>,
     },
 }
@@ -123,7 +123,7 @@ use uv_settings::ResolverSettings;
 
 use crate::error::ToolLockError;
 
-/// Return all packages which contain an executable with the given name.
+/// Return all packages that provide an executable with the specified name.
 pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec<InstalledDist> {
     site_packages
         .iter()
@@ -145,7 +145,7 @@ pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec
         .collect()
 }
 
-/// Remove any entrypoints attached to the [`Tool`].
+/// Remove all entrypoints for the [`Tool`].
 pub(super) fn remove_entrypoints(tool: &Tool) {
     remove_entrypoint_paths(
         tool.entrypoints()
@@ -154,7 +154,7 @@ pub(super) fn remove_entrypoints(tool: &Tool) {
     );
 }
 
-/// Remove the entrypoints at the given paths.
+/// Remove the entrypoint at each specified path.
 fn remove_entrypoint_paths<'a>(entrypoints: impl IntoIterator<Item = &'a Path>) {
     for executable in entrypoints {
         debug!("Removing executable: {}", executable.simplified_display());
@@ -172,13 +172,13 @@ fn remove_entrypoint_paths<'a>(entrypoints: impl IntoIterator<Item = &'a Path>) 
 pub(super) struct ToolPython {
     /// The source of the Python request.
     source: PythonRequestSource,
-    /// The selected Python request, computed by considering an explicit request, a global
-    /// version file, and static `requires-python` metadata from the source requirement.
+    /// The selected Python request.
+    /// Consider explicit requests, global version files, and static source `requires-python` metadata.
     pub(super) python_request: Option<PythonRequest>,
 }
 
 impl ToolPython {
-    /// Determine the [`ToolPython`] request for a tool invocation.
+    /// Create the [`ToolPython`] request for a tool invocation.
     pub(super) async fn from_request(
         python_request: Option<PythonRequest>,
         requirement: Option<&UnresolvedRequirement>,
@@ -247,16 +247,16 @@ impl ToolPython {
         })
     }
 
-    /// Returns `true` if the selected request was explicitly provided by the user.
+    /// Return `true` if the user explicitly provided the selected request.
     pub(super) fn is_explicit(&self) -> bool {
         matches!(self.source, PythonRequestSource::UserRequest)
     }
 }
 
-/// Infer [`RequiresPython`] from a direct source requirement by reading its `pyproject.toml`.
+/// Read [`RequiresPython`] from the `pyproject.toml` of a direct source requirement.
 ///
-/// Returns `None` when the requirement is not a directory or Git source, its metadata is not
-/// statically available, or the Git source cannot be fetched.
+/// Return `None` if the source is not a directory or Git repository.
+/// Also return `None` if static metadata is unavailable or the Git source cannot be fetched.
 async fn infer_requires_python_from_requirement(
     requirement: &UnresolvedRequirement,
     lfs: GitLfsSetting,
@@ -297,7 +297,7 @@ pub(super) struct ValidatedToolLock {
 }
 
 impl ValidatedToolLock {
-    /// Return whether the existing lock satisfies the current resolution inputs.
+    /// Return `true` if the existing lock satisfies the current resolution inputs.
     pub(super) fn is_satisfied(&self) -> bool {
         self.satisfied
     }
@@ -314,7 +314,7 @@ impl ValidatedToolLock {
 }
 
 impl ToolLock {
-    /// Build the lock manifest for a tool environment.
+    /// Create the lock manifest for a tool environment.
     pub(super) fn manifest(
         requirements: &[Requirement],
         constraints: &[Requirement],
@@ -335,7 +335,7 @@ impl ToolLock {
         )
     }
 
-    /// Build the lock for a tool environment.
+    /// Create the lock for a tool environment.
     pub(super) fn from_resolution(
         root: &Path,
         resolution: &ResolverOutput,
@@ -357,7 +357,7 @@ impl ToolLock {
         })
     }
 
-    /// Read the lock for a tool, if one has been generated.
+    /// Read the tool lock, if one exists.
     pub(super) fn read(directory: &Path) -> Option<Self> {
         let path = directory.join("uv.lock");
         match fs_err::read_to_string(&path) {
@@ -570,7 +570,7 @@ impl ToolLock {
         })
     }
 
-    /// Project the universal lock into a specific environment.
+    /// Convert the universal lock into a resolution for a specific environment.
     pub(super) fn to_resolution(
         &self,
         project_name: Option<&PackageName>,
@@ -618,8 +618,8 @@ impl ToolLock {
     }
 }
 
-/// Build an environment specification for a tool, preferring versions from its existing lock when
-/// available, then falling back to the installed environment.
+/// Create an environment specification for a tool.
+/// Prefer versions from its existing lock, then use versions from the installed environment.
 pub(super) fn tool_environment_spec<'lock>(
     requirements: RequirementsSpecification,
     lock: Option<&'lock ToolLock>,
@@ -643,8 +643,8 @@ pub(super) fn tool_environment_spec<'lock>(
 
     specification.with_preferences(PreferenceLocation::Entries(preferences))
 }
-/// Given a no-solution error and the [`Interpreter`] that was used during the solve, attempt to
-/// discover an alternate [`Interpreter`] that satisfies the `requires-python` constraint.
+/// Find another [`Interpreter`] after dependency resolution fails.
+/// The interpreter must satisfy the `requires-python` constraint.
 pub(super) async fn refine_interpreter(
     interpreter: &Interpreter,
     python_request: Option<&PythonRequest>,
@@ -664,21 +664,19 @@ pub(super) async fn refine_interpreter(
     // Infer the `requires-python` constraint from the error.
     let requires_python = no_solution_err.find_requires_python();
 
-    // If the existing interpreter already satisfies the `requires-python` constraint, we don't need
-    // to refine it. We'd expect to fail again anyway.
+    // Do not replace an interpreter that already satisfies `requires-python`.
+    // Dependency resolution would fail again with the same constraint.
     if requires_python.contains(interpreter.python_version()) {
         return Ok(None);
     }
 
-    // We want an interpreter that's as close to the required version as possible. If we choose the
-    // "latest" Python, we risk choosing a version that lacks wheels for the tool's requirements
-    // (assuming those requirements don't publish source distributions).
+    // Select an interpreter close to the minimum required version.
+    // The latest Python version might not have wheels for the tool dependencies.
+    // This prevents installation when those dependencies do not publish source distributions.
     //
-    // TODO(charlie): Solve for the Python version iteratively (or even, within the resolver
-    // itself). The current strategy can also fail if the tool's requirements have greater
-    // `requires-python` constraints, and we didn't see them in the initial solve. It can also fail
-    // if the tool's requirements don't publish wheels for this interpreter version, though that's
-    // rarer.
+    // TODO(charlie): Resolve the Python version iteratively or inside the resolver.
+    // This strategy can fail when dependencies have stricter `requires-python` constraints.
+    // It can also fail when dependencies do not publish wheels for the selected interpreter.
     let lower_bound = match requires_python.as_ref() {
         Bound::Included(version) => VersionSpecifier::greater_than_equal_version(version.clone()),
         Bound::Excluded(version) => VersionSpecifier::greater_than_version(version.clone()),
@@ -721,8 +719,7 @@ pub(super) async fn refine_interpreter(
     .await?
     .into_interpreter();
 
-    // If the user passed a `--python` request, and the refined interpreter is incompatible, we
-    // can't use it.
+    // Reject an interpreter that does not satisfy an explicit `--python` request.
     if let Some(python_request) = python_request {
         if !interpreter.matches_request(
             &python_request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
@@ -735,11 +732,11 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
-/// Finalizes a tool installation, after creation of an environment.
+/// Complete a tool installation after its environment is created.
 ///
-/// Installs tool executables for a given package, handling any conflicts.
+/// Install the package executables and handle conflicts.
 ///
-/// Adds a receipt for the tool.
+/// Create a receipt for the tool.
 pub(super) fn finalize_tool_install(
     environment: &PythonEnvironment,
     name: &PackageName,
@@ -767,11 +764,11 @@ pub(super) fn finalize_tool_install(
     let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
     let site_packages = SitePackages::from_environment(environment)?;
     let ordered_packages = entrypoints
-        // Install dependencies first
+        // Install dependencies first.
         .iter()
         .filter(|pkg| *pkg != name)
         .collect::<BTreeSet<_>>()
-        // Then install the root package last
+        // Install the root package last.
         .into_iter()
         .chain(std::iter::once(name));
 
@@ -808,7 +805,8 @@ pub(super) fn finalize_tool_install(
         };
         let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
 
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
+        // Determine the entrypoint targets.
+        // Sort the targets to keep output deterministic.
         let target_entrypoints = dist_entrypoints
             .into_iter()
             .map(|(name, source_path)| {
@@ -841,7 +839,7 @@ pub(super) fn finalize_tool_install(
             };
 
             if package != name {
-                // Non-root package: display the error with hints and continue.
+                // Show the dependency error and hints, then continue.
                 writeln!(
                     printer.stdout(),
                     "{}",
@@ -850,14 +848,14 @@ pub(super) fn finalize_tool_install(
                 continue;
             }
 
-            // For the root package, this is a fatal error.
+            // Fail when the root package provides no executables.
             writeln!(
                 printer.stdout(),
                 "No executables are provided by package `{}`; removing tool",
                 package.cyan()
             )?;
 
-            // Clean up the environment we just created.
+            // Remove the new environment.
             remove_entrypoint_paths(
                 installed_entrypoints
                     .iter()
@@ -868,14 +866,14 @@ pub(super) fn finalize_tool_install(
             return Err(err.into());
         }
 
-        // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
+        // Do not overwrite an existing entrypoint unless `--force` is set.
         if !force {
             let mut existing_entrypoints = target_entrypoints
                 .iter()
                 .filter(|(_, _, target_path)| target_path.exists())
                 .peekable();
             if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
+                // Remove the new environment.
                 remove_entrypoint_paths(
                     installed_entrypoints
                         .iter()
@@ -960,7 +958,7 @@ pub(super) fn finalize_tool_install(
 }
 
 fn warn_out_of_path(executable_directory: &Path) {
-    // If the executable directory isn't on the user's PATH, warn.
+    // Warn if the executable directory is not on the user's `PATH`.
     if !Shell::contains_path(executable_directory) {
         if let Some(shell) = Shell::from_env() {
             if let Some(command) = shell.prepend_path(executable_directory) {
