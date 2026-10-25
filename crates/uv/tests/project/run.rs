@@ -1,5 +1,7 @@
 #![expect(clippy::disallowed_types)]
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
@@ -7,6 +9,8 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(target_os = "linux")]
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
@@ -14,6 +18,8 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+#[cfg(target_os = "linux")]
+use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
 
 #[test]
@@ -5815,6 +5821,93 @@ fn exit_status_signal() -> Result<()> {
     "})?;
     let status = context.run().arg(script.path()).status()?;
     assert_eq!(status.code().expect("a status code"), 139);
+    Ok(())
+}
+
+/// Replacing the interpreter at the same canonical path selects a new cached environment.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_with_replaced_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let first = context.python_versions[0].1.canonicalize()?;
+    let second = context.python_versions[1].1.canonicalize()?;
+    let first_root = first
+        .parent()
+        .and_then(Path::parent)
+        .context("Python root")?;
+    let second_root = second
+        .parent()
+        .and_then(Path::parent)
+        .context("Python root")?;
+    let python = context.temp_dir.child("python/bin/python3");
+    fs_err::create_dir_all(python.parent().context("Python bin directory")?)?;
+    fs_err::copy(&first, &python)?;
+    let library = context.temp_dir.child("python/lib");
+    fs_err::os::unix::fs::symlink(first_root.join("lib"), &library)?;
+    let (filename, bytes) = generate_wheel(
+        &"env-probe".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&bytes)?;
+    let probe = "import env_probe, pathlib, sys; pathlib.Path('module.txt').write_text(env_probe.__file__); print(sys.version_info[:2])";
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project").arg("--no-index")
+        .arg("--python").arg(python.path())
+        .arg("--with").arg(wheel.path())
+        .arg("python").arg("-c").arg(probe), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + env-probe==1.0.0 (from file://[TEMP_DIR]/env_probe-1.0.0-py3-none-any.whl)
+    ");
+    let original_module = context.read("module.txt");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project").arg("--no-index")
+        .arg("--python").arg(python.path())
+        .arg("--with").arg(wheel.path())
+        .arg("python").arg("-c").arg(probe), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("module.txt"), original_module);
+
+    fs_err::remove_file(&python)?;
+    fs_err::copy(&second, &python)?;
+    fs_err::remove_file(&library)?;
+    fs_err::os::unix::fs::symlink(second_root.join("lib"), &library)?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project").arg("--no-index")
+        .arg("--python").arg(python.path())
+        .arg("--with").arg(wheel.path())
+        .arg("python").arg("-c").arg(probe), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 11)
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + env-probe==1.0.0 (from file://[TEMP_DIR]/env_probe-1.0.0-py3-none-any.whl)
+    ");
+    assert_ne!(context.read("module.txt"), original_module);
     Ok(())
 }
 
