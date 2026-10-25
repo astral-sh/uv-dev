@@ -9,21 +9,13 @@ use tokio::sync::Semaphore;
 #[derive(Clone)]
 pub struct Concurrency {
     /// The maximum number of concurrent downloads.
-    ///
-    /// Note this value must be non-zero.
-    pub downloads: usize,
+    pub downloads: NonZeroUsize,
     /// The maximum number of concurrent builds.
-    ///
-    /// Note this value must be non-zero.
-    pub builds: usize,
+    pub builds: NonZeroUsize,
     /// The maximum number of concurrent installs.
-    ///
-    /// Note this value must be non-zero.
-    pub installs: usize,
+    pub installs: NonZeroUsize,
     /// The maximum number of concurrent cache reads.
-    ///
-    /// Note this value must be non-zero.
-    pub cache_reads: usize,
+    pub cache_reads: NonZeroUsize,
     /// A global semaphore to limit the number of concurrent downloads.
     pub downloads_semaphore: Arc<Semaphore>,
     /// A global semaphore to limit the number of concurrent builds.
@@ -56,27 +48,30 @@ impl Default for Concurrency {
 
 impl Concurrency {
     // The default concurrent downloads limit.
-    pub const DEFAULT_DOWNLOADS: usize = 50;
+    pub const DEFAULT_DOWNLOADS: NonZeroUsize = NonZeroUsize::new(50).expect("nonzero default");
 
     // The default concurrent cache reads limit.
-    pub const DEFAULT_CACHE_READS: usize = 4;
+    pub const DEFAULT_CACHE_READS: NonZeroUsize = NonZeroUsize::new(4).expect("nonzero default");
 
     /// Create a new [`Concurrency`] with the given limits.
-    pub fn new(downloads: usize, builds: usize, installs: usize, cache_reads: usize) -> Self {
+    pub fn new(
+        downloads: NonZeroUsize,
+        builds: NonZeroUsize,
+        installs: NonZeroUsize,
+        cache_reads: NonZeroUsize,
+    ) -> Self {
         Self {
             downloads,
             builds,
             installs,
             cache_reads,
-            downloads_semaphore: Arc::new(Semaphore::new(downloads)),
-            builds_semaphore: Arc::new(Semaphore::new(builds)),
+            downloads_semaphore: Arc::new(Semaphore::new(downloads.get())),
+            builds_semaphore: Arc::new(Semaphore::new(builds.get())),
         }
     }
 
     // The default concurrent builds and install limit.
-    pub fn threads() -> usize {
-        std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
-            .unwrap_or(1)
+    pub fn threads() -> NonZeroUsize {
+        std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
     }
 }

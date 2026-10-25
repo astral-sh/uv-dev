@@ -148,7 +148,7 @@ pub async fn pip_list(
                     .await?;
                 Ok::<(&PackageName, Option<DistFilename>), uv_client::Error>((dist.name(), latest))
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.downloads.get());
 
         let mut map = FxHashMap::default();
         while let Some((package, version)) = fetches.next().await.transpose()? {
