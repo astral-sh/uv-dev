@@ -1,5 +1,5 @@
-name: Replay Rust cache behavior across commit history
-run-name: ${{ inputs.phase }} / commit ${{ inputs.commit_index }} / pair ${{ inputs.replica }}
+name: Inspect cache restoration and APT disk IO
+run-name: IO / ${{ inputs.phase }} / round ${{ inputs.round }}
 'on':
   workflow_dispatch:
     inputs:
@@ -8,37 +8,36 @@ run-name: ${{ inputs.phase }} / commit ${{ inputs.commit_index }} / pair ${{ inp
         options:
         - seed
         - warm
-        default: warm
         required: true
-      suite:
-        type: string
-        default: all
-        required: true
-      schema-changed:
-        type: string
-        default: 'false'
-        required: false
-      source:
-        type: string
-        required: true
-      commit_index:
-        type: string
-        required: true
-      replica:
+      round:
         type: string
         required: true
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
-  linux-tests-before:
+  deps-restore-first:
     timeout-minutes: 10
     runs-on: depot-ubuntu-24.04-16
-    name: linux-tests / before
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+    name: deps / restore-first
+    if: ${{ always() }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-        ref: ${{ inputs.source }}
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
     - name: Record source revision
       shell: bash
       run: |-
@@ -46,24 +45,53 @@ jobs:
         test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
         echo "Measured source revision: $(git rev-parse HEAD)"
       env:
-        EXPECTED_SOURCE: ${{ inputs.source }}
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
     - name: Install Rust toolchain
       run: rustup toolchain install --profile minimal
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
     - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-history-20261025-v1-before
+        prefix-key: uv-cache-apt-io-20261025-v1-deps
         key: ${{ hashFiles('Cargo.toml') }}
         profile: fast-build-nightly
         save-if: ${{ inputs.phase == 'seed' }}
         cache-workspace-crates: 'false'
+        add-job-id-key: 'false'
       name: Restore Rust cache
       id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
     - name: Record Rust cache availability
       if: ${{ inputs.phase == 'warm' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
-      run: 'echo "Rust cache exact hit: ${CACHE_HIT:-false}"'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
     - name: Configure Python archive cache
       run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
     - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
@@ -77,6 +105,19 @@ jobs:
         uv python install
         # Warm the cache for Unix-only tests
         uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
     - name: Install Linux test dependencies
       run: |
         # Try the next configured mirror after the first failed download.
@@ -89,29 +130,20 @@ jobs:
         # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
         sudo apt install -y --no-install-recommends --allow-downgrades \
           git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
-    - name: Start gnome-keyring
-      run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
-    - name: Create btrfs filesystem
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
       run: |
-        sudo apt install -y btrfs-progs
-        truncate -s 1G /tmp/btrfs.img
-        mkfs.btrfs /tmp/btrfs.img
-        sudo mkdir /btrfs
-        sudo mount -o loop /tmp/btrfs.img /btrfs
-        sudo chown "$(id -u):$(id -g)" /btrfs
-    - name: Create tmpfs filesystem
-      run: |
-        sudo mkdir /tmpfs
-        sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
-        sudo chown "$(id -u):$(id -g)" /tmpfs
-    - name: Create minix filesystem (low hardlink limit)
-      run: |
-        truncate -s 16M /tmp/minix.img
-        mkfs.minix /tmp/minix.img
-        sudo mkdir /minix
-        sudo mount -o loop /tmp/minix.img /minix
-        sudo chown "$(id -u):$(id -g)" /minix
-    - name: Cargo test
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Populate test artifacts
       env:
         UV_HTTP_RETRIES: 5
         RUST_BACKTRACE: 1
@@ -128,25 +160,11 @@ jobs:
           -Z checksum-freshness \
           --features test-python-patch,test-universal,native-auth,secret-service \
           --workspace \
-          --profile ci-linux
-    - name: Upload pending snapshots
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: pending-snapshots-linux-linux-tests-before
-        path: pending-snapshots/
-        if-no-files-found: ignore
-        include-hidden-files: true
-        retention-days: 1
-    - name: Upload JUnit results
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: junit-results-linux-linux-tests-before
-        path: target/nextest/ci*/junit.xml
-        if-no-files-found: ignore
-        retention-days: 1
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'linux-tests') }}
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
+  deps-apt-first:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
     env:
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
@@ -157,15 +175,13 @@ jobs:
       UV_LOCKED: 1
     permissions:
       contents: read
-  linux-tests-after:
-    timeout-minutes: 10
-    runs-on: depot-ubuntu-24.04-16
-    name: linux-tests / after
+    name: deps / apt-first
+    if: ${{ inputs.phase == 'warm' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-        ref: ${{ inputs.source }}
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
     - name: Record source revision
       shell: bash
       run: |-
@@ -173,24 +189,91 @@ jobs:
         test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
         echo "Measured source revision: $(git rev-parse HEAD)"
       env:
-        EXPECTED_SOURCE: ${{ inputs.source }}
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
     - name: Install Rust toolchain
       run: rustup toolchain install --profile minimal
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
     - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
       with:
-        prefix-key: uv-history-20261025-v1-after
+        prefix-key: uv-cache-apt-io-20261025-v1-deps
         key: ${{ hashFiles('Cargo.toml') }}
         profile: fast-build-nightly
         save-if: ${{ inputs.phase == 'seed' }}
-        cache-workspace-crates: 'true'
+        cache-workspace-crates: 'false'
+        add-job-id-key: 'false'
       name: Restore Rust cache
       id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
     - name: Record Rust cache availability
       if: ${{ inputs.phase == 'warm' }}
       shell: bash
       env:
         CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
-      run: 'echo "Rust cache exact hit: ${CACHE_HIT:-false}"'
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
     - name: Configure Python archive cache
       run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
     - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
@@ -204,41 +287,7 @@ jobs:
         uv python install
         # Warm the cache for Unix-only tests
         uv python install 3.12d 3.13d 3.13t 3.13td
-    - name: Install Linux test dependencies
-      run: |
-        # Try the next configured mirror after the first failed download.
-        cat /etc/apt/apt-mirrors.txt
-        printf '%s\n' \
-          'Acquire::Retries "0";' \
-          'Acquire::http::Timeout "10";' \
-          'Acquire::https::Timeout "10";' \
-          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
-        sudo apt install -y --no-install-recommends --allow-downgrades \
-          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
-    - name: Start gnome-keyring
-      run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
-    - name: Create btrfs filesystem
-      run: |
-        sudo apt install -y btrfs-progs
-        truncate -s 1G /tmp/btrfs.img
-        mkfs.btrfs /tmp/btrfs.img
-        sudo mkdir /btrfs
-        sudo mount -o loop /tmp/btrfs.img /btrfs
-        sudo chown "$(id -u):$(id -g)" /btrfs
-    - name: Create tmpfs filesystem
-      run: |
-        sudo mkdir /tmpfs
-        sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
-        sudo chown "$(id -u):$(id -g)" /tmpfs
-    - name: Create minix filesystem (low hardlink limit)
-      run: |
-        truncate -s 16M /tmp/minix.img
-        mkfs.minix /tmp/minix.img
-        sudo mkdir /minix
-        sudo mount -o loop /tmp/minix.img /minix
-        sudo chown "$(id -u):$(id -g)" /minix
-    - name: Cargo test
+    - name: Populate test artifacts
       env:
         UV_HTTP_RETRIES: 5
         RUST_BACKTRACE: 1
@@ -255,25 +304,11 @@ jobs:
           -Z checksum-freshness \
           --features test-python-patch,test-universal,native-auth,secret-service \
           --workspace \
-          --profile ci-linux
-    - name: Upload pending snapshots
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: pending-snapshots-linux-linux-tests-after
-        path: pending-snapshots/
-        if-no-files-found: ignore
-        include-hidden-files: true
-        retention-days: 1
-    - name: Upload JUnit results
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: junit-results-linux-linux-tests-after
-        path: target/nextest/ci*/junit.xml
-        if-no-files-found: ignore
-        retention-days: 1
-    if: ${{ (inputs.suite == 'all' || inputs.suite == 'linux-tests') }}
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
+  deps-restore-sync:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
     env:
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
@@ -284,3 +319,596 @@ jobs:
       UV_LOCKED: 1
     permissions:
       contents: read
+    name: deps / restore-sync
+    if: ${{ inputs.phase == 'warm' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Record source revision
+      shell: bash
+      run: |-
+        [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+        echo "Measured source revision: $(git rev-parse HEAD)"
+      env:
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      with:
+        prefix-key: uv-cache-apt-io-20261025-v1-deps
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-workspace-crates: 'false'
+        add-job-id-key: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Flush restored filesystem data
+      run: sync -f "$GITHUB_WORKSPACE"
+    - name: Probe IO after sync
+      shell: bash
+      env:
+        PROBE_POINT: after sync
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Populate test artifacts
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
+  full-restore-first:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+    name: full / restore-first
+    if: ${{ always() }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Record source revision
+      shell: bash
+      run: |-
+        [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+        echo "Measured source revision: $(git rev-parse HEAD)"
+      env:
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      with:
+        prefix-key: uv-cache-apt-io-20261025-v1-full
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-workspace-crates: 'true'
+        add-job-id-key: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Populate test artifacts
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
+  full-apt-first:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+    name: full / apt-first
+    if: ${{ inputs.phase == 'warm' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Record source revision
+      shell: bash
+      run: |-
+        [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+        echo "Measured source revision: $(git rev-parse HEAD)"
+      env:
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      with:
+        prefix-key: uv-cache-apt-io-20261025-v1-full
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-workspace-crates: 'true'
+        add-job-id-key: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Populate test artifacts
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
+  full-restore-sync:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: '3.12'
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+    permissions:
+      contents: read
+    name: full / restore-sync
+    if: ${{ inputs.phase == 'warm' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Record source revision
+      shell: bash
+      run: |-
+        [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+        echo "Measured source revision: $(git rev-parse HEAD)"
+      env:
+        EXPECTED_SOURCE: 6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596
+    - name: Install Rust toolchain
+      run: rustup toolchain install --profile minimal
+    - name: Probe IO before cache
+      shell: bash
+      env:
+        PROBE_POINT: before cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      with:
+        prefix-key: uv-cache-apt-io-20261025-v1-full
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.phase == 'seed' }}
+        cache-workspace-crates: 'true'
+        add-job-id-key: 'false'
+      name: Restore Rust cache
+      id: rust-cache
+    - name: Probe IO after cache
+      shell: bash
+      env:
+        PROBE_POINT: after cache
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Flush restored filesystem data
+      run: sync -f "$GITHUB_WORKSPACE"
+    - name: Probe IO after sync
+      shell: bash
+      env:
+        PROBE_POINT: after sync
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Record Rust cache availability
+      if: ${{ inputs.phase == 'warm' }}
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+      run: |-
+        echo "Rust cache exact hit: ${CACHE_HIT:-false}"
+        test "$CACHE_HIT" = true
+    - name: Configure Python archive cache
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+      with:
+        version: 0.13.5
+        checksum: f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+    - name: Install required Python versions
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+    - name: Probe IO before APT
+      shell: bash
+      env:
+        PROBE_POINT: before APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Install Linux test dependencies
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+        sudo apt install -y --no-install-recommends --allow-downgrades \
+          git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+    - name: Probe IO after APT
+      shell: bash
+      env:
+        PROBE_POINT: after APT
+      run: |
+        python3 - <<'PYTHON'
+        import json, os, re, time
+        from pathlib import Path
+        memory = {line.split(':')[0]: line.split(':')[1].strip() for line in Path('/proc/meminfo').read_text().splitlines() if line.split(':')[0] in {'MemAvailable', 'Dirty', 'Writeback', 'Cached'}}
+        vm = {key: int(value) for key, value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in {'nr_dirty', 'nr_writeback', 'pgpgin', 'pgpgout'}}
+        disks = [line.split() for line in Path('/proc/diskstats').read_text().splitlines() if re.fullmatch(r'(nvme[0-9]+n[0-9]+|[sv]d[a-z]+)', line.split()[2])]
+        print('IO probe: ' + json.dumps({'point': os.environ['PROBE_POINT'], 'monotonic': time.monotonic(), 'memory': memory, 'vm': vm, 'disks': disks, 'pressure': Path('/proc/pressure/io').read_text(), 'workspace_device': os.stat(os.environ['GITHUB_WORKSPACE']).st_dev, 'cargo_device': os.stat(Path.home() / '.cargo').st_dev}))
+        PYTHON
+    - name: Populate test artifacts
+      env:
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+        INSTA_UPDATE: new
+        INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+      run: |
+        uv run --only-group test cargo nextest run --locked \
+          --cargo-profile fast-build-nightly \
+          -Z panic-abort-tests \
+          -Z checksum-freshness \
+          --features test-python-patch,test-universal,native-auth,secret-service \
+          --workspace \
+          --profile ci-linux --no-run
+      if: ${{ inputs.phase == 'seed' }}
