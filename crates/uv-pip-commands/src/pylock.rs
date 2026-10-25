@@ -7,7 +7,10 @@ use anyhow::Context;
 use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
-use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
+use uv_configuration::{
+    BuildOptions, DependencyGroups, ExtrasSpecification, HashCheckingMode, RequirementsInput,
+    TargetTriple,
+};
 use uv_distribution_types::{RequiresPython, Resolution};
 use uv_lock::{PylockToml, PylockTomlError};
 use uv_normalize::{ExtraName, GroupName};
@@ -86,6 +89,27 @@ pub(crate) async fn read_pylock_toml(
         .with_context(|| format!("Not a valid `pylock.toml` file: {pylock}"))?;
 
     Ok((install_path, lock))
+}
+
+/// Check explicit selections against the publicly selectable names before expanding defaults.
+pub(crate) fn validate_pylock_selection(
+    lock: &PylockToml,
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroups,
+) -> anyhow::Result<()> {
+    for extra in extras.explicit_names() {
+        if !lock.extras.contains(extra) {
+            anyhow::bail!("Extra `{extra}` is not declared in the `pylock.toml` file");
+        }
+    }
+    for group in groups.explicit_names() {
+        if !lock.dependency_groups.contains(group) {
+            anyhow::bail!(
+                "Dependency group `{group}` is not listed in the `pylock.toml` file's `dependency-groups`"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Verify Python compatibility and convert a parsed [`PylockToml`] into a [`Resolution`] with its
