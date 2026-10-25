@@ -122,6 +122,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
@@ -154,6 +156,9 @@ jobs:
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
 
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
@@ -176,6 +181,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -183,16 +190,16 @@ jobs:
           version: "0.13.5"
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - name: "Check licenses"
-        run: uv run --only-dev cargo deny --all-features check licenses
+        run: uv run --only-dev cargo deny --locked --all-features check licenses
       - name: "Check sources"
-        run: uv run --only-dev cargo deny --all-features check sources
+        run: uv run --only-dev cargo deny --locked --all-features check sources
       - name: "Check workspace dependency features and build-script allowlist"
         run: uv run --no-project scripts/check-cargo-bans.py
       - name: "Check bans"
-        run: uv run --only-dev cargo deny --all-features check bans
+        run: uv run --only-dev cargo deny --locked --all-features check bans
       - name: "Check uv_build dependencies"
         run: |
-          uv run --only-dev cargo deny --manifest-path crates/uv-build/Cargo.toml --all-features check bans
+          uv run --only-dev cargo deny --locked --manifest-path crates/uv-build/Cargo.toml --all-features check bans
 
   hawk:
     timeout-minutes: 15
@@ -202,6 +209,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target/hawk"
@@ -225,6 +234,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -247,3 +258,20 @@ jobs:
           version: "0.13.5"
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - run: uv run --only-group check typos
+
+  cargo-shim:
+    name: "Cargo shim on ${{ matrix.os }}"
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Set up Dev Drive"
+        if: runner.os == 'Windows'
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - uses: $/.github/actions/setup-cargo
+      - run: python scripts/test-cargo-shim.py

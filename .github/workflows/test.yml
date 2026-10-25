@@ -36,6 +36,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
@@ -157,6 +159,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
@@ -262,6 +266,9 @@ jobs:
       - name: Copy Git Repo to Dev Drive
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
