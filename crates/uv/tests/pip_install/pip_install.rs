@@ -7990,17 +7990,7 @@ async fn install_package_basic_auth_from_keyring() {
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -8010,7 +8000,7 @@ async fn install_package_basic_auth_from_keyring() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -8046,17 +8036,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
         .mount(&server)
         .await;
 
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-index")
@@ -8068,7 +8048,7 @@ async fn install_requirements_basic_auth_from_keyring_trailing_whitespace() {
             EnvVars::KEYRING_TEST_CREDENTIALS,
             format!(r#"{{"{}": {{"public": "heron \t"}}}}"#, server.address()),
         )
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/requirements.txt
@@ -8086,17 +8066,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -8106,7 +8076,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "foobar"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -8127,17 +8097,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -8147,7 +8107,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"other": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
