@@ -42,6 +42,7 @@ pub(super) struct CollectedEnvironment {
 /// outside the selected resolution; exact synchronization removes them.
 pub(super) async fn collect_environment(
     target: InstallTarget<'_>,
+    metadata: &Metadata,
     venv: &PythonEnvironment,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -53,6 +54,13 @@ pub(super) async fn collect_environment(
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
 ) -> Result<CollectedEnvironment> {
+    if sync.is_none() && !target.lock().conflicts().is_empty() {
+        let marker_env = resolution_markers(None, None, venv.interpreter());
+        return inspect_environment(venv, |dist| {
+            metadata.installed_package_node_id(target.lock(), dist, &marker_env)
+        });
+    }
+
     let (extras, groups) = target_selection(target);
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
 
@@ -107,7 +115,8 @@ pub(super) async fn collect_environment(
         .await?;
     }
 
-    inspect_environment(venv, &package_ids.unwrap_or_default())
+    let package_ids = package_ids.unwrap_or_default();
+    inspect_environment(venv, |dist| package_ids.get(dist.name()).cloned())
 }
 
 /// Select the package IDs that can own modules in the target resolution.
@@ -147,16 +156,16 @@ fn selected_package_ids(
 /// Collect installed distributions and associate their modules with selected or unmanaged package IDs.
 fn inspect_environment(
     venv: &PythonEnvironment,
-    package_ids: &BTreeMap<PackageName, String>,
+    package_id: impl Fn(&InstalledDist) -> Option<String>,
 ) -> Result<CollectedEnvironment> {
     let site_packages = SitePackages::from_environment(venv)?;
     let mut packages = BTreeMap::new();
     let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
     for dist in site_packages {
-        let selected_package_id = package_ids.get(dist.name());
-        let package_id = selected_package_id
-            .cloned()
-            .unwrap_or_else(|| Metadata::unmanaged_package_node_id(&dist));
+        let selected_package_id = package_id(&dist);
+        let is_managed = selected_package_id.is_some();
+        let package_id =
+            selected_package_id.unwrap_or_else(|| Metadata::unmanaged_package_node_id(&dist));
         let dist = match packages.entry(package_id.clone()) {
             Entry::Vacant(entry) => entry.insert(dist),
             Entry::Occupied(entry) => {
@@ -172,7 +181,7 @@ fn inspect_environment(
         // need to handle them specially.
         let modules = match dist.read_modules(venv.interpreter().extension_suffixes()) {
             Ok(modules) => modules,
-            Err(err) if selected_package_id.is_none() => {
+            Err(err) if !is_managed => {
                 // Incomplete module metadata in an unmanaged package should not prevent
                 // inventory collection or module discovery for other packages.
                 tracing::warn!(

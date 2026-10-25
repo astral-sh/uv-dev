@@ -3150,6 +3150,45 @@ fn check_with_declared_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Checking a selected extra can inspect metadata containing mutually exclusive extras.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_conflicting_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+
+        [project.optional-dependencies]
+        a = ["idna==3.9"]
+        b = ["idna==3.10"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+    "#})?;
+
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str("import idna\n")?;
+    context.sync().arg("--extra").arg("a").assert().success();
+    uv_snapshot!(context.filters(), context.check()
+        .arg("--preview-features").arg("check-command")
+        .arg("--extra").arg("a")
+        .arg("--ty-version").arg("0.0.90"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+    ");
+
+    Ok(())
+}
+
 /// Type-check first-party extension stubs without building or installing the project.
 #[test]
 fn check_no_install_project() -> Result<()> {
