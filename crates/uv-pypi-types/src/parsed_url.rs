@@ -111,7 +111,7 @@ impl UnnamedRequirementUrl for VerbatimParsedUrl {
             verbatim_path.extension().is_none()
         };
         let url = verbatim.to_url();
-        let install_path = verbatim.as_path()?.into_boxed_path();
+        let install_path = verbatim_path.into_boxed_path();
         let parsed_url = if is_dir {
             ParsedUrl::Directory(ParsedDirectoryUrl {
                 url,
@@ -143,7 +143,7 @@ impl UnnamedRequirementUrl for VerbatimParsedUrl {
             verbatim_path.extension().is_none()
         };
         let url = verbatim.to_url();
-        let install_path = verbatim.as_path()?.into_boxed_path();
+        let install_path = verbatim_path.into_boxed_path();
         let parsed_url = if is_dir {
             ParsedUrl::Directory(ParsedDirectoryUrl {
                 url,
