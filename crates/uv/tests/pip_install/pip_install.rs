@@ -14323,6 +14323,25 @@ fn install_gitoxide_submodule_without_git() {
     ");
 }
 
+#[test]
+#[cfg(feature = "test-git")]
+fn install_gitoxide_lfs_without_git() {
+    let context = uv_test::test_context!("3.13");
+    context
+        .pip_install()
+        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .env(EnvVars::UV_GIT_LFS, "true")
+        .env(EnvVars::PATH, venv_bin_path(&context.venv))
+        .arg("git+https://github.com/astral-sh/test-lfs-repo.git@261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        .assert()
+        .success();
+    context
+        .python_command()
+        .args(["-c", "import test_lfs_repo.lfs_module"])
+        .assert()
+        .success();
+}
+
 /// Modify a project to use a `src` layout.
 #[test]
 fn change_layout_src() -> Result<()> {

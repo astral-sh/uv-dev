@@ -243,13 +243,8 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(
-        url: SafeUrl,
-        with_lfs: bool,
-        disable_ssl: bool,
-        offline: bool,
-    ) -> Result<Self> {
-        let backend = Backend::for_remote(&url, with_lfs, disable_ssl)?;
+    pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Result<Self> {
+        let backend = Backend::for_remote(&url, disable_ssl)?;
         Ok(Self {
             url,
             backend,
@@ -297,8 +292,9 @@ impl GitRemote {
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl)
-                        .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
+                    let lfs_ready =
+                        fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl, self.offline)
+                            .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
                 return Ok((db, rev));
@@ -321,7 +317,7 @@ impl GitRemote {
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl)
+                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl, self.offline)
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -397,6 +393,9 @@ impl GitDatabase {
 
     /// Checks if `oid` contains necessary LFS artifacts in this database.
     pub(crate) fn contains_lfs_artifacts(&self, oid: GitOid) -> bool {
+        if self.repo.backend == Backend::Gitoxide {
+            return crate::gitoxide::lfs::contains(&self.repo.path, oid).unwrap_or(false);
+        }
         self.repo.lfs_fsck_objects(&format!("{oid}^0"))
     }
 
@@ -451,13 +450,14 @@ impl GitCheckout {
                 revision,
                 original_remote_url,
                 database.remote.offline,
+                database.lfs_ready == Some(true),
             )
             .map_err(|err| redact_git_error(err, original_remote_url))?;
             paths::create(into.with_extension(CHECKOUT_READY_EXTENSION))?;
-            return Ok(Self::new(
-                revision,
-                GitRepository::open(into, Backend::Gitoxide)?,
-            ));
+            return Ok(
+                Self::new(revision, GitRepository::open(into, Backend::Gitoxide)?)
+                    .with_lfs_ready(database.lfs_ready),
+            );
         }
 
         // A local clone can hardlink object files from the cache.
@@ -872,7 +872,21 @@ fn fetch_lfs(
     url: &SafeUrl,
     revision: &GitOid,
     disable_ssl: bool,
+    offline: bool,
 ) -> Result<bool> {
+    if repo.backend == Backend::Gitoxide {
+        if crate::gitoxide::lfs::fetch(&repo.path, *revision, url, offline)? {
+            return Ok(true);
+        }
+        debug!("Using Git LFS for repository-specific transfer settings");
+        repo.backend = Backend::Cli;
+    }
+    if offline {
+        if repo.lfs_fsck_objects(revision.as_str()) {
+            return Ok(true);
+        }
+        return Err(GitError::TransportNotAllowed.into());
+    }
     let mut cmd = if let Ok(lfs) = GIT_LFS.as_ref() {
         debug!("Fetching Git LFS objects");
         lfs.clone()

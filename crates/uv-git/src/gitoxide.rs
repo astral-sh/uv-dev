@@ -10,6 +10,8 @@ use uv_static::EnvVars;
 
 use crate::git::GitError;
 
+pub(crate) mod lfs;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
     Cli,
@@ -17,7 +19,7 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    pub(crate) fn for_remote(url: &SafeUrl, with_lfs: bool, disable_ssl: bool) -> Result<Self> {
+    pub(crate) fn for_remote(url: &SafeUrl, disable_ssl: bool) -> Result<Self> {
         match std::env::var_os(EnvVars::UV_GIT_BACKEND).as_deref() {
             None => Ok(Self::Cli),
             Some(value) if value == "cli" => Ok(Self::Cli),
@@ -25,7 +27,6 @@ impl Backend {
                 if matches!(url.scheme(), "http" | "https")
                     && !url.as_str().contains('?')
                     && url.fragment().is_none()
-                    && !with_lfs
                     && !disable_ssl
                 {
                     Ok(Self::Gitoxide)
@@ -176,6 +177,7 @@ pub(crate) fn checkout(
     revision: uv_git_types::GitOid,
     url: &SafeUrl,
     offline: bool,
+    with_lfs: bool,
 ) -> Result<()> {
     let source = open(database)?;
     let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
@@ -222,6 +224,9 @@ pub(crate) fn checkout(
     )?;
     repo.committer_or_set_generic_fallback()?;
     repo.reset(commit, gix::repository::reset::ResetMode::Hard)?;
+    if with_lfs {
+        lfs::checkout(&source, &repo, commit)?;
+    }
     if let Some(modules) = repo.submodules()? {
         for module in modules {
             if module.index_id()?.is_some() {
