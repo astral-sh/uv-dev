@@ -20,7 +20,7 @@ use uv_resolver_types::PackageRole;
 use uv_types::HashStrategy;
 
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
-use crate::preferences::Preferences;
+use crate::preferences::{PreferenceHashes, Preferences};
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode, ResolverOutput};
 use crate::resolution_mode::ResolutionStrategy;
 use crate::resolver::{
@@ -38,7 +38,7 @@ pub(crate) struct ResolutionGraphBuilder<'a> {
     diagnostics: Vec<ResolutionDiagnostic>,
     project: Option<&'a PackageName>,
     workspace_members: &'a BTreeSet<PackageName>,
-    preferences: &'a Preferences,
+    preference_hashes: PreferenceHashes<'a>,
     hasher: &'a HashStrategy,
     index: &'a InMemoryIndex,
     git: &'a GitResolver,
@@ -64,7 +64,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
             diagnostics: Vec::new(),
             project,
             workspace_members,
-            preferences,
+            preference_hashes: preferences.hashes(),
             hasher,
             index,
             git,
@@ -114,7 +114,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
             let node = add_version(
                 &mut self.graph,
                 &mut self.diagnostics,
-                self.preferences,
+                &self.preference_hashes,
                 self.hasher,
                 self.index,
                 package,
@@ -277,7 +277,7 @@ fn add_edge(
 fn add_version(
     graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
     diagnostics: &mut Vec<ResolutionDiagnostic>,
-    preferences: &Preferences,
+    preference_hashes: &PreferenceHashes<'_>,
     hasher: &HashStrategy,
     in_memory: &InMemoryIndex,
     package: &ResolutionPackage,
@@ -296,7 +296,7 @@ fn add_version(
         url.as_deref(),
         &selected.hashes_id(),
         selected.version(),
-        preferences,
+        preference_hashes,
         hasher,
         in_memory,
     );
@@ -361,12 +361,12 @@ fn get_hashes(
     url: Option<&VerbatimParsedUrl>,
     metadata_id: &DistributionId,
     version: &Version,
-    preferences: &Preferences,
+    preference_hashes: &PreferenceHashes<'_>,
     hasher: &HashStrategy,
     in_memory: &InMemoryIndex,
 ) -> HashDigests {
     // 1. Look for hashes from the lockfile.
-    if let Some(digests) = preferences.match_hashes(name, version) {
+    if let Some(digests) = preference_hashes.get(name, version) {
         if !digests.is_empty() {
             return HashDigests::from(digests);
         }
