@@ -16,6 +16,8 @@ mod ecosystem;
 
 mod help;
 
+mod installed_metadata;
+
 mod network;
 
 #[cfg(feature = "test-pypi")]
