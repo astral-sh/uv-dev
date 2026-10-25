@@ -81,6 +81,9 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+#[cfg(target_os = "linux")]
+mod private_overlay;
+
 /// GitHub Gist API response structure
 #[derive(serde::Deserialize)]
 struct GistResponse {
@@ -479,6 +482,8 @@ pub async fn run(
     // Discover and sync the base environment.
     let is_script = script_interpreter.is_some();
     let temp_dir;
+    #[cfg(target_os = "linux")]
+    let mut private_mount = None;
     let base_interpreter = if let Some(script_interpreter) = script_interpreter {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if no_project {
@@ -619,6 +624,17 @@ pub async fn run(
             let extras = extras.with_defaults(default_extras);
 
             let private = preview.is_enabled(PreviewFeature::RunPrivateEnvironment);
+            #[cfg(target_os = "linux")]
+            let try_prepared = private
+                && command.is_some()
+                && !cache.is_temporary()
+                && python_platform.is_none()
+                && settings.reinstall.is_none()
+                && !settings.compile_bytecode
+                && settings.resolver.link_mode != LinkMode::Copy
+                && private_overlay::supported();
+            #[cfg(not(target_os = "linux"))]
+            let try_prepared = false;
             if private {
                 if no_sync {
                     bail!("`run-private-environment` requires environment synchronization");
@@ -800,7 +816,7 @@ pub async fn run(
                 );
 
                 let install_options = InstallOptions::default();
-                let roots = if try_cached {
+                let resolution = if try_cached || try_prepared {
                     let (resolution, _) = resolve_locked_environment(
                         target,
                         &venv,
@@ -810,8 +826,13 @@ pub async fn run(
                         &settings.resolver.build_options,
                         &install_options,
                     )?;
+                    Some(resolution)
+                } else {
+                    None
+                };
+                let roots = if let Some(resolution) = resolution.as_ref().filter(|_| try_cached) {
                     let roots = cached_wheel_roots(
-                        WheelSelection::Locked(&resolution),
+                        WheelSelection::Locked(resolution),
                         venv.interpreter(),
                         &settings.resolver,
                         &cache,
@@ -823,7 +844,7 @@ pub async fn run(
                         store_credentials_from_target(target, &client)?;
                         maybe_check_malware(
                             &target,
-                            &resolution,
+                            resolution,
                             &client,
                             &concurrency,
                             &cache,
@@ -836,6 +857,60 @@ pub async fn run(
                 } else {
                     None
                 };
+                #[cfg(target_os = "linux")]
+                let prepared = if try_prepared
+                    && let Some(resolution) = &resolution
+                    && private_overlay::eligible(resolution, &cache)
+                {
+                    let client = client_builder
+                        .clone()
+                        .keyring(settings.resolver.keyring_provider);
+                    store_credentials_from_target(target, &client)?;
+                    let interpreter =
+                        CachedEnvironment::base_interpreter(venv.interpreter(), &cache)?;
+                    let lower = CachedEnvironment::from_locked_resolution(
+                        resolution,
+                        result
+                            .lock()
+                            .build_constraints(project.workspace().install_path()),
+                        &interpreter,
+                        &settings,
+                        &malware_settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        printer,
+                        preview,
+                        private_overlay::open_lower,
+                    )
+                    .await
+                    .map_err(UvError::from)?;
+                    match private_overlay::PrivateOverlay::new(&cache, &lower, &venv) {
+                        Ok(mount) => {
+                            debug!(
+                                "Using a prepared private environment at {}",
+                                lower.display()
+                            );
+                            private_mount = Some(mount);
+                            true
+                        }
+                        Err(err) => {
+                            debug!("Falling back to a private wheel installation: {err:#}");
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                #[cfg(not(target_os = "linux"))]
+                let prepared = false;
                 if let Some(roots) = roots {
                     debug!("Running from {} cached wheels", roots.len());
                     let layout = venv.interpreter().layout();
@@ -843,7 +918,7 @@ pub async fn run(
                         uv_install_wheel::install_wheel_entrypoints(&layout, root)?;
                     }
                     set_overlay(&venv, &roots, std::iter::empty())?;
-                } else {
+                } else if !prepared {
                     let _project_lock = if try_cached && !isolated {
                         venv = project_environment().await?;
                         venv.lock()
@@ -1288,7 +1363,12 @@ pub async fn run(
     };
 
     debug!("Running `{command}`");
-    let mut process = command.as_command(interpreter);
+    let installed_scripts = interpreter.scripts();
+    #[cfg(target_os = "linux")]
+    let installed_scripts = private_mount
+        .as_ref()
+        .map_or(installed_scripts, |mount| mount.scripts.as_path());
+    let mut process = command.as_command(interpreter, installed_scripts);
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1341,6 +1421,10 @@ pub async fn run(
     // Spawn and wait for completion
     // Standard input, output, and error streams are all inherited
     // TODO(zanieb): Throw a nicer error message if the command is not found
+    #[cfg(target_os = "linux")]
+    if let Some(mount) = private_mount {
+        mount.configure(&mut process);
+    }
     let handle = process
         .spawn()
         .with_context(|| format!("Failed to spawn: {}", command.display_executable()))?;
@@ -1934,7 +2018,7 @@ impl RunCommand {
     }
 
     /// Convert a [`RunCommand`] into a [`Command`].
-    fn as_command(&self, interpreter: &Interpreter) -> Command {
+    fn as_command(&self, interpreter: &Interpreter, installed_scripts: &Path) -> Command {
         match self {
             Self::Python(args) => {
                 let mut process = Command::new(interpreter.sys_executable());
@@ -1943,11 +2027,9 @@ impl RunCommand {
             }
             Self::PythonPackage(target, path, args) => {
                 let name = PathBuf::from(target).with_extension(std::env::consts::EXE_EXTENSION);
-                let entrypoint = interpreter.scripts().join(name);
-
                 // If the target is an installed, executable script — prefer that
-                if uv_fs::which::is_executable(&entrypoint) {
-                    let mut process = Command::new(entrypoint);
+                if uv_fs::which::is_executable(&installed_scripts.join(&name)) {
+                    let mut process = Command::new(interpreter.scripts().join(name));
                     process.args(args);
                     process
                 // Otherwise, invoke `python <module>`

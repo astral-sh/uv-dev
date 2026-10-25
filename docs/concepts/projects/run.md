@@ -133,17 +133,28 @@ environment:
 preview-features = ["run-private-environment"]
 ```
 
-For example, `uv run pytest` installs the selected dependencies into a fresh environment, even when
-the project already has a `.venv`. uv requests copy-on-write file clones from the filesystem and
-uses ordinary copies when cloning is unavailable or copying is requested. Edits to installed wheel
-files are visible to other processes using the same temporary environment. Those edits disappear
-when the run ends, leaving the original installed files and cached wheels intact.
+For example, `uv run pytest` starts with its own temporary environment, even when the project
+already has a `.venv`. Edits to installed wheel files are visible to other processes using that
+environment and disappear when the run ends. When installing a private copy of the selected
+wheels, uv requests filesystem clones and uses ordinary copies when cloning is unavailable or
+copying is requested.
 
 uv updates the lockfile as usual. Use `--locked` to require an up-to-date lockfile or `--frozen` to
 run with the versions it already records. This preview takes precedence over `run-cached-wheels`. It
 requires synchronization and currently rejects `--no-sync` and additional run requirements
 (`--with`, `--with-editable`, `--with-requirements`, and `--with-cached-wheel`). Files in the
 project working directory and editable source trees remain writable in their usual locations.
+
+On Linux, when uv has effective `CAP_SYS_ADMIN` and can mount OverlayFS in a private mount
+namespace, it can reuse a prepared environment for repeated private runs. Each run using a
+prepared environment gets its own temporary path and a writable in-memory layer. On the first
+eligible run, uv prepares the selected wheels. Later eligible runs with the same interpreter and
+wheel selection can reuse those files, including installed console scripts.
+
+This optimization requires a persistent cache. Every distribution selected for installation must
+be a registry wheel with a recorded hash in the lockfile. Runs that need to build or refresh
+packages, compile bytecode, or use `--link-mode copy` use the regular private installation.
+uv also uses that installation when the runner cannot create the mounts.
 
 ## Signal handling
 

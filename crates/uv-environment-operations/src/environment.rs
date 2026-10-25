@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tracing::debug;
 
 use crate::{
@@ -13,12 +15,13 @@ use uv_settings::ResolverInstallerSettings;
 use uv_virtualenv::UpgradePolicy;
 
 use uv_cache::{Cache, CacheBucket};
-use uv_cache_info::CacheInfo;
+use uv_cache_info::{CacheInfo, Timestamp};
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
+use uv_fs::link::LinkMode;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
@@ -114,20 +117,23 @@ impl CachedEnvironment {
             cache,
             printer,
             preview,
+            |root| Ok(Self(PythonEnvironment::from_root(root, cache)?)),
         )
         .await
     }
 
-    /// Get or create a [`CachedEnvironment`] from a lock-backed [`Resolution`].
+    /// Get or create a cached environment from a lock-backed [`Resolution`].
     ///
     /// Prefer [`Self::from_spec`] when starting from unresolved requirements; it selects the base
     /// interpreter and resolves the requirements for that interpreter before delegating here.
     ///
-    /// This method checks `resolution` for malware when enabled and verifies its recorded hashes.
-    /// Both checks run before cache lookup. `interpreter` must be the base interpreter for which
+    /// This method checks `resolution` for malware when enabled and includes its recorded hashes
+    /// in the cache key. On a cache miss, the installer verifies any recorded hashes.
+    /// `interpreter` must be the base interpreter for which
     /// `resolution` was produced. In particular, callers materializing a universal lock must derive
-    /// its markers and tags from the same interpreter.
-    pub async fn from_locked_resolution(
+    /// its markers and tags from the same interpreter. `open` reads the completed environment
+    /// on both cache hits and fresh installations.
+    pub async fn from_locked_resolution<T>(
         resolution: &Resolution,
         build_constraints: Constraints,
         interpreter: &Interpreter,
@@ -141,7 +147,8 @@ impl CachedEnvironment {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+        open: impl Fn(PathBuf) -> Result<T, EnvironmentError>,
+    ) -> Result<T, EnvironmentError> {
         let malware_check_client_builder = client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider);
@@ -170,11 +177,12 @@ impl CachedEnvironment {
             cache,
             printer,
             preview,
+            open,
         )
         .await
     }
 
-    async fn from_resolution(
+    async fn from_resolution<T>(
         resolution: &Resolution,
         hash_strategy: HashStrategy,
         build_constraints: Constraints,
@@ -188,7 +196,8 @@ impl CachedEnvironment {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+        open: impl Fn(PathBuf) -> Result<T, EnvironmentError>,
+    ) -> Result<T, EnvironmentError> {
         // Hash the resolution by hashing the generated lockfile.
         let resolution_hash = {
             let mut distributions = resolution
@@ -229,20 +238,47 @@ impl CachedEnvironment {
         // the cached environment, it would be shared across all projects that use the same
         // interpreter and the same cached dependencies.
         //
-        // TODO(zanieb): We should include the version of the base interpreter in the hash, so if
-        // the interpreter at the canonicalized path changes versions we construct a new
-        // environment.
-        let interpreter_hash =
-            cache_digest(&canonicalize_executable(interpreter.sys_executable())?);
+        // TODO(zanieb): Include the base interpreter version in shared environment keys too.
+        let executable = canonicalize_executable(interpreter.sys_executable())?;
+        let private = matches!(settings.resolver.link_mode, LinkMode::Private { .. });
+        let interpreter_hash = if private {
+            // A private run mounts a relocatable lower tree that other commands must never execute
+            // directly. Replacing Python at the same path also requires a new lower tree.
+            hash_digest(&(
+                "private-run-v1",
+                &executable,
+                interpreter.key(),
+                Timestamp::from_path(&executable)?,
+                installer_metadata,
+            ))
+        } else {
+            cache_digest(&executable)
+        };
 
         // Search in the content-addressed cache.
-        let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
-
-        if let Ok(root) = cache.resolve_link(cache_entry.path()) {
-            if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                return Ok(Self(environment));
-            }
+        let cache_entry = cache.entry(
+            CacheBucket::Environments,
+            interpreter_hash,
+            &resolution_hash,
+        );
+        let cached = || {
+            let root = cache.resolve_link(cache_entry.path()).ok()?;
+            open(root).ok()
+        };
+        if let Some(environment) = cached() {
+            return Ok(environment);
         }
+        // Concurrent cold private runs should publish a single completed lower tree for this key.
+        let _lock = if private {
+            let lock = cache_entry.with_file(format!("{resolution_hash}.lock"));
+            let guard = lock.lock().await.map_err(anyhow::Error::from)?;
+            if let Some(environment) = cached() {
+                return Ok(environment);
+            }
+            Some(guard)
+        } else {
+            None
+        };
 
         // Create the environment in the cache, then relocate it to its content-addressed location.
         let temp_dir = cache.venv_dir()?;
@@ -279,7 +315,7 @@ impl CachedEnvironment {
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
         let root = cache.archive(&id);
 
-        Ok(Self(PythonEnvironment::from_root(root, cache)?))
+        open(root)
     }
 
     /// Return any mutable cache info that should invalidate a cached environment for a given
