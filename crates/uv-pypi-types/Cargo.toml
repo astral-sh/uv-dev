@@ -25,6 +25,7 @@ uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true, features = ["rkyv"] }
 uv-redacted = { workspace = true }
 uv-small-str = { workspace = true }
+uv-warnings = { workspace = true }
 
 astral-mail-headers = { workspace = true }
 hashbrown = { workspace = true }

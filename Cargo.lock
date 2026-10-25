@@ -7450,6 +7450,7 @@ dependencies = [
  "uv-pep508",
  "uv-redacted",
  "uv-small-str",
+ "uv-warnings",
 ]
 
 [[package]]
