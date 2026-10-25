@@ -44,7 +44,7 @@ use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
-use uv_warnings::{warn_user, warn_user_once};
+use uv_warnings::{warn_user, warn_user_once, warn_user_once_with_chain};
 use uv_workspace::{ProjectEnvironmentSelection, Workspace, WorkspaceCache};
 
 use crate::install_target::{InstallTarget, PackageSelection};
@@ -519,7 +519,11 @@ pub fn update_project_environment_link(
     };
 
     if let Err(err) = uv_fs::write_atomic_sync(&link, target.as_bytes()) {
-        report_error(format_args!("Failed to write the environment path: {err}"));
+        let error = anyhow::Error::from(err).context("Failed to write the environment path");
+        match link_error_reporting {
+            LinkErrorReporting::User => warn_user_once_with_chain!(error.as_ref()),
+            LinkErrorReporting::Log => warn!("{error:#}"),
+        }
         return false;
     }
 
