@@ -270,7 +270,7 @@ mod tests {
                 cache: Cache::temp()?,
                 installations: ManagedPythonInstallations::from_settings(Some(
                     StateStore::temp()?.bucket(StateBucket::ManagedPython),
-                ))?,
+                )),
                 search_path: None,
                 workdir,
             })
