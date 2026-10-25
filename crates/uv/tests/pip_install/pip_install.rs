@@ -15636,10 +15636,10 @@ fn pep_751_rejects_undeclared_extra() -> Result<()> {
     "#,
     )?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview").arg("--dry-run").arg("--extra").arg("reprot").arg("-r").arg("pylock.toml"), @"
+        .arg("--preview").arg("--dry-run").arg("--extra").arg("reports").arg("-r").arg("pylock.toml"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Extra `reprot` is not declared in the `pylock.toml` file
+    error: Extra `reports` is not declared in the `pylock.toml` file
     ");
     Ok(())
 }
