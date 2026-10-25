@@ -182,24 +182,13 @@ jobs:
 
           if jq --exit-status '.state == "closed"' \
             "$RUNNER_TEMP/bug-regression-pull-request.json" > /dev/null; then
-            gh api repos/astral-sh/uv/pulls \
-              --method GET \
-              --raw-field state=all \
-              --raw-field head="astral-sh:$PARENT_HEAD_REF" \
-              --raw-field base=main \
-              > "$RUNNER_TEMP/promoted-regression-pull-requests.json"
-            if ! jq --exit-status \
-              --arg head_ref "$PARENT_HEAD_REF" \
-              --arg head_sha "$PARENT_HEAD_SHA" '
-                length == 1
-                and (.[0].state == "open" or .[0].merged_at != null)
-                and .[0].base.ref == "main"
-                and .[0].base.repo.full_name == "astral-sh/uv"
-                and .[0].head.repo.full_name == "astral-sh/uv"
-                and .[0].head.ref == $head_ref
-                and .[0].head.sha == $head_sha
-              ' "$RUNNER_TEMP/promoted-regression-pull-requests.json" > /dev/null; then
-              echo "The closed regression-test pull request was not promoted at its verified head." >&2
+            bash agents/scripts/find-pull-request-promotion.sh astral-sh/uv-dev \
+              "$pull_request_number" "$PARENT_HEAD_REF" "$PARENT_HEAD_SHA" \
+              > "$RUNNER_TEMP/promoted-regression-pull-request.json"
+            if ! jq --exit-status '
+              . != null and (.state == "open" or .merged_at != null) and .base.ref == "main"
+            ' "$RUNNER_TEMP/promoted-regression-pull-request.json" > /dev/null; then
+              echo "The closed regression-test pull request does not have a usable upstream promotion." >&2
               exit 1
             fi
           fi
@@ -526,24 +515,13 @@ jobs:
 
           if jq --exit-status '.state == "closed"' \
             "$RUNNER_TEMP/bug-regression-pull-request.json" > /dev/null; then
-            gh api repos/astral-sh/uv/pulls \
-              --method GET \
-              --raw-field state=all \
-              --raw-field head="astral-sh:$PARENT_HEAD_REF" \
-              --raw-field base=main \
-              > "$RUNNER_TEMP/promoted-regression-pull-requests.json"
-            if ! jq --exit-status \
-              --arg head_ref "$PARENT_HEAD_REF" \
-              --arg head_sha "$PARENT_HEAD_SHA" '
-                length == 1
-                and (.[0].state == "open" or .[0].merged_at != null)
-                and .[0].base.ref == "main"
-                and .[0].base.repo.full_name == "astral-sh/uv"
-                and .[0].head.repo.full_name == "astral-sh/uv"
-                and .[0].head.ref == $head_ref
-                and .[0].head.sha == $head_sha
-              ' "$RUNNER_TEMP/promoted-regression-pull-requests.json" > /dev/null; then
-              echo "The closed regression-test pull request was not promoted at its verified head." >&2
+            bash agents/scripts/find-pull-request-promotion.sh astral-sh/uv-dev \
+              "$pull_request_number" "$PARENT_HEAD_REF" "$PARENT_HEAD_SHA" \
+              > "$RUNNER_TEMP/promoted-regression-pull-request.json"
+            if ! jq --exit-status '
+              . != null and (.state == "open" or .merged_at != null) and .base.ref == "main"
+            ' "$RUNNER_TEMP/promoted-regression-pull-request.json" > /dev/null; then
+              echo "The closed regression-test pull request does not have a usable upstream promotion." >&2
               exit 1
             fi
           fi

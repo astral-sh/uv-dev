@@ -2,6 +2,11 @@ name: Rebase conflicted pull request
 
 on:
   workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      STS_API_URL:
+        required: false
     inputs:
       number:
         required: true
@@ -30,7 +35,7 @@ env:
 
 jobs:
   rebase:
-    name: "Rebase pull request #${{ inputs.number }}"
+    name: "Rebase ${{ github.repository }}#${{ inputs.number }}"
     runs-on: depot-ubuntu-24.04-4
     environment:
       name: automations
@@ -76,6 +81,7 @@ jobs:
       - name: Prepare pull request branch
         id: prepare
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ inputs.base-ref }}
           BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
           HEAD_REF: ${{ inputs.head-ref }}
@@ -86,7 +92,8 @@ jobs:
           cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
           cp agents/prompts/rebase-pull-request.md "$RUNNER_TEMP/rebase-pull-request.md"
 
-          git fetch --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch \
+            --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
           current_head=$(git rev-parse 'FETCH_HEAD^{commit}')
           if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "The pull request head changed; refusing to rebase a stale revision." >&2
@@ -160,7 +167,7 @@ jobs:
           retention-days: 1
 
   push:
-    name: "Push rebased pull request #${{ inputs.number }}"
+    name: "Push rebased ${{ github.repository }}#${{ inputs.number }}"
     needs: rebase
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment:
