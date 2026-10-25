@@ -17,6 +17,7 @@ use rustc_hash::FxHashMap;
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
     Index, IndexCapabilities, IndexLocations, IndexMetadata, IndexUrl, RequiresPython,
+    SettingSource,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
@@ -1219,10 +1220,18 @@ impl PubGrubReportFormatter<'_> {
 
         // Add hints due to the package being entirely unavailable.
         match unavailable_packages.get(name) {
-            Some(UnavailablePackage::NoIndex) if no_find_links => {
-                hints.insert(PubGrubHint::NoIndex);
+            Some(UnavailablePackage::NoIndex) => {
+                if no_find_links {
+                    hints.insert(PubGrubHint::NoIndex);
+                }
+                hints.extend(
+                    index_locations
+                        .no_index_sources()
+                        .indirect_sources()
+                        .cloned()
+                        .map(|source| PubGrubHint::NoIndexSource { source }),
+                );
             }
-            Some(UnavailablePackage::NoIndex) => {}
             Some(UnavailablePackage::Offline) => {
                 hints.insert(PubGrubHint::Offline);
             }
@@ -1534,6 +1543,8 @@ pub enum PubGrubHint {
     /// Requirements were unavailable due to lookups in the index being disabled and no extra
     /// index was provided via `--find-links`
     NoIndex,
+    /// An indirect declaration disabled index lookups for an unavailable package.
+    NoIndexSource { source: SettingSource },
     /// A package was not found in the registry, but network access was disabled.
     Offline,
     /// Metadata for a package could not be parsed.
@@ -1720,6 +1731,9 @@ enum PubGrubHintCore {
         package: PackageName,
     },
     NoIndex,
+    NoIndexSource {
+        source: SettingSource,
+    },
     Offline,
     InvalidPackageMetadata {
         package: PackageName,
@@ -1807,6 +1821,7 @@ impl From<PubGrubHint> for PubGrubHintCore {
                 Self::BuildPrereleaseRequested { package }
             }
             PubGrubHint::NoIndex => Self::NoIndex,
+            PubGrubHint::NoIndexSource { source } => Self::NoIndexSource { source },
             PubGrubHint::Offline => Self::Offline,
             PubGrubHint::InvalidPackageMetadata { package, .. } => {
                 Self::InvalidPackageMetadata { package }
@@ -1953,6 +1968,9 @@ impl std::fmt::Display for PubGrubHint {
                     "Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `{}`)",
                     "--find-links <uri>".green(),
                 )
+            }
+            Self::NoIndexSource { source } => {
+                write!(f, "`--no-index` was enabled by {source}")
             }
             Self::Offline => {
                 write!(
