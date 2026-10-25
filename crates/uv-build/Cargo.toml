@@ -11,6 +11,7 @@ license = { workspace = true }
 
 [dependencies]
 uv-build-backend = { workspace = true }
+uv-errors = { workspace = true }
 uv-logging = { workspace = true }
 uv-preview = { workspace = true }
 uv-version = { workspace = true }
@@ -20,6 +21,11 @@ anstream = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+fs-err = { workspace = true }
+insta = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
