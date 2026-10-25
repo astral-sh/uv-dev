@@ -48,6 +48,25 @@ contain a `pyproject.toml` file. However, workspace members can be _either_
 [applications](./init.md#applications) or [libraries](./init.md#libraries); both are supported in
 the workspace context.
 
+For example, the `bird-feeder` library could define:
+
+```toml title="packages/bird-feeder/pyproject.toml"
+[project]
+name = "bird-feeder"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.12,<0.13"]
+build-backend = "uv_build"
+```
+
+Each member declares its own `[project]` metadata. Unlike Cargo, uv does not support inheriting
+fields such as `version`, `description`, or `requires-python` with `{ workspace = true }`. The
+separate inheritance rules for `tool.uv.sources` are described in
+[Workspace sources](#workspace-sources).
+
 Every workspace needs a root, which is _also_ a workspace member. In the above example, `albatross`
 is the workspace root, and the workspace members include all projects under the `packages`
 directory, except `seeds`.
