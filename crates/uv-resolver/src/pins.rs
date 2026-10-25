@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use uv_distribution_types::{DistributionId, Identifier, ResolvedDist};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_resolver_types::PreferenceId;
 
 use crate::ResolveError;
 use crate::candidate_selector::Candidate;
@@ -19,7 +20,9 @@ enum FilePin<'index> {
         /// The concrete distribution whose metadata is used during resolution.
         metadata: PinMetadata<'index>,
         /// The index-level variant metadata for the selected package version.
-        variants_json: Option<RegisteredVariantsJson<'index>>,
+        variants_json: Option<Box<RegisteredVariantsJson<'index>>>,
+        /// Input preferences used to select this package, including selections through proxies.
+        preferences: Vec<PreferenceId>,
     },
     Url(RegisteredMetadata<'index>),
 }
@@ -58,7 +61,13 @@ impl<'index> FilePins<'index> {
                 } = entry.get_mut()
                     && pinned_variants_json.is_none()
                 {
-                    *pinned_variants_json = variants_json;
+                    *pinned_variants_json = variants_json.map(Box::new);
+                }
+                if let Some(preference_id) = candidate.preference_id()
+                    && let FilePin::Registry { preferences, .. } = entry.get_mut()
+                    && !preferences.contains(&preference_id)
+                {
+                    preferences.push(preference_id);
                 }
                 if let Some(request) = request
                     && let FilePin::Registry {
@@ -78,7 +87,8 @@ impl<'index> FilePins<'index> {
                 entry.insert(FilePin::Registry {
                     dist: dist.for_installation().to_owned(),
                     metadata,
-                    variants_json,
+                    variants_json: variants_json.map(Box::new),
+                    preferences: candidate.preference_id().into_iter().collect(),
                 });
             }
         }
@@ -131,24 +141,30 @@ impl<'index> FilePins<'index> {
         version: &Version,
     ) -> Option<&RegisteredVariantsJson<'index>> {
         match self.0.get(&(name.clone(), version.clone()))? {
-            FilePin::Registry { variants_json, .. } => variants_json.as_ref(),
+            FilePin::Registry { variants_json, .. } => variants_json.as_deref(),
             FilePin::Url(_) => None,
         }
     }
 
-    /// Return the pinned registry artifact and its metadata identity in a single lookup.
+    /// Return the registry artifact, metadata identity, and input preferences in a single lookup.
     pub(crate) fn dist_and_id(
         &self,
         name: &PackageName,
         version: &Version,
-    ) -> Option<(&ResolvedDist, &DistributionId)> {
+    ) -> Option<(&ResolvedDist, &DistributionId, &[PreferenceId])> {
         match self.0.get(&(name.clone(), version.clone()))? {
-            FilePin::Registry { dist, metadata, .. } => Some((
+            FilePin::Registry {
+                dist,
+                metadata,
+                preferences,
+                ..
+            } => Some((
                 dist,
                 match metadata {
                     PinMetadata::Unrequested(id) => id,
                     PinMetadata::Registered(metadata) => metadata.id(),
                 },
+                preferences,
             )),
             FilePin::Url(_) => None,
         }

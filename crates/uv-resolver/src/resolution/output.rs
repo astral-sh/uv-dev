@@ -89,39 +89,55 @@ impl<'a> ResolutionGraphBuilder<'a> {
         // Add every package to the graph.
         for (package, version) in resolution.nodes {
             let node = ResolutionNode { package, version };
-            let entry = match self.inverse.entry(node) {
-                Entry::Occupied(entry) => {
-                    node_indices.push(*entry.get());
-                    continue;
-                }
-                Entry::Vacant(entry) => entry,
-            };
-            let package = &entry.key().package;
             let selected = SelectedDistribution::new(
-                package,
-                entry.key().version.clone(),
+                &node.package,
+                node.version.clone(),
                 &resolution.pins,
                 self.index,
                 self.git,
             )?;
-            let package_role = if self.project == Some(&package.name) {
-                PackageRole::Project
-            } else if self.workspace_members.contains(&package.name) {
-                PackageRole::WorkspaceMember
-            } else {
-                PackageRole::Dependency
+            let node = match self.inverse.entry(node) {
+                Entry::Occupied(entry) => {
+                    let node = *entry.get();
+                    if let ResolutionGraphNode::Dist(distribution) = &mut self.graph[node] {
+                        for &preference in selected.preferences() {
+                            if let Some((_, preference_marker)) = distribution
+                                .preferences
+                                .iter_mut()
+                                .find(|(id, _)| *id == preference)
+                            {
+                                preference_marker.or(marker);
+                            } else {
+                                distribution.preferences.push((preference, marker));
+                            }
+                        }
+                    }
+                    node
+                }
+                Entry::Vacant(entry) => {
+                    let package = &entry.key().package;
+                    let package_role = if self.project == Some(&package.name) {
+                        PackageRole::Project
+                    } else if self.workspace_members.contains(&package.name) {
+                        PackageRole::WorkspaceMember
+                    } else {
+                        PackageRole::Dependency
+                    };
+                    let node = add_version(
+                        &mut self.graph,
+                        &mut self.diagnostics,
+                        self.preferences,
+                        self.hasher,
+                        self.index,
+                        package,
+                        selected,
+                        marker,
+                        package_role,
+                    );
+                    entry.insert(node);
+                    node
+                }
             };
-            let node = add_version(
-                &mut self.graph,
-                &mut self.diagnostics,
-                self.preferences,
-                self.hasher,
-                self.index,
-                package,
-                selected,
-                package_role,
-            );
-            entry.insert(node);
             node_indices.push(node);
         }
         drop(resolution.pins);
@@ -181,6 +197,9 @@ impl<'a> ResolutionGraphBuilder<'a> {
             if let ResolutionGraphNode::Dist(dist) = &mut graph[index] {
                 dist.marker = reachability.remove(&index).unwrap_or_default();
                 dist.marker.imbibe(conflict_marker);
+                for (_, marker) in &mut dist.preferences {
+                    marker.and(dist.marker);
+                }
             }
         }
         for weight in graph.edge_weights_mut() {
@@ -282,6 +301,7 @@ fn add_version(
     in_memory: &InMemoryIndex,
     package: &ResolutionPackage,
     selected: SelectedDistribution,
+    preference_marker: UniversalMarker,
     package_role: PackageRole,
 ) -> NodeIndex {
     let ResolutionPackage {
@@ -300,7 +320,7 @@ fn add_version(
         hasher,
         in_memory,
     );
-    let (version, dist, metadata) = selected.into_parts();
+    let (version, dist, metadata, selected_preferences) = selected.into_parts();
 
     // Track yanks for registry distributions.
     match dist.yanked() {
@@ -350,6 +370,10 @@ fn add_version(
         metadata,
         role: package_role,
         marker: UniversalMarker::TRUE,
+        preferences: selected_preferences
+            .into_iter()
+            .map(|preference| (preference, preference_marker))
+            .collect(),
     }))
 }
 

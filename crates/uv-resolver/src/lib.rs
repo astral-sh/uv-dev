@@ -3,7 +3,9 @@ pub use exclusions::Exclusions;
 pub use flat_index::{FlatDistributions, FlatIndex};
 pub use manifest::Manifest;
 pub use preferences::{Preference, PreferenceError, Preferences};
-pub use prioritized_distribution::{HashComparison, PrioritizedDist, SourceDistCompatibility};
+pub use prioritized_distribution::{
+    HashComparison, PrioritizedDist, SourceDistCompatibility, implied_markers_for_wheels,
+};
 pub use pubgrub::PubGrubHint;
 pub use python_requirement::PythonRequirement;
 pub use resolution::{ConflictingDistributionError, DisplayResolutionGraph, ResolverOutput};

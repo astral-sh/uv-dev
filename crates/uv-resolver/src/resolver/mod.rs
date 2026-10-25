@@ -14,7 +14,7 @@ use either::Either;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
-use pubgrub::{ConflictId, Id, IncompatibilityArena, Ranges, State, Term};
+use pubgrub::{ConflictId, Dependency, Id, IncompatibilityArena, Ranges, State, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::oneshot;
@@ -511,12 +511,21 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     .try_universal_markers()
                                     .unwrap_or(UniversalMarker::TRUE);
                                 for (package, version) in &resolution.nodes {
+                                    let preference_ids = if package.url.is_none() {
+                                        resolution
+                                            .pins
+                                            .dist_and_id(&package.name, version)
+                                            .map_or(&[][..], |(_, _, ids)| ids)
+                                    } else {
+                                        &[]
+                                    };
                                     preferences.insert(
                                         package.name.clone(),
                                         package.index.clone(),
                                         marker,
                                         version.clone(),
                                         PreferenceSource::Resolver,
+                                        preference_ids,
                                     );
                                 }
                             }
@@ -593,7 +602,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     // stable for a given range and pre-release policy. Avoid repeating candidate
                     // selection when PubGrub revisits an identical decision after backtracking.
                     let cache_selected_version = match source {
-                        PackageSource::Registry(None) => true,
+                        PackageSource::Registry(None) => {
+                            self.options.wheel_preference_environments.is_empty()
+                        }
                         PackageSource::Url(_) | PackageSource::Registry(Some(_)) => false,
                     };
                     let decision = if cache_selected_version
@@ -1386,6 +1397,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
+            if self.options.wheel_preference_environments.is_empty() {
+                MarkerTree::FALSE
+            } else {
+                python_requirement
+                    .target()
+                    .complexify_markers(find_current_environments(id, pubgrub))
+            },
         ) else {
             // Short circuit: we couldn't find _any_ versions for a package.
             return Ok(None);
@@ -1702,6 +1720,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
+            if self.options.wheel_preference_environments.is_empty() {
+                MarkerTree::FALSE
+            } else {
+                self.python_requirement
+                    .target()
+                    .complexify_markers(find_current_environments(id, pubgrub))
+            },
         ) else {
             return Ok(None);
         };
@@ -2432,6 +2457,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     None,
                     &env,
                     self.tags.as_ref(),
+                    MarkerTree::FALSE,
                 ) else {
                     return Ok(None);
                 };
@@ -2474,6 +2500,15 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             return Ok(Some(response));
                         }
                     }
+                }
+
+                // Preference activation is unknown during speculative prefetch. Defer source
+                // metadata until candidate selection can decide whether its preference needs wheels.
+                if !self.options.wheel_preference_environments.is_empty()
+                    && candidate.preference_id().is_some()
+                    && let CompatibleDist::SourceDist { .. } = dist
+                {
+                    return Ok(None);
                 }
 
                 // Avoid prefetching source distributions with unbounded lower-bound ranges. This
@@ -4155,6 +4190,43 @@ fn enrich_dependency_error(
 
 /// Compute the set of markers for which a package is known to be relevant.
 fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>) -> MarkerTree {
+    find_environments_inner(id, state, false)
+}
+
+/// Compute activation proved by dependencies under the current positive assignments.
+fn find_current_environments(
+    id: Id<PubGrubPackage>,
+    state: &State<UvDependencyProvider>,
+) -> MarkerTree {
+    find_environments_inner(id, state, true)
+}
+
+fn find_environments_inner(
+    id: Id<PubGrubPackage>,
+    state: &State<UvDependencyProvider>,
+    current_only: bool,
+) -> MarkerTree {
+    let is_active = |dependency: &Dependency<'_, PubGrubPackage, Range<Version>>| {
+        if !current_only {
+            return true;
+        }
+        let Some(Term::Positive(current_parent)) = state
+            .partial_solution
+            .term_intersection_for_package(dependency.dependent)
+        else {
+            return false;
+        };
+        let Some(Term::Positive(current_child)) = state
+            .partial_solution
+            .term_intersection_for_package(dependency.dependency)
+        else {
+            return false;
+        };
+        current_parent.subset_of(dependency.dependent_versions)
+            && dependency
+                .dependency_versions
+                .is_some_and(|range| !current_child.is_disjoint(range))
+    };
     let package = &state.package_store[id];
     if package.is_root() {
         return MarkerTree::TRUE;
@@ -4169,6 +4241,9 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
 
     while let Some(current) = stack.pop() {
         for dependency in state.dependencies(current) {
+            if !is_active(&dependency) {
+                continue;
+            }
             let parent = dependency.dependent;
             if current != dependency.dependency {
                 continue;
@@ -4197,6 +4272,9 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
             continue;
         };
         for dependency in state.dependencies(current) {
+            if !is_active(&dependency) {
+                continue;
+            }
             let parent = dependency.dependent;
             let child = dependency.dependency;
             if current != parent || !ancestors.contains(&child) {
