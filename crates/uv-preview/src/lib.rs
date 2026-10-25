@@ -462,6 +462,8 @@ pub enum PreviewFeature {
     BuildDependencyHashes,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {
