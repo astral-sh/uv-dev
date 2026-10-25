@@ -77,10 +77,9 @@ impl ValidatedSourceArchive {
             .collect::<Vec<_>>();
         let mut hasher = HashReader::new(reader, &mut hashers);
 
-        let (staging_dir, _) =
-            uv_extract::stream::archive(&mut hasher, ext, staging_dir, tar_backend)
-                .await
-                .map_err(|err| Error::Extract(source.to_string(), err))?;
+        let staging_dir = uv_extract::stream::archive(&mut hasher, ext, staging_dir, tar_backend)
+            .await
+            .map_err(|err| Error::Extract(source.to_string(), err))?;
 
         if !algorithms.is_empty() || validation.expected_size.is_some() {
             hasher.finish().await.map_err(Error::HashExhaustion)?;
