@@ -649,10 +649,10 @@ impl<'a> LockedDependencyBuilder<'a> {
             // A project's production selection can conflict with its own extras. Keep the base
             // distribution available in either branch while retaining compatible extra selections.
             let project_conflicts_with_extra = |extra: &ExtraName| {
-                expected.lock.conflicts.iter().any(|conflicts| {
-                    conflicts.contains(&requirement.name, ConflictKindRef::Project)
-                        && conflicts.contains(&requirement.name, extra)
-                })
+                expected
+                    .lock
+                    .conflicts
+                    .project_conflicts_with_extra(&requirement.name, extra)
             };
             let root_extra_project_conflict = matches!(context, DependencyContext::Extra(_))
                 && expected
@@ -1906,7 +1906,12 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
             DependencyContext::Production => UniversalMarker::from_combined(
                 context.conflict_marker(&self.package.id.name, &self.lock.conflicts),
             ),
-            DependencyContext::Extra(extra) if !self.project_conflicts_with_extra(extra) => {
+            DependencyContext::Extra(extra)
+                if !self
+                    .lock
+                    .conflicts
+                    .project_conflicts_with_extra(&self.package.id.name, extra) =>
+            {
                 UniversalMarker::new(
                     MarkerTree::TRUE,
                     ConflictMarker::from_conflict_item(&ConflictItem::from(
@@ -2033,14 +2038,6 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         } else {
             parent_marker
         }
-    }
-
-    /// Return whether an extra and its project belong to the same conflict set.
-    fn project_conflicts_with_extra(&self, extra: &ExtraName) -> bool {
-        self.lock.conflicts.iter().any(|conflict_set| {
-            conflict_set.contains(&self.package.id.name, ConflictKindRef::Project)
-                && conflict_set.contains(&self.package.id.name, extra)
-        })
     }
 
     /// Exclude conflict selections that cannot coexist with the selected item.
