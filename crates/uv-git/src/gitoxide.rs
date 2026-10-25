@@ -21,22 +21,11 @@ impl Backend {
             None => Ok(Self::Cli),
             Some(value) if value == "cli" => Ok(Self::Cli),
             Some(value) if value == "gitoxide" => {
-                let inherited_repository = [
-                    EnvVars::GIT_DIR,
-                    EnvVars::GIT_WORK_TREE,
-                    EnvVars::GIT_INDEX_FILE,
-                    EnvVars::GIT_OBJECT_DIRECTORY,
-                    EnvVars::GIT_ALTERNATE_OBJECT_DIRECTORIES,
-                    EnvVars::GIT_COMMON_DIR,
-                ]
-                .iter()
-                .any(|key| std::env::var_os(key).is_some());
                 if matches!(url.scheme(), "http" | "https")
                     && !url.as_str().contains('?')
                     && url.fragment().is_none()
                     && !with_lfs
                     && !disable_ssl
-                    && !inherited_repository
                 {
                     Ok(Self::Gitoxide)
                 } else {
@@ -46,6 +35,24 @@ impl Backend {
             Some(_) => bail!("Invalid value for `UV_GIT_BACKEND`. Expected `cli` or `gitoxide`."),
         }
     }
+}
+
+fn options() -> gix::open::Options {
+    gix::open::Options::default().without_repository_environment_overrides()
+}
+
+pub(crate) fn open(path: &Path) -> gix::Result<gix::Repository> {
+    gix::open_opts(path, options())
+}
+
+pub(crate) fn init(path: &Path) -> gix::Result<gix::Repository> {
+    Ok(gix::ThreadSafeRepository::init_opts(
+        path,
+        gix::create::Kind::WithWorktree,
+        gix::create::Options::default(),
+        options(),
+    )?
+    .to_thread_local())
 }
 
 pub(crate) fn fetch(
@@ -58,8 +65,7 @@ pub(crate) fn fetch(
     if offline {
         return Err(GitError::TransportNotAllowed.into());
     }
-    let options = gix::open::Options::default()
-        .config_overrides(["gitoxide.credentials.terminalPrompt=false"]);
+    let options = options().config_overrides(["gitoxide.credentials.terminalPrompt=false"]);
     let mut repo = gix::open_opts(path, options)?;
     repo.committer_or_set_generic_fallback()?;
     let mut remote = repo
@@ -70,7 +76,150 @@ pub(crate) fn fetch(
     }
     remote
         .connect(Direction::Fetch)?
-        .prepare_fetch(Discard, Default::default())?
+        .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?
         .receive(Discard, &AtomicBool::new(false))?;
+    Ok(())
+}
+
+pub(crate) fn checkout(
+    database: &Path,
+    destination: &Path,
+    revision: uv_git_types::GitOid,
+    url: &SafeUrl,
+    offline: bool,
+) -> Result<()> {
+    let source = open(database)?;
+    let mut repo = init(destination)?;
+    copy_cached_objects(&source, &repo)?;
+    repo.committer_or_set_generic_fallback()?;
+    let mut config = repo.config_edit()?;
+    config.set_raw_value("remote.origin.url", gix::path::into_bstr(database)?)?;
+    config.set_raw_value("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")?;
+    config.commit()?;
+
+    for tag in source.references()?.tags()? {
+        let mut tag = tag?;
+        let id = tag.follow_to_object()?.detach();
+        repo.reference(
+            tag.name(),
+            id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "clone: tag",
+        )?;
+    }
+
+    let options = |overrides: Vec<String>| {
+        options().config_overrides(overrides.into_iter().chain([
+            "gitoxide.credentials.terminalPrompt=false".to_owned(),
+            "filter.lfs.process=".to_owned(),
+            "filter.lfs.smudge=".to_owned(),
+            "filter.lfs.required=false".to_owned(),
+        ]))
+    };
+    let mut repo = gix::open_opts(
+        destination,
+        options(crate::git::submodule_update_config(url)),
+    )?;
+    repo.committer_or_set_generic_fallback()?;
+    let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
+    repo.reset(commit, gix::repository::reset::ResetMode::Hard)?;
+    if let Some(modules) = repo.submodules()? {
+        for module in modules {
+            if module.index_id()?.is_some() {
+                if offline {
+                    return Err(GitError::TransportNotAllowed.into());
+                }
+                module.init(false)?;
+            }
+        }
+        // Nested modules resolve relative URLs against their own origins.
+        let repo = gix::open_opts(destination, options(crate::git::submodule_auth_config(url)))?;
+        if let Some(modules) = repo.submodules()? {
+            for module in modules {
+                module.update_submodule(
+                    Discard,
+                    &AtomicBool::new(false),
+                    &gix::submodule::update::Options::new(true, true),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy cached object files into the checkout, using hard links where possible, so they
+/// remain available if the cache database is removed.
+fn copy_cached_objects(source: &gix::Repository, destination: &gix::Repository) -> Result<()> {
+    let store = source.objects.store_ref();
+    let destination_objects = destination.objects.store_ref().path();
+    let hash_len = source.object_hash().len_in_hex();
+    for objects in std::iter::once(store.path().to_owned()).chain(store.alternate_db_paths()?) {
+        anyhow::ensure!(
+            fs_err::symlink_metadata(&objects)?.is_dir(),
+            "invalid Git object directory"
+        );
+        for entry in fs_err::read_dir(&objects)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(directory) = name.to_str() else {
+                continue;
+            };
+            let packed = directory == "pack";
+            let loose = directory.len() == 2 && directory.bytes().all(|b| b.is_ascii_hexdigit());
+            if !(packed || loose) {
+                continue;
+            }
+            anyhow::ensure!(
+                entry.file_type()?.is_dir(),
+                "invalid Git object directory: {}",
+                entry.path().display()
+            );
+            fs_err::create_dir_all(destination_objects.join(directory))?;
+            for object in fs_err::read_dir(entry.path())? {
+                let object = object?;
+                let name = object.file_name();
+                let Some(name) = name.to_str() else { continue };
+                let hex = if packed {
+                    let Some(stem) = name
+                        .strip_suffix(".pack")
+                        .or_else(|| name.strip_suffix(".idx"))
+                    else {
+                        continue;
+                    };
+                    let Some(hex) = stem.strip_prefix("pack-") else {
+                        continue;
+                    };
+                    if hex.len() != hash_len {
+                        continue;
+                    }
+                    hex
+                } else {
+                    if name.len() != hash_len - 2 {
+                        continue;
+                    }
+                    name
+                };
+                if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    continue;
+                }
+                anyhow::ensure!(
+                    object.file_type()?.is_file(),
+                    "invalid Git object file: {}",
+                    object.path().display()
+                );
+                let target = destination_objects.join(directory).join(name);
+                match fs_err::hard_link(object.path(), &target) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(_) => {
+                        fs_err::copy(object.path(), target)?;
+                    }
+                }
+            }
+        }
+    }
+    if source.is_shallow()? {
+        fs_err::copy(source.shallow_file()?, destination.shallow_file()?)?;
+    }
     Ok(())
 }

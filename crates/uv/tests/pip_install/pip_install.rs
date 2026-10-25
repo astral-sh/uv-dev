@@ -14306,6 +14306,23 @@ fn install_git_submodule_remote_relative() {
     ");
 }
 
+#[test]
+#[cfg(feature = "test-git")]
+fn install_gitoxide_submodule_without_git() {
+    let context = uv_test::test_context!("3.13");
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .env(EnvVars::PATH, venv_bin_path(&context.venv))
+        .arg("git+https://github.com/astral-test/uv-submodule-pypackage.git@377720a1a7f48279bbfc17988454132f13644e84"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-submodule-pypackage.git@377720a1a7f48279bbfc17988454132f13644e84)
+    ");
+}
+
 /// Modify a project to use a `src` layout.
 #[test]
 fn change_layout_src() -> Result<()> {

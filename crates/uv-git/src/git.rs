@@ -79,6 +79,7 @@ pub(crate) struct GitRemote {
     /// URL to a remote repository.
     url: SafeUrl,
     backend: Backend,
+    offline: bool,
 }
 
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
@@ -113,7 +114,7 @@ impl GitRepository {
     /// Opens an existing Git repository at `path`.
     fn open(path: &Path, backend: Backend) -> Result<Self> {
         if backend == Backend::Gitoxide {
-            gix::open(path)?;
+            crate::gitoxide::open(path)?;
             return Ok(Self {
                 path: path.to_owned(),
                 backend,
@@ -135,7 +136,7 @@ impl GitRepository {
     /// Initializes a Git repository at `path`.
     fn init(path: &Path, backend: Backend) -> Result<Self> {
         if backend == Backend::Gitoxide {
-            gix::init(path)?;
+            crate::gitoxide::init(path)?;
             return Ok(Self {
                 path: path.to_owned(),
                 backend,
@@ -184,7 +185,7 @@ impl GitRepository {
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
         if self.backend == Backend::Gitoxide {
-            return Ok(gix::open(&self.path)?
+            return Ok(crate::gitoxide::open(&self.path)?
                 .rev_parse_single(refname)?
                 .to_string()
                 .parse()?);
@@ -242,9 +243,18 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(url: SafeUrl, with_lfs: bool, disable_ssl: bool) -> Result<Self> {
+    pub(crate) fn new(
+        url: SafeUrl,
+        with_lfs: bool,
+        disable_ssl: bool,
+        offline: bool,
+    ) -> Result<Self> {
         let backend = Backend::for_remote(&url, with_lfs, disable_ssl)?;
-        Ok(Self { url, backend })
+        Ok(Self {
+            url,
+            backend,
+            offline,
+        })
     }
 
     /// Gets the remote repository URL.
@@ -271,14 +281,19 @@ impl GitRemote {
         reference: &GitReference,
         locked_rev: Option<GitOid>,
         disable_ssl: bool,
-        offline: bool,
         with_lfs: bool,
     ) -> Result<(GitDatabase, GitOid)> {
         let locked_reference = locked_rev.map(GitReference::Commit);
         let reference = locked_reference.as_ref().unwrap_or(reference);
         if let Some(mut db) = db {
-            fetch(&mut db.repo, &self.url, reference, disable_ssl, offline)
-                .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
+            fetch(
+                &mut db.repo,
+                &self.url,
+                reference,
+                disable_ssl,
+                self.offline,
+            )
+            .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
@@ -301,7 +316,7 @@ impl GitRemote {
 
         fs_err::create_dir_all(into)?;
         let mut repo = GitRepository::init(into, self.backend)?;
-        fetch(&mut repo, &self.url, reference, disable_ssl, offline)
+        fetch(&mut repo, &self.url, reference, disable_ssl, self.offline)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
@@ -353,7 +368,7 @@ impl GitDatabase {
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
         if self.repo.backend == Backend::Gitoxide {
-            let repo = gix::open(&self.repo.path)?;
+            let repo = crate::gitoxide::open(&self.repo.path)?;
             return Ok(repo
                 .rev_parse_single(revision.as_str())?
                 .shorten()?
@@ -429,9 +444,23 @@ impl GitCheckout {
             Err(e) => return Err(e.into()),
         }
 
-        // Perform a local clone of the repository, which will attempt to use
-        // hardlinks to set up the repository. This should speed up the clone operation
-        // quite a bit if it works.
+        if database.repo.backend == Backend::Gitoxide {
+            crate::gitoxide::checkout(
+                &database.repo.path,
+                into,
+                revision,
+                original_remote_url,
+                database.remote.offline,
+            )
+            .map_err(|err| redact_git_error(err, original_remote_url))?;
+            paths::create(into.with_extension(CHECKOUT_READY_EXTENSION))?;
+            return Ok(Self::new(
+                revision,
+                GitRepository::open(into, Backend::Gitoxide)?,
+            ));
+        }
+
+        // A local clone can hardlink object files from the cache.
         let res = GIT
             .as_ref()
             .cloned()?
@@ -590,7 +619,7 @@ impl GitCheckout {
 /// remotes. Instead, callers pass these values via `git -c`, using a credential-stripped origin URL
 /// for resolution and a transient `url.*.insteadOf` rewrite when credentials are needed for
 /// transport.
-fn submodule_update_config(original_remote_url: &SafeUrl) -> Vec<String> {
+pub(crate) fn submodule_update_config(original_remote_url: &SafeUrl) -> Vec<String> {
     let remote_url = original_remote_url.without_credentials();
     let mut config = vec![format!("remote.origin.url={}", remote_url.as_str())];
 
@@ -603,7 +632,7 @@ fn submodule_update_config(original_remote_url: &SafeUrl) -> Vec<String> {
 /// Unlike `remote.origin.url`, these rewrites are safe to inherit during recursive submodule
 /// updates: they rewrite transport URLs for authentication, but do not change the base URL that Git
 /// uses to resolve nested relative submodule URLs.
-fn submodule_auth_config(original_remote_url: &SafeUrl) -> Vec<String> {
+pub(crate) fn submodule_auth_config(original_remote_url: &SafeUrl) -> Vec<String> {
     let remote_url = original_remote_url.without_credentials();
     let mut config = Vec::new();
 
@@ -891,7 +920,7 @@ fn redact_git_error(mut error: anyhow::Error, url: &SafeUrl) -> anyhow::Error {
         return error;
     }
 
-    anyhow!("{}", redact(&error.to_string()))
+    anyhow!("{}", redact(&format!("{error:#}")))
 }
 
 #[cfg(test)]
