@@ -220,7 +220,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
                     .dependency_groups
                     .into_iter()
                     .filter_map(|(group, dependencies)| {
-                        if requirement.groups.contains(&group) {
+                        if requirement.groups().contains(&group) {
                             Some(dependencies)
                         } else {
                             None
@@ -244,7 +244,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         Ok(Some(RequestedRequirements::new(
             package,
             version,
-            requirement.extras,
+            requirement.selection.into_extras(),
             requires_dist,
             direct,
         )))

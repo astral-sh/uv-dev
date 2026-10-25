@@ -373,7 +373,12 @@ impl FlatRequiresDist {
         let mut queue: VecDeque<_> = flattened
             .iter()
             .filter(|req| req.name == *name)
-            .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
+            .flat_map(|req| {
+                req.extras()
+                    .iter()
+                    .cloned()
+                    .map(|extra| (extra, req.marker))
+            })
             .collect();
         while let Some((extra, marker)) = queue.pop_front() {
             if !seen.insert((extra.clone(), marker)) {
@@ -395,8 +400,7 @@ impl FlatRequiresDist {
                 }
                 let requirement = Requirement {
                     name: requirement.name.clone(),
-                    extras: requirement.extras.clone(),
-                    groups: requirement.groups.clone(),
+                    selection: requirement.selection.clone(),
                     source: requirement.source.clone(),
                     scope: requirement.scope.clone(),
                     origin: requirement.origin.clone(),
@@ -406,7 +410,7 @@ impl FlatRequiresDist {
                     // Add each transitively included extra.
                     queue.extend(
                         requirement
-                            .extras
+                            .extras()
                             .iter()
                             .cloned()
                             .map(|extra| (extra, requirement.marker)),
@@ -424,15 +428,9 @@ impl FlatRequiresDist {
         let mut self_constraints = vec![];
         for req in &flattened {
             if req.name == *name && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    extras: Box::new([]),
-                    groups: req.groups.clone(),
-                    source: req.source.clone(),
-                    scope: req.scope.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+                let mut constraint = req.clone();
+                constraint.selection.clear_extras();
+                self_constraints.push(constraint);
             }
         }
 

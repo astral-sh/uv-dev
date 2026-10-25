@@ -6,7 +6,8 @@ use uv_configuration::{
     PackageOverride,
 };
 use uv_distribution_types::{
-    IndexMetadata, IndexUrl, Requirement, RequirementScope, RequirementSource, RequiresPython,
+    IndexMetadata, IndexUrl, Requirement, RequirementScope, RequirementSelection,
+    RequirementSource, RequiresPython,
 };
 use uv_fs::normalize_path;
 use uv_git_types::GitUrl;
@@ -107,8 +108,10 @@ pub(super) fn normalize_requirement(
     requires_python: &RequiresPython,
 ) -> Result<Requirement, LockError> {
     // Sort the extras and groups for consistency.
-    requirement.extras.sort();
-    requirement.groups.sort();
+    match &mut requirement.selection {
+        RequirementSelection::Extras(extras) => extras.sort(),
+        RequirementSelection::Groups(groups) => groups.sort(),
+    }
     requirement.marker = requires_python.simplify_markers(requirement.marker);
     requirement.scope = RequirementScope::Global;
     requirement.origin = None;

@@ -216,7 +216,7 @@ pub async fn list(
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
-                    .flat_map(|req| req.extras.iter()) // Flatten the extras from all matching requirements
+                    .flat_map(|req| req.extras().iter()) // Flatten the extras from all matching requirements
                     .peekable()
             })
             .take_if(|extras| extras.peek().is_some())
