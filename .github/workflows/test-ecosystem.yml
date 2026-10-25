@@ -23,7 +23,7 @@ jobs:
             ref: "7f25bbdf45fc81cca6dc23fb6a7377d436b70c83"
             commands:
               - "uv venv"
-              - "uv pip install -e '.[dev]'"
+              - "uv pip install -e . --group dev"
             python: "3.9"
           - repo: "pallets/flask"
             ref: "b78b5a210bde49e7e04b62a2a4f453ca10e0048c"
