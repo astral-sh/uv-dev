@@ -976,11 +976,7 @@ impl MarkerTree {
 
     /// Does this marker apply in the given environment?
     pub fn evaluate(self, env: &MarkerEnvironment, extras: &[ExtraName]) -> bool {
-        self.evaluate_reporter_impl(
-            env,
-            ExtrasEnvironment::from_extras(extras),
-            &mut TracingReporter,
-        )
+        self.evaluate_impl(env, ExtrasEnvironment::from_extras(extras))
     }
 
     /// Evaluate a marker in the context of a PEP 751 lockfile, which exposes several additional
@@ -992,11 +988,7 @@ impl MarkerTree {
         extras: &[ExtraName],
         groups: &[GroupName],
     ) -> bool {
-        self.evaluate_reporter_impl(
-            env,
-            ExtrasEnvironment::from_pep751(extras, groups),
-            &mut TracingReporter,
-        )
+        self.evaluate_impl(env, ExtrasEnvironment::from_pep751(extras, groups))
     }
 
     /// Evaluates this marker tree against an optional environment and a
@@ -1013,27 +1005,18 @@ impl MarkerTree {
     ) -> bool {
         match env {
             None => self.evaluate_extras(extras),
-            Some(env) => self.evaluate_reporter_impl(
-                env,
-                ExtrasEnvironment::from_extras(extras),
-                &mut TracingReporter,
-            ),
+            Some(env) => self.evaluate_impl(env, ExtrasEnvironment::from_extras(extras)),
         }
     }
 
-    fn evaluate_reporter_impl(
-        self,
-        env: &MarkerEnvironment,
-        extras: ExtrasEnvironment,
-        reporter: &mut impl Reporter,
-    ) -> bool {
+    fn evaluate_impl(self, env: &MarkerEnvironment, extras: ExtrasEnvironment) -> bool {
         match self.kind() {
             MarkerTreeKind::True => return true,
             MarkerTreeKind::False => return false,
             MarkerTreeKind::Version(marker) => {
                 for (range, tree) in marker.edges() {
                     if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
@@ -1042,7 +1025,7 @@ impl MarkerTree {
                     let l_string = env.get_string(marker.key());
 
                     if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
@@ -1052,24 +1035,24 @@ impl MarkerTree {
                 };
                 for (range, tree) in marker.edges() {
                     if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
             MarkerTreeKind::In(marker) => {
                 return marker
                     .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::Contains(marker) => {
                 return marker
                     .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::Extra(marker) => {
                 return marker
                     .edge(extras.extra().contains(marker.name().extra()))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::List(marker) => {
                 let edge = match marker.pair() {
@@ -1081,9 +1064,7 @@ impl MarkerTree {
                     CanonicalMarkerListPair::Arbitrary { .. } => return false,
                 };
 
-                return marker
-                    .edge(edge)
-                    .evaluate_reporter_impl(env, extras, reporter);
+                return marker.edge(edge).evaluate_impl(env, extras);
             }
         }
 
