@@ -7885,7 +7885,6 @@ dependencies = [
  "toml",
  "tracing",
  "uv-cache-info",
- "uv-client",
  "uv-configuration",
  "uv-dirs",
  "uv-distribution-types",
