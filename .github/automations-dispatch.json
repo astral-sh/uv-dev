@@ -58,6 +58,17 @@
     {
       "repository": "uv",
       "on": {
+        "push": []
+      },
+      "conditions": {
+        "/ref": "refs/heads/main",
+        "/deleted": false
+      },
+      "workflow": "pull-request-conflicts.yml"
+    },
+    {
+      "repository": "uv",
+      "on": {
         "pull_request": ["labeled"]
       },
       "conditions": {
@@ -110,6 +121,17 @@
         "/label/name": "bot:rebase"
       },
       "allow_draft": true,
+      "workflow": "pull-request-conflicts.yml"
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "push": []
+      },
+      "conditions": {
+        "/ref": "refs/heads/main",
+        "/deleted": false
+      },
       "workflow": "pull-request-conflicts.yml"
     },
     {
