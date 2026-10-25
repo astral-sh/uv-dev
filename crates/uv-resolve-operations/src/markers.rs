@@ -62,6 +62,7 @@ pub fn resolution_tags<'env>(
             gil_disabled: interpreter.gil_disabled(),
             debug_enabled: interpreter.debug_enabled(),
             is_cross: true,
+            prefer_portable_linux: python_platform.is_some(),
         },
     )?;
     Ok(Cow::Owned(tags))
