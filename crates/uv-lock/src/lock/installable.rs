@@ -877,8 +877,8 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // still depends on a package outside the subgraph.
                 if !conflict.is_constant() {
                     return Err(LockErrorKind::DependencyConflictOutsideSubgraph {
-                        package: package.id.clone(),
-                        dependency: dependency.package_id.clone(),
+                        package: package.id.as_ref().clone(),
+                        dependency: dependency.package_id.as_ref().clone(),
                     }
                     .into());
                 }
@@ -935,13 +935,13 @@ impl Lock {
         let selected_package = dependency.package();
         let Some(index) = self.by_id.get(&selected_package.id) else {
             return Err(LockErrorKind::RootPackageMissingFromLock {
-                id: selected_package.id.clone(),
+                id: selected_package.id.as_ref().clone(),
             }
             .into());
         };
         let Some(package) = self.packages.get(index.0) else {
             return Err(LockErrorKind::RootPackageMissingFromLock {
-                id: selected_package.id.clone(),
+                id: selected_package.id.as_ref().clone(),
             }
             .into());
         };
@@ -999,14 +999,14 @@ impl Lock {
         for root in roots {
             let Some(index) = self.by_id.get(&root.id) else {
                 return Err(LockErrorKind::RootPackageMissingFromLock {
-                    id: root.id.clone(),
+                    id: root.id.as_ref().clone(),
                 }
                 .into());
             };
             if seen.insert(&root.id) {
                 let Some(root) = self.packages.get(index.0) else {
                     return Err(LockErrorKind::RootPackageMissingFromLock {
-                        id: root.id.clone(),
+                        id: root.id.as_ref().clone(),
                     }
                     .into());
                 };
