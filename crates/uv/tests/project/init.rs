@@ -13,7 +13,7 @@ use uv_test::{TestContext, uv_snapshot};
 
 /// A project in the home directory becomes the discovered project for unrelated descendants.
 #[test]
-fn init_implicit_home_directory() -> Result<()> {
+fn init_implicit_home_directory() {
     let context = uv_test::test_context!("3.12");
     uv_snapshot!(context.filters(), context.init().arg("--bare").current_dir(&context.home_dir), @"
     exit_code: 2 (failure)
@@ -32,7 +32,6 @@ fn init_implicit_home_directory() -> Result<()> {
         .assert()
         .success();
     assert!(context.home_dir.child("pyproject.toml").is_file());
-    Ok(())
 }
 
 #[test]
