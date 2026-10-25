@@ -19,6 +19,7 @@ use uv_distribution_types::{
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -33,9 +34,10 @@ use uv_resolver::{
 use uv_settings::{LockedSource, ResolverSettings};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{DiscoveryOptions, WorkspaceCache};
 
 use crate::lock_target::find_lock_format_error;
+use crate::parent_lock::{ParentLockSnapshot, warn_nested_workspaces};
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
 /// The result of running a lock operation.
@@ -872,10 +874,49 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
-            let LockedRequirements { preferences, git } = versions_lock
+            let LockedRequirements {
+                mut preferences,
+                git,
+            } = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
                 .unwrap_or_default();
+
+            // Parent locks influence new decisions but are not inputs to child-lock validity.
+            // Defer reading them until a resolution is actually required so a valid child lock
+            // remains usable independently of the parent.
+            let parent_lock = match target {
+                LockTarget::Workspace(workspace) => {
+                    if let Some(root) = workspace
+                        .parent_workspace_root(&DiscoveryOptions::default(), cache)
+                        .await?
+                    {
+                        warn_nested_workspaces();
+                        Some(ParentLockSnapshot::read(root).await?)
+                    } else {
+                        None
+                    }
+                }
+                LockTarget::Script(_) => None,
+            };
+            if let Some(parent_lock) = parent_lock {
+                debug!(
+                    "Using parent workspace lockfile at `{}` as resolution preferences",
+                    parent_lock.root().join("uv.lock").display()
+                );
+                // The initial universal resolver marker can be unconstrained even when the
+                // workspace has a bounded Python range or supported-environment list.
+                let supported_environments = match lock_supported_environments.as_markers() {
+                    [] => MarkerTree::TRUE,
+                    markers => markers
+                        .iter()
+                        .copied()
+                        .fold(MarkerTree::FALSE, MarkerTree::or),
+                };
+                let child_environment =
+                    requires_python.to_marker_tree().and(supported_environments);
+                preferences.extend(parent_lock.preferences(child_environment)?);
+            }
 
             // Populate the Git resolver.
             for ResolvedRepositoryReference { reference, sha } in git {
