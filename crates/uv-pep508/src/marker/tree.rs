@@ -207,21 +207,34 @@ impl FromStr for MarkerValue {
     }
 }
 
-/// PEP 508 marker literals have no escape syntax. A parsed literal always has an unused delimiter.
+/// PEP 508 does not specify backslash escapes. A parsed literal always has an unused delimiter.
 struct QuotedMarkerValue<'a>(&'a str);
 
-impl Display for QuotedMarkerValue<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let value = self.0;
-        if !value.contains('\'') {
-            write!(f, "'{value}'")
-        } else if !value.contains('"') {
-            write!(f, "\"{value}\"")
+impl QuotedMarkerValue<'_> {
+    fn delimiter(&self) -> Option<char> {
+        if !self.0.contains('\'') {
+            Some('\'')
+        } else if !self.0.contains('"') {
+            Some('"')
         } else {
-            Err(fmt::Error)
+            None
         }
     }
 }
+
+impl Display for QuotedMarkerValue<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let quote = self.delimiter().ok_or(fmt::Error)?;
+        write!(f, "{quote}{}{quote}", self.0)
+    }
+}
+
+/// An interpreter value that cannot be represented as a PEP 508 marker literal.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "The value of `{0}` contains both single and double quotes and cannot be written as a PEP 508 marker"
+)]
+pub struct UnquotableMarkerValue(MarkerValueString);
 
 impl Display for MarkerValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -609,6 +622,21 @@ impl Display for ContainerOperator {
 }
 
 impl MarkerExpression {
+    /// Construct an equality expression for a string reported by the interpreter.
+    pub fn from_environment_string(
+        key: MarkerValueString,
+        value: &str,
+    ) -> Result<Self, UnquotableMarkerValue> {
+        if QuotedMarkerValue(value).delimiter().is_none() {
+            return Err(UnquotableMarkerValue(key));
+        }
+        Ok(Self::String {
+            key,
+            operator: MarkerOperator::Equal,
+            value: ArcStr::from(value),
+        })
+    }
+
     /// Parse a [`MarkerExpression`] from a string with the given reporter.
     #[cfg(test)]
     fn parse_reporter(s: &str, reporter: &mut impl Reporter) -> Result<Option<Self>, Pep508Error> {
@@ -2936,6 +2964,19 @@ mod test {
             let marker = m(source);
             assert_eq!(m(&marker.try_to_string().unwrap()), marker, "{source}");
         }
+    }
+
+    #[test]
+    fn environment_marker_value_requires_a_quote_delimiter() {
+        let key = MarkerValueString::PlatformVersion;
+        let expression = MarkerExpression::from_environment_string(key, "O'Brien").unwrap();
+        assert_eq!(expression.to_string(), r#"platform_version == "O'Brien""#);
+        let error =
+            MarkerExpression::from_environment_string(key, r#"one' and "two""#).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The value of `platform_version` contains both single and double quotes and cannot be written as a PEP 508 marker"
+        );
     }
 
     #[test]
