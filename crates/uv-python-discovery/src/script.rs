@@ -121,7 +121,10 @@ pub enum ScriptInterpreter {
     /// An interpreter to use to create a new script environment.
     Interpreter(RequestedInterpreter),
     /// An interpreter from an existing script environment.
-    Environment(PythonEnvironment),
+    Environment {
+        environment: PythonEnvironment,
+        request: PythonRequest,
+    },
 }
 
 impl ScriptInterpreter {
@@ -258,13 +261,21 @@ impl ScriptInterpreter {
                 requires_python.as_ref(),
                 cache,
             ) {
-                Ok(()) => return Ok(Self::Environment(environment)),
+                Ok(()) => {
+                    return Ok(Self::Environment {
+                        environment,
+                        request: python_request.unwrap_or_default(),
+                    });
+                }
                 Err(err) if keep_incompatible => {
                     warn_user!(
                         "Using incompatible environment (`{}`) due to `--no-sync` ({err})",
                         environment.root().user_display().cyan(),
                     );
-                    return Ok(Self::Environment(environment));
+                    return Ok(Self::Environment {
+                        environment,
+                        request: python_request.unwrap_or_default(),
+                    });
                 }
                 Err(err) => {
                     debug!("{err}");
@@ -306,7 +317,7 @@ impl ScriptInterpreter {
     pub fn into_interpreter(self) -> Interpreter {
         match self {
             Self::Interpreter(requested) => requested.into_interpreter(),
-            Self::Environment(venv) => venv.into_interpreter(),
+            Self::Environment { environment, .. } => environment.into_interpreter(),
         }
     }
 }
