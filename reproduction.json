@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced on Linux x86_64 with CPython 3.12.3, installed uv 0.13.5, and uv 0.8.15. In a dependency-free project, uv 0.13.5 `uv lock` generated revision 5. After changing only the project version, uv 0.8.15 `uv lock` silently rewrote it to revision 3. Removing pyproject.toml and running uv 0.13.5 `uv sync --frozen` exited 2 with the exact reported revision-5 requirement error. Controls showed that an unchanged-project lock preserved revision 5 and frozen sync with the manifest present accepted revision 3. A separate fixture confirmed default-group metadata loss. Regenerating with uv 0.13.5 restored successful manifest-free sync. Windows and the reporter’s unidentified older version were not tested. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, existing test coverage, and verified mitigation; checkout files and GitHub state were unchanged."
+}
