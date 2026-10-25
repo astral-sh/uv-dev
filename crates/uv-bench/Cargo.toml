@@ -61,6 +61,10 @@ harness = false
 [[bench]]
 name = "uv_pep508"
 path = "benches/uv_pep508.rs"
+
+[[bench]]
+name = "lock_marker_eval"
+path = "benches/lock_marker_eval.rs"
 harness = false
 
 [[bench]]
