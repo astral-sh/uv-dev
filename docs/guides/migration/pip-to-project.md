@@ -39,11 +39,21 @@ import fastapi
 It's best practice to create a virtual environment for each project, to avoid mixing packages
 between them. For example:
 
-```console
-$ python -m venv
-$ source .venv/bin/activate
-$ pip ...
-```
+=== "macOS and Linux"
+
+    ```console
+    $ python -m venv .venv
+    $ source .venv/bin/activate
+    $ pip ...
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> python -m venv .venv
+    PS> .venv\Scripts\activate
+    PS> pip ...
+    ```
 
 We will revisit this topic in the [project environments section](#project-environments) below.
 
