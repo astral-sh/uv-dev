@@ -401,8 +401,8 @@ async fn create_venv_project_environment_lock() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: foo
     WARN Failed to acquire project environment lock: Timeout ([TIME]) when waiting for lock on `[TEMP_DIR]/` at `[PROJECT_ENVIRONMENT_LOCK]/`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    Creating virtual environment at: foo
     Activate with: source foo/[BIN]/activate
     ");
     drop(lock);
@@ -453,8 +453,8 @@ async fn create_venv_project_environment_lock_symlink() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: project-link/foo
     WARN Failed to acquire project environment lock: Timeout ([TIME]) when waiting for lock on `[TEMP_DIR]/project-link` at `[PROJECT_ENVIRONMENT_LOCK]/`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    Creating virtual environment at: project-link/foo
     Activate with: source project-link/foo/[BIN]/activate
     ");
     drop(lock);
