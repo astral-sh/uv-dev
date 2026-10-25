@@ -35,7 +35,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use crate::lock_target::find_lock_format_error;
+use crate::lock_target::{LockWithContents, find_lock_format_error};
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
 /// The result of running a lock operation.
@@ -171,7 +171,7 @@ impl<'env> LockOperation<'env> {
             LockMode::Locked(interpreter, lock_source) => {
                 // Read the existing lockfile.
                 let lock_filename = target.lock_filename();
-                let Some((existing, existing_contents)) = target.read_with_contents().await? else {
+                let Some(existing) = target.read_with_contents().await? else {
                     return Err(LockError::MissingLockfile(
                         lock_source.into(),
                         lock_filename,
@@ -179,16 +179,10 @@ impl<'env> LockOperation<'env> {
                 };
 
                 if self.preview.is_enabled(PreviewFeature::LockfileFormatCheck)
-                    && let Some(line) = find_lock_format_error(&existing_contents)
+                    && let Some(line) = find_lock_format_error(&existing.contents)
                 {
                     return Err(LockError::LockFormat(lock_filename, line, lock_source));
                 }
-
-                let check_lockfile_contents = if self.check_lockfile_contents {
-                    Some(existing_contents)
-                } else {
-                    None
-                };
 
                 // Perform the lock operation, but don't write the lockfile to disk.
                 let result = Box::pin(do_lock(
@@ -196,7 +190,7 @@ impl<'env> LockOperation<'env> {
                     interpreter,
                     Some(existing),
                     self.mode,
-                    check_lockfile_contents,
+                    self.check_lockfile_contents,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -225,24 +219,15 @@ impl<'env> LockOperation<'env> {
             }
             LockMode::Write(interpreter) | LockMode::DryRun(interpreter) => {
                 // Read the existing lockfile.
-                let (existing, existing_contents) = match target.read_with_contents().await {
-                    Ok(Some((existing, existing_contents))) => {
-                        (Some(existing), Some(existing_contents))
-                    }
-                    Ok(None) => (None, None),
+                let existing = match target.read_with_contents().await {
+                    Ok(existing) => existing,
                     Err(LockError::Lock(err)) => {
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
                         );
-                        (None, None)
+                        None
                     }
                     Err(err) => return Err(err),
-                };
-
-                let check_lockfile_contents = if self.check_lockfile_contents {
-                    existing_contents
-                } else {
-                    None
                 };
 
                 // Perform the lock operation.
@@ -251,7 +236,7 @@ impl<'env> LockOperation<'env> {
                     interpreter,
                     existing,
                     self.mode,
-                    check_lockfile_contents,
+                    self.check_lockfile_contents,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -284,9 +269,9 @@ impl<'env> LockOperation<'env> {
 async fn do_lock(
     target: LockTarget<'_>,
     interpreter: &Interpreter,
-    existing_lock: Option<Lock>,
+    existing: Option<LockWithContents>,
     mode: LockMode<'_>,
-    check_lockfile_contents: Option<String>,
+    check_lockfile_contents: bool,
     external: Vec<NameRequirementSpecification>,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&Refresh>,
@@ -301,6 +286,13 @@ async fn do_lock(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+
+    let (existing_lock, check_lockfile_contents) = existing.map_or((None, None), |existing| {
+        (
+            Some(existing.lock),
+            check_lockfile_contents.then_some(existing.contents),
+        )
+    });
 
     // Extract the project settings.
     let ResolverSettings {
