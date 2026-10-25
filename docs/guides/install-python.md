@@ -111,9 +111,12 @@ $ uv venv
 
     Automatic Python downloads can be [easily disabled](../concepts/python-versions.md#disabling-automatic-python-downloads) if you want more control over when Python is downloaded.
 
-<!-- TODO(zanieb): Restore when Python shim management is added
-Note that when an automatic Python installation occurs, the `python` command will not be added to the shell. Use `uv python install-shim` to ensure the `python` shim is installed.
--->
+!!! note
+
+    Automatic Python downloads do not add new Python executables to your `PATH`. Run
+    `uv python install` with the desired version to
+    [install a versioned executable](../concepts/python-versions.md#installing-python-executables).
+    The experimental `--default` option also creates `python` and `python3` executables.
 
 ## Using existing Python versions
 
