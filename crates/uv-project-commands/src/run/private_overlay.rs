@@ -36,9 +36,13 @@ pub(super) fn eligible(resolution: &Resolution, cache: &Cache) -> bool {
         })
 }
 
-/// Creating the mounts requires effective `CAP_SYS_ADMIN` in the current user namespace.
+/// Creating a mount namespace requires `CAP_SYS_ADMIN`. Joining it also requires
+/// `CAP_SYS_CHROOT` in the current user namespace.
 pub(super) fn supported() -> bool {
-    capabilities(None).is_ok_and(|set| set.effective.contains(CapabilitySet::SYS_ADMIN))
+    capabilities(None).is_ok_and(|set| {
+        set.effective
+            .contains(CapabilitySet::SYS_ADMIN | CapabilitySet::SYS_CHROOT)
+    })
 }
 
 /// Inspect the prepared tree without executing Python, which could run its `.pth` or

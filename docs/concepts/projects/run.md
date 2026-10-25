@@ -145,11 +145,12 @@ requires synchronization and currently rejects `--no-sync` and additional run re
 (`--with`, `--with-editable`, `--with-requirements`, and `--with-cached-wheel`). Files in the
 project working directory and editable source trees remain writable in their usual locations.
 
-On Linux, when uv has effective `CAP_SYS_ADMIN` and can mount OverlayFS in a private mount
-namespace, it can reuse a prepared environment for repeated private runs. Each run using a prepared
-environment gets its own temporary path and a writable in-memory layer. On the first eligible run,
-uv prepares the selected wheels. Later eligible runs with the same interpreter and wheel selection
-can reuse those files, including installed console scripts.
+On Linux, uv can reuse a prepared environment for repeated private runs when it has effective
+`CAP_SYS_ADMIN` and `CAP_SYS_CHROOT` and can create and join a private mount namespace with an
+OverlayFS mount. Each run using a prepared environment gets its own temporary path and a writable
+in-memory layer. On the first eligible run, uv prepares the selected wheels. Later eligible runs
+with the same interpreter and wheel selection can reuse those files, including installed console
+scripts.
 
 This optimization requires a persistent cache. Every distribution selected for installation must be
 a registry wheel with a recorded hash in the lockfile. Runs that need to build or refresh packages,
