@@ -205,7 +205,7 @@ pub async fn remove(
     )?;
 
     // Save the modified `pyproject.toml` or script.
-    target.write(&content)?;
+    edit.write(|| target.write(&content))?;
 
     // If `--frozen`, exit early. There's no reason to lock and sync, since we don't need a `uv.lock`
     // to exist at all.
@@ -350,7 +350,9 @@ pub async fn remove(
             printer,
             preview,
         )
-        .execute((&target).into()),
+        .execute_with_writer((&target).into(), |path, contents| {
+            edit.write_lockfile(path, contents)
+        }),
     )
     .await
     {
