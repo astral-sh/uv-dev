@@ -14,7 +14,7 @@ use thiserror::Error;
 use tracing::{debug, instrument, trace};
 
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
-use uv_build_frontend::{SourceBuild, SourceBuildContext};
+use uv_build_frontend::{SourceBuild, SourceBuildContext, warn_for_bundled_backend};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
@@ -689,6 +689,7 @@ impl BuildContext for BuildDispatch<'_> {
         debug!("Performing direct build for {identifier}");
 
         let output_dir = output_dir.to_path_buf();
+        let show_warnings = warn_for_bundled_backend(&sources);
         let tar_backend = self.tar_backend;
         let filename = tokio::task::spawn_blocking(move || -> Result<_, BuildBackendError> {
             let filename = match build_kind {
@@ -698,7 +699,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &output_dir,
                         None,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                     )?;
                     DistFilename::WheelFilename(wheel)
                 }
@@ -707,7 +708,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &source_tree,
                         &output_dir,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                         tar_backend,
                     )?;
                     DistFilename::SourceDistFilename(source_dist)
@@ -718,7 +719,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &output_dir,
                         None,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                     )?;
                     DistFilename::WheelFilename(wheel)
                 }
