@@ -103,6 +103,29 @@ fn resolve_extras(criterion: &mut Criterion<WallTime>) {
     group.finish();
 }
 
+fn visit_extras(criterion: &mut Criterion<WallTime>) {
+    for width in [1, 7, 8, 16, 64, 256] {
+        let conditions = (0..width)
+            .map(|index| format!("platform_machine == 'machine-{index:08}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let marker: MarkerTree = format!("extra == 'target' and ({conditions})")
+            .parse()
+            .expect("benchmark marker should be valid");
+
+        criterion.bench_function(
+            &format!("visit_extras {width} platform ranges"),
+            |benchmark| {
+                benchmark.iter(|| {
+                    let mut visited = 0;
+                    black_box(marker).visit_extras(|_, _| visited += 1);
+                    black_box(visited)
+                });
+            },
+        );
+    }
+}
+
 /// Measure conflict simplification on its own and together with formatting. Environment-only
 /// markers can discard the conflict guards, while conflict-dependent markers must retain them.
 /// Build the inputs before timing and copy the original marker on every iteration.
@@ -168,5 +191,5 @@ fn imbibe(criterion: &mut Criterion<WallTime>) {
     group.finish();
 }
 
-criterion_group!(uv_pep508, to_dnf, resolve_extras, imbibe);
+criterion_group!(uv_pep508, to_dnf, resolve_extras, visit_extras, imbibe);
 criterion_main!(uv_pep508);
