@@ -7429,7 +7429,7 @@ struct PackageWire {
     group_requires_python: BTreeMap<GroupName, GroupMetadata>,
 }
 
-#[derive(Clone, Default, Debug, Eq, PartialEq, serde::Deserialize)]
+#[derive(Clone, Default, Debug, Eq, serde::Deserialize)]
 #[serde(from = "PackageMetadataWire")]
 struct PackageMetadata {
     requires_dist: Box<[Requirement]>,
@@ -7465,6 +7465,20 @@ impl From<PackageMetadataWire> for PackageMetadata {
                 .map(|(group, requirements)| (group, requirements.into_iter().collect()))
                 .collect(),
         }
+    }
+}
+
+impl PartialEq for PackageMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            requires_dist,
+            provides_extra,
+            dependency_groups,
+        } = self;
+        requires_dist == &other.requires_dist
+            && dependency_groups == &other.dependency_groups
+            && provides_extra.iter().collect::<BTreeSet<_>>()
+                == other.provides_extra.iter().collect::<BTreeSet<_>>()
     }
 }
 
@@ -10685,6 +10699,19 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn recorded_extra_availability_is_a_set() -> Result<(), Box<dyn Error>> {
+        let recorded: PackageMetadata =
+            toml::from_str("provides-extras = ['zebra', 'alpha', 'alpha']")?;
+        let extras = recorded.provides_extra.clone();
+        let decoded: PackageMetadata = toml::from_str("provides-extras = ['alpha', 'zebra']")?;
+        assert_eq!(recorded, decoded);
+        assert_eq!(recorded.provides_extra, extras);
+        let changed: PackageMetadata = toml::from_str("provides-extras = ['alpha']")?;
+        assert_ne!(recorded, changed);
+        Ok(())
     }
 
     #[test]
