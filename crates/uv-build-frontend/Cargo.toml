@@ -53,3 +53,4 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+temp-env = { workspace = true }
