@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Re-resolution overwrites newer lockfile revisions and can discard metadata. The parent regression passes while asserting this downgrade. Preventing writes requires a compatibility-policy and override decision; retaining only the revision number would not preserve metadata. The checkout remains unchanged, and the README records the investigation and limitation.",
+  "validation": [],
+  "pull_request": null
+}

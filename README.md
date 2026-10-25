@@ -125,19 +125,37 @@ uv 0.13.5 accepted the same configuration and updated the project successfully. 
 
 ### Existing test coverage
 
-The following setups and assertions were inspected; the Rust tests were not executed:
+During the initial reproduction, the following setups and assertions were inspected without executing the Rust tests. The parent regression was subsequently executed during the fix investigation described below:
 
 - `crates/uv/tests/sync/sync.rs`, `sync_lockfile_requires_revision`: supplies a revision-4 lockfile without a project manifest, then snapshots exit 2 and the exact reported frozen-discovery error. Covers the downstream error, not a cross-version rewrite.
 - `crates/uv/tests/sync/sync.rs`, `sync_lockfile_without_manifest`: locks a project with local wheels and an explicit `docs` default group, removes its manifest, and snapshots successful frozen sync using the recorded defaults. Covers the successful manifest-free path.
-- `crates/uv/tests/lock/lock.rs`, `lock_bump_static_version` (`test-universal`): changes a dependency-free project's version from 0.1.0 to 0.2.0, verifies `--locked` fails, and snapshots a normal lock updating the package version. Covers the re-resolution trigger used here, with a single current executable.
+- `crates/uv/tests/lock/lock.rs`, `lock_bump_static_version` (`test-universal`): the parent regression now changes a generated lockfile from revision 5 to synthetic revision 6, verifies a no-op lock preserves it, changes the dependency-free project version, verifies `--locked` fails without writing, and snapshots a normal lock downgrading to revision 5. It then removes the manifest and verifies frozen sync succeeds. This models the older-writer behavior with a single current executable; revision 5 still satisfies the current consumer, unlike the historical revision-3 downgrade.
 - `crates/uv/tests/lock/lock.rs`, `lock_refresh` (`test-universal`): starts with a revision-2 lock missing a wheel, verifies a no-op lock leaves it unchanged, and verifies `--refresh` restores the wheel and writes revision 5. Covers format regeneration, not downgrade prevention.
 - `crates/uv/tests/lock/lock.rs`, `lock_unsupported_version` (`test-universal`): rejects schema `version = 2`, including a malformed newer-schema lock. This tests schema-version rejection, not a maximum supported `revision`.
 
-Targeted searches in `crates/uv/tests/` and `crates/uv-client/tests/it/` found no direct cross-version revision-downgrade prevention test. No tests were added or modified.
+Initial targeted searches in `crates/uv/tests/` and `crates/uv-client/tests/it/` found no direct cross-version revision-downgrade prevention test. The checkout now includes the synthetic-newer-revision regression from astral-sh/uv-dev#2993. No tests were added or modified during the fix investigation.
 
 ### Evidence and limits
 
 Command stdout, stderr, exit codes, and before/after lockfiles are retained in `/tmp/uv-22911-v7f7pbxi/evidence/`. The original older writer and its re-resolution trigger remain unknown. The minimal reproduction uses a project-version change; it does not show that every no-op `uv lock` downgrades a lockfile. Windows was not tested. More workspace/group variants are unnecessary to establish this behavior because both the downgrade and the exact downstream error occurred without a workspace or dependencies.
+
+## Fix
+
+**Outcome: not fixed; compatibility policy requires a maintainer decision.** The checkout remains unchanged, including the parent regression in `crates/uv/tests/lock/lock.rs` from astral-sh/uv-dev#2993 at commit `ab8b02e1d4d5489c989d6d36bc38c9c651af8728`.
+
+The reproduced cause is confirmed in the producer and write paths: `Lock::from_toml` accepts supported schema versions without rejecting higher revisions; a fresh resolution constructs `Lock` with the running executable's `REVISION`; `LockOperation::execute` commits a changed result without comparing the previous and newly generated revisions. A satisfying no-op lock bypasses that write. The typed lock representation does not preserve arbitrary unknown future metadata, so retaining the incoming revision number alone would misrepresent the generated lockfile's capabilities and would not fix the demonstrated metadata loss.
+
+A write refusal would change the documented compatibility contract in `docs/concepts/resolution.md`: uv versions can read and write the same schema version, and revision changes do not cause older versions to error. The policy must specify whether to introduce an exception for writes, what explicit override is supported, and how it interacts with format regeneration. The issue's proposed `--force` behavior is a proposal, not an established interface. A generic unknown-metadata preservation mechanism would require a broader design and cannot be inferred safely from the dependency-free fixture. Neither approach is a focused implementation of an already settled contract. The existing project-level `required-version` mitigation remains applicable.
+
+Neighboring coverage and consumers were inspected: `lock_refresh` intentionally regenerates an older revision using the current format; `lock_unsupported_version` covers schema-version rejection rather than revision rejection; `sync_lockfile_requires_revision` rejects revision 4 without a manifest; and `sync_frozen_member_default_groups_revision_4` uses manifest-derived defaults for older locks. These assertions are consistent with the confirmed cause and do not establish another consumer bug. The parent's successful manifest-free sync after a synthetic 6-to-5 downgrade is also consistent: the current consumer needs revision 5, whereas the released-version reproduction downgraded to revision 3. No additional command variants or speculative fixtures were added.
+
+Successful focused baseline validation:
+
+```sh
+cargo test -p uv --test lock --features test-universal lock::lock_bump_static_version -- --exact
+```
+
+This ran in the unoptimized debug test profile: **1 passed, 0 failed**, including the no-op preservation, locked-mode rejection, undesirable downgrade snapshot, and manifest-free frozen-sync round trip. `cargo nextest` was unavailable, so the documented Cargo test runner was used. The baseline was confirmed before considering changes. No desired-behavior test or production edit was made because choosing its expected refusal or preservation behavior would preempt the unresolved policy decision. There is no validated production fix to publish.
 
 ## Mitigation
 
@@ -146,6 +164,8 @@ Set an appropriate minimum uv version using `[tool.uv].required-version` in the 
 The error's suggestion to run `uv lock` requires restoring or providing the project manifest; a lockfile alone does not contain the source project's full configuration for re-resolution.
 
 ## Related
+
+- astral-sh/uv-dev#2993 — Parent regression pull request. Extends `lock_bump_static_version` to assert a synthetic revision-6 lock is downgraded to revision 5 after a project-version change. The unchanged test passed in the debug-profile fix investigation.
 
 - astral-sh/uv#15220 — Force newest lock file format (revision = 3, upload-time=...) (issue, closed). Describes mixed-version collaboration and removal of newer metadata. Requests forced format upgrades rather than prevention of downgrades. Maintainers recommended `required-version` and later `--refresh`.
 - astral-sh/uv#22018 — Support frozen sync without workspace manifests (pull request, merged October 3, 2026; released in uv 0.12.23). Introduced the affected discovery path, requiring revision 5 or later. Explains the downstream error, without preventing older writers from downgrading the file.
@@ -166,6 +186,6 @@ Related-issue research covered open and closed issues and PRs using the error te
 
 ## Validation and follow-up
 
-Runtime checks used released executables, not a checkout build. Source and existing-test inspection used checkout commit `6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596`; historical source inspection used tag `0.8.15`. No checkout files or GitHub state were changed. Reproduction artifacts and caches are temporary, and only this issue-context README was updated outside the reproduction directory.
+Initial runtime reproduction used released executables. The subsequent fix investigation ran the parent regression against a debug-profile checkout build, as recorded in the Fix section. Initial source and existing-test inspection used checkout commit `6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596`; historical source inspection used tag `0.8.15`. No checkout files or GitHub state were changed. The initial reproduction artifacts and caches are temporary. The fix investigation generated ordinary debug build artifacts but made no source or regression-test changes. Only this README was modified within the issue-context directory.
 
 For an exact match to the reported PR, obtain the older writer's version, the project change or flags causing re-resolution, and confirmation that the workspace manifest was absent during frozen sync. These details refine the reporter-specific sequence but are no longer prerequisites for demonstrating the reported behavior. Any proposed write guard should preserve intentional reading compatibility and define override semantics explicitly.
