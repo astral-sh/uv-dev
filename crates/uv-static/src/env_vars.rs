@@ -1409,12 +1409,13 @@ impl EnvVars {
     pub const UV_NO_INSTALLER_METADATA: &'static str = "UV_NO_INSTALLER_METADATA";
 
     /// Selects the Git dependency backend. Defaults to `cli`. Set to `gitoxide` to use the
-    /// experimental Rust backend for hostless `file://` URLs and for HTTP(S) URLs when uv
-    /// has not disabled TLS verification. URLs with a query or fragment and local requests
-    /// that need the configured upload-pack transport use the Git executable. Supported
-    /// HTTP(S) Git LFS repositories use the basic transfer protocol.
-    /// Submodules with LFS enabled, custom transfers, pointer extensions and authentication
-    /// that requires a credential helper use the Git LFS executable.
+    /// experimental Rust backend for HTTP(S), hostless `file://` and SSH URLs. An SSH URL
+    /// needs a host, no password, and either no username or the username `git`. SSH fetches
+    /// run the configured SSH command or `ssh`. URLs with a query or fragment, requests
+    /// with disabled TLS verification and local repositories that require upload-pack use
+    /// the Git executable. Supported HTTP(S) Git LFS repositories use the basic transfer
+    /// protocol. SSH LFS downloads, submodules with LFS enabled, custom transfers, pointer
+    /// extensions and authentication that needs a credential helper use the Git LFS executable.
     #[attr_added_in("next release")]
     pub const UV_GIT_BACKEND: &'static str = "UV_GIT_BACKEND";
 

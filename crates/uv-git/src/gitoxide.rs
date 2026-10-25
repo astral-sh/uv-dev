@@ -24,18 +24,27 @@ impl Backend {
             None => Ok(Self::Cli),
             Some(value) if value == "cli" => Ok(Self::Cli),
             Some(value) if value == "gitoxide" => {
-                if (matches!(url.scheme(), "http" | "https")
-                    || (url.scheme() == "file" && url.host().is_none()))
-                    && !url.as_str().contains('?')
-                    && url.fragment().is_none()
-                    && !disable_ssl
-                {
+                if Self::supports(url, disable_ssl) {
                     Ok(Self::Gitoxide)
                 } else {
                     Ok(Self::Cli)
                 }
             }
             Some(_) => bail!("Invalid value for `UV_GIT_BACKEND`. Expected `cli` or `gitoxide`."),
+        }
+    }
+
+    fn supports(url: &SafeUrl, disable_ssl: bool) -> bool {
+        if disable_ssl || url.as_str().contains('?') || url.fragment().is_some() {
+            return false;
+        }
+        match url.scheme() {
+            "http" | "https" => true,
+            "file" => !url.has_host(),
+            "ssh" => {
+                url.has_host() && matches!(url.username(), "" | "git") && url.password().is_none()
+            }
+            _ => false,
         }
     }
 }
@@ -335,4 +344,28 @@ fn copy_cached_objects(source: &gix::Repository, destination: &gix::Repository) 
         fs_err::copy(source.shallow_file()?, destination.shallow_file()?)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_supports_usernames_preserved_in_promisor_urls() -> Result<()> {
+        for url in [
+            "ssh://forge.example/pkg",
+            "ssh://git@forge.example:2222/pkg",
+        ] {
+            let url = SafeUrl::parse(url)?;
+            assert!(Backend::supports(&url, false));
+            assert_eq!(url.without_credentials().as_ref(), &url);
+        }
+        for url in [
+            "ssh://user@forge.example/pkg",
+            "ssh://git:secret@forge.example/pkg",
+        ] {
+            assert!(!Backend::supports(&SafeUrl::parse(url)?, false));
+        }
+        Ok(())
+    }
 }
