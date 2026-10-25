@@ -8192,6 +8192,7 @@ name = "uv-virtualenv"
 version = "0.0.97"
 dependencies = [
  "console",
+ "core-foundation 0.10.1",
  "fs-err",
  "itertools 0.14.0",
  "owo-colors",

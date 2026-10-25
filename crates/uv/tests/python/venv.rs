@@ -19,6 +19,47 @@ use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
 use uv_test::{assert_link_target, site_packages_path, uv_snapshot};
 
+/// Apply backup exclusion to a new directory, but not one reused with `--allow-existing`.
+#[cfg(target_os = "macos")]
+#[test]
+fn venv_backup_exclusion() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let fresh = context.temp_dir.child("fresh");
+    context
+        .venv()
+        .arg(fresh.path())
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+    context
+        .external_command("/usr/bin/xattr")
+        .arg("-p")
+        .arg("com.apple.metadata:com_apple_backup_excludeItem")
+        .arg(fresh.path())
+        .assert()
+        .success();
+
+    let reused = context.temp_dir.child("reused");
+    reused.child("keep.txt").write_str("keep")?;
+    context
+        .venv()
+        .arg(reused.path())
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+    context
+        .external_command("/usr/bin/xattr")
+        .arg("-p")
+        .arg("com.apple.metadata:com_apple_backup_excludeItem")
+        .arg(reused.path())
+        .assert()
+        .failure();
+    Ok(())
+}
+
 #[test]
 fn create_venv() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
