@@ -45,6 +45,8 @@ pub(crate) async fn cache_clean(
         }
     };
 
+    cache.validate_removal_root()?;
+
     let removal_accounting = if preview.is_enabled(PreviewFeature::CachePhysicalSpace) {
         RemovalAccounting::Fine
     } else {

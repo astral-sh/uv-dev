@@ -20,6 +20,22 @@ use uv_static::EnvVars;
 use uv_test::assert_path_missing;
 use uv_test::uv_snapshot;
 
+/// An unrelated nonempty directory can be selected by mistake via `UV_CACHE_DIR`.
+#[test]
+fn clean_untagged_directory() -> Result<()> {
+    let mut context = uv_test::test_context!("3.12");
+    context.cache_dir = context.temp_dir.child("unrelated");
+    let sentinel = context.cache_dir.child("keep.txt");
+    sentinel.write_str("keep")?;
+    uv_snapshot!(context.filters(), context.clean().arg("--force"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Refusing to remove contents of `unrelated` without a valid `CACHEDIR.TAG` file
+    ");
+    assert_eq!(fs_err::read_to_string(&sentinel)?, "keep");
+    Ok(())
+}
+
 /// `cache clean` should remove all packages.
 #[test]
 fn clean_all() -> Result<()> {
