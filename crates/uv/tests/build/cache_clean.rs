@@ -620,6 +620,7 @@ fn clean_handles_verbatim_paths() -> Result<()> {
 
     // Attempt to create a file with a trailing dot (we need to make it verbatim to do so)
     uwsgi_shard.create_dir_all()?;
+    uv_fs::cachedir::ensure_tag(&context.cache_dir)?;
     let invalid_path = uwsgi_shard.child("logging.").to_path_buf();
     let invalid_file = uv_fs::verbatim_path(invalid_path.as_path());
     fs_err::write(&invalid_file, b"")?;
