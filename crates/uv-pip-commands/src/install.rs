@@ -543,6 +543,8 @@ pub async fn pip_install(
             &extras,
             &groups,
             &build_options,
+            &exclude_newer,
+            &index_locations,
             hash_checking,
         )?
     } else {

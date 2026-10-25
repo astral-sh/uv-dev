@@ -14591,7 +14591,7 @@ fn pep_751_install_registry_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_install_invalid_artifact_urls() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
@@ -15088,7 +15088,7 @@ fn pep_751_install_path_wheel() -> Result<()> {
 
 #[test]
 fn pep_751_prefers_path_over_url() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_exclude_newer("false");
 
     for wheel in [
         "ok-1.0.0-py3-none-any.whl",
@@ -15193,7 +15193,7 @@ fn pep_751_install_path_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     let pylock_toml = context.temp_dir.child("pylock.toml");
 
     allow_duplicates! {
@@ -15270,7 +15270,7 @@ fn pep_751_missing_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes_unselected_artifacts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     fs::copy(
         context
             .workspace_root
@@ -15316,7 +15316,7 @@ fn pep_751_empty_hashes_unselected_artifacts() -> Result<()> {
 
 #[test]
 fn pep_751_unsupported_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
@@ -15624,7 +15624,7 @@ fn pep_751_multiple_sources() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -15664,7 +15664,7 @@ fn pep_751_default_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_empty_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -15705,7 +15705,7 @@ fn pep_751_default_groups_empty_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_unrelated_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -15746,7 +15746,7 @@ fn pep_751_default_groups_unrelated_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_overlapping_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -15787,7 +15787,7 @@ fn pep_751_default_groups_overlapping_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_explicit_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -15869,7 +15869,7 @@ fn pep_751_default_groups_absent() -> Result<()> {
 
 #[test]
 fn pep_751_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_exclude_newer("false");
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
