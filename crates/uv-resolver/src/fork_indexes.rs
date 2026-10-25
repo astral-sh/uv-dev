@@ -10,12 +10,12 @@ use crate::resolver::ResolverEnvironment;
 pub(crate) struct ForkIndexes(FxHashMap<PackageName, IndexMetadata>);
 
 impl ForkIndexes {
-    /// Get the [`Index`] previously used for a package in this fork.
+    /// Get the [`IndexMetadata`] previously used for a package in this fork.
     pub(crate) fn get(&self, package_name: &PackageName) -> Option<&IndexMetadata> {
         self.0.get(package_name)
     }
 
-    /// Check that this is the only [`Index`] used for this package in this fork.
+    /// Check that this is the only [`IndexMetadata`] used for this package in this fork.
     pub(crate) fn insert(
         &mut self,
         package_name: &PackageName,
