@@ -90,6 +90,27 @@ If a build failure is reproducible with another installer, you should investigat
 example, `numpy` or `setuptools`), find a way to avoid building the package in the first place, or
 make the necessary adjustments to your system for the build to succeed.
 
+### Building the current project
+
+For a failure from `uv build`, try [PyPA's `build` frontend](https://build.pypa.io/) on the same
+source tree. Use a virtual environment with the same Python version as the failing build, then run
+these commands from the project directory:
+
+```console
+$ python -m pip install build
+$ python -m build
+```
+
+By default, `uv build` and `python -m build` build a source distribution, then build a wheel from
+that source distribution. If the original command used `--sdist` or `--wheel`, pass the same option
+to `python -m build`. Also pass any relevant backend configuration with `--config-setting`, and
+compare the selected build-dependency versions.
+
+If the project uses `uv_build`, compare the build backend versions before attributing a difference
+to the frontend. `uv build` can use its
+[bundled build backend](../../concepts/build-backend.md#bundled-build-backend), while
+`python -m build` uses the separate `uv_build` package.
+
 ## Why does uv build a package?
 
 When generating the cross-platform lockfile, uv needs to determine the dependencies of all packages,
