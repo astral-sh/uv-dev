@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
+    Mock, MockServer, ResponseTemplate, Times,
     matchers::{method, path},
 };
 
@@ -33,6 +33,24 @@ impl PackageServer {
     /// Access the mock server to add responses and request expectations.
     pub fn mock_server(&self) -> &MockServer {
         &self.server
+    }
+
+    /// Serve caller-provided core metadata with an explicit request expectation.
+    ///
+    /// Mount this after [`Self::serve_with`], which resets responses. Advertise the sidecar separately
+    /// through that method's `core-metadata` field; its value and hashes need not match these bytes.
+    pub async fn serve_metadata(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        expected_requests: impl Into<Times>,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/{filename}.metadata")))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(bytes.to_vec(), "text/plain"))
+            .expect(expected_requests)
+            .mount(&self.server)
+            .await;
     }
 
     /// Replace all responses with one archive and its index entry, keeping the server address.
