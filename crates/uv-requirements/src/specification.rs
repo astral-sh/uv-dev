@@ -37,8 +37,8 @@ use tracing::instrument;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
-    RequirementsInput,
+    BuildPolicy, BuildPolicyPackage, DependencyGroups, ExcludeDependency, NoBinary, NoBuild,
+    Override, PackageOverride, RequirementsInput,
 };
 use uv_distribution_types::{Index, Requirement};
 use uv_distribution_types::{
@@ -92,6 +92,10 @@ pub struct RequirementsSpecification {
     pub no_binary: NoBinary,
     /// The `--no-build` flags to enforce when selecting distributions.
     pub no_build: NoBuild,
+    /// The global build policy provided by inline script metadata.
+    pub build_policy: Option<BuildPolicy>,
+    /// Per-package build policies provided by inline script metadata.
+    pub build_policy_package: BuildPolicyPackage,
 }
 
 impl RequirementsSpecification {
@@ -184,6 +188,12 @@ impl RequirementsSpecification {
                         .clone()
                         .unwrap_or_default(),
                 ),
+                build_policy: tool_uv.top_level.build_policy,
+                build_policy_package: tool_uv
+                    .top_level
+                    .build_policy_package
+                    .clone()
+                    .unwrap_or_default(),
                 no_build: NoBuild::from_args(
                     tool_uv.top_level.no_build,
                     tool_uv
@@ -592,6 +602,9 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.build_policy = source.build_policy.or(spec.build_policy);
+            spec.build_policy_package
+                .extend(source.build_policy_package);
             spec.require_hashes |= source.require_hashes;
         }
 
@@ -632,6 +645,9 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.build_policy = source.build_policy.or(spec.build_policy);
+            spec.build_policy_package
+                .extend(source.build_policy_package);
             spec.require_hashes |= source.require_hashes;
         }
 
@@ -660,6 +676,9 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.build_policy = source.build_policy.or(spec.build_policy);
+            spec.build_policy_package
+                .extend(source.build_policy_package);
             spec.require_hashes |= source.require_hashes;
         }
 
