@@ -2631,7 +2631,12 @@ pub async fn download_to_disk(url: &str, path: &Path) {
         .build()
         .expect("failed to build base client");
     let url = url.parse().unwrap();
-    let response = client.for_host(&url).get(url).send().await.unwrap();
+    let response = client
+        .for_host(&url)
+        .get(url.into_unsafe_url())
+        .send()
+        .await
+        .unwrap();
 
     let mut file = fs_err::tokio::File::create(path).await.unwrap();
     let mut stream = response.bytes_stream();

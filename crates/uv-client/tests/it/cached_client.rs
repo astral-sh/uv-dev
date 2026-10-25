@@ -36,7 +36,11 @@ async fn cached_text(
     control: CacheControl,
 ) -> Result<String> {
     let url = format!("{}/metadata", server.uri()).parse()?;
-    let request = client.uncached().for_host(&url).get(url).build()?;
+    let request = client
+        .uncached()
+        .for_host(&url)
+        .get(url.into_unsafe_url())
+        .build()?;
     client
         .get_serde_with_retry(request, entry, control, async |response, _| {
             response.text().await
@@ -81,7 +85,11 @@ fn dispatch_and_http_errors_share_retry_budget() -> Result<()> {
     let cache = tempfile::tempdir()?;
     let entry = CacheEntry::new(cache.path(), "response");
     let url = format!("{}/metadata", server.uri()).parse()?;
-    let request = client.uncached().for_host(&url).get(url).build()?;
+    let request = client
+        .uncached()
+        .for_host(&url)
+        .get(url.into_unsafe_url())
+        .build()?;
     let mut fetch = pin!(client.get_serde_with_retry(
         request,
         &entry,
@@ -546,7 +554,11 @@ async fn assert_retry_budget(
                 .build()?,
         );
         let url = server.uri().parse()?;
-        let request = client.uncached().for_host(&url).get(url).build()?;
+        let request = client
+            .uncached()
+            .for_host(&url)
+            .get(url.into_unsafe_url())
+            .build()?;
         let callback_retries = RefCell::new(Vec::new());
         let callback = async |response: Response, retry_state: &mut RetryState| {
             response.bytes().await.map_err(io::Error::other)?;
@@ -620,7 +632,7 @@ async fn send_counts_middleware_retries() -> Result<()> {
             .no_retry_delay(true)
             .build()?;
         let url = server.uri().parse()?;
-        let request = client.for_host(&url).get(url.clone());
+        let request = client.for_host(&url).get(url.clone().into_unsafe_url());
         let mut retry_state = RetryState::start(client.retry_policy(), url);
         let result = retry_state.send(request).await;
         assert_eq!(result.is_err(), network_error);
@@ -659,7 +671,11 @@ async fn revalidation_http_errors_share_retry_budget() -> Result<()> {
         )
         .mount(&server)
         .await;
-    let request = client.uncached().for_host(&url).get(url.clone()).build()?;
+    let request = client
+        .uncached()
+        .for_host(&url)
+        .get(url.clone().into_unsafe_url())
+        .build()?;
     let result = client
         .get_serde_with_retry(
             request,
@@ -678,7 +694,11 @@ async fn revalidation_http_errors_share_retry_budget() -> Result<()> {
         .expect(3)
         .mount(&server)
         .await;
-    let request = client.uncached().for_host(&url).get(url).build()?;
+    let request = client
+        .uncached()
+        .for_host(&url)
+        .get(url.into_unsafe_url())
+        .build()?;
     let result = client
         .get_serde_with_retry(
             request,

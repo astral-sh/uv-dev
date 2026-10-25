@@ -10,6 +10,7 @@ use futures::{FutureExt, TryStreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use rayon::in_place_scope;
 use rayon::prelude::*;
+use reqwest_middleware::RequestBuilder;
 use rustc_hash::FxHashMap;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, ReadBuf};
 use tokio::sync::Semaphore;
@@ -19,8 +20,7 @@ use tracing::{Instrument, debug, info_span, instrument, warn};
 use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
-    RequestBuilder, RetryState,
+    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient, RetryState,
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
@@ -1601,7 +1601,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         self.client
             .unmanaged
             .uncached_client(&url)
-            .get(url)
+            .get(url.into_unsafe_url())
             .header(
                 // `reqwest` defaults to accepting compressed responses.
                 // Specify identity encoding to get consistent .whl downloading
@@ -1615,11 +1615,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     /// Build a GET request with a `Range: bytes=<offset>-` header.
     ///
     /// Used to resume an interrupted download from `offset` bytes into the file.
-    fn request_with_offset(&self, url: SafeUrl, offset: u64) -> RequestBuilder<'_> {
+    fn request_with_offset(&self, url: SafeUrl, offset: u64) -> RequestBuilder {
         self.client
             .unmanaged
             .uncached_client(&url)
-            .get(url)
+            .get(url.into_unsafe_url())
             .header(
                 "accept-encoding",
                 reqwest::header::HeaderValue::from_static("identity"),
