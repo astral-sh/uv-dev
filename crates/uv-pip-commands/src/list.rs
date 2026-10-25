@@ -14,7 +14,7 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::ListFormat;
-use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
+use uv_configuration::{BuildOptions, Concurrency, IndexStrategy, KeyringProviderType};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
@@ -43,6 +43,7 @@ pub async fn pip_list(
     format: &ListFormat,
     outdated: bool,
     prerelease: Prerelease,
+    build_options: &BuildOptions,
     index_locations: IndexLocations,
     index_strategy: IndexStrategy,
     keyring_provider: KeyringProviderType,
@@ -132,6 +133,7 @@ pub async fn pip_list(
             client: &client,
             capabilities: &capabilities,
             prerelease: &prerelease,
+            build_options,
             exclude_newer: &exclude_newer,
             index_locations: &latest_index_locations,
             tags: Some(tags),

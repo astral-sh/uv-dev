@@ -312,6 +312,7 @@ pub async fn install(
             client: &client,
             capabilities: &capabilities,
             prerelease: &settings.resolver.prerelease,
+            build_options: &settings.resolver.build_options,
             exclude_newer: &settings.resolver.exclude_newer,
             index_locations: &settings.resolver.index_locations,
             tags: None,
