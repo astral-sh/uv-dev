@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet;
 use tracing::debug;
 
 use uv_cache::Cache;
-use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDistKind, Name};
+use uv_distribution_types::{DependencyMetadata, InstalledDistKind, Name};
 use uv_fs::Simplified;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
