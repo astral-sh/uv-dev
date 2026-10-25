@@ -134,6 +134,14 @@ pub enum Error {
     Metadata(#[from] uv_pypi_types::MetadataError),
     #[error("Failed to read metadata: {}", _0.user_display())]
     WheelMetadata(PathBuf, #[source] Box<uv_metadata::Error>),
+    #[error(
+        "The `METADATA` in `{filename}` does not match the metadata hash advertised by the index (expected {expected}, computed {actual})"
+    )]
+    WheelSidecarMismatch {
+        filename: Box<WheelFilename>,
+        expected: HashDigest,
+        actual: HashDigest,
+    },
     #[error("Failed to read metadata from installed package `{0}`")]
     ReadInstalled(Box<InstalledDist>, #[source] InstalledDistError),
     #[error("Failed to extract archive: {0}")]
@@ -317,6 +325,7 @@ impl Error {
             | Self::BuiltWheelIncompatibleTargetPlatform { .. }
             | Self::Metadata(_)
             | Self::WheelMetadata(..)
+            | Self::WheelSidecarMismatch { .. }
             | Self::Extract(..)
             | Self::MissingPkgInfo
             | Self::MissingSubdirectory(..)

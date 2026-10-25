@@ -19189,3 +19189,44 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     Ok(())
 }
+
+/// An index can advertise internally consistent sidecar and archive hashes while serving
+/// different dependency metadata in the two files.
+#[tokio::test]
+async fn reject_wheel_with_inconsistent_sidecar() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .requires(&["leaf".parse()?])
+        .build();
+    let sidecar = "Metadata-Version: 2.2\nName: example\nVersion: 1.0\n";
+    let wheel_hash = hex::encode(Sha256::digest(&wheel));
+    let sidecar_hash = hex::encode(Sha256::digest(sidecar));
+    Mock::given(method("GET")).and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(r#"<a href="/{filename}#sha256={wheel_hash}" data-core-metadata="sha256={sidecar_hash}">{filename}</a>"#), "text/html"))
+        .mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(sidecar))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url").arg(format!("{}/simple/", server.uri()))
+        .arg("example"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download `example==1.0`
+      cause: The `METADATA` in `example-1.0-py3-none-any.whl` does not match the metadata hash advertised by the index (expected sha256:3b49f3abf9059a7989e98e997f30823e903e0f46afa00178fe05b1b0b191e85e, computed sha256:bad511584dec1afd0349e1bb75e33717c7865a9f632e942dc1150f1dafcd07c8)
+    ");
+    Ok(())
+}
