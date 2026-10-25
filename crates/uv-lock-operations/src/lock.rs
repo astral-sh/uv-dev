@@ -768,6 +768,7 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        let source_indexes = target.indexes().cloned().collect::<Vec<_>>();
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let database = DistributionDatabase::new(
             &client,
@@ -796,6 +797,7 @@ async fn do_lock(
             interpreter,
             &requires_python,
             index_locations,
+            &source_indexes,
             upgrade,
             refresh,
             &options,

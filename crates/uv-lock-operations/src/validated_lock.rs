@@ -9,7 +9,9 @@ use uv_command_support::Printer;
 use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
+use uv_distribution_types::{
+    DependencyMetadata, Index, IndexLocations, Requirement, RequiresPython,
+};
 use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -60,6 +62,7 @@ impl ValidatedLock {
         interpreter: &Interpreter,
         requires_python: &RequiresPython,
         index_locations: &IndexLocations,
+        source_indexes: &[Index],
         upgrade: &Upgrade,
         refresh: Option<&Refresh>,
         options: &Options,
@@ -91,21 +94,6 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
-        // Stored cutoffs can belong to packages considered during backtracking. New cutoffs for
-        // packages outside the lock take effect when another change triggers resolution.
-        let exclude_newer = lock.filter_exclude_newer(options.exclude_newer.clone());
-        if let Some(change) = lock.exclude_newer().compare(&exclude_newer) {
-            // If a relative value is used, we won't invalidate on every tick of the clock unless
-            // the span duration changed or some other operation causes a new resolution
-            if !change.is_relative_timestamp_change() {
-                let _ = writeln!(
-                    printer.stderr(),
-                    "Resolving despite existing lockfile due to {change}",
-                );
-                return Ok(Self::Preferable(lock));
-            }
-        }
-
         if upgrade.is_all() {
             // If the user specified `--upgrade`, then we can't use the existing lockfile.
             //
@@ -257,19 +245,6 @@ impl ValidatedLock {
             return Ok(Self::Preferable(lock));
         }
 
-        // If the user provided at least one index URL (from the command line, or from a configuration
-        // file), don't use the existing lockfile if it references any registries that are no longer
-        // included in the current configuration.
-        //
-        // However, if _no_ indexes were provided, we assume that the user wants to reuse the existing
-        // distributions, even though a failure to reuse the lockfile will result in re-resolving
-        // against PyPI by default.
-        let indexes = if index_locations.is_none() {
-            None
-        } else {
-            Some(index_locations)
-        };
-
         // Determine whether the lockfile satisfies the workspace requirements.
         match lock
             .satisfies(
@@ -286,7 +261,9 @@ impl ValidatedLock {
                 workspace_group_metadata,
                 workspace_default_groups,
                 dependency_metadata,
-                indexes,
+                index_locations,
+                source_indexes,
+                &options.exclude_newer,
                 interpreter.tags()?,
                 interpreter.markers(),
                 &options.build_options,
@@ -300,6 +277,13 @@ impl ValidatedLock {
             SatisfiesResult::Satisfied => {
                 debug!("Existing `uv.lock` satisfies workspace requirements");
                 Ok(Self::Satisfies(lock))
+            }
+            SatisfiesResult::MismatchedExcludeNewer(package, cutoff) => {
+                let _ = writeln!(
+                    printer.stderr(),
+                    "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
+                );
+                Ok(Self::Preferable(lock))
             }
             SatisfiesResult::MismatchedMembers(expected, actual) => {
                 debug!(
