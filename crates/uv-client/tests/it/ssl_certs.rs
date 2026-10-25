@@ -21,8 +21,8 @@ use uv_static::EnvVars;
 
 use crate::http_util::{
     SelfSigned, generate_expired_self_signed_certs_with_ca, generate_self_signed_certs_with_ca,
-    generate_self_signed_certs_with_ca_custom_extensions, start_https_mtls_user_agent_server,
-    start_https_user_agent_server, test_cert_dir,
+    generate_self_signed_certs_with_ca_custom_extensions, local_client_builder,
+    start_https_mtls_user_agent_server, start_https_user_agent_server, test_cert_dir,
 };
 
 /// A self-signed CA together with a server certificate and a client certificate
@@ -248,7 +248,7 @@ impl TestClient {
         async_with_vars(vars, async {
             let (server_task, addr) = start_https_user_agent_server(&cert.server).await.unwrap();
             let cache = Cache::temp().unwrap().init().await.unwrap();
-            let base = BaseClientBuilder::default()
+            let base = local_client_builder()
                 .retries(0)
                 .no_retry_delay(true)
                 .with_system_certs(system_certs);
@@ -259,7 +259,12 @@ impl TestClient {
             };
             let client = RegistryClientBuilder::new(base, cache);
             let client = if custom_client {
-                client.with_reqwest_client(reqwest::Client::new())
+                client.with_reqwest_client(
+                    reqwest::Client::builder()
+                        .no_proxy()
+                        .build()
+                        .expect("local client should build"),
+                )
             } else {
                 client
             };
@@ -442,7 +447,14 @@ async fn send_request(
     retries: u32,
 ) -> Result<reqwest::Response, reqwest_middleware::Error> {
     let url = SafeUrl::from_str(&format!("https://{addr}")).unwrap();
-    send_request_to_with_cert(&url, system_certs, cert, retries).await
+    send_request_to_with_cert(
+        &url,
+        local_client_builder()
+            .retries(retries)
+            .with_system_certs(system_certs),
+        cert,
+    )
+    .await
 }
 
 /// Send a GET request to an arbitrary URL using a fresh registry client.
@@ -451,14 +463,20 @@ async fn send_request_to(
     url: &SafeUrl,
     system_certs: bool,
 ) -> Result<reqwest::Response, reqwest_middleware::Error> {
-    send_request_to_with_cert(url, system_certs, None, 3).await
+    send_request_to_with_cert(
+        url,
+        BaseClientBuilder::default()
+            .retries(3)
+            .with_system_certs(system_certs),
+        None,
+    )
+    .await
 }
 
 async fn send_request_to_with_cert(
     url: &SafeUrl,
-    system_certs: bool,
+    base: BaseClientBuilder<'_>,
     cert: Option<&Path>,
-    retries: u32,
 ) -> Result<reqwest::Response, reqwest_middleware::Error> {
     let cache = Cache::temp().unwrap().init().await.unwrap();
     let custom_certificates = if let Some(cert) = cert {
@@ -466,10 +484,7 @@ async fn send_request_to_with_cert(
     } else {
         Certificates::from_env()
     };
-    let base = BaseClientBuilder::default()
-        .retries(retries)
-        .no_retry_delay(true)
-        .with_system_certs(system_certs);
+    let base = base.no_retry_delay(true);
     let base = if let Some(certificates) = custom_certificates {
         base.custom_certificates(certificates)
     } else {
