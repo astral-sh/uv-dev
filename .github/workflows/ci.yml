@@ -113,6 +113,7 @@ jobs:
         sudo chown "$(id -u):$(id -g)" /minix
     - name: Cargo test
       env:
+        CACHE_SEED_COMPILE_ONLY: ${{ inputs.phase == 'seed' && inputs.commit_index == '0' }}
         UV_HTTP_RETRIES: 5
         RUST_BACKTRACE: 1
         UV_INTERNAL__TEST_COW_FS: /btrfs
@@ -122,13 +123,18 @@ jobs:
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
       run: |
+        cache_seed_args=()
+        if [[ "$CACHE_SEED_COMPILE_ONLY" == "true" ]]; then
+          cache_seed_args+=(--no-run)
+          echo "Measured seed compile only: true"
+        fi
         uv run --only-group test cargo nextest run --locked \
           --cargo-profile fast-build-nightly \
           -Z panic-abort-tests \
           -Z checksum-freshness \
           --features test-python-patch,test-universal,native-auth,secret-service \
           --workspace \
-          --profile ci-linux
+          --profile ci-linux "${cache_seed_args[@]}"
     - name: Upload pending snapshots
       if: ${{ failure() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -240,6 +246,7 @@ jobs:
         sudo chown "$(id -u):$(id -g)" /minix
     - name: Cargo test
       env:
+        CACHE_SEED_COMPILE_ONLY: ${{ inputs.phase == 'seed' && inputs.commit_index == '0' }}
         UV_HTTP_RETRIES: 5
         RUST_BACKTRACE: 1
         UV_INTERNAL__TEST_COW_FS: /btrfs
@@ -249,13 +256,18 @@ jobs:
         INSTA_UPDATE: new
         INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
       run: |
+        cache_seed_args=()
+        if [[ "$CACHE_SEED_COMPILE_ONLY" == "true" ]]; then
+          cache_seed_args+=(--no-run)
+          echo "Measured seed compile only: true"
+        fi
         uv run --only-group test cargo nextest run --locked \
           --cargo-profile fast-build-nightly \
           -Z panic-abort-tests \
           -Z checksum-freshness \
           --features test-python-patch,test-universal,native-auth,secret-service \
           --workspace \
-          --profile ci-linux
+          --profile ci-linux "${cache_seed_args[@]}"
     - name: Upload pending snapshots
       if: ${{ failure() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
