@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::process::Command;
 use tracing::{debug, trace, warn};
 
+use rustc_hash::FxHashSet;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{
@@ -27,7 +28,8 @@ use uv_configuration::{
     ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
 };
 use uv_dispatch::UniversalState;
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, RegistryWheelIndex};
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -69,7 +71,7 @@ use uv_settings::{
 };
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
-use uv_types::SourceTreeEditablePolicy;
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
@@ -92,6 +94,7 @@ pub async fn run(
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
     requirements: Vec<RequirementsSource>,
+    cached_wheels: Vec<WheelFilename>,
     show_resolution: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -964,9 +967,14 @@ pub async fn run(
     // If we're layering requirements atop the project environment, run the command in an ephemeral,
     // isolated environment. Otherwise, modifications to the "active virtual environment" would
     // poison the cache.
-    let ephemeral_dir = requirements_env
-        .as_ref()
-        .map(|_| cache.venv_dir())
+    let wheel_roots = cached_wheel_roots(
+        &cached_wheels,
+        &base_interpreter,
+        &settings.resolver,
+        &cache,
+    )?;
+    let ephemeral_dir = (requirements_env.is_some() || !wheel_roots.is_empty())
+        .then(|| cache.venv_dir())
         .transpose()?;
 
     let ephemeral_env = ephemeral_dir
@@ -999,126 +1007,141 @@ pub async fn run(
     // environment. Adding `sitecustomize.py` would be an alternative, but it can be shadowed by an
     // existing such module in the python installation.
     if let Some(ephemeral_env) = ephemeral_env.as_ref() {
-        if let Some(requirements_env) = requirements_env.as_ref() {
-            let requirements_site_packages =
-                requirements_env.site_packages().next().ok_or_else(|| {
+        let requirements_site_packages = requirements_env
+            .as_ref()
+            .map(|env| {
+                env.site_packages().next().ok_or_else(|| {
                     anyhow!("Requirements environment has no site packages directory")
-                })?;
-            let mut base_site_packages = base_interpreter
-                .runtime_site_packages()
+                })
+            })
+            .transpose()?;
+        let mut base_site_packages = base_interpreter
+            .runtime_site_packages()
+            .iter()
+            .map(|path| Cow::Borrowed(path.as_path()))
+            .chain(base_interpreter.site_packages())
+            .peekable();
+        if base_site_packages.peek().is_none() {
+            return Err(anyhow!("Base environment has no site packages directory"));
+        }
+
+        let overlay_content = format!(
+            "import site; {}{}",
+            if wheel_roots.is_empty() {
+                ""
+            } else {
+                "import sys; sys.dont_write_bytecode = True; "
+            },
+            wheel_roots
                 .iter()
                 .map(|path| Cow::Borrowed(path.as_path()))
-                .chain(base_interpreter.site_packages())
-                .peekable();
-            if base_site_packages.peek().is_none() {
-                return Err(anyhow!("Base environment has no site packages directory"));
-            }
+                .chain(requirements_site_packages)
+                .chain(base_site_packages)
+                .dedup()
+                .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
+                .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
 
-            let overlay_content = format!(
-                "import site; {}",
-                std::iter::once(requirements_site_packages)
-                    .chain(base_site_packages)
-                    .dedup()
-                    .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                    .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            );
+        set_overlay(ephemeral_env, &overlay_content)?;
 
-            set_overlay(ephemeral_env, &overlay_content)?;
-
-            // N.B. The order here matters — earlier interpreters take precedence over the
-            // later ones.
-            for interpreter in [requirements_env.interpreter(), &base_interpreter] {
-                // Copy each entrypoint from the base environments to the ephemeral environment,
-                // updating the Python executable target to ensure they run in the ephemeral
-                // environment.
-                let scripts = match fs_err::read_dir(interpreter.scripts()) {
-                    Ok(scripts) => scripts,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                    Err(err) => return Err(err.into()),
-                };
-                for entry in scripts {
-                    let entry = entry?;
-                    if !entry.file_type()?.is_file() {
-                        continue;
-                    }
-                    match copy_entrypoint(
-                        &entry.path(),
-                        &ephemeral_env.scripts().join(entry.file_name()),
-                        interpreter.sys_executable(),
-                        ephemeral_env.interpreter().sys_executable(),
-                    ) {
-                        Ok(()) => {}
-                        // If the entrypoint already exists, skip it.
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::AlreadyExists =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: already exists",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(CopyEntrypointError::Io(err))
-                            if err.kind() == std::io::ErrorKind::PermissionDenied =>
-                        {
-                            trace!(
-                                "Skipping copy of entrypoint `{}`: permission denied",
-                                &entry.path().display()
-                            );
-                        }
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-
-                // Link data directories from the base environment to the ephemeral environment.
-                //
-                // This is critical for Jupyter Lab, which cannot operate without the files it
-                // writes to `<prefix>/share/jupyter`.
-                //
-                // See https://github.com/jupyterlab/jupyterlab/issues/17716
-                for dir in &["etc/jupyter", "share/jupyter"] {
-                    let source = interpreter.sys_prefix().join(dir);
-                    if !matches!(source.try_exists(), Ok(true)) {
-                        continue;
-                    }
-                    if !source.is_dir() {
-                        continue;
-                    }
-                    let target = ephemeral_env.interpreter().sys_prefix().join(dir);
-                    if let Some(parent) = target.parent() {
-                        fs_err::create_dir_all(parent)?;
-                    }
-                    match create_symlink(&source, &target) {
-                        Ok(()) => trace!(
-                            "Created link for `{}` -> `{}`",
-                            target.user_display(),
-                            source.user_display()
-                        ),
-                        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-            }
-
-            // Write the `sys.prefix` of the parent environment to the `extends-environment` key of the `pyvenv.cfg`
-            // file. This helps out static-analysis tools such as ty (see docs on
-            // `set_parent_environment`).
-            //
-            // Note that we do this even if the parent environment is not a virtual environment.
-            // For ephemeral environments created by `uv run --with`, the parent environment's
-            // `site-packages` directory is added to `sys.path` even if the parent environment is not
-            // a virtual environment and even if `--system-site-packages` was not explicitly selected.
-            set_parent_environment(ephemeral_env, base_interpreter.sys_prefix())?;
-
-            // If `--system-site-packages` is enabled, add the system site packages to the ephemeral
+        // N.B. The order here matters — earlier interpreters take precedence over the
+        // later ones.
+        for interpreter in requirements_env
+            .as_ref()
+            .map(PythonEnvironment::interpreter)
+            .into_iter()
+            .chain(std::iter::once(&base_interpreter))
+        {
+            // Copy each entrypoint from the base environments to the ephemeral environment,
+            // updating the Python executable target to ensure they run in the ephemeral
             // environment.
-            if base_interpreter.is_virtualenv()
-                && PyVenvConfiguration::parse(base_interpreter.sys_prefix().join("pyvenv.cfg"))
-                    .is_ok_and(|cfg| cfg.include_system_site_packages())
-            {
-                ephemeral_env.set_pyvenv_cfg("include-system-site-packages", "true")?;
+            let scripts = match fs_err::read_dir(interpreter.scripts()) {
+                Ok(scripts) => scripts,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err.into()),
+            };
+            for entry in scripts {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                match copy_entrypoint(
+                    &entry.path(),
+                    &ephemeral_env.scripts().join(entry.file_name()),
+                    interpreter.sys_executable(),
+                    ephemeral_env.interpreter().sys_executable(),
+                ) {
+                    Ok(()) => {}
+                    // If the entrypoint already exists, skip it.
+                    Err(CopyEntrypointError::Io(err))
+                        if err.kind() == std::io::ErrorKind::AlreadyExists =>
+                    {
+                        trace!(
+                            "Skipping copy of entrypoint `{}`: already exists",
+                            &entry.path().display()
+                        );
+                    }
+                    Err(CopyEntrypointError::Io(err))
+                        if err.kind() == std::io::ErrorKind::PermissionDenied =>
+                    {
+                        trace!(
+                            "Skipping copy of entrypoint `{}`: permission denied",
+                            &entry.path().display()
+                        );
+                    }
+                    Err(err) => return Err(err.into()),
+                }
             }
+
+            // Link data directories from the base environment to the ephemeral environment.
+            //
+            // This is critical for Jupyter Lab, which cannot operate without the files it
+            // writes to `<prefix>/share/jupyter`.
+            //
+            // See https://github.com/jupyterlab/jupyterlab/issues/17716
+            for dir in &["etc/jupyter", "share/jupyter"] {
+                let source = interpreter.sys_prefix().join(dir);
+                if !matches!(source.try_exists(), Ok(true)) {
+                    continue;
+                }
+                if !source.is_dir() {
+                    continue;
+                }
+                let target = ephemeral_env.interpreter().sys_prefix().join(dir);
+                if let Some(parent) = target.parent() {
+                    fs_err::create_dir_all(parent)?;
+                }
+                match create_symlink(&source, &target) {
+                    Ok(()) => trace!(
+                        "Created link for `{}` -> `{}`",
+                        target.user_display(),
+                        source.user_display()
+                    ),
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
+        // Write the `sys.prefix` of the parent environment to the `extends-environment` key of the `pyvenv.cfg`
+        // file. This helps out static-analysis tools such as ty (see docs on
+        // `set_parent_environment`).
+        //
+        // Note that we do this even if the parent environment is not a virtual environment.
+        // For ephemeral environments created by `uv run --with`, the parent environment's
+        // `site-packages` directory is added to `sys.path` even if the parent environment is not
+        // a virtual environment and even if `--system-site-packages` was not explicitly selected.
+        set_parent_environment(ephemeral_env, base_interpreter.sys_prefix())?;
+
+        // If `--system-site-packages` is enabled, add the system site packages to the ephemeral
+        // environment.
+        if base_interpreter.is_virtualenv()
+            && PyVenvConfiguration::parse(base_interpreter.sys_prefix().join("pyvenv.cfg"))
+                .is_ok_and(|cfg| cfg.include_system_site_packages())
+        {
+            ephemeral_env.set_pyvenv_cfg("include-system-site-packages", "true")?;
         }
     }
 
@@ -1247,6 +1270,75 @@ pub async fn run(
         .with_context(|| format!("Failed to spawn: {}", command.display_executable()))?;
 
     run_to_completion(handle).await
+}
+
+/// Look up extracted registry wheels using the same index pointers and interpreter tags as the installer.
+fn cached_wheel_roots(
+    wheels: &[WheelFilename],
+    interpreter: &Interpreter,
+    settings: &ResolverSettings,
+    cache: &Cache,
+) -> anyhow::Result<Vec<PathBuf>> {
+    if wheels.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tags = interpreter.tags()?;
+    let hasher = HashStrategy::default();
+    let builds =
+        LoweredExtraBuildDependencies::from_non_lowered(settings.extra_build_dependencies.clone())
+            .into_inner();
+    let mut index = RegistryWheelIndex::new(
+        cache,
+        tags,
+        &settings.index_locations,
+        &hasher,
+        &settings.config_setting,
+        &settings.config_settings_package,
+        &builds,
+        &settings.extra_build_variables,
+    );
+    let mut roots = Vec::with_capacity(wheels.len());
+    let mut names = FxHashSet::default();
+    for wheel in wheels {
+        if !names.insert(&wheel.name) {
+            bail!("Multiple cached wheels requested for `{}`", wheel.name);
+        }
+        if !wheel.tag_compatibility(tags).is_compatible() {
+            bail!("Cached wheel `{wheel}` is incompatible with the selected Python interpreter");
+        }
+        let mut matches = index
+            .get(&wheel.name)
+            .filter(|entry| !entry.is_built() && entry.dist().filename == *wheel);
+        let Some(entry) = matches.next() else {
+            bail!("Wheel `{wheel}` is not cached from a configured index");
+        };
+        if matches.any(|other| other.dist().path != entry.dist().path) {
+            bail!("Wheel `{wheel}` is cached from multiple indexes; select a single index");
+        }
+        let root = entry.dist().path.as_ref();
+        let metadata = uv_metadata::read_flat_wheel_metadata(wheel, root)?;
+        if metadata.name != wheel.name || metadata.version != wheel.version {
+            bail!("Wheel `{wheel}` has inconsistent package metadata");
+        }
+        if let Some(requires) = metadata.requires_python
+            && !requires.contains(interpreter.python_version())
+        {
+            bail!(
+                "Wheel `{wheel}` requires Python `{requires}`, but the selected interpreter is `{}`",
+                interpreter.python_version()
+            );
+        }
+        for child in fs_err::read_dir(root)? {
+            let child = child?;
+            if child.file_type()?.is_dir()
+                && child.path().extension().is_some_and(|ext| ext == "data")
+            {
+                bail!("Wheel `{wheel}` requires installation to relocate its `.data` directory");
+            }
+        }
+        roots.push(root.to_path_buf());
+    }
+    Ok(roots)
 }
 
 /// Add the parent environments' site packages to an ephemeral environment.

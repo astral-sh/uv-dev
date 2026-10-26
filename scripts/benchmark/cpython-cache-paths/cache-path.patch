@@ -1,0 +1,29 @@
+--- a/Lib/site.py
++++ b/Lib/site.py
+@@ -532,6 +532,7 @@
+     if candidate_conf:
+         virtual_conf = candidate_conf
+         system_site = "true"
++        cache_paths = []
+         # Issue 25185: Use UTF-8, as that's what the venv module uses when
+         # writing the file.
+         with open(virtual_conf, encoding='utf-8') as f:
+@@ -544,11 +545,18 @@
+                         system_site = value.lower()
+                     elif key == 'home':
+                         sys._home = value
++                    elif key == "uv-cache-path" and os.path.isabs(value):
++                        cache_paths.append(value)
+ 
+         sys.prefix = sys.exec_prefix = site_prefix
+ 
+         # Doing this here ensures venv takes precedence over user-site
+         addsitepackages(known_paths, [sys.prefix])
++        for path in cache_paths:
++            directory, key = makepath(path)
++            if key not in known_paths and os.path.isdir(directory):
++                sys.path.append(directory)
++                known_paths.add(key)
+ 
+         # addsitepackages will process site_prefix again if its in PREFIXES,
+         # but that's ok; known_paths will prevent anything being added twice

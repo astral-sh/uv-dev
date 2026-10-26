@@ -26,6 +26,7 @@ use uv_configuration::{
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
     TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
     IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
@@ -693,6 +694,7 @@ pub struct RunSettings {
     pub with: Vec<String>,
     pub with_editable: Vec<String>,
     pub with_requirements: Vec<RequirementsInput>,
+    pub with_cached_wheel: Vec<WheelFilename>,
     pub isolated: bool,
     pub show_resolution: bool,
     pub all_packages: bool,
@@ -754,6 +756,7 @@ impl RunSettings {
             with,
             with_editable,
             with_requirements,
+            with_cached_wheel,
             isolated,
             active,
             no_active,
@@ -852,6 +855,7 @@ impl RunSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
+            with_cached_wheel,
             with_requirements: with_requirements
                 .into_iter()
                 .filter_map(Maybe::into_option)

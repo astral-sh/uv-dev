@@ -22,6 +22,7 @@ use uv_configuration::{
     TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
     VersionControlSystem, VersionFormat,
 };
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
     IndexSourceError, IndexUrl, Origin, PipExtraIndex, PipFindLinks, PipIndex,
@@ -3350,6 +3351,15 @@ pub struct RunArgs {
     /// Using `pyproject.toml`, `setup.py`, or `setup.cfg` files is not allowed.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// Import an extracted wheel by filename from the local cache.
+    ///
+    /// The wheel must be cached from a configured index or `--find-links` location. A miss fails
+    /// even when online. Repeat this option for dependencies missing from the base environment.
+    /// uv checks the wheel tags and `Requires-Python` against the selected interpreter. It does not
+    /// install entry points or relocate wheel data with this option.
+    #[arg(long, value_name = "FILENAME", conflicts_with_all = ["with", "with_editable", "with_requirements"])]
+    pub with_cached_wheel: Vec<WheelFilename>,
 
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///
