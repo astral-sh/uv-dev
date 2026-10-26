@@ -14,13 +14,22 @@ Duplicate of astral-sh/uv#11743. astral-sh/uv#21671 proposed libc exclusions but
 
 The supported behavior in uv 0.13.5 is to require glibc-compatible artifacts without requiring musl, using a glibc-only baseline with `required-environments`. That does not prohibit musl installations or remove musl wheels. Merely including Linux in `environments` does not require wheels for every libc.
 
-## Draft response
+The maintainer additionally recommends `no-build-package` for the affected dependency when source-distribution fallback is unacceptable. This addresses the wheel-only installation need without implementing musl exclusion; success for the reporter is not yet confirmed.
 
-You cannot currently exclude musl through `tool.uv.environments`: PEP 508 has no libc marker. This request is tracked in astral-sh/uv#11743; let's keep the discussion there.
+## Maintainer guidance
 
-`minimum-libc-version` controls required artifact coverage. Setting `musl`, even to a very high version, still requires musl-compatible artifacts. To require only glibc coverage, configure your Linux `required-environments` and set only the desired `glibc` baseline, leaving `musl` unset. This does not exclude musl or remove its wheels from the lockfile. The `environments` configuration you posted does not itself require musl wheels.
+In the supplied discussion for astral-sh/uv#22913, maintainer charliermarsh confirms that a glibc-only `minimum-libc-version` setting requires glibc-compatible wheel coverage, but a source distribution can also satisfy the requirement. To prevent source-distribution fallback for a specific dependency, the maintainer recommends combining the baseline with `no-build-package`:
 
-If resolution still fails after removing the musl requirement, please share the complete error and a minimal `pyproject.toml` including the affected dependencies in that discussion.
+```toml
+minimum-libc-version = { glibc = "2.31" }
+no-build-package = ["example-bin"]
+```
+
+These are settings under `[tool.uv]`; `example-bin` is an illustrative package name, not a dependency identified by the reporter. The baseline should match the oldest glibc version the project intends to support. The existing `required-environments` guidance identifies the Linux architectures for which coverage is required.
+
+This provides a practical way to require compatible wheels for dependencies that cannot be built from source. It does not introduce a libc environment marker, exclude musl installations, or remove musl wheels from the lockfile. The reporter has not confirmed whether this configuration resolves their problem, and the affected packages and original resolution error remain unknown.
+
+Evidence: maintainer comment 6419641097, dated 2026-10-26, in astral-sh/uv#22913. The supplied full discussion identifies the author as a repository member.
 
 ## Classification
 
@@ -38,6 +47,8 @@ The failed high-version workaround is not evidence that libc exclusion regressed
 
 ## Supporting evidence
 
+- `crates/uv-settings/src/settings.rs:1289` documents `no-build-package` as disabling source-distribution builds for a specified package, with an exception for first-party workspace packages. `crates/uv-resolver/src/version_map.rs:108` applies the package-specific build policy during resolution.
+- `crates/uv/tests/lock/minimum_libc.rs:685`, `minimum_libc_allows_sdist_fallback`, demonstrates resolution succeeding through a source distribution when the wheel cannot satisfy the glibc baseline, then failing with `--no-build` when no compatible wheel is available. This supports the fallback distinction; the test uses the global build prohibition, while the maintainer recommends the package-specific setting. The test was inspected, not executed.
 - In astral-sh/uv#11743, maintainer comments dated 2025-02-24 explicitly state that `tool.uv.environments` cannot capture manylinux versus musllinux because PEP 508 has no equivalent libc constraint. The follow-up says a new field or syntax needs configuration design. The issue remains open with `enhancement` and `needs-design` labels.
 - `docs/concepts/resolution.md:191` describes the default wheel requirement and distinguishes limiting `environments` from adding `required-environments`. It does not require every Linux libc to be covered by default.
 - `docs/concepts/resolution.md:241` states that environment markers do not include libc implementation or version. At line 259 it explicitly says that omitting a libc means it is not required, not excluded. The same text was verified through GitHub at the reporter's exact `0.13.5` tag.
@@ -64,6 +75,6 @@ The link from astral-sh/uv#11743 to astral-sh/uv#7816 was inspected: that issue 
 
 ## Handoff
 
-Centralize the exclusion request in astral-sh/uv#11743. Explain the preview setting's coverage semantics and ask for the full error and dependency example only if resolution remains broken after removing the unintended musl requirement. Do not recommend the unmerged structured-environment or libc-marker syntax.
+The exclusion request remains covered by astral-sh/uv#11743. For the immediate wheel-only dependency need, the maintainer has supplied a glibc-only baseline combined with `no-build-package`; confirmation from the reporter is still needed. If investigation continues, the missing inputs are the affected dependency names, complete configuration, failing command, and full error after applying the relevant coverage and build restrictions. Do not recommend the unmerged structured-environment or libc-marker syntax.
 
-This handoff and proposed reply are for maintainer review. No GitHub changes were made.
+This is an internal maintainer handoff. No public response was drafted or posted for this context update, and no GitHub changes were made.
