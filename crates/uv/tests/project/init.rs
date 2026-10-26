@@ -11,6 +11,29 @@ use uv_static::EnvVars;
 
 use uv_test::{TestContext, uv_snapshot};
 
+/// A project in the home directory becomes the discovered project for unrelated descendants.
+#[test]
+fn init_implicit_home_directory() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.init().arg("--bare").current_dir(&context.home_dir), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot implicitly initialize a project in the home directory. Use `uv init <path>` to choose a project directory, or `uv init .` to initialize the home directory explicitly.
+    ");
+    assert!(!context.home_dir.child("pyproject.toml").exists());
+
+    context
+        .init()
+        .arg("--bare")
+        .arg("--name")
+        .arg("intentional")
+        .arg(".")
+        .current_dir(&context.home_dir)
+        .assert()
+        .success();
+    assert!(context.home_dir.child("pyproject.toml").is_file());
+}
+
 #[test]
 fn init() {
     let context = uv_test::test_context!("3.12");

@@ -107,6 +107,16 @@ pub async fn init(
                 Some(ref path) => std::path::absolute(path)?,
             };
 
+            if explicit_path.is_none()
+                && std::env::home_dir().is_some_and(|home| {
+                    uv_fs::is_same_file_allow_missing(&path, &home) == Some(true)
+                })
+            {
+                anyhow::bail!(
+                    "Cannot implicitly initialize a project in the home directory. Use `uv init <path>` to choose a project directory, or `uv init .` to initialize the home directory explicitly."
+                );
+            }
+
             // Make sure a project does not already exist in the given directory.
             if path.join("pyproject.toml").exists() {
                 let path =
