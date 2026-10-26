@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 21177,
+        "title": "Bump `quinn-proto` to 0.11.17",
+        "url": "https://github.com/astral-sh/uv/issues/21177",
+        "state": "closed",
+        "reason": "Earlier scanner-driven quinn-proto upgrade request for two QUIC advisories. Maintainers explained that uv does not use HTTP/3 or QUIC and those findings did not affect uv. This informs the quinn-proto assessment, but does not identify the new Aikido alerts or cover either zerovec crate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20025,
+        "title": "Bump `quinn-proto` to 0.11.15",
+        "url": "https://github.com/astral-sh/uv/pull/20025",
+        "state": "merged",
+        "reason": "Merged on 2026-06-27, updating quinn-proto from 0.11.14 to 0.11.15 for GHSA-4w2j-m93h-cj5j. Its description explicitly says uv was unaffected because reqwest's http3 feature is disabled. This is historical maintenance precedent, not a fix for the requested 0.11.19 update."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19853,
+        "title": "Update Rust dependencies",
+        "url": "https://github.com/astral-sh/uv/pull/19853",
+        "state": "closed",
+        "reason": "An earlier, unmerged dependency refresh proposed zerovec 0.11.5 to 0.11.6 and zerovec-derive 0.11.2 to 0.11.3. It provides update history for the other two crates, but neither reaches the requested versions nor identifies the reported vulnerabilities."
+      }
+    ],
+    "search_scope": "Used authenticated gh searches across open/closed issues and open/closed/merged PRs, separately querying quinn-proto, zerovec-derive, zerovec, and the requested versions. Broadened to Aikido, vulnerability, security scanner, RustSec, dependency updates, HTTP/3, ICU, zero-copy, memory safety, and unsoundness; also searched the public zerovec advisory identifiers. PR search omitted a known matching PR, so supplemented it by examining titles and bodies of the 3,000 most recent PRs, spanning 2026-05-05 through 2026-10-26. Inspected candidate discussions, maintainer comments, linked PRs, and relevant diffs. Ruled out astral-sh/uv#22475: its reqwest update does not change the three requested crates. Aikido reports astral-sh/uv#20541 and astral-sh/uv#20542 concern different crates and advisories. Checked Cargo.lock, reqwest features, and public GitHub advisories; found no canonical discussion covering all three requested updates."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests dependency maintenance upgrades. The checkout confirms versions below the requested targets, but the unidentified Aikido alerts do not establish an applicable vulnerability in uv. The historical quinn findings concern disabled HTTP/3 functionality, and the public zerovec advisories inspected affect older version ranges. The related items concern earlier updates, not this three-crate request; no regression of a previously fixed uv bug is established.",
+  "summary": "astral-sh/uv#21177 and astral-sh/uv#20025 explain earlier quinn-proto alerts and uv's disabled HTTP/3 support. Closed, unmerged astral-sh/uv#19853 proposed older zerovec updates. No existing item was found covering all three requested versions.",
+  "draft_response": "The current lockfile contains quinn-proto 0.11.18, zerovec-derive 0.11.2, and zerovec 0.11.5. uv does not enable HTTP/3 or QUIC, so the quinn-proto advisories discussed in astral-sh/uv#21177 did not affect uv.\n\nPlease share your uv version, the Aikido advisory IDs or links for each alert, and whether Aikido scanned Cargo.lock or a distributed binary/container. Those details will help assess whether these findings affect uv and whether the updates need security prioritization. Updates without an applicable security issue are handled through routine dependency maintenance."
+}
