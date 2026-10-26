@@ -14874,8 +14874,10 @@ fn git_source_refs() -> Result<()> {
 #[cfg(feature = "test-git")]
 #[cfg_attr(windows, ignore = "Git error messages differ on Windows")]
 fn git_source_missing_tag() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"`.*/git(?:\.exe)? -c core\.fsmonitor=false fetch (.*)`",
+        "`git -c core.fsmonitor=false fetch $1`",
+    ));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -14898,11 +14900,83 @@ fn git_source_missing_tag() -> Result<()> {
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8dab139913c4b566
       cause: failed to fetch tag `missing`
-      cause: process didn't exit successfully: `git fetch --force --update-head-ok 'https://github.com/astral-test/uv-public-pypackage' '+refs/tags/missing:refs/remotes/origin/tags/missing'` (exit status: 128)
+      cause: process didn't exit successfully: `git -c core.fsmonitor=false fetch --force --update-head-ok 'https://github.com/astral-test/uv-public-pypackage' '+refs/tags/missing:refs/remotes/origin/tags/missing'` (exit status: 128)
              --- stderr
              fatal: couldn't find remote ref refs/tags/missing
     ");
 
+    Ok(())
+}
+
+/// A cached dependency checkout does not need the filesystem monitor for the user's working tree.
+#[test]
+#[cfg(all(unix, feature = "test-git", feature = "test-universal"))]
+fn git_checkout_fsmonitor() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ])
+        .assert()
+        .success();
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("example @ git+{url}"))?;
+
+    let hook = context.temp_dir.child("monitor");
+    let called = context.temp_dir.child("called");
+    hook.write_str("#!/bin/sh\ntouch \"$MONITOR_LOG\"\nprintf 'fixture\\0'\n")?;
+    let monitor = r#"sh "$MONITOR_HOOK""#;
+    Command::new("git")
+        .current_dir(repository.path())
+        .arg("-c")
+        .arg(format!("core.fsmonitor={monitor}"))
+        .args(["status", "--porcelain"])
+        .env("MONITOR_HOOK", hook.path())
+        .env("MONITOR_LOG", called.path())
+        .assert()
+        .success();
+    assert!(called.exists());
+    fs_err::remove_file(called.path())?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", monitor)
+        .env("MONITOR_HOOK", hook.path())
+        .env("MONITOR_LOG", called.path())
+        .assert()
+        .success();
+    assert!(!called.exists());
     Ok(())
 }
 
