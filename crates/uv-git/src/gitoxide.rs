@@ -60,14 +60,14 @@ pub(crate) fn init(path: &Path) -> gix::Result<gix::Repository> {
     .to_thread_local())
 }
 
-/// Return `false` when the local request cannot use the in-process fetch.
+/// Fetch the requested references, serving ordinary local repositories in process.
 pub(crate) fn fetch(
     path: &Path,
     url: &SafeUrl,
     refspecs: &[String],
     all_tags: bool,
     offline: bool,
-) -> Result<bool> {
+) -> Result<()> {
     let options = options().config_overrides(["gitoxide.credentials.terminalPrompt=false"]);
     let mut repo = gix::open_opts(path, options)?;
     repo.committer_or_set_generic_fallback()?;
@@ -77,20 +77,25 @@ pub(crate) fn fetch(
     if all_tags {
         remote = remote.with_fetch_tags(gix::remote::fetch::Tags::All);
     }
-    if remote
+    let local = remote
         .url(Direction::Fetch)
-        .is_some_and(|url| url.scheme == gix::url::Scheme::File)
-    {
-        return Ok(remote.try_fetch_local(&AtomicBool::new(false))?.is_some());
+        .is_some_and(|url| url.scheme == gix::url::Scheme::File && url.host().is_none());
+    let interrupt = AtomicBool::new(false);
+    if local && remote.try_fetch_local(&interrupt)?.is_some() {
+        return Ok(());
     }
-    if offline {
+    if offline && !local {
         return Err(GitError::TransportNotAllowed.into());
     }
-    let outcome = remote
+    let fetch = remote
         .connect(Direction::Fetch)?
-        .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?
-        .with_filter(gix::remote::fetch::Filter::TreeDepth(0))
-        .receive(Discard, &AtomicBool::new(false))?;
+        .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
+    let outcome = if local {
+        fetch
+    } else {
+        fetch.with_filter(gix::remote::fetch::Filter::TreeDepth(0))
+    }
+    .receive(Discard, &interrupt)?;
     if let gix::remote::fetch::Status::Change {
         write_pack_bundle, ..
     } = outcome.status
@@ -100,7 +105,7 @@ pub(crate) fn fetch(
     {
         set_promisor(&mut repo, url)?;
     }
-    Ok(true)
+    Ok(())
 }
 
 fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
