@@ -15623,6 +15623,28 @@ fn pep_751_multiple_sources() -> Result<()> {
 }
 
 #[test]
+fn pep_751_rejects_undeclared_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["report"]
+        dependency-groups = ["test"]
+        default-groups = ["default"]
+        packages = []
+    "#,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview").arg("--dry-run").arg("--extra").arg("reports").arg("-r").arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `reports` is not declared in the `pylock.toml` file
+    ");
+    Ok(())
+}
+
+#[test]
 fn pep_751_default_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 

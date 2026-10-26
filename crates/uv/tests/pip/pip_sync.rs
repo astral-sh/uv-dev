@@ -5898,6 +5898,28 @@ fn pep_751() -> Result<()> {
 }
 
 #[test]
+fn pep_751_rejects_explicit_private_default_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["report"]
+        dependency-groups = ["test"]
+        default-groups = ["default"]
+        packages = []
+    "#,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview").arg("--dry-run").arg("--group").arg("default").arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Dependency group `default` is not listed in the `pylock.toml` file's `dependency-groups`
+    ");
+    Ok(())
+}
+
+#[test]
 fn pep_751_default_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
