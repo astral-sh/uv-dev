@@ -282,6 +282,11 @@ explicit = true
 
 To add a Git dependency source, prefix a Git-compatible URL with `git+`.
 
+By default, uv uses the Git executable to fetch and check out dependencies. To try the in-process
+Git backend, run `uv sync --preview-features gitoxide`. SSH, credential helpers, checkout filters,
+and some local fetches still use external programs. See [preview features](../preview.md) for
+configuration options.
+
 For example:
 
 ```console
@@ -378,8 +383,10 @@ lfs-cowsay = { git = "https://github.com/astral-sh/lfs-cowsay", lfs = true }
 
 !!! important
 
-    Ensure Git LFS is installed and configured on your system before attempting to install sources
-    using Git LFS, otherwise a build failure can occur.
+    Install and configure Git LFS to fetch LFS objects with uv's default Git backend. With the
+    `gitoxide` preview, uv can download objects using the basic HTTP(S) transfer or read them from
+    a local repository without `git-lfs`. Some authentication, storage, and transfer configurations
+    still require Git LFS.
 
 ### URL
 
