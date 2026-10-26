@@ -92,6 +92,7 @@ pub async fn run(
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
     requirements: Vec<RequirementsSource>,
+    overlay: bool,
     show_resolution: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -126,6 +127,10 @@ pub async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    #[cfg(not(target_os = "linux"))]
+    if overlay {
+        bail!("`--overlay` requires Linux");
+    }
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.
@@ -1190,6 +1195,19 @@ pub async fn run(
 
     debug!("Running `{command}`");
     let mut process = command.as_command(interpreter);
+    #[cfg(target_os = "linux")]
+    let _overlay_mount = if overlay {
+        if !interpreter.is_virtualenv() || requirements_env.is_some() {
+            bail!(
+                "`--overlay` requires a virtual environment without additional `--with` requirements"
+            );
+        }
+        let mount = cache.venv_dir()?;
+        crate::overlay::configure(&mut process, interpreter.sys_prefix(), mount.path())?;
+        Some(mount)
+    } else {
+        None
+    };
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1244,7 +1262,13 @@ pub async fn run(
     // TODO(zanieb): Throw a nicer error message if the command is not found
     let handle = process
         .spawn()
-        .with_context(|| format!("Failed to spawn: {}", command.display_executable()))?;
+        .with_context(|| {
+            if overlay {
+                format!("Failed to run `{}` with OverlayFS (requires mount namespace and OverlayFS mount permissions)", command.display_executable())
+            } else {
+                format!("Failed to spawn: {}", command.display_executable())
+            }
+        })?;
 
     run_to_completion(handle).await
 }

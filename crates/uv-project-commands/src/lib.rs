@@ -15,6 +15,8 @@ pub mod export;
 pub mod format;
 pub mod init;
 pub mod lock;
+#[cfg(target_os = "linux")]
+mod overlay;
 pub mod remove;
 pub mod run;
 pub mod sync;

@@ -3351,6 +3351,16 @@ pub struct RunArgs {
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
+    /// Run with a temporary writable `OverlayFS` mount over the selected virtual environment.
+    ///
+    /// Requires Linux and permission to create a mount namespace and mount `tmpfs` and `OverlayFS`.
+    /// The command sees
+    /// the environment at its normal path. Changes through the mount last for the lifetime of the
+    /// namespace. Project synchronization happens before the mount. Use `--no-sync` for an
+    /// already prepared environment. Editable sources and external symlink targets remain shared.
+    #[arg(long, conflicts_with_all = ["with", "with_editable", "with_requirements"])]
+    pub overlay: bool,
+
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///
     /// Usually, the project environment is reused for performance. This option forces a fresh
