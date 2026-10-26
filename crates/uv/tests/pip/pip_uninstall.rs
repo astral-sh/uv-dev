@@ -732,3 +732,23 @@ fn yes_short_flag() {
     "
     );
 }
+
+#[test]
+fn uninstall_pylock_stdin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("--offline").arg("-r").arg("-")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `pylock.toml` is not a supported input format for `uv pip uninstall`
+    ");
+
+    Ok(())
+}

@@ -58,17 +58,8 @@ pub async fn read_requirements(
     groups: Option<&GroupsSpecification>,
     client_builder: &BaseClientBuilder<'_>,
 ) -> Result<RequirementsSpecification, Error> {
-    // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
-    // return an error.
-    if !extras.is_empty() && !requirements.iter().any(RequirementsSource::allows_extras) {
-        let has_editable = requirements
-            .iter()
-            .any(|source| matches!(source, RequirementsSource::Editable(_)));
-        return Err(Error::ExtrasWithoutSource { has_editable });
-    }
-
-    // Read all requirements from the provided sources.
-    Ok(RequirementsSpecification::from_sources(
+    // Read all requirements from the provided sources, including format detection for stdin.
+    let spec = RequirementsSpecification::from_sources(
         requirements,
         constraints,
         overrides,
@@ -76,7 +67,18 @@ pub async fn read_requirements(
         groups,
         client_builder,
     )
-    .await?)
+    .await?;
+
+    // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
+    // return an error.
+    if !extras.is_empty() && spec.pylock.is_none() && spec.source_trees.is_empty() {
+        let has_editable = requirements
+            .iter()
+            .any(|source| matches!(source, RequirementsSource::Editable(_)));
+        return Err(Error::ExtrasWithoutSource { has_editable });
+    }
+
+    Ok(spec)
 }
 
 /// Resolve a set of constraints.

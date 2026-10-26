@@ -1030,6 +1030,12 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
+    if spec.pylock.is_some() {
+        return Err(anyhow::anyhow!(
+            "`pylock.toml` is not a supported input format for `uv tool run`"
+        )
+        .into());
+    }
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.

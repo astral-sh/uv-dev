@@ -6619,3 +6619,23 @@ fn tool_install_with_build_hashes() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn tool_install_pylock_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg("--offline").arg("--with-requirements").arg("-").arg("iniconfig")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `pylock.toml` is not a supported input format for `uv tool install`
+    ");
+
+    Ok(())
+}

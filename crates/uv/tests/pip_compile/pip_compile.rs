@@ -58,6 +58,28 @@ use uv_test::{
 };
 
 #[test]
+fn compile_pylock_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_compile()
+        .arg("--offline")
+        .arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `pylock.toml` is not a supported input format for `uv pip compile`
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn compile_requirements_in() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
