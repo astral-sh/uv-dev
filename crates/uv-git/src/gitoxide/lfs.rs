@@ -11,7 +11,7 @@ use uv_git_types::GitOid;
 use uv_redacted::SafeUrl;
 
 use super::{materialize_tree, open};
-use crate::git::GitError;
+use crate::git::{GitError, GitRemote};
 
 struct Entry {
     path: PathBuf,
@@ -183,20 +183,15 @@ pub(crate) fn contains(database: &Path, revision: GitOid) -> Result<bool> {
     Ok(true)
 }
 
-pub(crate) fn fetch(
-    database: &Path,
-    revision: GitOid,
-    url: &SafeUrl,
-    offline: bool,
-) -> Result<bool> {
-    let repo = open(database)?;
+pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Result<bool> {
+    let repo = gix::open_opts(database, source.network_options([]))?;
     let commit = gix::ObjectId::from_hex(revision.as_str().as_bytes())?;
     if repo
         .config_snapshot()
         .boolean("remote.uv-promisor.promisor")
         == Some(true)
     {
-        materialize_tree(&repo, commit, url, offline)?;
+        materialize_tree(&repo, commit, source)?;
     }
     let Some(entries) = entries(&repo, commit)? else {
         return Ok(false);
@@ -211,7 +206,7 @@ pub(crate) fn fetch(
         return Ok(true);
     }
     let (remote, _) = repo
-        .remote_at(url.as_str())?
+        .remote_at(source.url.as_str())?
         .sanitized_url_and_version(gix::remote::Direction::Fetch)?;
     if remote.scheme == gix::url::Scheme::File
         && remote.host().is_none()
@@ -223,23 +218,39 @@ pub(crate) fn fetch(
     let Some(endpoint) = batch_endpoint(&remote, entries.endpoint)? else {
         return Ok(false);
     };
-    if offline {
+    if source.offline {
         return Err(GitError::TransportNotAllowed.into());
     }
 
-    let mut builder = Client::builder().redirect(reqwest::redirect::Policy::none());
-    if let Some(ca) = std::env::var_os("GIT_SSL_CAINFO")
+    let ca = std::env::var_os("GIT_SSL_CAINFO")
         .map(PathBuf::from)
         .or_else(|| {
             repo.config_snapshot()
                 .string("http.sslCAInfo")
                 .and_then(|p| gix::path::from_bstring(p).ok())
         })
-    {
-        builder =
-            builder.tls_certs_only(reqwest::Certificate::from_pem_bundle(&fs_err::read(ca)?)?);
-    }
-    let client = builder.build()?;
+        .map(fs_err::read)
+        .transpose()?
+        .map(|pem| reqwest::Certificate::from_pem_bundle(&pem))
+        .transpose()?;
+    let client = |verify: bool| {
+        let mut builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .tls_danger_accept_invalid_certs(!verify);
+        if let Some(certs) = &ca {
+            builder = builder.tls_certs_only(certs.clone());
+        }
+        builder.build()
+    };
+    let verified = client(true)?;
+    let unverified = source.disable_ssl.then(|| client(false)).transpose()?;
+    let client_for = |url: &SafeUrl| {
+        if same_origin(source.url(), url) {
+            unverified.as_ref().unwrap_or(&verified)
+        } else {
+            &verified
+        }
+    };
     let pointers = missing.into_values().collect::<Vec<_>>();
     let credentials = if same_origin(&remote, &endpoint) {
         uv_auth::Credentials::from_url(&remote)?
@@ -247,7 +258,7 @@ pub(crate) fn fetch(
         None
     };
     for batch in pointers.chunks(100) {
-        let mut request = client
+        let mut request = client_for(&endpoint)
             .post(endpoint.as_str())
             .header(ACCEPT, download::MEDIA_TYPE)
             .header(CONTENT_TYPE, download::MEDIA_TYPE)
@@ -280,7 +291,8 @@ pub(crate) fn fetch(
         let actions = download::actions(batch, &json)?;
         for &pointer in batch {
             let action = &actions[pointer.oid];
-            let response = get_object(&client, &endpoint, action)?;
+            let url = SafeUrl::parse(&action.href)?;
+            let response = get_object(client_for(&url), &endpoint, &url, action)?;
             store(&repo, pointer, response)?;
         }
     }
@@ -383,8 +395,12 @@ fn store(repo: &gix::Repository, pointer: Pointer<'_>, reader: impl Read) -> Res
     Ok(())
 }
 
-fn get_object(client: &Client, endpoint: &SafeUrl, action: &download::Action) -> Result<Response> {
-    let url = SafeUrl::parse(&action.href)?;
+fn get_object(
+    client: &Client,
+    endpoint: &SafeUrl,
+    url: &SafeUrl,
+    action: &download::Action,
+) -> Result<Response> {
     ensure!(
         url.scheme() == "https"
             || (url.scheme() == "http"

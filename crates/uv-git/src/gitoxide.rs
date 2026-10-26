@@ -8,7 +8,7 @@ use gix::remote::Direction;
 use uv_preview::PreviewFeature;
 use uv_redacted::SafeUrl;
 
-use crate::git::GitError;
+use crate::git::{GitError, GitRemote, remote_url_root};
 
 pub(crate) mod lfs;
 
@@ -19,27 +19,44 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    pub(crate) fn for_remote(url: &SafeUrl, disable_ssl: bool) -> Self {
-        if uv_preview::is_enabled(PreviewFeature::Gitoxide) && Self::supports(url, disable_ssl) {
+    pub(crate) fn for_remote(url: &SafeUrl) -> Self {
+        if uv_preview::is_enabled(PreviewFeature::Gitoxide) && Self::supports(url) {
             Self::Gitoxide
         } else {
             Self::Cli
         }
     }
 
-    fn supports(url: &SafeUrl, disable_ssl: bool) -> bool {
-        if disable_ssl || url.as_str().contains('?') || url.fragment().is_some() {
-            return false;
-        }
+    fn supports(url: &SafeUrl) -> bool {
         match url.scheme() {
-            "http" | "https" => true,
+            "http" | "https" | "git" => true,
             "file" => !url.has_host(),
-            "ssh" => {
-                url.has_host() && matches!(url.username(), "" | "git") && url.password().is_none()
-            }
+            "ssh" => url.has_host() && url.password().is_none(),
             _ => false,
         }
     }
+}
+
+impl GitRemote {
+    fn network_options(&self, extra: impl IntoIterator<Item = String>) -> gix::open::Options {
+        let ssl = (self.disable_ssl && self.url.scheme() == "https").then(|| {
+            let origin = remote_url_root(self.url.without_credentials().into_owned());
+            format!("http.{}.sslVerify=false", origin.as_str())
+        });
+        options().config_overrides(
+            extra
+                .into_iter()
+                .chain(ssl)
+                .chain(["gitoxide.credentials.terminalPrompt=false".to_owned()]),
+        )
+    }
+}
+// A promisor remote stays in the checkout after uv exits. Queries may contain credentials
+// and a non-default SSH username is needed to reconnect.
+fn can_persist_promisor(url: &SafeUrl) -> bool {
+    !url.as_str().contains('?')
+        && url.fragment().is_none()
+        && (url.scheme() != "ssh" || matches!(url.username(), "" | "git"))
 }
 
 pub(super) fn options() -> gix::open::Options {
@@ -63,12 +80,12 @@ pub(crate) fn init(path: &Path) -> gix::Result<gix::Repository> {
 /// Fetch the requested references, serving ordinary local repositories in process.
 pub(crate) fn fetch(
     path: &Path,
-    url: &SafeUrl,
+    source: &GitRemote,
     refspecs: &[String],
     all_tags: bool,
-    offline: bool,
 ) -> Result<()> {
-    let options = options().config_overrides(["gitoxide.credentials.terminalPrompt=false"]);
+    let url = source.url();
+    let options = source.network_options([]);
     let mut repo = gix::open_opts(path, options)?;
     repo.committer_or_set_generic_fallback()?;
     let mut remote = repo
@@ -84,13 +101,13 @@ pub(crate) fn fetch(
     if local && remote.try_fetch_local(&interrupt)?.is_some() {
         return Ok(());
     }
-    if offline && !local {
+    if source.offline && !local {
         return Err(GitError::TransportNotAllowed.into());
     }
     let fetch = remote
         .connect(Direction::Fetch)?
         .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
-    let outcome = if local {
+    let outcome = if local || !can_persist_promisor(url) {
         fetch
     } else {
         fetch.with_filter(gix::remote::fetch::Filter::TreeDepth(0))
@@ -121,8 +138,7 @@ fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
 fn materialize_tree(
     repo: &gix::Repository,
     commit: gix::ObjectId,
-    url: &SafeUrl,
-    offline: bool,
+    remote: &GitRemote,
 ) -> Result<()> {
     let root = repo.find_commit(commit)?.tree_id()?.detach();
     loop {
@@ -152,21 +168,18 @@ fn materialize_tree(
         if missing.is_empty() {
             return Ok(());
         }
-        if offline {
+        if remote.offline {
             return Err(GitError::TransportNotAllowed.into());
         }
         // Commits in a partial clone can have incomplete trees. Advertising them as haves
         // would let the server omit the very objects required for the checkout.
         let repo = gix::open_opts(
             repo.git_dir(),
-            options().config_overrides([
-                "fetch.negotiationAlgorithm=noop",
-                "gitoxide.credentials.terminalPrompt=false",
-            ]),
+            remote.network_options(["fetch.negotiationAlgorithm=noop".to_owned()]),
         )?;
         let objects = missing.iter().map(ToString::to_string).collect::<Vec<_>>();
         let outcome = repo
-            .remote_at(url.as_str())?
+            .remote_at(remote.url.as_str())?
             .with_refspecs(objects.iter().map(String::as_str), Direction::Fetch)?
             .with_fetch_tags(gix::remote::fetch::Tags::None)
             .connect(Direction::Fetch)?
@@ -190,8 +203,7 @@ pub(crate) fn checkout(
     database: &Path,
     destination: &Path,
     revision: uv_git_types::GitOid,
-    url: &SafeUrl,
-    offline: bool,
+    remote: &GitRemote,
     with_lfs: bool,
 ) -> Result<()> {
     let source = open(database)?;
@@ -201,12 +213,12 @@ pub(crate) fn checkout(
         .boolean("remote.uv-promisor.promisor")
         == Some(true);
     if partial {
-        materialize_tree(&source, commit, url, offline)?;
+        materialize_tree(&source, commit, remote)?;
     }
     let mut repo = init(destination)?;
     copy_cached_objects(&source, &repo)?;
-    if partial {
-        set_promisor(&mut repo, url)?;
+    if partial && can_persist_promisor(remote.url()) {
+        set_promisor(&mut repo, remote.url())?;
     }
     repo.committer_or_set_generic_fallback()?;
     let mut config = repo.config_edit()?;
@@ -226,8 +238,7 @@ pub(crate) fn checkout(
     }
 
     let options = |overrides: Vec<String>| {
-        options().config_overrides(overrides.into_iter().chain([
-            "gitoxide.credentials.terminalPrompt=false".to_owned(),
+        remote.network_options(overrides.into_iter().chain([
             "filter.lfs.process=".to_owned(),
             "filter.lfs.smudge=".to_owned(),
             "filter.lfs.required=false".to_owned(),
@@ -235,7 +246,7 @@ pub(crate) fn checkout(
     };
     let mut repo = gix::open_opts(
         destination,
-        options(crate::git::submodule_update_config(url)),
+        options(crate::git::submodule_update_config(remote.url())),
     )?;
     repo.committer_or_set_generic_fallback()?;
     repo.reset(commit, gix::repository::reset::ResetMode::Hard)?;
@@ -245,14 +256,17 @@ pub(crate) fn checkout(
     if let Some(modules) = repo.submodules()? {
         for module in modules {
             if module.index_id()?.is_some() {
-                if offline {
+                if remote.offline {
                     return Err(GitError::TransportNotAllowed.into());
                 }
                 module.init(false)?;
             }
         }
         // Nested modules resolve relative URLs against their own origins.
-        let repo = gix::open_opts(destination, options(crate::git::submodule_auth_config(url)))?;
+        let repo = gix::open_opts(
+            destination,
+            options(crate::git::submodule_auth_config(remote.url())),
+        )?;
         if let Some(modules) = repo.submodules()? {
             for module in modules {
                 module.update_submodule(
@@ -349,20 +363,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssh_supports_usernames_preserved_in_promisor_urls() -> Result<()> {
-        for url in [
-            "ssh://forge.example/pkg",
-            "ssh://git@forge.example:2222/pkg",
+    fn promisor_urls_can_be_stored_without_credentials() -> Result<()> {
+        for (raw, supported, persistent) in [
+            ("https://forge.example/pkg", true, true),
+            ("https://forge.example/cgi?repo=pkg", true, false),
+            ("ssh://git@forge.example:2222/pkg", true, true),
+            ("ssh://user@forge.example/pkg", true, false),
+            ("ssh://git:secret@forge.example/pkg", false, true),
         ] {
-            let url = SafeUrl::parse(url)?;
-            assert!(Backend::supports(&url, false));
-            assert_eq!(url.without_credentials().as_ref(), &url);
-        }
-        for url in [
-            "ssh://user@forge.example/pkg",
-            "ssh://git:secret@forge.example/pkg",
-        ] {
-            assert!(!Backend::supports(&SafeUrl::parse(url)?, false));
+            let url = SafeUrl::parse(raw)?;
+            assert_eq!(Backend::supports(&url), supported);
+            if supported {
+                assert_eq!(can_persist_promisor(&url), persistent);
+            }
         }
         Ok(())
     }

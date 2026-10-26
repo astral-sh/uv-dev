@@ -77,9 +77,10 @@ enum RefspecStrategy {
 #[derive(PartialEq, Clone, Debug)]
 pub(crate) struct GitRemote {
     /// URL to a remote repository.
-    url: SafeUrl,
+    pub(super) url: SafeUrl,
     backend: Backend,
-    offline: bool,
+    pub(super) offline: bool,
+    pub(super) disable_ssl: bool,
 }
 
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
@@ -244,11 +245,12 @@ impl GitRepository {
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
     pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Self {
-        let backend = Backend::for_remote(&url, disable_ssl);
+        let backend = Backend::for_remote(&url);
         Self {
             url,
             backend,
             offline,
+            disable_ssl,
         }
     }
 
@@ -275,26 +277,18 @@ impl GitRemote {
         db: Option<GitDatabase>,
         reference: &GitReference,
         locked_rev: Option<GitOid>,
-        disable_ssl: bool,
         with_lfs: bool,
     ) -> Result<(GitDatabase, GitOid)> {
         let locked_reference = locked_rev.map(GitReference::Commit);
         let reference = locked_reference.as_ref().unwrap_or(reference);
         if let Some(mut db) = db {
-            fetch(
-                &mut db.repo,
-                &self.url,
-                reference,
-                disable_ssl,
-                self.offline,
-            )
-            .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
+            fetch(&mut db.repo, &self, reference)
+                .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready =
-                        fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl, self.offline)
-                            .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
+                    let lfs_ready = fetch_lfs(&mut db.repo, &self, &rev)
+                        .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
                 return Ok((db, rev));
@@ -312,12 +306,12 @@ impl GitRemote {
 
         fs_err::create_dir_all(into)?;
         let mut repo = GitRepository::init(into, self.backend)?;
-        fetch(&mut repo, &self.url, reference, disable_ssl, self.offline)
+        fetch(&mut repo, &self, reference)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl, self.offline)
+                fetch_lfs(&mut repo, &self, &rev)
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -448,8 +442,7 @@ impl GitCheckout {
                 &database.repo.path,
                 into,
                 revision,
-                original_remote_url,
-                database.remote.offline,
+                &database.remote,
                 database.lfs_ready == Some(true),
             )
             .map_err(|err| redact_git_error(err, original_remote_url))?;
@@ -657,28 +650,16 @@ pub(crate) fn submodule_auth_config(original_remote_url: &SafeUrl) -> Vec<String
 /// This is used as the rewrite prefix for `url.*.insteadOf`, so a credentialed parent URL can
 /// authenticate sibling submodule URLs without making the credentials part of any persisted
 /// submodule URL.
-fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
+pub(super) fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
     url.set_path("/");
     url.set_query(None);
     url.set_fragment(None);
     url
 }
 
-/// Attempts to fetch the given git `reference` for a Git repository.
-///
-/// This is the main entry for git clone/fetch. It does the following:
-///
-/// * Turns [`GitReference`] into refspecs accordingly.
-/// * Dispatches `git fetch` using the git CLI.
-///
-/// The `remote_url` argument is the git remote URL where we want to fetch from.
-fn fetch(
-    repo: &mut GitRepository,
-    remote_url: &SafeUrl,
-    reference: &GitReference,
-    disable_ssl: bool,
-    offline: bool,
-) -> Result<()> {
+/// Fetch the references needed to resolve a Git dependency.
+fn fetch(repo: &mut GitRepository, remote: &GitRemote, reference: &GitReference) -> Result<()> {
+    let remote_url = remote.url();
     if let GitReference::Commit(commit) = reference
         && repo
             .resolve(reference)
@@ -739,11 +720,16 @@ fn fetch(
 
     debug!("Performing a Git fetch for: {remote_url}");
     let mut fetch_refspecs = |refspecs: &[String]| match repo.backend {
-        Backend::Cli => fetch_with_cli(repo, remote_url, refspecs, tags, disable_ssl, offline),
-        Backend::Gitoxide => {
-            crate::gitoxide::fetch(&repo.path, remote_url, refspecs, tags, offline)
-                .map_err(|err| redact_git_error(err, remote_url))
-        }
+        Backend::Cli => fetch_with_cli(
+            repo,
+            remote_url,
+            refspecs,
+            tags,
+            remote.disable_ssl,
+            remote.offline,
+        ),
+        Backend::Gitoxide => crate::gitoxide::fetch(&repo.path, remote, refspecs, tags)
+            .map_err(|err| redact_git_error(err, remote_url)),
     };
     let result = match refspec_strategy {
         RefspecStrategy::All => fetch_refspecs(&refspecs),
@@ -866,22 +852,17 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
     Ok(cmd)
 });
 
-/// Attempts to use `git-lfs` CLI to fetch required LFS objects for a given revision.
-fn fetch_lfs(
-    repo: &mut GitRepository,
-    url: &SafeUrl,
-    revision: &GitOid,
-    disable_ssl: bool,
-    offline: bool,
-) -> Result<bool> {
+/// Fetch and validate the LFS objects required for a revision.
+fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
+    let url = remote.url();
     if repo.backend == Backend::Gitoxide {
-        if crate::gitoxide::lfs::fetch(&repo.path, *revision, url, offline)? {
+        if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote)? {
             return Ok(true);
         }
         debug!("Falling back to Git LFS for this repository");
         repo.backend = Backend::Cli;
     }
-    if offline {
+    if remote.offline {
         if repo.lfs_fsck_objects(revision.as_str()) {
             return Ok(true);
         }
@@ -896,7 +877,7 @@ fn fetch_lfs(
         return Ok(false);
     };
 
-    if disable_ssl {
+    if remote.disable_ssl {
         debug!("Disabling SSL verification for Git LFS");
         cmd.env(EnvVars::GIT_SSL_NO_VERIFY, "true");
     }

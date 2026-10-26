@@ -114,7 +114,6 @@ impl GitSource {
                 maybe_db,
                 self.git.reference(),
                 self.git.precise(),
-                self.disable_ssl,
                 lfs_requested,
             )?;
 
