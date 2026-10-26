@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicBool;
 use anyhow::Result;
 use gix::progress::Discard;
 use gix::remote::Direction;
-use uv_redacted::SafeUrl;
 use uv_preview::PreviewFeature;
+use uv_redacted::SafeUrl;
 
 use crate::git::GitError;
 
@@ -42,7 +42,7 @@ impl Backend {
     }
 }
 
-fn options() -> gix::open::Options {
+pub(super) fn options() -> gix::open::Options {
     gix::open::Options::default().without_repository_environment_overrides()
 }
 

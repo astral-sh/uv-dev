@@ -10,6 +10,7 @@ pub use crate::source::{Fetch, Reporter};
 mod credentials;
 mod git;
 mod gitoxide;
+pub mod project;
 mod rate_limit;
 mod resolver;
 mod source;

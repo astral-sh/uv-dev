@@ -1,21 +1,9 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::path::Path;
 
 use serde::Deserialize;
-use uv_git::GIT;
 
-#[derive(Debug, thiserror::Error)]
-pub enum VersionControlError {
-    #[error("Attempted to initialize a Git repository, but `git` was not found in PATH")]
-    GitNotInstalled,
-    #[error("Failed to initialize Git repository at `{0}`\nstdout: {1}\nstderr: {2}")]
-    GitInit(PathBuf, String, String),
-    #[error("`git` command failed")]
-    GitCommand(#[source] std::io::Error),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
+pub use uv_git::project::VersionControlError;
 
 /// The version control system to use.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Deserialize)]
@@ -35,27 +23,7 @@ impl VersionControlSystem {
     pub fn init(&self, path: &Path) -> Result<(), VersionControlError> {
         match self {
             Self::Git => {
-                let Ok(git) = GIT.as_ref() else {
-                    return Err(VersionControlError::GitNotInstalled);
-                };
-
-                let output = git
-                    .build_command()
-                    .arg("init")
-                    .current_dir(path)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-                    .map_err(VersionControlError::GitCommand)?;
-                if !output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(VersionControlError::GitInit(
-                        path.to_path_buf(),
-                        stdout.to_string(),
-                        stderr.to_string(),
-                    ));
-                }
+                uv_git::project::init(path)?;
 
                 // Create the `.gitignore`, if it doesn't exist.
                 match fs_err::OpenOptions::new()

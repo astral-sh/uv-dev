@@ -1,13 +1,12 @@
 use std::fmt::Write;
 use std::iter;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 use toml_edit::{InlineTable, Value};
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
@@ -18,7 +17,6 @@ use uv_configuration::{
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
-use uv_git::GIT;
 use uv_install_wheel::reserved_script_name;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -37,7 +35,6 @@ use uv_python_types::{
 };
 use uv_scripts::{Pep723Script, ScriptTag};
 use uv_settings::PythonInstallMirrors;
-use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache, WorkspaceErrorKind,
@@ -1159,99 +1156,22 @@ fn generate_package_scripts(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-enum GitDiscoveryResult {
-    /// Git is initialized at the path.
-    Repository,
-    /// Git is not initialized at the path.
-    NoRepository,
-    /// There is no `git[.exe]` binary in PATH.
-    NoGit,
-    /// There is a `git[.exe]` binary in PATH, but it returned an unexpected output.
-    BrokenGit,
-}
-
-/// Checks if there is a Git work tree at the given path.
-fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
-    // Determine whether the path is inside a Git work tree.
-    let Ok(git) = GIT.as_ref() else {
-        return GitDiscoveryResult::NoGit;
-    };
-    let Ok(output) = git
-        .build_command()
-        .arg("rev-parse")
-        .arg("--is-inside-work-tree")
-        .env(EnvVars::LC_ALL, "C")
-        .current_dir(path)
-        .output()
-    else {
-        debug!(
-            "`git rev-parse --is-inside-work-tree` failed to launch for `{}`",
-            path.display()
-        );
-        return GitDiscoveryResult::BrokenGit;
-    };
-    if output.status.success() {
-        if std::str::from_utf8(&output.stdout).map(str::trim) == Ok("true") {
-            debug!("Found a Git repository for `{}`", path.display());
-            GitDiscoveryResult::Repository
-        } else {
-            debug!(
-                "`git rev-parse --is-inside-work-tree` succeeded but didn't return `true` for `{}`",
-                path.display()
-            );
-            trace!(
-                "`git rev-parse --is-inside-work-tree` stdout: {:?}",
-                String::from_utf8_lossy(&output.stdout)
-            );
-            GitDiscoveryResult::BrokenGit
-        }
-    } else {
-        if std::str::from_utf8(&output.stderr).is_ok_and(|err| err.contains("not a git repository"))
-        {
-            debug!("Not a Git repository `{}`", path.display());
-            GitDiscoveryResult::NoRepository
-        } else {
-            debug!(
-                "`git rev-parse --is-inside-work-tree` failed but didn't contain `not a git repository` in stderr for `{}`",
-                path.display()
-            );
-            GitDiscoveryResult::BrokenGit
-        }
-    }
-}
-
 /// Initialize the version control system at the given path, if applicable.
 fn init_vcs(path: &Path, vcs: Option<VersionControlSystem>) -> Result<()> {
-    // vcs is None for an existing repository because we don't want to initialize again.
-    let (vcs, implicit) = match vcs {
-        None => match detect_git_repository(path) {
-            GitDiscoveryResult::NoRepository => (VersionControlSystem::Git, true),
-            GitDiscoveryResult::Repository
-            | GitDiscoveryResult::NoGit
-            | GitDiscoveryResult::BrokenGit => (VersionControlSystem::None, false),
-        },
-        Some(VersionControlSystem::None) => (VersionControlSystem::None, false),
-        // The user requested Git explicitly, so the only reason not to invoke it is that Git is
-        // already initialized. In case of an error (broken git), we will raise the real error
-        // when trying to initialize, which should give us a better error message.
-        Some(VersionControlSystem::Git) => match detect_git_repository(path) {
-            GitDiscoveryResult::NoRepository
-            | GitDiscoveryResult::BrokenGit
-            | GitDiscoveryResult::NoGit => (VersionControlSystem::Git, false),
-            GitDiscoveryResult::Repository => (VersionControlSystem::None, false),
-        },
-    };
-
-    // Attempt to initialize the VCS.
-    match vcs.init(path) {
-        Ok(()) => Ok(()),
-        // If the VCS isn't installed, only raise an error if a VCS was explicitly specified.
-        Err(err @ VersionControlError::GitNotInstalled) if implicit => {
-            debug!("Failed to initialize version control: {err}");
-            Ok(())
+    if vcs == Some(VersionControlSystem::None) {
+        return Ok(());
+    }
+    match uv_git::project::inside_worktree(path) {
+        Ok(true) => return Ok(()),
+        Err(err) if vcs.is_none() => {
+            debug!("Skipping Git initialization: {err}");
+            return Ok(());
         }
-        Err(err) => Err(err.into()),
+        _ => {}
+    }
+    match VersionControlSystem::Git.init(path) {
+        Err(VersionControlError::GitNotInstalled) if vcs.is_none() => Ok(()),
+        result => Ok(result?),
     }
 }
 
@@ -1274,39 +1194,7 @@ fn get_author_info(path: &Path, author_from: AuthorFrom) -> Option<Author> {
 
 /// Fetch the default author from git configuration.
 fn get_author_from_git(path: &Path) -> Result<Author> {
-    let Ok(git) = GIT.as_ref() else {
-        anyhow::bail!("`git` not found in PATH")
-    };
-
-    let mut name = None;
-    let mut email = None;
-
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.name")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        name = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.email")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        email = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
+    let (name, email) = uv_git::project::author(path)?;
     let author = match (name, email) {
         (Some(name), Some(email)) => Author::NameEmail { name, email },
         (Some(name), None) => Author::Name(name),

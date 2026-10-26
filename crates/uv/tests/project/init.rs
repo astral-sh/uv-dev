@@ -3979,6 +3979,43 @@ fn git_states() {
     assert!(!context.temp_dir.child("broken-git/.git").is_dir());
 }
 
+#[test]
+fn gitoxide_init_without_git() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    TestContext::disallow_git_cli(&context.bin_dir)?;
+    let config = context.temp_dir.child("gitconfig");
+    config.write_str(
+        "[init]\ndefaultBranch = trunk\n[user]\nname = Alice\nemail = alice@example.com\n",
+    )?;
+    for project in ["parent", "parent/child"] {
+        context
+            .init()
+            .args([
+                "--preview-features",
+                "gitoxide",
+                "--vcs",
+                "git",
+                "--author-from",
+                "git",
+                "--no-workspace",
+                project,
+            ])
+            .env("GIT_CONFIG_GLOBAL", config.path())
+            .assert()
+            .success();
+        let contents = context.read(format!("{project}/pyproject.toml"));
+        assert!(contents.contains("Alice"));
+        assert!(contents.contains("alice@example.com"));
+    }
+    assert_eq!(
+        context.read("parent/.git/HEAD").trim(),
+        "ref: refs/heads/trunk"
+    );
+    assert!(context.temp_dir.child("parent/.gitignore").is_file());
+    assert!(!context.temp_dir.child("parent/child/.git").exists());
+    Ok(())
+}
+
 /// Using `uv init` with `--project` isn't allowed.
 #[test]
 fn init_project_flag_is_not_allowed() -> Result<()> {
