@@ -19382,7 +19382,7 @@ fn pep_751_compile_non_universal() -> Result<()> {
     Ok(())
 }
 
-/// A platform-specific compile can discard a Windows dependency before writing the lockfile.
+/// Windows x64 dependencies must survive compiling to a lockfile and syncing from it.
 #[test]
 fn pep_751_windows_amd64_compile() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -19403,10 +19403,16 @@ fn pep_751_windows_amd64_compile() -> Result<()> {
     lock-version = "1.0"
     created-by = "uv"
     requires-python = ">=3.12.[X]"
-    packages = []
+
+    [[packages]]
+    name = "iniconfig"
+    version = "2.0.0"
+    marker = "platform_machine == 'AMD64' and sys_platform == 'win32'"
+    sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", upload-time = 2023-01-07T11:08:11Z, size = 4646, hashes = { sha256 = "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3" } }
+    wheels = [{ url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2023-01-07T11:08:09Z, size = 5892, hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }]
 
     ----- stderr -----
-    Resolved in [TIME]
+    Resolved 1 package in [TIME]
     "#);
 
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -19416,8 +19422,9 @@ fn pep_751_windows_amd64_compile() -> Result<()> {
         .arg("pylock.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked in [TIME]
-    Would make no changes
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
