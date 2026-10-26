@@ -23,7 +23,7 @@ uv-build-backend = { workspace = true }
 uv-build-commands = { workspace = true }
 uv-build-frontend = { workspace = true }
 uv-cache = { workspace = true }
-uv-cache-info = { workspace = true }
+uv-cache-info = { workspace = true, features = ["gitoxide"] }
 uv-cli = { workspace = true }
 uv-client = { workspace = true }
 uv-command-support = { workspace = true }

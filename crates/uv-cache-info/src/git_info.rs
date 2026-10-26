@@ -20,6 +20,9 @@ pub(crate) enum GitInfoError {
     WrongLength(String),
     #[error("The discovered commit has an invalid character (expected hexadecimal): {0}")]
     WrongDigit(String),
+    #[cfg(feature = "gitoxide")]
+    #[error(transparent)]
+    Gitoxide(#[from] gix::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -31,6 +34,19 @@ pub(crate) struct Commit(String);
 impl Commit {
     /// Return the [`Commit`] for the repository at the given path.
     pub(crate) fn from_repository(path: &Path) -> Result<Self, GitInfoError> {
+        #[cfg(feature = "gitoxide")]
+        if uv_preview::is_enabled(uv_preview::PreviewFeature::Gitoxide) {
+            let repo = discover(path)?;
+            let head = repo.head()?;
+            let id = head.id().ok_or_else(|| {
+                GitInfoError::MissingRef(
+                    repo.git_dir().to_owned(),
+                    head.referent_name()
+                        .map_or_else(|| "HEAD".to_owned(), ToString::to_string),
+                )
+            })?;
+            return Ok(Self(id.to_string()));
+        }
         let repository = GitRepository::find(path)?;
 
         let git_head_path = repository.git_dir.join("HEAD");
@@ -67,6 +83,18 @@ pub(crate) struct Tags(BTreeMap<String, String>);
 impl Tags {
     /// Return the [`Tags`] for the repository at the given path.
     pub(crate) fn from_repository(path: &Path) -> Result<Self, GitInfoError> {
+        #[cfg(feature = "gitoxide")]
+        if uv_preview::is_enabled(uv_preview::PreviewFeature::Gitoxide) {
+            let repo = discover(path)?;
+            let mut tags = BTreeMap::new();
+            for reference in repo.references()?.tags()? {
+                let mut reference = reference?;
+                if let Ok(name) = str::from_utf8(reference.name().shorten()) {
+                    tags.insert(name.to_owned(), reference.follow_to_object()?.to_string());
+                }
+            }
+            return Ok(Self(tags));
+        }
         let repository = GitRepository::find(path)?;
         let git_tags_path = repository.common_dir.join("refs").join("tags");
 
@@ -102,6 +130,11 @@ impl Tags {
 
         Ok(Self(tags))
     }
+}
+
+#[cfg(feature = "gitoxide")]
+fn discover(path: &Path) -> gix::Result<gix::Repository> {
+    gix::discover_opts(path, Default::default(), gix::open::Options::isolated())
 }
 
 struct GitRepository {
@@ -239,6 +272,19 @@ mod tests {
 
     #[test]
     fn commit_and_tags_from_linked_worktree() -> Result<()> {
+        #[cfg(feature = "gitoxide")]
+        let _preview = uv_preview::test::with_features(&[]);
+        check_linked_worktree()
+    }
+
+    #[cfg(feature = "gitoxide")]
+    #[test]
+    fn gitoxide_commit_and_tags_from_linked_worktree() -> Result<()> {
+        let _preview = uv_preview::test::with_features(&[uv_preview::PreviewFeature::Gitoxide]);
+        check_linked_worktree()
+    }
+
+    fn check_linked_worktree() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let worktree = temp_dir.path().join("worktree");
         let common_git_dir = temp_dir.path().join("common.git");
@@ -246,6 +292,13 @@ mod tests {
 
         fs_err::create_dir_all(&worktree)?;
         fs_err::create_dir_all(&worktree_git_dir)?;
+        fs_err::create_dir_all(common_git_dir.join("objects"))?;
+        fs_err::create_dir_all(common_git_dir.join("refs"))?;
+        fs_err::write(common_git_dir.join("HEAD"), "ref: refs/heads/main\n")?;
+        fs_err::write(
+            worktree_git_dir.join("gitdir"),
+            format!("{}\n", worktree.join(".git").display()),
+        )?;
         fs_err::write(
             worktree.join(".git"),
             format!("gitdir: {}\n", worktree_git_dir.display()),

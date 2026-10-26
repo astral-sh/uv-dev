@@ -7252,6 +7252,7 @@ version = "0.0.97"
 dependencies = [
  "anyhow",
  "fs-err",
+ "gix",
  "globwalk",
  "insta",
  "schemars",
@@ -7262,6 +7263,7 @@ dependencies = [
  "tracing",
  "uv-fs",
  "uv-macros",
+ "uv-preview",
  "walkdir",
 ]
 
