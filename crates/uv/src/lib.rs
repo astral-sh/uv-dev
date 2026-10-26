@@ -1280,6 +1280,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) => Err(anyhow!(
             "pip's `debug` is unsupported (consider using `uvx pip debug` instead)"
         )),
+        Commands::Vm {
+            command: uv_cli::VmCommand::Run(args),
+        } => {
+            show_settings!(args);
+            commands::vm::run(args, &cache.init().await?).await
+        }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Clean(args),
         })

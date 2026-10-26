@@ -35,3 +35,5 @@ mod update_shell;
 mod upgrade;
 
 mod version;
+
+mod vm;

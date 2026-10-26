@@ -55,6 +55,7 @@ fn help() {
       build                      Build Python packages into source distributions and wheels
       publish                    Upload distributions to an index
       workspace                  Inspect uv workspaces
+      vm                         Run commands in disposable Linux virtual machines
       cache                      Manage uv's cache
       self                       Manage the uv executable
       generate-shell-completion  Generate shell completion
@@ -136,6 +137,7 @@ fn help_flag() {
       build      Build Python packages into source distributions and wheels
       publish    Upload distributions to an index
       workspace  Inspect uv workspaces
+      vm         Run commands in disposable Linux virtual machines
       cache      Manage uv's cache
       self       Manage the uv executable
       help       Display documentation for a command
@@ -216,6 +218,7 @@ fn help_short_flag() {
       build      Build Python packages into source distributions and wheels
       publish    Upload distributions to an index
       workspace  Inspect uv workspaces
+      vm         Run commands in disposable Linux virtual machines
       cache      Manage uv's cache
       self       Manage the uv executable
       help       Display documentation for a command
@@ -1004,6 +1007,7 @@ fn help_unknown_subcommand() {
         build
         publish
         workspace
+        vm
         cache
         self
         generate-shell-completion
@@ -1033,6 +1037,7 @@ fn help_unknown_subcommand() {
         build
         publish
         workspace
+        vm
         cache
         self
         generate-shell-completion
@@ -1090,6 +1095,7 @@ fn help_with_global_option() {
       build                      Build Python packages into source distributions and wheels
       publish                    Upload distributions to an index
       workspace                  Inspect uv workspaces
+      vm                         Run commands in disposable Linux virtual machines
       cache                      Manage uv's cache
       self                       Manage the uv executable
       generate-shell-completion  Generate shell completion
@@ -1206,6 +1212,7 @@ fn help_with_no_pager() {
       build                      Build Python packages into source distributions and wheels
       publish                    Upload distributions to an index
       workspace                  Inspect uv workspaces
+      vm                         Run commands in disposable Linux virtual machines
       cache                      Manage uv's cache
       self                       Manage the uv executable
       generate-shell-completion  Generate shell completion
