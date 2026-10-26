@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Windows x64 targets now use AMD64 for platform_machine, correcting rejected pylock environments and omitted conditional dependencies. Updated all three parent regressions to verify environment validation, package selection, and the compile-to-pylock-to-sync round trip.",
+  "validation": [
+    "All three updated parent regressions passed in debug profile after confirmed pre-fix failures.",
+    "Four neighboring integration tests passed.",
+    "Windows-target cargo-xwin Clippy passed for uv-configuration with warnings denied.",
+    "cargo fmt --all and formatting verification passed.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2996"
+}
