@@ -905,7 +905,12 @@ impl EnvVars {
     #[attr_added_in("0.10.0")]
     pub const UV_HTTP_CONNECT_TIMEOUT: &'static str = "UV_HTTP_CONNECT_TIMEOUT";
 
-    /// The number of retries for HTTP requests. (default: 3)
+    /// The number of retries for HTTP requests made by uv. (default: 3)
+    ///
+    /// Git handles HTTP and HTTPS requests made by `git fetch`. With Git 2.54 or later, set
+    /// `GIT_HTTP_MAX_RETRIES=3` to enable retries for HTTP 429 responses during reference discovery.
+    /// See [Git's HTTP settings](https://git-scm.com/docs/git-config#Documentation/git-config.txt-httpmaxRetries)
+    /// for retry and delay limits.
     #[attr_added_in("0.7.21")]
     pub const UV_HTTP_RETRIES: &'static str = "UV_HTTP_RETRIES";
 
