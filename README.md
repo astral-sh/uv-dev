@@ -8,31 +8,52 @@ Classification: enhancement
 
 The reporter says Aikido flagged three Rust dependencies as vulnerable and recommends
 quinn-proto 0.11.19, zerovec-derive 0.11.5, and zerovec 0.11.8. The issue was opened on
-2026-10-26 and has no comments. It supplies no advisory identifiers, affected uv version,
+2026-10-26. The original report supplies no advisory identifiers, affected uv version,
 scan target, triggering input, or observed command failure.
 
 astral-sh/uv#21177 and astral-sh/uv#20025 explain earlier quinn-proto alerts and uv's disabled HTTP/3 support. Closed, unmerged astral-sh/uv#19853 proposed older zerovec updates. No existing item was found covering all three requested versions.
 
-The checked-out lockfile is below all three requested targets. That confirms the update
-request is relevant to this checkout, but does not establish that uv exercises vulnerable
-code. The earlier quinn findings were explicitly assessed by maintainers as inapplicable
-to uv. The security relevance of the new Aikido findings remains unconfirmed.
+The checked-out lockfile is below all three requested targets. Repository member EliteTK
+has assessed the reported dependencies and states that the vulnerabilities have no impact
+on current uv usage: quinn-proto is not compiled into uv, and the zerovec crates parse
+ICU data compiled into uv rather than untrusted data. EliteTK intends to look into version
+bumps anyway; no completed update, linked implementation PR, or release date is supplied.
 
-## Draft response
+## Current maintainer assessment
 
-The current lockfile contains quinn-proto 0.11.18, zerovec-derive 0.11.2, and zerovec 0.11.5. uv does not enable HTTP/3 or QUIC, so the quinn-proto advisories discussed in astral-sh/uv#21177 did not affect uv.
+Source: EliteTK's comment on astral-sh/uv#22936, posted 2026-10-26 at 20:41:28 UTC
+(comment ID 6426830952). The supplied full discussion identifies EliteTK as a repository
+MEMBER.
 
-Please share your uv version, the Aikido advisory IDs or links for each alert, and whether Aikido scanned Cargo.lock or a distributed binary/container. Those details will help assess whether these findings affect uv and whether the updates need security prioritization. Updates without an applicable security issue are handled through routine dependency maintenance.
+- **quinn-proto:** EliteTK reports checking that it is present in Cargo.lock but is not
+  compiled as part of uv's build. Its lockfile inclusion comes from a weak reference in
+  reqwest's `rustls` feature.
+- **zerovec-derive and zerovec:** EliteTK reports that their relevant use is through
+  `icu_normalizer`, parsing ICU data compiled into uv. On that basis, the affected parsing
+  does not receive untrusted data.
+- **Impact and disposition:** EliteTK concludes that the reported vulnerabilities have no
+  impact on current uv usage and will look into bumping the versions anyway. This is an
+  intention to investigate maintenance updates, not confirmation of a fix or release.
+
+These are attributed maintainer findings from the issue discussion. The existing local
+source checks below establish locked versions and feature configuration; this follow-up
+did not independently rebuild uv or audit all ICU parsing paths. The assessment concerns
+the reported vulnerabilities in uv's current usage, not the safety of these crates for
+other consumers or configurations.
 
 ## Classification
 
-This requests dependency maintenance upgrades. The checkout confirms versions below the requested targets, but the unidentified Aikido alerts do not establish an applicable vulnerability in uv. The historical quinn findings concern disabled HTTP/3 functionality, and the public zerovec advisories inspected affect older version ranges. The related items concern earlier updates, not this three-crate request; no regression of a previously fixed uv bug is established.
+Classification remains enhancement: the request is to update dependencies, and the
+maintainer's applicability assessment identifies no security impact on current uv usage.
+It adds a direct assessment of both zerovec crates to the earlier evidence about disabled
+QUIC functionality. There is no established uv correctness defect or regression requiring
+bug classification, and the related items concern earlier updates rather than this
+three-crate request.
 
-The primary request is to update dependencies, so enhancement fits better than a support
-question. This assessment does not dismiss the scanner findings as false positives:
-the specific advisories must be identified before extending earlier applicability
-conclusions to the new report. A confirmed applicable vulnerability would warrant bug
-classification even without a reproducer.
+The absence of advisory identifiers in the original report remains a documentation gap,
+but the current disposition is supported by the maintainer's build and data-flow findings,
+rather than solely by the absence of a reproducer. New evidence that affected code handles
+untrusted data in a supported uv configuration would warrant revisiting the assessment.
 
 The earlier quinn-proto issue requested 0.11.17 and the merged PR updated to 0.11.15;
 the current checkout already locks 0.11.18. Neither establishes a returned bug.
@@ -116,10 +137,13 @@ behavior; their generic dependency titles do not describe the requested crate up
 
 ## Next step
 
-Obtain the Aikido advisory IDs or links for each package, the affected uv version,
-and the scan target. Compare each advisory's affected versions and vulnerable
-functionality with uv's enabled dependencies before deciding security priority.
-The requested version numbers alone are insufficient to make that determination.
+Follow up on the optional dependency bumps discussed by EliteTK and record a matching PR
+or released version when one is available. The supplied discussion does not establish
+that any of the requested updates has landed or that a security-priority release is needed.
+If later evidence challenges the applicability assessment, obtain the exact advisory,
+affected uv build/configuration, and path by which untrusted data reaches the affected code.
 
-This handoff proposes a reply for maintainer review. No GitHub changes or checkout
-edits were made, and no builds or tests were needed for this read-only assessment.
+The initial `triage.json` records the assessment before this maintainer comment; its draft
+reply and unresolved applicability wording are superseded by the current context above.
+The classification and related items remain unchanged. No public response was drafted or
+posted for this follow-up, and only this README was updated.
