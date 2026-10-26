@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use gix::progress::Discard;
 use gix::remote::Direction;
 use uv_redacted::SafeUrl;
-use uv_static::EnvVars;
+use uv_preview::PreviewFeature;
 
 use crate::git::GitError;
 
@@ -19,18 +19,11 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    pub(crate) fn for_remote(url: &SafeUrl, disable_ssl: bool) -> Result<Self> {
-        match std::env::var_os(EnvVars::UV_GIT_BACKEND).as_deref() {
-            None => Ok(Self::Cli),
-            Some(value) if value == "cli" => Ok(Self::Cli),
-            Some(value) if value == "gitoxide" => {
-                if Self::supports(url, disable_ssl) {
-                    Ok(Self::Gitoxide)
-                } else {
-                    Ok(Self::Cli)
-                }
-            }
-            Some(_) => bail!("Invalid value for `UV_GIT_BACKEND`. Expected `cli` or `gitoxide`."),
+    pub(crate) fn for_remote(url: &SafeUrl, disable_ssl: bool) -> Self {
+        if uv_preview::is_enabled(PreviewFeature::Gitoxide) && Self::supports(url, disable_ssl) {
+            Self::Gitoxide
+        } else {
+            Self::Cli
         }
     }
 

@@ -286,6 +286,9 @@ pub enum PreviewFeature {
     /// reports a lower bound; other platforms continue to use a coarser estimate. See [clearing the
     /// cache](./cache.md#clearing-the-cache) for details.
     CachePhysicalSpace,
+    /// Use gitoxide for supported Git dependency fetches and checkouts. Some URLs and configurations
+    /// require Git or Git LFS. SSH fetches use the configured SSH command.
+    Gitoxide,
     /// The `uv init` command rejects the deprecated `--project` option. To choose where to create a
     /// project, pass the target directory as a positional argument, such as `uv init my-project`.
     InitProjectFlag,

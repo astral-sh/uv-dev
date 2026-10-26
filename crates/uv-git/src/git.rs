@@ -243,13 +243,13 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Result<Self> {
-        let backend = Backend::for_remote(&url, disable_ssl)?;
-        Ok(Self {
+    pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Self {
+        let backend = Backend::for_remote(&url, disable_ssl);
+        Self {
             url,
             backend,
             offline,
-        })
+        }
     }
 
     /// Gets the remote repository URL.

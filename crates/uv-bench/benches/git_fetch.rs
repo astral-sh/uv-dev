@@ -59,6 +59,7 @@ fn git_fetch(criterion: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
     }
+    uv_preview::set(uv_preview::Preview::default()).expect("Failed to configure preview features");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

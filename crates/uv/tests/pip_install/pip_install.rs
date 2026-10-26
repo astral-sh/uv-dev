@@ -14311,7 +14311,7 @@ fn install_git_submodule_remote_relative() {
 fn install_gitoxide_submodule_without_git() {
     let context = uv_test::test_context!("3.13");
     uv_snapshot!(context.filters(), context.pip_install()
-        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .arg("--preview-features").arg("gitoxide")
         .env(EnvVars::PATH, venv_bin_path(&context.venv))
         .arg("git+https://github.com/astral-test/uv-submodule-pypackage.git@377720a1a7f48279bbfc17988454132f13644e84"), @r"
     exit_code: 0 (success)
@@ -14329,7 +14329,7 @@ fn install_gitoxide_lfs_without_git() {
     let context = uv_test::test_context!("3.13");
     context
         .pip_install()
-        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .arg("--preview-features").arg("gitoxide")
         .env(EnvVars::UV_GIT_LFS, "true")
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf")

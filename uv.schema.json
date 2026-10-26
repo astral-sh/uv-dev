@@ -1860,6 +1860,7 @@
             "s3-endpoint",
             "cache-size",
             "cache-physical-space",
+            "gitoxide",
             "init-project-flag",
             "workspace-metadata",
             "workspace-dir",

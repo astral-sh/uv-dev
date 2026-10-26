@@ -24182,7 +24182,7 @@ fn lock_gitoxide_local_repository(lfs: bool) -> Result<()> {
     context
         .lock()
         .arg("--offline")
-        .env(EnvVars::UV_GIT_BACKEND, "gitoxide")
+        .arg("--preview-features").arg("gitoxide")
         .env(EnvVars::UV_GIT_LFS, lfs.to_string())
         .env(EnvVars::PATH, context.bin_dir.path())
         .assert()

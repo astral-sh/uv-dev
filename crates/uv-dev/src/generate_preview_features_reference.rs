@@ -238,6 +238,11 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `gitoxide` {#gitoxide}
+
+        Use gitoxide for supported Git dependency fetches and checkouts. Some URLs and configurations
+        require Git or Git LFS. SSH fetches use the configured SSH command.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes
