@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9390,
+        "title": "Doc: clarify \"virtual projects\" static version required[/-]",
+        "url": "https://github.com/astral-sh/uv/issues/9390",
+        "state": "closed",
+        "reason": "Closest match: the same dynamic version, package = false, uv lock failure, and setuptools flat-layout error. A static version avoided it. Although closed as fixed, the fresh-resolution fallback remains in both historical and current source."
+      },
+      {
+        "kind": "issue",
+        "number": 12467,
+        "title": "egg-info directory keep being created",
+        "url": "https://github.com/astral-sh/uv/issues/12467",
+        "state": "closed",
+        "reason": "Reports backend execution during uv add/remove with package = false and a dynamic version, including the same flat-layout error. A maintainer explains the setuptools fallback; the reporter adopts a static version. This occurred after the lockfile-validation fix."
+      },
+      {
+        "kind": "issue",
+        "number": 7930,
+        "title": "Error when creating a lock file with disabled package management mode",
+        "url": "https://github.com/astral-sh/uv/issues/7930",
+        "state": "open",
+        "reason": "Broader predecessor involving setuptools execution despite package = false. Its reproduction omits both version and a dynamic declaration, an invalid-input case now caught by parser validation. astral-sh/uv#9390 is the closer match."
+      },
+      {
+        "kind": "issue",
+        "number": 10689,
+        "title": "uv lock should not run build backend for dynamic versions",
+        "url": "https://github.com/astral-sh/uv/issues/10689",
+        "state": "closed",
+        "reason": "Tracks backend calls after dynamic versions were omitted from uv.lock. Closed by astral-sh/uv#10703, which addresses existing-lockfile validation rather than fresh resolution."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10703,
+        "title": "Avoid building dynamic versions when validating lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/10703",
+        "state": "merged",
+        "reason": "Released in uv 0.5.21. Extracts static requirements during lockfile validation; its regression test supplies an existing lockfile and runs --locked --offline. Explains successful lockfile reuse without fixing fresh-resolution backend calls."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10622,
+        "title": "Omit dynamic versions from the lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/10622",
+        "state": "merged",
+        "reason": "Omits versions for dynamically versioned source trees. Its discussion explicitly acknowledges remaining backend calls, establishing that lockfile version omission does not itself eliminate metadata acquisition."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs. Literal searches covered package = false, dynamic versions, get_requires_for_build_wheel, the flat-layout error, --locked, and upgrades. Conceptual searches covered virtual/non-package projects, metadata extraction, unnecessary backend calls, and omitting application versions. Followed comments, timelines, and historical fixes; supplemented empty PR search results with a paginated all-state PR title/body scan. Compared current source with uv 0.9.17 and release history. Ruled out astral-sh/uv#17975 as static-version lockfile churn, astral-sh/uv#4058 as a pip compile fix, and astral-sh/uv#9549 as an sdist-filename optimization. astral-sh/uv#10522 and astral-sh/uv#10204 concern metadata requirements rather than this backend failure."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#9390 reports the same configuration, command failure, and setuptools error. The new report clarifies the distinction between lockfile reuse and fresh resolution. Although the earlier issue was closed as fixed, astral-sh/uv#10703 only changes validation, and the same fresh-resolution fallback exists in uv 0.9.17 and the current checkout. The evidence supports an incompletely addressed case rather than a demonstrated regression; discussion can be centralized by reopening astral-sh/uv#9390.",
+  "summary": "astral-sh/uv#9390 and astral-sh/uv#12467 report the same behavior. astral-sh/uv#10622 and astral-sh/uv#10703 explain version omission and successful lockfile reuse, but do not eliminate fresh-resolution backend calls.",
+  "draft_response": "Your reproduction matches astral-sh/uv#9390, including the flat-layout error with `package = false` and a dynamic version. Although that issue was closed as fixed, astral-sh/uv#10703 only avoids backend calls when validating an existing lockfile; it does not cover a fresh resolve. The next step is to reopen astral-sh/uv#9390 for that remaining case and consolidate this reproduction there. For now, replacing `dynamic = [\"version\"]` with a static `version = \"0.0.0\"` avoids this metadata lookup."
+}
