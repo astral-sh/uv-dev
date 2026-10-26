@@ -16146,10 +16146,11 @@ fn pep_751_windows_amd64_environment() -> Result<()> {
         .arg("--python-version").arg("3.11")
         .arg("--python-platform").arg("x86_64-pc-windows-msvc")
         .arg("-r").arg("pylock.toml"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    error: The target environment is not supported by the lockfile
+    Checked in [TIME]
+    Would make no changes
     ");
 
     pylock_toml.write_str(indoc! {r#"
@@ -16167,11 +16168,10 @@ fn pep_751_windows_amd64_environment() -> Result<()> {
         .arg("--python-version").arg("3.11")
         .arg("--python-platform").arg("x86_64-pc-windows-msvc")
         .arg("-r").arg("pylock.toml"), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Checked in [TIME]
-    Would make no changes
+    error: The target environment is not supported by the lockfile
     ");
 
     Ok(())
@@ -16207,8 +16207,9 @@ fn pep_751_windows_amd64_package_marker() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Checked in [TIME]
-    Would make no changes
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
