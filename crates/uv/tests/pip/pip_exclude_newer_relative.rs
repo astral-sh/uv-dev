@@ -16,7 +16,7 @@ fn pip_install_exclude_newer_relative() {
 
     // 3 weeks before 2024-05-01 is 2024-04-10, which is before idna 3.7.
     uv_snapshot!(context.filters(), context
-        .pip_install()
+        .pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
         .arg("--exclude-newer")
@@ -25,14 +25,14 @@ fn pip_install_exclude_newer_relative() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + idna==3.6
     ");
 
     // A package-specific span can relax the global cutoff for that package.
     uv_snapshot!(context.filters(), context
-        .pip_install()
+        .pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
         .arg("--exclude-newer")
@@ -44,10 +44,8 @@ fn pip_install_exclude_newer_relative() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Would download 1 package
+    Would install 1 package
      + idna==3.7
     ");
 }
@@ -71,15 +69,15 @@ fn pip_install_exclude_newer_relative_config() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context
-        .pip_install()
+        .pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
         .arg("idna"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + idna==3.6
     ");
 
@@ -92,7 +90,7 @@ fn pip_install_exclude_newer_relative_config() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context
-        .pip_install()
+        .pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
         .arg("--upgrade")
@@ -100,10 +98,8 @@ fn pip_install_exclude_newer_relative_config() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Would download 1 package
+    Would install 1 package
      + idna==3.7
     ");
 

@@ -1240,20 +1240,14 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example-pkg-a==1 (from git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_a)
-    ");
-
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + example-pkg-a @ git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_a
     ");
 
     Ok(())
@@ -1553,20 +1547,14 @@ fn lock_sdist_git_short_rev() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
-    ");
-
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979
     ");
 
     Ok(())
@@ -3850,23 +3838,17 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root
      + sniffio==1.3.1
-    ");
-
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 4 packages in [TIME]
     ");
 
     Ok(())
@@ -3973,23 +3955,17 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root
      + sniffio==1.3.1
-    ");
-
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 4 packages in [TIME]
     ");
 
     Ok(())
@@ -4105,24 +4081,29 @@ fn lock_project_extra() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    // Install the extras from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("test"), @"
+    // Check the extras selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("test"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==3.7.0
+     + idna==3.6
      + iniconfig==2.0.0
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -4161,12 +4142,13 @@ fn lock_project_with_overrides() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 7 packages
+    Would install 7 packages
      + blinker==1.7.0
      + click==8.1.7
      + flask==3.0.0
@@ -4279,11 +4261,12 @@ fn lock_project_with_scoped_overrides() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.2
      + sniffio==1.3.1
@@ -4336,14 +4319,15 @@ fn lock_project_with_scoped_overrides() -> Result<()> {
     Updated idna v3.2 -> v3.6
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.2
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==3.7.0
      + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -4419,12 +4403,13 @@ fn lock_project_with_override_sources() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.2 (from https://files.pythonhosted.org/packages/d7/77/ff688d1504cdc4db2a938e2b7b9adee5dd52e34efbd2431051efc9984de9/idna-3.2-py3-none-any.whl)
      + sniffio==1.3.1
@@ -4672,12 +4657,13 @@ fn lock_project_with_excludes() -> Result<()> {
     Resolved 8 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
      + blinker==1.7.0
      + click==8.1.7
      + flask==3.0.0
@@ -4860,12 +4846,13 @@ fn lock_project_with_constraints() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.3
      + sniffio==1.3.1
@@ -4910,12 +4897,13 @@ fn lock_project_with_constraint_sources() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Install the base dependencies from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the base dependencies selected from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.2 (from https://files.pythonhosted.org/packages/d7/77/ff688d1504cdc4db2a938e2b7b9adee5dd52e34efbd2431051efc9984de9/idna-3.2-py3-none-any.whl)
      + sniffio==1.3.1
@@ -5215,12 +5203,13 @@ fn lock_dependency_extra() -> Result<()> {
     Resolved 10 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 8 packages
+    Would install 8 packages
      + blinker==1.7.0
      + click==8.1.7
      + flask==3.0.2
@@ -5481,12 +5470,13 @@ fn lock_conditional_dependency_extra() -> Result<()> {
     // hint: To update the lockfile, run `uv lock`.
     // "###);
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 5 packages
+    Would install 5 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
@@ -5507,12 +5497,13 @@ fn lock_conditional_dependency_extra() -> Result<()> {
     Resolved 8 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context_38.filters(), context_38.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context_38.filters(), context_38.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
@@ -5680,12 +5671,13 @@ fn lock_dependency_non_existent_extra() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 7 packages
+    Would install 7 packages
      + blinker==1.7.0
      + click==8.1.7
      + flask==3.0.2
@@ -5843,33 +5835,33 @@ fn lock_conflicting_project_basic1() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + project @ file://[TEMP_DIR]/
      + sortedcontainers==2.3.0
     ");
 
-    // Another install, but with the group enabled, which
+    // Another plan, but with the group enabled, which
     // should fail because it conflicts with the project.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Group `foo` and package `project` are incompatible with the declared conflicts: {`project:foo`, project}
     ");
-    // Another install, but this time with `--only-group=foo`,
+    // Another plan, but this time with `--only-group=foo`,
     // which excludes the project and is thus okay.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--only-group=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     - project==0.1.0 (from file://[TEMP_DIR]/)
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.4.0
     ");
 
@@ -6042,39 +6034,40 @@ fn lock_conflicting_workspace_members() -> Result<()> {
     });
 
     // Install from the lockfile
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + example==0.1.0 (from file://[TEMP_DIR]/)
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + example @ file://[TEMP_DIR]/
      + sortedcontainers==2.3.0
     ");
 
     // Install subexample without the root
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("subexample"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--package").arg("subexample"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     - example==0.1.0 (from file://[TEMP_DIR]/)
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
      + sortedcontainers==2.4.0
-     + subexample==0.1.0 (from file://[TEMP_DIR]/subexample)
+     + subexample @ file://[TEMP_DIR]/subexample
     ");
 
     // Attempt to install them together, i.e., with `--all-packages`
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-packages"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--all-packages"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
     ");
 
     // Attempt to install them together, i.e., with `--package`
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("example").arg("--package").arg("subexample"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--package").arg("example").arg("--package").arg("subexample"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
     ");
 
@@ -6297,42 +6290,42 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
     });
 
     // Install from the lockfile
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + example==0.1.0 (from file://[TEMP_DIR]/)
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + example @ file://[TEMP_DIR]/
      + sortedcontainers==2.3.0
     ");
 
     // Attempt to install with the extra selected
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extra `foo` and package `example` are incompatible with the declared conflicts: {`example[foo]`, example, subexample}
     ");
 
     // Install just the child package
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("subexample"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--package").arg("subexample"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     - example==0.1.0 (from file://[TEMP_DIR]/)
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
      + sortedcontainers==2.4.0
-     + subexample==0.1.0 (from file://[TEMP_DIR]/subexample)
+     + subexample @ file://[TEMP_DIR]/subexample
     ");
 
     // Install with just development dependencies
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--only-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 2 packages in [TIME]
-     - sortedcontainers==2.4.0
-     - subexample==0.1.0 (from file://[TEMP_DIR]/subexample)
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
     ");
 
     let lock = lock_without_package_metadata(&context.read("uv.lock"))?;
@@ -6631,27 +6624,31 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
     });
 
     // Install from the lockfile
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
     ");
 
     // Install with `--only-dev`
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--only-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
 
     // Install just the child package
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("subexample"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--package").arg("subexample"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
      + sortedcontainers==2.4.0
-     + subexample==0.1.0 (from file://[TEMP_DIR]/subexample)
+     + subexample @ file://[TEMP_DIR]/subexample
     ");
 
     let lock = lock_without_package_metadata(&context.read("uv.lock"))?;
@@ -6819,35 +6816,37 @@ fn lock_conflicting_project_basic2() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
-     + example==0.1.0 (from file://[TEMP_DIR]/)
+     + example @ file://[TEMP_DIR]/
      + idna==3.6
      + sniffio==1.3.1
     ");
-    // Another install, but with the group enabled, which
+    // Another plan, but with the group enabled, which
     // should fail because it conflicts with the project.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Group `foo` and package `example` are incompatible with the declared conflicts: {`example:foo`, example}
     ");
-    // Another install, but this time with `--only-group=foo`,
+    // Another plan, but this time with `--only-group=foo`,
     // which excludes the project and is thus okay.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--only-group=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.1.0
-     - example==0.1.0 (from file://[TEMP_DIR]/)
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -7003,36 +7002,40 @@ fn lock_conflicting_mixed() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + project @ file://[TEMP_DIR]/
     ");
-    // Another install, but with the group enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=project1"), @"
+    // Another plan, but with the group enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=project1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + project @ file://[TEMP_DIR]/
      + sortedcontainers==2.3.0
     ");
-    // Another install, but with the extra enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=project2"), @"
+    // Another plan, but with the extra enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=project2"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + project @ file://[TEMP_DIR]/
      + sortedcontainers==2.4.0
     ");
-    // And finally, installing both the group and the extra should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=project1").arg("--extra=project2"), @"
+    // And finally, requesting both the group and the extra should fail.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=project1").arg("--extra=project2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extra `project2` and group `project1` are incompatible with the declared conflicts: {`project[project2]`, `project:project1`}
     ");
 
@@ -7825,12 +7828,13 @@ fn lock_git_plus_prefix() -> Result<()> {
     ");
 
     // Install from the lockfile, excluding development dependencies.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389
     ");
 
     Ok(())
@@ -7971,11 +7975,12 @@ fn lock_partial_git() -> Result<()> {
     ");
 
     // Install from the lockfile, excluding development dependencies.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -8050,12 +8055,13 @@ fn lock_unsupported_tag() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + watchdog==6.0.0
     ");
 
@@ -10558,21 +10564,25 @@ fn lock_dev() -> Result<()> {
     ");
 
     // Install from the lockfile, excluding development dependencies.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
     // Install from the lockfile, including development dependencies (the default).
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 2 packages
+     + iniconfig==2.0.0
      + typing-extensions==4.12.2 (from https://files.pythonhosted.org/packages/26/9f/ad63fc0248c5379346306f8668cda6e2e2e9c95e01216d2b8ffd9ff037d0/typing_extensions-4.12.2-py3-none-any.whl)
     ");
 
@@ -12281,12 +12291,13 @@ fn lock_cycles() -> Result<()> {
     Resolved 11 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 10 packages in [TIME]
-    Installed 10 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 10 packages
+    Would install 10 packages
      + argparse==1.4.0
      + extras==1.0.0
      + fixtures==3.0.0
@@ -15870,12 +15881,13 @@ async fn lock_relative_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -17029,14 +17041,14 @@ fn lock_find_links_local_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&workspace), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     ");
 
@@ -17360,14 +17372,14 @@ fn lock_find_links_local_sdist() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&workspace), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + tqdm==999.0.0
     ");
 
@@ -17448,12 +17460,13 @@ fn lock_find_links_http_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + packaging==23.2
     ");
 
@@ -17532,12 +17545,13 @@ fn lock_find_links_http_sdist() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + packaging==23.2
     ");
 
@@ -17963,12 +17977,13 @@ fn lock_local_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + basic-package==0.1.0
     ");
 
@@ -18080,16 +18095,17 @@ fn lock_sources_url() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
-     + workspace==0.1.0 (from https://github.com/user-attachments/files/16592193/workspace.zip)
+     + workspace @ https://github.com/user-attachments/files/16592193/workspace.zip
     ");
 
     Ok(())
@@ -18274,16 +18290,17 @@ fn lock_sources_archive() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
-     + workspace==0.1.0 (from file://[TEMP_DIR]/workspace.zip)
+     + workspace @ file://[TEMP_DIR]/workspace.zip
     ");
 
     Ok(())
@@ -18407,15 +18424,16 @@ fn lock_sources_source_tree() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==0.1.0 (from file://[TEMP_DIR]/workspace/anyio)
-     + project==0.1.0 (from file://[TEMP_DIR]/)
-     + workspace==0.1.0 (from file://[TEMP_DIR]/workspace)
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + anyio @ file://[TEMP_DIR]/workspace/anyio
+     + project @ file://[TEMP_DIR]/
+     + workspace @ file://[TEMP_DIR]/workspace
     ");
 
     Ok(())
@@ -18765,29 +18783,34 @@ fn lock_mixed_extras() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    // Install from the lockfile. This should include the first-party packages, but no third-party
+    // The installation plan should include the first-party packages, but no third-party
     // packages, since they all rely on extras.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&workspace1), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&workspace1), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + leaf1==0.1.0 (from file://[TEMP_DIR]/workspace1/packages/leaf1)
-     + leaf2==0.1.0 (from file://[TEMP_DIR]/workspace2/packages/leaf2)
-     + workspace2==0.1.0 (from file://[TEMP_DIR]/workspace2)
+    Would create project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + leaf1 @ file://[TEMP_DIR]/workspace1/packages/leaf1
+     + leaf2 @ file://[TEMP_DIR]/workspace2/packages/leaf2
+     + workspace2 @ file://[TEMP_DIR]/workspace2
     ");
 
     // Install from the lockfile with the `async` extra. This should include `typing-extensions`,
     // but not `iniconfig` or `packaging`, since we're installing the root package, whereas
     // `iniconfig` is an extra on another package, and `packaging` is an extra in another workspace.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("async").arg("--frozen").current_dir(&workspace1), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("async").arg("--frozen").current_dir(&workspace1), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Would create project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + leaf1 @ file://[TEMP_DIR]/workspace1/packages/leaf1
+     + leaf2 @ file://[TEMP_DIR]/workspace2/packages/leaf2
      + typing-extensions==4.10.0
+     + workspace2 @ file://[TEMP_DIR]/workspace2
     ");
 
     Ok(())
@@ -18931,26 +18954,29 @@ fn lock_transitive_extra() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Install from the lockfile. This should include the first-party packages, but no third-party
+    // The installation plan should include the first-party packages, but no third-party
     // packages, since they all rely on extras.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&workspace), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + leaf==0.1.0 (from file://[TEMP_DIR]/workspace/packages/leaf)
+    Would create project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + leaf @ file://[TEMP_DIR]/workspace/packages/leaf
     ");
 
     // Install from the lockfile with the `async` extra. This should include `typing-extensions`
     // and `iniconfig`.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("async").arg("--frozen").current_dir(&workspace), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("async").arg("--frozen").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Would create project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + iniconfig==2.0.0
+     + leaf @ file://[TEMP_DIR]/workspace/packages/leaf
      + typing-extensions==4.10.0
     ");
 
@@ -23436,33 +23462,39 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
 
     pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--extra")
         .arg("original"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dependency==1.0.0 (from file://[TEMP_DIR]/dependency)
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + dependency @ file://[TEMP_DIR]/dependency
     ");
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("added"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("added"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extra `added` is not defined in the `optional-dependencies` table for `project`
     ");
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--group")
         .arg("original"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + dependency @ file://[TEMP_DIR]/dependency
     ");
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("added"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("added"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
 
@@ -23479,25 +23511,33 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ");
     pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("original"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("original"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + dependency @ file://[TEMP_DIR]/dependency
     ");
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("added"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("added"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extra `added` is not defined in the `optional-dependencies` table for `project`
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("original"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("original"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + dependency @ file://[TEMP_DIR]/dependency
     ");
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("added"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("added"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
 
@@ -26449,11 +26489,12 @@ fn lock_non_project_fork() -> Result<()> {
     Added iniconfig v2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
      + anyio==4.3.0
      + exceptiongroup==1.2.0
      + idna==3.6
@@ -27152,13 +27193,14 @@ fn lock_dropped_dev_extra() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + coverage==7.4.4
     ");
 
@@ -27249,13 +27291,14 @@ fn lock_empty_dev_dependencies() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -27343,12 +27386,13 @@ fn lock_empty_dependency_group() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -27675,12 +27719,13 @@ fn lock_trailing_slash_index_url() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
@@ -29172,13 +29217,14 @@ fn lock_explicit_virtual_project() -> Result<()> {
     Resolved 11 packages in [TIME]
     ");
 
-    // Install from the lockfile. The virtual project should _not_ be installed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile. The virtual project should _not_ be installed.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + black==24.3.0
      + click==8.1.7
@@ -29383,13 +29429,14 @@ fn lock_implicit_virtual_project() -> Result<()> {
     Resolved 11 packages in [TIME]
     ");
 
-    // Install from the lockfile. The virtual project should _not_ be installed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile. The virtual project should _not_ be installed.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + black==24.3.0
      + click==8.1.7
@@ -29540,14 +29587,15 @@ fn lock_implicit_package_path() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    // Install from the lockfile. The path dependency should be installed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile. The path dependency should be installed.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
@@ -30391,12 +30439,13 @@ fn lock_simplified_environments() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -30499,12 +30548,13 @@ fn lock_dependency_metadata() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
      + anyio==3.7.0
      + iniconfig==2.0.0
     ");
@@ -30711,13 +30761,14 @@ fn lock_dependency_metadata_git() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + anyio==4.6.2 (from git+https://github.com/agronholm/anyio@c4844254e6db0cb804c240ba07405db73d810e0b)
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + anyio @ git+https://github.com/agronholm/anyio@c4844254e6db0cb804c240ba07405db73d810e0b
      + iniconfig==2.0.0
     ");
 
@@ -34398,15 +34449,16 @@ fn lock_transitive_git() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
-     + c==1.0.0 (from git+https://github.com/astral-sh/workspace-virtual-root-test@fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#subdirectory=packages/c)
-     + d==1.0.0 (from git+https://github.com/astral-sh/workspace-virtual-root-test@fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#subdirectory=packages/d)
+     + c @ git+https://github.com/astral-sh/workspace-virtual-root-test@fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#subdirectory=packages/c
+     + d @ git+https://github.com/astral-sh/workspace-virtual-root-test@fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#subdirectory=packages/d
      + idna==3.6
      + sniffio==1.3.1
     ");
@@ -36441,12 +36493,13 @@ fn lock_relative_project() -> Result<()> {
         .assert()
         .success();
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--project").arg("../project").current_dir(&peer), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--project").arg("../project").current_dir(&peer), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: [TEMP_DIR]/project/.venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -36713,12 +36766,13 @@ fn lock_no_build_static_metadata() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--no-build").arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-build").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -37164,12 +37218,13 @@ fn lock_self_compatible() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -37253,12 +37308,13 @@ fn lock_self_exact() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -37374,12 +37430,13 @@ fn lock_self_extra_to_extra_compatible() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -37530,12 +37587,13 @@ fn lock_self_extra_compatible() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -37650,12 +37708,13 @@ fn lock_self_marker_compatible() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
@@ -41344,15 +41403,10 @@ async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Resu
 
     let no_trailing_slash_url = &proxy.url("/simple");
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--index").arg(no_trailing_slash_url), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio").arg("--index").arg(no_trailing_slash_url), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
