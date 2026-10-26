@@ -56,6 +56,8 @@ pub enum MetadataError {
     DuplicateImportName(String),
     #[error("Reading metadata from `PKG-INFO` requires Metadata 2.2 or later (found: {0})")]
     UnsupportedMetadataVersion(String),
+    #[error("Unsupported Core Metadata version {0} (highest supported version: 2.6)")]
+    UnsupportedWheelMetadataVersion(String),
     #[error("The following field was marked as dynamic: {0}")]
     DynamicField(&'static str),
     #[error(
@@ -109,15 +111,15 @@ impl<'a> Headers<'a> {
 }
 
 /// Parse a `Metadata-Version` field into a (major, minor) tuple.
-fn parse_version(metadata_version: &str) -> Result<(u8, u8), MetadataError> {
+fn parse_version(metadata_version: &str) -> Result<(u32, u32), MetadataError> {
     let (major, minor) = metadata_version
         .split_once('.')
         .ok_or_else(|| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
     let major = major
-        .parse::<u8>()
+        .parse::<u32>()
         .map_err(|_| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
     let minor = minor
-        .parse::<u8>()
+        .parse::<u32>()
         .map_err(|_| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
     Ok((major, minor))
 }

@@ -9,6 +9,7 @@ use tracing::warn;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
+use uv_warnings::warn_user_once;
 
 use crate::lenient_requirement::LenientRequirement;
 use crate::metadata::Headers;
@@ -43,6 +44,18 @@ impl ResolutionMetadata {
     /// Parse the [`ResolutionMetadata`] from a `METADATA` file, as included in a built distribution (wheel).
     pub fn parse_metadata(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content);
+
+        if let Some(version) = headers.get_first_value("Metadata-Version")? {
+            let (major, minor) = metadata::parse_version(&version)?;
+            if major > 2 {
+                return Err(MetadataError::UnsupportedWheelMetadataVersion(version));
+            }
+            if major == 2 && minor > 6 {
+                warn_user_once!(
+                    "Core Metadata version {version} is newer than the supported version 2.6; reading known fields"
+                );
+            }
+        }
 
         let name = PackageName::from_owned(
             headers
@@ -333,6 +346,23 @@ mod tests {
         "};
         let meta = ResolutionMetadata::parse_metadata(s.as_bytes());
         assert_matches!(meta, Err(MetadataError::InvalidName(_)));
+    }
+
+    #[test]
+    fn wheel_metadata_future_major() {
+        let metadata = b"Metadata-Version: 3.0\nName: example\nVersion: 1\n";
+        assert_matches!(
+            ResolutionMetadata::parse_metadata(metadata),
+            Err(MetadataError::UnsupportedWheelMetadataVersion(version)) if version == "3.0"
+        );
+    }
+
+    #[test]
+    fn wheel_metadata_future_minor() -> anyhow::Result<()> {
+        let metadata = b"Metadata-Version: 2.99\nName: example\nVersion: 1\nRequires-Dist: leaf\n";
+        let metadata = ResolutionMetadata::parse_metadata(metadata)?;
+        assert_eq!(metadata.requires_dist[0].name.as_ref(), "leaf");
+        Ok(())
     }
 
     #[test]

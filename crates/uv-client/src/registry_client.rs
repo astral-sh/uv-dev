@@ -1162,7 +1162,7 @@ impl RegistryClient {
             let cache_entry = self.cache.entry(
                 CacheBucket::Wheels,
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
-                format!("{}.msgpack", filename.cache_key()),
+                format!("{}.metadata-v2.msgpack", filename.cache_key()),
             );
             let cache_control = match self.connectivity {
                 Connectivity::Online
@@ -1240,7 +1240,7 @@ impl RegistryClient {
         let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),
-            format!("{}.msgpack", filename.cache_key()),
+            format!("{}.metadata-v2.msgpack", filename.cache_key()),
         );
         let cache_control = match self.connectivity {
             Connectivity::Online
