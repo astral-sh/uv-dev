@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use gix::bstr::{BString, ByteSlice};
-use gix_lfs::{Pointer, download};
+use gix_lfs::{Pointer, download, filter::Filter};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use uv_git_types::GitOid;
@@ -49,28 +49,39 @@ fn entries(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Selec
     let config = repo.config_snapshot();
     let get = |key: &str| config.string(key).or_else(|| tracked.string(key));
     let endpoint = get("lfs.url").or_else(|| get("remote.origin.lfsurl"));
-    if [config.plumbing(), &tracked].into_iter().any(|file| {
-        file.sections_by_name("lfs")
-            .into_iter()
-            .flatten()
-            .any(|section| match section.header().subsection_name() {
-                None => section
+    let include = get("lfs.fetchinclude").unwrap_or_default();
+    let exclude = get("lfs.fetchexclude").unwrap_or_default();
+    let filter = Filter::new(
+        &include,
+        &exclude,
+        config.boolean("core.ignoreCase").unwrap_or(false),
+    );
+    if config
+        .plumbing()
+        .sections_by_name("lfs")
+        .into_iter()
+        .flatten()
+        .any(|section| match section.header().subsection_name() {
+            None => section.value_names().any(|name| {
+                !matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "url" | "pushurl" | "fetchinclude" | "fetchexclude"
+                )
+            }),
+            Some(sub) if sub == "transfer" => {
+                section
                     .value_names()
-                    .any(|name| !matches!(name.to_ascii_lowercase().as_str(), "url" | "pushurl")),
-                Some(sub) if sub == "transfer" => {
-                    section
-                        .value_names()
-                        .any(|name| !name.eq_ignore_ascii_case("maxretries"))
-                        || file
-                            .string("lfs.transfer.maxretries")
-                            .is_none_or(|value| value != "0")
-                }
-                Some(_) => true,
-            })
-    }) || index
-        .entries()
-        .iter()
-        .any(|entry| entry.mode.is_submodule())
+                    .any(|name| !name.eq_ignore_ascii_case("maxretries"))
+                    || config
+                        .string("lfs.transfer.maxretries")
+                        .is_none_or(|value| value != "0")
+            }
+            Some(_) => true,
+        })
+        || index
+            .entries()
+            .iter()
+            .any(|entry| entry.mode.is_submodule())
     {
         return Ok(None);
     }
@@ -88,6 +99,9 @@ fn entries(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Selec
             continue;
         }
         let path = entry.path(&index);
+        if !filter.allows(path) {
+            continue;
+        }
         attributes
             .at_entry(path, Some(entry.mode))?
             .matching_attributes(&mut matched);
@@ -208,11 +222,25 @@ pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Re
     let (remote, _) = repo
         .remote_at(source.url.as_str())?
         .sanitized_url_and_version(gix::remote::Direction::Fetch)?;
-    if remote.scheme == gix::url::Scheme::File
-        && remote.host().is_none()
-        && entries.endpoint.is_none()
-    {
-        return fetch_local(&repo, &remote, missing.into_values());
+    if remote.scheme == gix::url::Scheme::File && remote.host().is_none() {
+        if let Some(endpoint) = entries
+            .endpoint
+            .as_ref()
+            .map(|v| gix::url::parse(v))
+            .transpose()?
+        {
+            if endpoint.scheme == gix::url::Scheme::File {
+                if endpoint.host().is_some()
+                    || gix::path::from_bstr(&endpoint.path)?.canonicalize()?
+                        != gix::path::from_bstr(&remote.path)?.canonicalize()?
+                {
+                    return Ok(false);
+                }
+                return fetch_local(&repo, &remote, missing.into_values());
+            }
+        } else {
+            return fetch_local(&repo, &remote, missing.into_values());
+        }
     }
     let remote = SafeUrl::parse(remote.to_bstring().to_str()?)?;
     let Some(endpoint) = batch_endpoint(&remote, entries.endpoint)? else {
@@ -346,22 +374,7 @@ fn fetch_local<'a>(
         gix::path::from_bstr(&remote.path)?,
         super::options().bail_if_untrusted(true),
     )?;
-    if source
-        .config_snapshot()
-        .plumbing()
-        .sections_by_name("lfs")
-        .is_some()
-        || source
-            .workdir()
-            .map(|dir| dir.join(".lfsconfig").try_exists())
-            .transpose()?
-            .unwrap_or(false)
-        || (!source.head()?.is_unborn()
-            && source
-                .head_tree()?
-                .lookup_entry_by_path(".lfsconfig")?
-                .is_some())
-    {
+    if source.config_snapshot().string("lfs.storage").is_some() {
         return Ok(false);
     }
     // Keep object paths inside the source's common Git directory, even through directory symlinks.
