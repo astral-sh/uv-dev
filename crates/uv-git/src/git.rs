@@ -108,57 +108,45 @@ pub(crate) struct GitCheckout {
 pub(crate) struct GitRepository {
     /// Path to the underlying Git repository on the local filesystem.
     path: PathBuf,
-    backend: Backend,
+    native: Option<gix::Repository>,
 }
 
 impl GitRepository {
-    /// Opens an existing Git repository at `path`.
+    /// Open an existing repository at `path`.
     fn open(path: &Path, backend: Backend) -> Result<Self> {
-        if backend == Backend::Gitoxide {
-            crate::gitoxide::open(path)?;
-            return Ok(Self {
-                path: path.to_owned(),
-                backend,
-            });
-        }
-        // Make sure there is a Git repository at the specified path.
-        GIT.as_ref()
-            .cloned()?
-            .arg("rev-parse")
-            .cwd(path)
-            .exec_with_output()?;
-
+        let native = match backend {
+            Backend::Gitoxide => Some(crate::gitoxide::open(path)?),
+            Backend::Cli => {
+                GIT.as_ref()
+                    .cloned()?
+                    .arg("rev-parse")
+                    .cwd(path)
+                    .exec_with_output()?;
+                None
+            }
+        };
         Ok(Self {
-            path: path.to_path_buf(),
-            backend,
+            path: path.to_owned(),
+            native,
         })
     }
 
-    /// Initializes a Git repository at `path`.
+    /// Initialize a repository at `path`.
     fn init(path: &Path, backend: Backend) -> Result<Self> {
-        if backend == Backend::Gitoxide {
-            crate::gitoxide::init(path)?;
-            return Ok(Self {
-                path: path.to_owned(),
-                backend,
-            });
-        }
-        // TODO(ibraheem): see if this still necessary now that we no longer use libgit2
-        // Skip anything related to templates, they just call all sorts of issues as
-        // we really don't want to use them yet they insist on being used. See #6240
-        // for an example issue that comes up.
-        // opts.external_template(false);
-
-        // Initialize the repository.
-        GIT.as_ref()
-            .cloned()?
-            .arg("init")
-            .cwd(path)
-            .exec_with_output()?;
-
+        let native = match backend {
+            Backend::Gitoxide => Some(crate::gitoxide::init(path)?),
+            Backend::Cli => {
+                GIT.as_ref()
+                    .cloned()?
+                    .arg("init")
+                    .cwd(path)
+                    .exec_with_output()?;
+                None
+            }
+        };
         Ok(Self {
-            path: path.to_path_buf(),
-            backend,
+            path: path.to_owned(),
+            native,
         })
     }
 
@@ -185,11 +173,8 @@ impl GitRepository {
 
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
-        if self.backend == Backend::Gitoxide {
-            return Ok(crate::gitoxide::open(&self.path)?
-                .rev_parse_single(refname)?
-                .to_string()
-                .parse()?);
+        if let Some(repo) = &self.native {
+            return Ok(repo.rev_parse_single(refname)?.to_string().parse()?);
         }
         let result = GIT
             .as_ref()
@@ -282,7 +267,7 @@ impl GitRemote {
         let locked_reference = locked_rev.map(GitReference::Commit);
         let reference = locked_reference.as_ref().unwrap_or(reference);
         if let Some(mut db) = db {
-            fetch(&mut db.repo, &self, reference)
+            fetch(&db.repo, &self, reference)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
             if let Ok(rev) = db.repo.resolve(reference) {
@@ -305,8 +290,8 @@ impl GitRemote {
         }
 
         fs_err::create_dir_all(into)?;
-        let mut repo = GitRepository::init(into, self.backend)?;
-        fetch(&mut repo, &self, reference)
+        let repo = GitRepository::init(into, self.backend)?;
+        fetch(&repo, &self, reference)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
@@ -344,7 +329,7 @@ impl GitDatabase {
         // A non-fresh checkout can happen if the checkout operation was
         // interrupted. In that case, the checkout gets deleted and a new
         // clone is created.
-        let checkout = match GitRepository::open(destination, self.repo.backend)
+        let checkout = match GitRepository::open(destination, self.remote.backend)
             .ok()
             .map(|repo| GitCheckout::new(rev, repo))
             .filter(GitCheckout::is_fresh)
@@ -357,8 +342,7 @@ impl GitDatabase {
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
-        if self.repo.backend == Backend::Gitoxide {
-            let repo = crate::gitoxide::open(&self.repo.path)?;
+        if let Some(repo) = &self.repo.native {
             return Ok(repo
                 .rev_parse_single(revision.as_str())?
                 .shorten()?
@@ -387,8 +371,8 @@ impl GitDatabase {
 
     /// Checks if `oid` contains necessary LFS artifacts in this database.
     pub(crate) fn contains_lfs_artifacts(&self, oid: GitOid) -> bool {
-        if self.repo.backend == Backend::Gitoxide {
-            return crate::gitoxide::lfs::contains(&self.repo.path, oid).unwrap_or(false);
+        if let Some(repo) = &self.repo.native {
+            return crate::gitoxide::lfs::contains(repo, oid).unwrap_or(false);
         }
         self.repo.lfs_fsck_objects(&format!("{oid}^0"))
     }
@@ -437,8 +421,8 @@ impl GitCheckout {
             Err(e) => return Err(e.into()),
         }
 
-        if database.repo.backend == Backend::Gitoxide {
-            crate::gitoxide::checkout(
+        if database.repo.native.is_some() {
+            let native = crate::gitoxide::checkout(
                 &database.repo.path,
                 into,
                 revision,
@@ -447,10 +431,14 @@ impl GitCheckout {
             )
             .map_err(|err| redact_git_error(err, original_remote_url))?;
             paths::create(into.with_extension(CHECKOUT_READY_EXTENSION))?;
-            return Ok(
-                Self::new(revision, GitRepository::open(into, Backend::Gitoxide)?)
-                    .with_lfs_ready(database.lfs_ready),
-            );
+            return Ok(Self::new(
+                revision,
+                GitRepository {
+                    path: into.to_owned(),
+                    native: Some(native),
+                },
+            )
+            .with_lfs_ready(database.lfs_ready));
         }
 
         // A local clone can hardlink object files from the cache.
@@ -478,7 +466,7 @@ impl GitCheckout {
                 .exec_with_output()?;
         }
 
-        let repo = GitRepository::open(into, database.repo.backend)?;
+        let repo = GitRepository::open(into, database.remote.backend)?;
         let checkout = Self::new(revision, repo);
         let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url)?;
         Ok(checkout.with_lfs_ready(lfs_ready))
@@ -658,7 +646,7 @@ pub(super) fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
 }
 
 /// Fetch the references needed to resolve a Git dependency.
-fn fetch(repo: &mut GitRepository, remote: &GitRemote, reference: &GitReference) -> Result<()> {
+fn fetch(repo: &GitRepository, remote: &GitRemote, reference: &GitReference) -> Result<()> {
     let remote_url = remote.url();
     if let GitReference::Commit(commit) = reference
         && repo
@@ -719,7 +707,7 @@ fn fetch(repo: &mut GitRepository, remote: &GitRemote, reference: &GitReference)
     }
 
     debug!("Performing a Git fetch for: {remote_url}");
-    let mut fetch_refspecs = |refspecs: &[String]| match repo.backend {
+    let fetch_refspecs = |refspecs: &[String]| match remote.backend {
         Backend::Cli => fetch_with_cli(
             repo,
             remote_url,
@@ -784,7 +772,7 @@ fn fetch(repo: &mut GitRepository, remote: &GitRemote, reference: &GitReference)
 
 /// Attempts to use `git` CLI installed on the system to fetch a repository.
 fn fetch_with_cli(
-    repo: &mut GitRepository,
+    repo: &GitRepository,
     url: &SafeUrl,
     refspecs: &[String],
     tags: bool,
@@ -852,9 +840,9 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
     Ok(cmd)
 });
 
-/// Fetch and validate the LFS objects required for a revision.
+/// Fetch the LFS objects for a revision and validate them when validation is available.
 fn fetch_lfs(repo: &GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
-    if repo.backend == Backend::Gitoxide {
+    if repo.native.is_some() {
         if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote)? {
             return Ok(true);
         }
@@ -873,7 +861,7 @@ pub(super) fn checkout_lfs_extension(
         .context("Git LFS checkout needs a worktree")?;
     let git = GitRepository {
         path: path.to_owned(),
-        backend: Backend::Cli,
+        native: None,
     };
     anyhow::ensure!(
         fetch_lfs_with_cli(&git, remote, &commit.to_string())?,

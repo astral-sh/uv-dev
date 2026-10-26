@@ -212,7 +212,7 @@ pub(crate) fn checkout(
     revision: uv_git_types::GitOid,
     remote: &GitRemote,
     with_lfs: bool,
-) -> Result<()> {
+) -> Result<gix::Repository> {
     let source = open(database)?;
     let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
     let partial = source
@@ -286,7 +286,7 @@ pub(crate) fn checkout(
             lfs::checkout_submodules(&repo, remote)?;
         }
     }
-    Ok(())
+    Ok(repo)
 }
 
 /// Copy cached object files into the checkout, using hard links where possible, so they

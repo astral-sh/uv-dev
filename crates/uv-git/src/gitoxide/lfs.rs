@@ -10,7 +10,7 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use uv_git_types::GitOid;
 use uv_redacted::SafeUrl;
 
-use super::{materialize_tree, open};
+use super::materialize_tree;
 use crate::git::{GitError, GitRemote};
 
 struct Entry {
@@ -207,14 +207,13 @@ pub(super) fn checkout_submodules(repo: &gix::Repository, parent: &GitRemote) ->
     Ok(())
 }
 
-pub(crate) fn contains(database: &Path, revision: GitOid) -> Result<bool> {
-    let repo = open(database)?;
+pub(crate) fn contains(repo: &gix::Repository, revision: GitOid) -> Result<bool> {
     let commit = gix::ObjectId::from_hex(revision.as_str().as_bytes())?;
-    let Some(entries) = entries(&repo, commit)? else {
+    let Some(entries) = entries(repo, commit)? else {
         return Ok(false);
     };
     for entry in &entries.files {
-        if !cached(&repo, entry.pointer())? {
+        if !cached(repo, entry.pointer())? {
             return Ok(false);
         }
     }
