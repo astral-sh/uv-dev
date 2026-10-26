@@ -9,6 +9,8 @@ use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::io;
 use std::path::Path;
+use uv_cache::{Cache, CacheBucket};
+use uv_cache_key::cache_digest;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
@@ -4871,6 +4873,59 @@ fn run_remote_pep723_script() {
      + pygments==2.17.2
      + rich==13.7.1
     ");
+}
+
+/// Remote script lock logs apply [`uv_redacted::SafeUrl`] redaction while the full URL identifies
+/// the cache entry.
+#[tokio::test]
+async fn run_remote_pep723_script_redacts_lock_credentials() {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/script.py"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = []
+            # ///
+            print("Hello, world!")
+        "#}))
+        .mount(&server)
+        .await;
+
+    let script_url = format!(
+        "http://username:password@{}/script.py?X-Amz-Signature=signing-secret&safe=value",
+        server.address()
+    );
+    let digest = cache_digest(&script_url);
+    let environment = Cache::from_path(context.cache_dir.path())
+        .shard(CacheBucket::Environments, &digest)
+        .into_path_buf();
+    let lock_path = std::env::temp_dir().join(format!("uv-{digest}.lock"));
+    let context = context
+        .with_filtered_path(&environment, "SCRIPT_ENV")
+        .with_filtered_path(&lock_path, "SCRIPT_LOCK");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg(&script_url)
+        .env(EnvVars::RUST_LOG, "uv_fs::locked_file=trace"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello, world!
+
+    ----- stderr -----
+    TRACE Checking lock for `[CACHE_DIR]/` at `[CACHE_DIR]/.lock`
+    TRACE Acquired shared lock for `[CACHE_DIR]/`
+    TRACE Checking lock for `http://username:****@[LOCALHOST]/script.py?X-Amz-Signature=****&safe=value` at `[SCRIPT_LOCK]/`
+    TRACE Acquired exclusive lock for `http://username:****@[LOCALHOST]/script.py?X-Amz-Signature=****&safe=value`
+    TRACE Released lock at `[SCRIPT_LOCK]/`
+    TRACE Checking lock for `[SCRIPT_ENV]/` at `[SCRIPT_ENV]/.lock`
+    TRACE Acquired exclusive lock for `[SCRIPT_ENV]/`
+    TRACE Released lock at `[SCRIPT_ENV]/.lock`
+    TRACE Released lock at `[CACHE_DIR]/.lock`
+    ");
+
+    ChildPath::new(environment).assert(predicate::path::is_dir());
 }
 
 #[test]
