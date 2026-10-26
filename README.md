@@ -10,23 +10,44 @@ The reporter requests `reqsign-core` 3.3.2 because the currently selected versio
 depends on `mea`, which is broken on PPC32. They report that development moved
 to `asyncband` and that the replacement removed the problematic code.
 
-The checkout locks `reqsign` 0.20.6, `reqsign-core` 3.3.1, and `mea` 0.6.7.
+The checkout examined during triage and reproduction locked `reqsign` 0.20.6,
+`reqsign-core` 3.3.1, and `mea` 0.6.7.
 A minimal dependency check reproduces a compilation failure in `mea` 0.6.7
 for `powerpc-unknown-linux-gnu`: its unconditional `AtomicU64` import fails
 with Rust error E0432. An equivalent check using `asyncband` 0.7.1 with the
 `mutex` feature succeeds for the same target. Published `reqsign-core` 3.3.2
 uses that replacement and feature. A complete uv build was not attempted.
 
-apache/reqsign#868 supplies the dependency replacement released in reqsign-core 3.3.2; astral-sh/uv#2658 queues a broader reqsign update that includes it. No other uv issue or PR for this specific PPC32 failure was found in the issue-context search.
+The requested dependency update is now merged in astral-sh/uv#22925. It
+updates `reqsign` to 0.20.7 and `reqsign-core` to 3.3.2, removes `mea`, and
+locks `asyncband` 0.7.4. The maintainer comment links this PR to the report.
+A complete PPC32 uv build and availability in a published uv release remain
+unverified.
 
-The issue was opened on October 24, 2026, and has no comments. It does not
+The issue was opened on October 24, 2026. The supplied discussion contains
+a maintainer comment linking astral-sh/uv#22925, but does not
 provide an exact target triple, build command, diagnostic, uv version, or a
 before-and-after build result. `powerpc-unknown-linux-gnu` was selected as a
 representative PPC32 target, not supplied by the reporter.
 
-## Draft response
+## Fix status
 
-Reproduced the dependency-level PPC32 failure with Rust 1.99.0: checking mea 0.6.7 for powerpc-unknown-linux-gnu fails with E0432 because std::sync::atomic::AtomicU64 is unavailable. Checking asyncband 0.7.1 with its mutex feature succeeds for the same target. reqsign-core 3.3.2 uses that replacement via apache/reqsign#868, while uv still locks reqsign-core 3.3.1 and mea 0.6.7. This supports the requested update; a complete uv build still needs verification for the reporter's exact target and build configuration.
+Maintainer EliteTK linked astral-sh/uv#22925 in the issue discussion. GitHub
+confirms that PR merged on October 26, 2026, at 17:40:11 UTC, with merge commit
+`c3bcf4bb9d51ffc918cfdfcb15d716e061f3ba2e`.
+
+The PR changes only `Cargo.lock`. Its diff confirms `reqsign` 0.20.6 → 0.20.7,
+`reqsign-core` 3.3.1 → 3.3.2, removal of the `mea` 0.6.7 package, and addition
+of `asyncband` 0.7.4. This incorporates the requested dependency replacement;
+a separate lockfile-update PR is no longer needed.
+
+The PR's required-jobs check succeeded, including Linux and Windows Cargo
+tests and Clippy checks. The returned check list contains no dedicated PPC32
+build. Release-artifact builds, integration tests, and system tests were
+skipped. The earlier isolated reproduction checked `asyncband` 0.7.1, whereas
+the merged lockfile selects 0.7.4; it does not verify the complete merged
+uv dependency graph on PPC32. No reporter confirmation or released uv version
+containing the change is established by the supplied discussion or PR evidence.
 
 ## Classification
 
@@ -41,8 +62,9 @@ compatibility for this target; they do not establish that a complete uv
 build passes after updating `reqsign-core`.
 
 The dashboard is a general dependency queue, not a canonical discussion of
-this failure. The merged upstream change is available for uv to consume;
-it does not update uv's lockfile.
+this failure. astral-sh/uv#22925 now incorporates the upstream change into
+uv's lockfile. It was created after this report and is the implementing PR;
+the classification remains bug rather than duplicate.
 
 ## Reproduction
 
@@ -172,11 +194,17 @@ sources, and isolated toolchain/cache/output directories.
 
 ## Related
 
-- apache/reqsign#868 — refactor: replace mea with asyncband 0.7.1 (merged). apache/reqsign#868 replaces mea with asyncband and is included in reqsign-core 3.3.2, published September 25, 2026. This supplies the upstream dependency change needed here; uv still locks reqsign-core 3.3.1.
-- astral-sh/uv#2658 — Dependency Dashboard (open). astral-sh/uv#2658 lists reqsign 0.20.7 under Pending Status Checks. That release requires reqsign-core ^3.3.2, so the queued update would incorporate the requested version. The dashboard does not track the PPC32 failure or link an implementing PR for this update.
+- astral-sh/uv#22925 — Update Rust crate reqsign to v0.20.7 (merged October 26, 2026). Linked by a maintainer in the issue discussion. The lockfile diff updates reqsign-core to 3.3.2, removes mea 0.6.7, and selects asyncband 0.7.4. This implements the requested dependency update; complete PPC32 uv build verification remains outstanding.
+- apache/reqsign#868 — refactor: replace mea with asyncband 0.7.1 (merged). apache/reqsign#868 replaces mea with asyncband and is included in reqsign-core 3.3.2, published September 25, 2026. This supplies the upstream dependency replacement now incorporated into uv by astral-sh/uv#22925.
+- astral-sh/uv#2658 — Dependency Dashboard (open at initial triage). The initial inspection listed reqsign 0.20.7 under Pending Status Checks. That release requires reqsign-core ^3.3.2. The update has since merged through astral-sh/uv#22925; the dashboard entry is historical context rather than an outstanding fix.
 
 ## Supporting evidence
 
+- The issue discussion links astral-sh/uv#22925. Read-only inspection of the
+  PR metadata and `Cargo.lock` diff confirms the merged versions and removal
+  of `mea` described above.
+- The local file references below document the affected checkout examined
+  during the original triage and reproduction, not the merged PR state.
 - `Cargo.toml:255` declares `reqsign`; `crates/uv-auth/Cargo.toml:36`
   consumes it for uv's cloud authentication providers.
 - `Cargo.lock:3812` selects `reqsign` 0.20.6.
@@ -209,7 +237,7 @@ sources, and isolated toolchain/cache/output directories.
   are feature-gated.
   Source: https://static.crates.io/crates/asyncband/asyncband-0.7.1.crate
 - `reqsign` 0.20.7 requires `reqsign-core ^3.3.2`, connecting the
-  pending dashboard update to this report.
+  dashboard update, now merged as astral-sh/uv#22925, to this report.
   Source: https://crates.io/api/v1/crates/reqsign/0.20.7/dependencies
 
 ## Search coverage and excluded candidates
@@ -220,7 +248,7 @@ dependency code. No specific uv command or error text was supplied. Literal
 package/version searches and platform/build symptom searches were conducted
 separately; the later `AtomicU64` search followed source inspection.
 
-Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh: reqsign-core, reqsign, 3.3.2, mea, asyncband, PPC32, PowerPC, ppc, powerpc-unknown-linux-gnu, 32-bit builds, unmaintained dependencies, Rust dependency updates, and AtomicU64. Inspected candidate bodies, comments, timelines, referenced fixes, and recent PRs. Ruled out astral-sh/uv#3423 and its merged fix astral-sh/uv#7271 (tokio-tar), astral-sh/uv#9793 and astral-sh/uv#9810 (64-bit PowerPC musl linking), astral-sh/uv#22273 (GCS identity fallback), and astral-sh/uv#18287 (JWT advisory). Followed the upstream release comparison to apache/reqsign#868 and checked published crate sources and dependency metadata. No existing uv discussion or PR for this specific failure was found.
+Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh: reqsign-core, reqsign, 3.3.2, mea, asyncband, PPC32, PowerPC, ppc, powerpc-unknown-linux-gnu, 32-bit builds, unmaintained dependencies, Rust dependency updates, and AtomicU64. Inspected candidate bodies, comments, timelines, referenced fixes, and recent PRs. Ruled out astral-sh/uv#3423 and its merged fix astral-sh/uv#7271 (tokio-tar), astral-sh/uv#9793 and astral-sh/uv#9810 (64-bit PowerPC musl linking), astral-sh/uv#22273 (GCS identity fallback), and astral-sh/uv#18287 (JWT advisory). Followed the upstream release comparison to apache/reqsign#868 and checked published crate sources and dependency metadata. The initial search found no existing uv discussion or PR for this specific failure. The later maintainer comment identifies astral-sh/uv#22925, whose merged lockfile diff was inspected for this update.
 
 The historical `tokio-tar` issue was particularly plausible because it also
 reported an unmaintained dependency broken on PowerPC. Its comments and
@@ -232,14 +260,15 @@ and JWT decoding exposure, not compilation.
 
 ## Recommended next step
 
-Prepare a focused lockfile update using
-`cargo update -p reqsign-core --precise 3.3.2`, review the resulting
-dependency changes, and verify that `mea` leaves the dependency graph.
-The isolated checks confirm the reported blocker and show that the replacement
-mutex dependency compiles for `powerpc-unknown-linux-gnu`. Verify a complete
-uv build for the reporter's exact PPC32 target and configuration before
-claiming the issue is fully resolved. The broader `reqsign` 0.20.7 update
-queued in astral-sh/uv#2658 is another route to the required core version.
+Use merge commit `c3bcf4bb9d51ffc918cfdfcb15d716e061f3ba2e` from
+astral-sh/uv#22925, or a revision containing it, for any remaining complete
+uv PPC32 build verification. Verify the reporter's exact target and build
+configuration with the merged dependency graph, including `asyncband` 0.7.4.
+The requested version update and removal of `mea` are already merged; no
+additional dependency-update PR is indicated by the available evidence.
+Confirm which published uv release includes the merge before recommending
+a released version as containing the fix.
 
-Only this README and isolated temporary reproduction artifacts were written.
-No checkout files or GitHub state were changed.
+The existing isolated reproduction findings and commands above are unchanged.
+This context update modified only this README; no checkout files, other
+context artifacts, or GitHub state were changed.
