@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19768,
+        "title": "Include additional checks, such as `ruff check`, in `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/19768",
+        "state": "open",
+        "reason": "Origin of the request: a comment proposes selecting Pyrefly, pyright, or mypy. Maintainer zsol explicitly opened astral-sh/uv#22941 to track checker selection separately because astral-sh/uv#19768 concerns additional checks. Related, but not a duplicate."
+      },
+      {
+        "kind": "issue",
+        "number": 19791,
+        "title": "Allow users to specify a custom ty configuration file when running `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/19791",
+        "state": "open",
+        "reason": "Adjacent customization request for the same command, but it selects a ty configuration file while retaining ty. It does not request switching type checkers."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using literal terms \"uv check\", \"type checker\", and \"ty-version\"; conceptual combinations involving mypy, pyright, Pyrefly, custom/configurable checkers, alternative checkers, and backends; and area:uv-check/check-command searches for implementations or fixes. Inspected candidate bodies, comments, and cross-reference timelines, including linked astral-sh/ty-pre-commit#7 and facebook/pyrefly#3176. No matching implementation PR surfaced. Ruled out astral-sh/uv#19768 as a duplicate because its maintainer explicitly split this request into the new issue. Also distinguished astral-sh/uv#19791 (ty configuration), astral-sh/uv#16314 (linting), astral-sh/uv#5903 (general task running), and closed astral-sh/uv#21551 (workspace exclusions)."
+  },
+  "type": "enhancement",
+  "type_reason": "The request adds checker selection to a command whose current implementation directly invokes ty and exposes ty-specific version selection. No incorrect behavior or regression is reported. Although alternative checkers were discussed in astral-sh/uv#19768, a maintainer explicitly created this issue to track that capability separately.",
+  "summary": "astral-sh/uv#19768 is the originating discussion and explicitly delegates checker selection to this issue. astral-sh/uv#19791 concerns configuring ty rather than replacing it. No duplicate or implementing pull request was found.",
+  "draft_response": "The customization you're requesting isn't supported yet: `uv check` currently invokes ty, and `--ty-version` only selects its version. This issue tracks checker selection separately from the additional checks discussed in astral-sh/uv#19768. The next step is to define how projects select a checker and how uv passes the environment and supported options. For now, you can add your preferred checker as a development dependency and invoke it through `uv run`, for example `uv run mypy .`."
+}
