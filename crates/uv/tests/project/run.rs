@@ -14,7 +14,9 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext, copy_dir_ignore, packse::PackseServer, site_packages_path, uv_snapshot,
+};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1661,6 +1663,56 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     ");
 
     Ok(())
+}
+
+#[test]
+fn run_with_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let prepared = context.temp_dir.child("prepared");
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg(prepared.path())
+        .assert()
+        .success();
+    let site = site_packages_path(prepared.path(), "python3.12");
+    fs_err::create_dir(site.join("extra"))?;
+    fs_err::write(site.join("shared.pth"), "extra\n")?;
+    fs_err::write(site.join("extra/example.py"), "value = 42\n")?;
+
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--python", "3.12", "--with-environment", "prepared", "--offline",
+        "python", "-I", "-c", indoc! { "
+            import pathlib, sys, example
+            prepared = pathlib.Path('prepared').resolve()
+            assert pathlib.Path(example.__file__).is_relative_to(prepared)
+            assert pathlib.Path(sys.prefix).resolve() != prepared
+            print(example.value)
+        " },
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    42
+    ");
+    Ok(())
+}
+
+#[test]
+fn run_with_environment_different_python() {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
+    context
+        .venv()
+        .args(["--python", "3.13", "prepared"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run().args([
+        "--no-project", "--python", "3.12", "--with-environment", "prepared", "python", "-V",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--with-environment` requires the same base Python installation as the command
+    ");
 }
 
 /// Test that an ephemeral environment writes the path of its parent environment to the `extends-environment` key

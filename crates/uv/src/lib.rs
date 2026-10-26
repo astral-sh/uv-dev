@@ -2363,6 +2363,7 @@ async fn run_project(
                 script,
                 command,
                 requirements,
+                args.with_environment.as_deref(),
                 args.show_resolution || globals.verbose > 0,
                 args.lock_check,
                 args.frozen,

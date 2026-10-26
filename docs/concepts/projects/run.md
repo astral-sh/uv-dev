@@ -24,6 +24,13 @@ $ uv run bash scripts/foo.sh
 
 ## Requesting additional dependencies
 
+Use `uv run --with-environment /path/to/venv` to run with packages and console scripts from an
+already prepared virtual environment. The supplied environment must use the same base Python
+installation as the interpreter selected by uv. Its site-packages directory is added before the
+project's site-packages directory. Keep the environment available for the duration of the command.
+Changes to its files are visible to other commands using it. The option conflicts with `--with`,
+`--with-editable`, and `--with-requirements`.
+
 Additional dependencies or different versions of dependencies can be requested per invocation.
 
 The `--with` option is used to include a dependency for the invocation, e.g., to request a different

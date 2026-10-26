@@ -92,6 +92,7 @@ pub async fn run(
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
     requirements: Vec<RequirementsSource>,
+    with_environment: Option<&Path>,
     show_resolution: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -883,7 +884,20 @@ pub async fn run(
     // If necessary, create an environment for the ephemeral requirements or command.
     let base_site_packages = SitePackages::from_interpreter(&base_interpreter)?;
     let requirements_env = match spec {
-        None => None,
+        None => with_environment
+            .map(|root| -> anyhow::Result<_> {
+                let environment = PythonEnvironment::from_root(std::path::absolute(root)?, &cache)?;
+                if !environment.interpreter().is_virtualenv() {
+                    bail!("`{}` is not a virtual environment", root.user_display());
+                }
+                if fs_err::canonicalize(environment.interpreter().find_base_python()?)?
+                    != fs_err::canonicalize(base_interpreter.find_base_python()?)?
+                {
+                    bail!("`--with-environment` requires the same base Python installation as the command");
+                }
+                Ok(environment)
+            })
+            .transpose()?,
         Some(spec)
             if can_skip_ephemeral(&spec, &base_interpreter, &base_site_packages, &settings) =>
         {
