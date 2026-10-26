@@ -16,14 +16,14 @@ use uv_pep440::{Version, VersionParseError, VersionSpecifier};
 use super::algebra::{Edges, INTERNER, NodeId, Variable};
 use super::simplify;
 #[cfg(test)]
-use crate::Pep508ErrorSource;
-#[cfg(test)]
 use crate::cursor::Cursor;
 use crate::marker::lowering::{
     CanonicalMarkerListPair, CanonicalMarkerValueString, CanonicalMarkerValueVersion,
 };
 use crate::marker::parse;
-use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, Reporter, TracingReporter};
+use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, TracingReporter};
+#[cfg(test)]
+use crate::{Pep508ErrorSource, Reporter};
 
 /// Ways in which marker evaluation can fail
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -976,11 +976,7 @@ impl MarkerTree {
 
     /// Does this marker apply in the given environment?
     pub fn evaluate(self, env: &MarkerEnvironment, extras: &[ExtraName]) -> bool {
-        self.evaluate_reporter_impl(
-            env,
-            ExtrasEnvironment::from_extras(extras),
-            &mut TracingReporter,
-        )
+        self.evaluate_impl(env, ExtrasEnvironment::from_extras(extras))
     }
 
     /// Evaluate a marker in the context of a PEP 751 lockfile, which exposes several additional
@@ -992,11 +988,7 @@ impl MarkerTree {
         extras: &[ExtraName],
         groups: &[GroupName],
     ) -> bool {
-        self.evaluate_reporter_impl(
-            env,
-            ExtrasEnvironment::from_pep751(extras, groups),
-            &mut TracingReporter,
-        )
+        self.evaluate_impl(env, ExtrasEnvironment::from_pep751(extras, groups))
     }
 
     /// Evaluates this marker tree against an optional environment and a
@@ -1013,27 +1005,18 @@ impl MarkerTree {
     ) -> bool {
         match env {
             None => self.evaluate_extras(extras),
-            Some(env) => self.evaluate_reporter_impl(
-                env,
-                ExtrasEnvironment::from_extras(extras),
-                &mut TracingReporter,
-            ),
+            Some(env) => self.evaluate_impl(env, ExtrasEnvironment::from_extras(extras)),
         }
     }
 
-    fn evaluate_reporter_impl(
-        self,
-        env: &MarkerEnvironment,
-        extras: ExtrasEnvironment,
-        reporter: &mut impl Reporter,
-    ) -> bool {
+    fn evaluate_impl(self, env: &MarkerEnvironment, extras: ExtrasEnvironment) -> bool {
         match self.kind() {
             MarkerTreeKind::True => return true,
             MarkerTreeKind::False => return false,
             MarkerTreeKind::Version(marker) => {
                 for (range, tree) in marker.edges() {
                     if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
@@ -1041,30 +1024,8 @@ impl MarkerTree {
                 for (range, tree) in marker.children() {
                     let l_string = env.get_string(marker.key());
 
-                    if matches!(
-                        marker.key(),
-                        CanonicalMarkerValueString::PlatformRelease
-                            | CanonicalMarkerValueString::PlatformVersion
-                    ) && range.as_singleton().is_none()
-                        && let Some((start, end)) = range.bounding_range()
-                    {
-                        if let Bound::Included(value) | Bound::Excluded(value) = start {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
-                        }
-
-                        if let Bound::Included(value) | Bound::Excluded(value) = end {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
-                        }
-                    }
-
                     if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
@@ -1074,24 +1035,24 @@ impl MarkerTree {
                 };
                 for (range, tree) in marker.edges() {
                     if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
+                        return tree.evaluate_impl(env, extras);
                     }
                 }
             }
             MarkerTreeKind::In(marker) => {
                 return marker
                     .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::Contains(marker) => {
                 return marker
                     .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::Extra(marker) => {
                 return marker
                     .edge(extras.extra().contains(marker.name().extra()))
-                    .evaluate_reporter_impl(env, extras, reporter);
+                    .evaluate_impl(env, extras);
             }
             MarkerTreeKind::List(marker) => {
                 let edge = match marker.pair() {
@@ -1103,9 +1064,7 @@ impl MarkerTree {
                     CanonicalMarkerListPair::Arbitrary { .. } => return false,
                 };
 
-                return marker
-                    .edge(edge)
-                    .evaluate_reporter_impl(env, extras, reporter);
+                return marker.edge(edge).evaluate_impl(env, extras);
             }
         }
 
@@ -2141,6 +2100,18 @@ mod test {
         );
     }
 
+    #[test]
+    fn restricted_platform_release_forks_cover_unknown_targets() {
+        let supported = m("sys_platform == 'darwin' and platform_machine == 'arm64'");
+        let required = supported.and(m("platform_release == '24'"));
+        let wheel = supported.and(m("platform_release >= '25'"));
+        let split = required.restrict(required.or(wheel));
+        let forks = [supported.and(split), supported.and(split.negate())];
+        let [left, right] = forks.map(|tree| m(&tree.try_to_string().unwrap()));
+        assert_eq!(left.or(right), supported);
+        assert!(left.is_disjoint(right));
+    }
+
     fn env37() -> MarkerEnvironment {
         MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
             implementation_name: "",
@@ -2730,10 +2701,8 @@ mod test {
             }
         }
 
-        // `platform_release` and `platform_version` are `Version | String` fields, not pure
-        // strings. Preserve their existing ordering behavior in this change.
-        assert!(m("platform_release < '2'").evaluate(&env, &[]));
-        assert!(m("platform_version <= '2'").evaluate(&env, &[]));
+        assert!(!m("platform_release < '2'").evaluate(&env, &[]));
+        assert!(!m("platform_version <= '2'").evaluate(&env, &[]));
     }
 
     #[test]
@@ -2865,13 +2834,74 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "tracing")]
-    #[tracing_test::traced_test]
-    fn warnings5() {
-        let env = env37().with_platform_release("10");
-        let marker = MarkerTree::from_str("platform_release < '2'").unwrap();
-        assert!(marker.evaluate(&env, &[]));
-        logs_contain("Comparing 10 and 2 lexicographically");
+    fn opaque_platform_marker_ordering() {
+        let env = env37()
+            .with_sys_platform("linux")
+            .with_platform_release("6.8.0-106-generic")
+            .with_platform_version("#1 SMP");
+        for (source, expected) in [
+            ("platform_release < '99'", false),
+            ("'99' > platform_release", false),
+            ("platform_release != '99'", true),
+            ("'99' != platform_release", true),
+            ("platform_release <= '6.8.0-106-generic'", true),
+            ("platform_version < 'z'", false),
+            ("'z' > platform_version", false),
+            ("platform_version >= '#1 SMP'", true),
+            ("'SMP' in platform_version", true),
+        ] {
+            let marker = m(source);
+            assert_eq!(marker.evaluate(&env, &[]), expected, "{source}");
+            if let Some(rendered) = marker.try_to_string() {
+                assert_eq!(m(&rendered), marker, "{source}: {rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn version_platform_markers_use_numeric_ordering() {
+        for (key, platforms) in [
+            ("platform_release", &["darwin", "ios", "android"][..]),
+            ("platform_version", &["win32"][..]),
+        ] {
+            let marker = m(&format!("{key} > '9.0'"));
+            assert_eq!(m(&format!("'9.0' < {key}")), marker);
+            for platform in platforms {
+                let env = env37()
+                    .with_sys_platform(*platform)
+                    .with_platform_release("10.0")
+                    .with_platform_version("10.0.22631");
+                assert!(marker.evaluate(&env, &[]));
+                assert!(!marker.negate().evaluate(&env, &[]));
+            }
+            assert_eq!(m(&marker.try_to_string().unwrap()), marker);
+            assert_eq!(
+                m(&marker.negate().try_to_string().unwrap()),
+                marker.negate()
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_target_release_uses_string_comparisons() {
+        for platform in ["darwin", "ios", "android"] {
+            let env = env37()
+                .with_sys_platform(platform)
+                .with_platform_release("");
+            for (source, expected) in [
+                ("platform_release != '14'", true),
+                ("platform_release == '14'", false),
+                ("platform_release >= '14'", false),
+                ("platform_release < '14'", false),
+            ] {
+                let marker = m(source);
+                assert_eq!(marker.evaluate(&env, &[]), expected, "{source}");
+                assert_eq!(marker.negate().evaluate(&env, &[]), !expected, "{source}");
+                for tree in [marker, marker.negate()] {
+                    assert_eq!(m(&tree.try_to_string().unwrap()), tree);
+                }
+            }
+        }
     }
 
     #[test]
@@ -3809,7 +3839,7 @@ mod test {
             "python_full_version == '3.7.1'"
         ));
 
-        // basic version bounds checking should still work with lexicographical comparisons
+        // Bounds on a platform field can be disjoint across both comparison modes.
         test_version_bounds_disjointness("platform_version");
 
         assert!(is_disjoint("os_name == 'Linux'", "os_name == 'OSX'"));

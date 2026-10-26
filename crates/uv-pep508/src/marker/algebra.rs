@@ -370,11 +370,17 @@ impl InternerGuard<'_> {
                 };
                 let string = self.create_node(
                     Variable::String(key),
-                    Edges::from_string(key, operator, value.clone()),
+                    Edges::from_string(operator, value.clone()),
                 );
-                // Darwin kernel releases are dotted versions. Other platforms can include
-                // arbitrary text in `platform_release`, so retain string comparisons there.
-                if key == CanonicalMarkerValueString::PlatformRelease
+                // Darwin reports a kernel release; iOS and Android report the OS release
+                // (PEP 730 and PEP 738). On Windows, `platform.version()` is the OS build version.
+                // Keep both branches so a lock can target platforms with different comparison rules.
+                let version_platforms: &[&str] = match key {
+                    CanonicalMarkerValueString::PlatformRelease => &["darwin", "ios", "android"],
+                    CanonicalMarkerValueString::PlatformVersion => &["win32"],
+                    _ => &[],
+                };
+                if !version_platforms.is_empty()
                     && let Some(operator) = operator.to_pep440_operator()
                     && let Ok(pattern) = value.parse::<VersionPattern>()
                     && let Ok(specifier) = VersionSpecifier::from_pattern(operator, pattern)
@@ -383,13 +389,23 @@ impl InternerGuard<'_> {
                         Variable::VersionString(key),
                         Edges::from_specifier(specifier),
                     );
-                    let darwin = self.expression(MarkerExpression::String {
-                        key: MarkerValueString::SysPlatform,
-                        operator: MarkerOperator::Equal,
-                        value: arcstr::literal!("darwin"),
-                    });
-                    let version = self.and(darwin, version);
-                    let string = self.and(darwin.not(), string);
+                    let mut platforms = NodeId::FALSE;
+                    for &platform in version_platforms {
+                        let platform = self.expression(MarkerExpression::String {
+                            key: MarkerValueString::SysPlatform,
+                            operator: MarkerOperator::Equal,
+                            value: ArcStr::from(platform),
+                        });
+                        platforms = self.or(platforms, platform);
+                    }
+                    // Explicit targets can leave the release or build version unknown.
+                    let nonempty = self.create_node(
+                        Variable::String(key),
+                        Edges::from_string(MarkerOperator::NotEqual, arcstr::literal!("")),
+                    );
+                    let version_field = self.and(platforms, nonempty);
+                    let version = self.and(version_field, version);
+                    let string = self.and(version_field.not(), string);
                     return self.or(version, string);
                 }
                 return string;
@@ -717,13 +733,22 @@ impl InternerGuard<'_> {
                 let Some(fallback) = fallback else {
                     return NodeId::FALSE;
                 };
+                // A platform version node is only defined when the field is nonempty.
+                // Keep its string branch even if the assumption excludes an unknown target.
+                let keep_string_branch = matches!(
+                    value_node.var,
+                    Variable::String(
+                        CanonicalMarkerValueString::PlatformRelease
+                            | CanonicalMarkerValueString::PlatformVersion
+                    )
+                );
                 let children = value_node.children.apply(
                     value,
                     &assumption_node.children,
                     assumption,
                     |value, assumption| {
                         if assumption.is_false() {
-                            fallback
+                            if keep_string_branch { value } else { fallback }
                         } else {
                             self.restrict_cached(value, assumption, cache)
                         }
@@ -1605,45 +1630,16 @@ impl EdgeBuilder {
     ///
     /// This function will panic for the `In` and `Contains` marker operators, which
     /// should be represented as separate boolean variables.
-    fn from_string(
-        key: CanonicalMarkerValueString,
-        operator: MarkerOperator,
-        value: ArcStr,
-    ) -> Self {
-        let range: Ranges<ArcStr> = match (key, operator) {
-            // `platform_release` and `platform_version` are `Version | String` fields. Preserve
-            // their existing lexicographic behavior here; their version-aware semantics are
-            // outside the pure string field behavior handled by this change.
-            (
-                CanonicalMarkerValueString::PlatformRelease
-                | CanonicalMarkerValueString::PlatformVersion,
-                MarkerOperator::GreaterThan,
-            ) => Ranges::strictly_higher_than(value),
-            (
-                CanonicalMarkerValueString::PlatformRelease
-                | CanonicalMarkerValueString::PlatformVersion,
-                MarkerOperator::GreaterEqual,
-            ) => Ranges::higher_than(value),
-            (
-                CanonicalMarkerValueString::PlatformRelease
-                | CanonicalMarkerValueString::PlatformVersion,
-                MarkerOperator::LessThan,
-            ) => Ranges::strictly_lower_than(value),
-            (
-                CanonicalMarkerValueString::PlatformRelease
-                | CanonicalMarkerValueString::PlatformVersion,
-                MarkerOperator::LessEqual,
-            ) => Ranges::lower_than(value),
-            (_, MarkerOperator::Equal) => Ranges::singleton(value),
-            (_, MarkerOperator::NotEqual) => Ranges::singleton(value).complement(),
+    fn from_string(operator: MarkerOperator, value: ArcStr) -> Self {
+        let range: Ranges<ArcStr> = match operator {
+            MarkerOperator::Equal => Ranges::singleton(value),
+            MarkerOperator::NotEqual => Ranges::singleton(value).complement(),
             // The marker specification defines strict ordering comparisons for string-valued
             // fields as always false, while inclusive ordering comparisons are equivalent to
             // equality.
-            (_, MarkerOperator::GreaterThan | MarkerOperator::LessThan) => Ranges::empty(),
-            (_, MarkerOperator::GreaterEqual | MarkerOperator::LessEqual) => {
-                Ranges::singleton(value)
-            }
-            (_, MarkerOperator::TildeEqual) => {
+            MarkerOperator::GreaterThan | MarkerOperator::LessThan => Ranges::empty(),
+            MarkerOperator::GreaterEqual | MarkerOperator::LessEqual => Ranges::singleton(value),
+            MarkerOperator::TildeEqual => {
                 unreachable!("string comparisons with ~= are ignored")
             }
             _ => unreachable!("`in` and `contains` are treated as boolean variables"),

@@ -44245,7 +44245,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
-            "platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
+            "(platform_machine == 'arm64' and platform_release == '' and sys_platform == 'darwin') or (platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin')",
             "platform_machine == 'arm64' and platform_release < '25' and sys_platform == 'darwin'",
         ]
         supported-markers = [
@@ -44275,7 +44275,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
         version = "2.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
+            "(platform_machine == 'arm64' and platform_release == '' and sys_platform == 'darwin') or (platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin')",
         ]
         wheels = [
             { url = "http://[LOCALHOST]/files/a-2.0.0-py3-none-macosx_26_0_arm64.whl", hash = "sha256:[SHA256:a-2.0.0-py3-none-macosx_26_0_arm64.whl]", upload-time = "2024-03-24T00:00:00Z" },
@@ -44287,7 +44287,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
         source = { virtual = "." }
         dependencies = [
             { name = "a", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "platform_release < '25'" },
-            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "platform_release >= '25'" },
+            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "platform_release == '' or platform_release >= '25'" },
         ]
 
         [package.metadata]
@@ -44386,7 +44386,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
         revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
-            "python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
+            "(python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release == '' and sys_platform == 'darwin') or (python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin')",
             "python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release < '25' and sys_platform == 'darwin'",
             "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
         ]
@@ -44418,7 +44418,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
         version = "2.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
+            "(python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release == '' and sys_platform == 'darwin') or (python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin')",
             "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
         ]
         wheels = [
@@ -44432,7 +44432,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
         source = { virtual = "." }
         dependencies = [
             { name = "a", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.13' and platform_release < '25'" },
-            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.13' or platform_release >= '25'" },
+            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.13' or platform_release == '' or platform_release >= '25'" },
         ]
 
         [package.metadata]
