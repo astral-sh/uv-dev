@@ -269,14 +269,17 @@ jobs:
           version: "0.13.5"
           checksum: "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a"
 
-      - name: "Install required Python versions"
+      - name: Install Rust and Python
+        working-directory: ${{ env.UV_WORKSPACE }}
         env:
           UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
-        run: uv python install
-
-      - name: "Install Rust toolchain"
-        working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: |
+          $rustup = Start-Process rustup -ArgumentList 'toolchain', 'install', '--profile', 'minimal' -NoNewWindow -PassThru
+          uv python install
+          $pythonExitCode = $LASTEXITCODE
+          $rustup.WaitForExit()
+          if ($pythonExitCode -ne 0) { exit $pythonExitCode }
+          exit $rustup.ExitCode
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
