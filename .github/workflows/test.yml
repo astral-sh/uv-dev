@@ -279,6 +279,8 @@ jobs:
         run: rustup toolchain install --profile minimal
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+        env:
+          ZSTD_CLEVEL: 10
         with:
           prefix-key: v1-rust-workspace
           key: ${{ hashFiles('Cargo.toml') }}
