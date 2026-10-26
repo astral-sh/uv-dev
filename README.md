@@ -29,7 +29,9 @@ These are settings under `[tool.uv]`; `example-bin` is an illustrative package n
 
 This provides a practical way to require compatible wheels for dependencies that cannot be built from source. It does not introduce a libc environment marker, exclude musl installations, or remove musl wheels from the lockfile. The reporter's subsequent `ruff` example tests wheel retention with a glibc-only baseline; it does not include `no-build-package` or confirm the wheel-only configuration works for the original binary dependencies. The original resolution error remains unknown.
 
-Evidence: maintainer comment 6419641097, dated 2026-10-26, in astral-sh/uv#22913. The supplied full discussion identifies the author as a repository member.
+In response to the retained-wheel example, charliermarsh confirms that the setting does not exclude musllinux wheels and says they will not be selected for the reporter's use case. This distinguishes entries retained in a universal lockfile from artifacts selected for installation on the target platform. The maintainer describes the resolution requirement as needing a manylinux wheel; the source-distribution fallback described above and the documented generic-Linux-wheel coverage exception still apply. This clarification is not a report of an actual installation test or confirmation that the original resolution failure is fixed.
+
+Evidence: maintainer comments 6419641097 and 6424783119, dated 2026-10-26, in astral-sh/uv#22913. The supplied full discussion identifies the author as a repository member.
 
 ## Reporter-provided example: retained musllinux wheels
 
@@ -48,7 +50,7 @@ preview-features = ["minimum-libc-version"]
 minimum-libc-version = { glibc = "2.31" }
 ```
 
-Run `uv lock` and inspect `uv.lock`. The reporter says musllinux wheels remain; their expectation is that the glibc-only configuration should omit them. This is a user-provided example, not an independently executed reproduction. No lockfile, selected Ruff version, or command output is attached. The Python requirement is `>=3.15`; no new uv version or platform is specified beyond the original report.
+Run `uv lock` and inspect `uv.lock`. The reporter says musllinux wheels remain; their expectation is that the glibc-only configuration should omit them. This is a user-provided example, not an independently executed reproduction. No lockfile, selected Ruff version, or command output is attached. The Python requirement is `>=3.15`. The reporter explicitly confirms running this example with uv 0.13.5 in the edited comment; no platform specific to this example is supplied.
 
 The example omits `environments`, `required-environments`, and `no-build-package`. It therefore differs from the original restricted-environment configuration and does not test the maintainer's package-specific build prohibition. Adding coverage requirements would not itself remove musllinux wheel entries: `docs/concepts/resolution.md:256` explicitly says these wheels are retained, and `minimum_libc_retains_locked_wheels` in `crates/uv/tests/lock/minimum_libc.rs:25` snapshots a musllinux wheel alongside manylinux wheels even with a Linux `required-environments` entry and glibc-only baseline. The documentation and existing test were inspected; no commands from the example or tests were executed.
 
