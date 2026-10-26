@@ -578,6 +578,31 @@ impl Cache {
         }))
     }
 
+    /// Check that a destructive cache operation is targeting a tagged cache or an empty directory.
+    pub fn validate_removal_root(&self) -> io::Result<()> {
+        if cachedir::is_tagged(&self.root)? {
+            return Ok(());
+        }
+        // An empty cache may contain only the lock acquired by the current command.
+        let mut entries = fs_err::read_dir(&self.root)?;
+        match entries.next().transpose()? {
+            None => return Ok(()),
+            Some(entry)
+                if entry.file_name() == ".lock" && entries.next().transpose()?.is_none() =>
+            {
+                return Ok(());
+            }
+            Some(_) => {}
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Refusing to remove contents of `{}` without a valid `CACHEDIR.TAG` file",
+                self.root.user_display(),
+            ),
+        ))
+    }
+
     /// Clear the cache, removing all entries.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
         // Waiters may have already opened the lock. Retain its path and directory so they acquire

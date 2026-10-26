@@ -890,7 +890,9 @@ impl TestContext {
         fs_err::create_dir_all(dir)?;
         let tmp = tempfile::TempDir::new_in(dir)?;
         self.cache_dir = ChildPath::new(tmp.path()).child("cache");
-        fs_err::create_dir_all(&self.cache_dir)?;
+        Cache::from_path(self.cache_dir.path())
+            .init_no_wait()?
+            .expect("new test cache should not be locked");
         let replacement = format!("[{name}]/[CACHE_DIR]/");
         for pattern in Self::path_patterns(&self.cache_dir) {
             self.filters.insert(0, (pattern, replacement.clone()));
