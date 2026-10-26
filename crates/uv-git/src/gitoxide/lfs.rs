@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use gix::bstr::{BString, ByteSlice};
+use gix::protocol::transport::client::blocking_io::http;
 use gix_lfs::{Pointer, download, filter::Filter};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
@@ -295,23 +296,31 @@ fn fetch_objects(
         .transpose()?
         .map(|pem| reqwest::Certificate::from_pem_bundle(&pem))
         .transpose()?;
-    let client = |verify: bool| {
+    let mut clients = Vec::new();
+    let mut client_for = |url: &SafeUrl| -> Result<Client> {
+        let options = repo
+            .transport_options(url.as_str(), None)?
+            .and_then(|options| options.downcast::<http::Options>().ok())
+            .context("Git LFS requires HTTP transport options")?;
+        let verify = !source.disable_ssl || !same_origin(source.url(), url);
+        let key = (
+            verify,
+            options.proxy.clone(),
+            options.no_proxy.clone(),
+            options.proxy_auth_method,
+        );
+        if let Some((_, client)) = clients.iter().find(|(policy, _)| *policy == key) {
+            return Ok(Client::clone(client));
+        }
         let mut builder = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .tls_danger_accept_invalid_certs(!verify);
         if let Some(certs) = &ca {
             builder = builder.tls_certs_only(certs.clone());
         }
-        builder.build()
-    };
-    let verified = client(true)?;
-    let unverified = source.disable_ssl.then(|| client(false)).transpose()?;
-    let client_for = |url: &SafeUrl| {
-        if same_origin(source.url(), url) {
-            unverified.as_ref().unwrap_or(&verified)
-        } else {
-            &verified
-        }
+        let client = http::reqwest::configure_proxy(builder, &options)?.build()?;
+        clients.push((key, client.clone()));
+        Ok(client)
     };
     let pointers = missing.into_values().collect::<Vec<_>>();
     let credentials = if same_origin(&remote, &endpoint) {
@@ -320,7 +329,7 @@ fn fetch_objects(
         None
     };
     for batch in pointers.chunks(100) {
-        let mut request = client_for(&endpoint)
+        let mut request = client_for(&endpoint)?
             .post(endpoint.as_str())
             .header(ACCEPT, download::MEDIA_TYPE)
             .header(CONTENT_TYPE, download::MEDIA_TYPE)
@@ -354,7 +363,7 @@ fn fetch_objects(
         for &pointer in batch {
             let action = &actions[pointer.oid];
             let url = SafeUrl::parse(&action.href)?;
-            let response = get_object(client_for(&url), &endpoint, &url, action)?;
+            let response = get_object(&client_for(&url)?, &endpoint, &url, action)?;
             store(repo, pointer, response)?;
         }
     }

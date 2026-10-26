@@ -1,5 +1,4 @@
-#[cfg(feature = "test-universal")]
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[cfg(feature = "test-git")]
 use std::process::Command;
 
 use anyhow::Result;
@@ -9,13 +8,13 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-universal", feature = "test-git"))]
 use serde_json::json;
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-universal", feature = "test-git"))]
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-universal", feature = "test-git"))]
 use walkdir::WalkDir;
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-universal", feature = "test-git"))]
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -24121,12 +24120,58 @@ fn lock_gitoxide_local_lfs_retries_an_incomplete_checkout() -> Result<()> {
     lock_gitoxide_local_repository(LocalGitFixture::LfsRetry)
 }
 
+/// An LFS download may use a different URL-scoped proxy than its batch request.
+#[cfg(feature = "test-git")]
+#[tokio::test]
+async fn lock_gitoxide_lfs_uses_url_scoped_proxies() -> Result<()> {
+    let origin = MockServer::start().await;
+    let batch = MockServer::start().await;
+    let object = MockServer::start().await;
+    let oid = hex::encode(Sha256::digest(LOCAL_GIT_PYPROJECT));
+    Mock::given(method("POST"))
+        .and(path("/batch/objects/batch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "objects": [{"oid": oid, "size": LOCAL_GIT_PYPROJECT.len(), "actions": {
+                "download": {"href": format!("{}/storage/{}", origin.uri(), oid)}
+            }}]
+        })))
+        .expect(1)
+        .mount(&batch)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/storage/{oid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(LOCAL_GIT_PYPROJECT))
+        .expect(1)
+        .mount(&object)
+        .await;
+    lock_gitoxide_local_repository(LocalGitFixture::LfsProxy {
+        endpoint: origin.uri(),
+        batch: batch.uri(),
+        object: object.uri(),
+    })?;
+    assert!(origin.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[cfg(feature = "test-git")]
+const LOCAL_GIT_PYPROJECT: &str = indoc! {r#"
+    [project]
+    name = "local-package"
+    version = "1.2.3"
+    requires-python = ">=3.13"
+"#};
+
 #[cfg(feature = "test-git")]
 enum LocalGitFixture {
     Plain,
     Lfs,
     LfsSubmodule,
     LfsRetry,
+    LfsProxy {
+        endpoint: String,
+        batch: String,
+        object: String,
+    },
 }
 
 #[cfg(feature = "test-git")]
@@ -24134,12 +24179,7 @@ fn lock_gitoxide_local_repository(fixture: LocalGitFixture) -> Result<()> {
     let lfs = !matches!(fixture, LocalGitFixture::Plain);
     let context = uv_test::test_context!("3.13");
     let repository = context.temp_dir.child("local dependency");
-    let pyproject = indoc! {r#"
-        [project]
-        name = "local-package"
-        version = "1.2.3"
-        requires-python = ">=3.13"
-    "#};
+    let pyproject = LOCAL_GIT_PYPROJECT;
     Command::new("git")
         .arg("init")
         .arg(repository.path())
@@ -24147,13 +24187,19 @@ fn lock_gitoxide_local_repository(fixture: LocalGitFixture) -> Result<()> {
         .success();
     if lfs {
         let oid = hex::encode(Sha256::digest(pyproject));
-        repository
-            .child(format!(
-                ".git/lfs/objects/{}/{}/{oid}",
-                &oid[..2],
-                &oid[2..4]
-            ))
-            .write_str(pyproject)?;
+        if let LocalGitFixture::LfsProxy { endpoint, .. } = &fixture {
+            repository
+                .child(".lfsconfig")
+                .write_str(&format!("[lfs]\nurl = {endpoint}/batch\n"))?;
+        } else {
+            repository
+                .child(format!(
+                    ".git/lfs/objects/{}/{}/{oid}",
+                    &oid[..2],
+                    &oid[2..4]
+                ))
+                .write_str(pyproject)?;
+        }
         repository.child("pyproject.toml").write_str(&format!(
             "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
             pyproject.len()
@@ -24252,7 +24298,25 @@ fn lock_gitoxide_local_repository(fixture: LocalGitFixture) -> Result<()> {
             assert!(entry?.path().extension().is_none_or(|ext| ext != "ok"));
         }
     }
-    lock().arg("--offline").assert().success();
+    if let LocalGitFixture::LfsProxy {
+        endpoint,
+        batch,
+        object,
+    } = fixture
+    {
+        lock()
+            .env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_0", format!("http.{endpoint}/batch.proxy"))
+            .env("GIT_CONFIG_VALUE_0", batch)
+            .env("GIT_CONFIG_KEY_1", format!("http.{endpoint}/storage.proxy"))
+            .env("GIT_CONFIG_VALUE_1", object)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .assert()
+            .success();
+    } else {
+        lock().arg("--offline").assert().success();
+    }
     assert!(
         context
             .read("uv.lock")
