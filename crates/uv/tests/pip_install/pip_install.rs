@@ -11331,6 +11331,60 @@ fn create_local_index_with_tqdm(context: &TestContext, root: &Path) -> Result<()
     Ok(())
 }
 
+/// Indexes whose paths differ only by a `.git` suffix can serve different wheels.
+#[test]
+fn local_index_git_suffix_uses_separate_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo".parse()?;
+    let version = "1.0".parse()?;
+    let plain = context.temp_dir.child("simple");
+    let dotted = context.temp_dir.child("simple.git");
+    for (index, marker) in [(&plain, "first"), (&dotted, "second")] {
+        let (filename, wheel) = WheelBuilder::new(&name, &version)
+            .files(&[("origin-proof.txt", marker)])
+            .build();
+        let package = index.child("demo");
+        package.child(&filename).write_binary(&wheel)?;
+        package
+            .child("index.html")
+            .write_str(&format!(r#"<a href="{filename}">{filename}</a>"#))?;
+    }
+
+    let first = context.temp_dir.child("first-target");
+    context
+        .pip_install()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--default-index")
+        .arg(SafeUrl::from_directory_path(plain.path()).unwrap().as_str())
+        .arg("--target")
+        .arg(first.path())
+        .arg("demo==1.0")
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(first.join("origin-proof.txt"))?, "first");
+
+    let second = context.temp_dir.child("second-target");
+    context
+        .pip_install()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--default-index")
+        .arg(
+            SafeUrl::from_directory_path(dotted.path())
+                .unwrap()
+                .as_str(),
+        )
+        .arg("--target")
+        .arg(second.path())
+        .arg("demo==1.0")
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(second.join("origin-proof.txt"))?,
+        "second"
+    );
+    Ok(())
+}
+
 /// Resolve against a local directory laid out as a PEP 503-compatible index.
 #[test]
 fn local_index_absolute() -> Result<()> {

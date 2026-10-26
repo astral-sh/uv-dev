@@ -427,12 +427,14 @@ fn clean_package_index() -> Result<()> {
         iniconfig
     "})?;
 
+    let index = uv_distribution_types::IndexUrl::parse("https://test.pypi.org/simple", None)?;
+
     // Install a requirement, to populate the cache.
     context
         .pip_sync()
         .arg("requirements.txt")
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(index.url().as_str())
         .assert()
         .success();
 
@@ -440,8 +442,7 @@ fn clean_package_index() -> Result<()> {
     let rkyv = context
         .cache_dir
         .child("simple-v27")
-        .child("index")
-        .child("e8208120cae3ba69")
+        .child(uv_cache::WheelCache::Index(&index).root())
         .child("iniconfig.rkyv");
     assert!(
         rkyv.exists(),

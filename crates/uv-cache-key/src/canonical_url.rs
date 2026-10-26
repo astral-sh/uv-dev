@@ -18,7 +18,13 @@ use crate::cache_key::{CacheKey, CacheKeyHasher};
 pub struct CanonicalUrl(SafeUrl);
 
 impl CanonicalUrl {
-    pub fn new(mut url: SafeUrl) -> Self {
+    pub fn new(url: SafeUrl) -> Self {
+        let is_git = url.scheme().starts_with("git+");
+        Self::canonicalize(url, is_git)
+    }
+
+    /// Canonicalize a URL, applying repository-specific normalization when `is_git` is true.
+    fn canonicalize(mut url: SafeUrl, is_git: bool) -> Self {
         // If the URL cannot be a base, then it's not a valid URL anyway.
         if url.cannot_be_a_base() {
             return Self(url);
@@ -33,41 +39,43 @@ impl CanonicalUrl {
             url.path_segments_mut().unwrap().pop_if_empty();
         }
 
-        // For GitHub URLs specifically, just lower-case everything. GitHub
-        // treats both the same, but they hash differently, and we're gonna be
-        // hashing them. This wants a more general solution, and also we're
-        // almost certainly not using the same case conversion rules that GitHub
-        // does. (See issue #84)
-        if url.host_str() == Some("github.com") {
-            // The scheme is already lowercase, and hierarchical paths are percent-encoded.
-            let path = url.path().to_ascii_lowercase();
-            url.set_path(&path);
-        }
-
-        // Repos can generally be accessed with or without `.git` extension.
-        if let Some((prefix, suffix)) = url.path().rsplit_once('@') {
-            // Ex) `git+https://github.com/pypa/sample-namespace-packages.git@2.0.0`
-            let needs_chopping = std::path::Path::new(prefix)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
-            if needs_chopping {
-                let prefix = &prefix[..prefix.len() - 4];
-                let path = format!("{prefix}@{suffix}");
+        if is_git {
+            // For GitHub URLs specifically, just lower-case everything. GitHub
+            // treats both the same, but they hash differently, and we're gonna be
+            // hashing them. This wants a more general solution, and also we're
+            // almost certainly not using the same case conversion rules that GitHub
+            // does. (See issue #84)
+            if url.host_str() == Some("github.com") {
+                // The scheme is already lowercase, and hierarchical paths are percent-encoded.
+                let path = url.path().to_ascii_lowercase();
                 url.set_path(&path);
             }
-        } else {
-            // Ex) `git+https://github.com/pypa/sample-namespace-packages.git`
-            let needs_chopping = std::path::Path::new(url.path())
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
-            if needs_chopping {
-                let last = {
-                    // Unwrap safety: We checked `url.cannot_be_a_base()`, and `url.path()` having
-                    // an extension implies at least one segment.
-                    let last = url.path_segments().unwrap().next_back().unwrap();
-                    last[..last.len() - 4].to_owned()
-                };
-                url.path_segments_mut().unwrap().pop().push(&last);
+
+            // Repos can generally be accessed with or without `.git` extension.
+            if let Some((prefix, suffix)) = url.path().rsplit_once('@') {
+                // Ex) `git+https://github.com/pypa/sample-namespace-packages.git@2.0.0`
+                let needs_chopping = std::path::Path::new(prefix)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
+                if needs_chopping {
+                    let prefix = &prefix[..prefix.len() - 4];
+                    let path = format!("{prefix}@{suffix}");
+                    url.set_path(&path);
+                }
+            } else {
+                // Ex) `git+https://github.com/pypa/sample-namespace-packages.git`
+                let needs_chopping = std::path::Path::new(url.path())
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
+                if needs_chopping {
+                    let last = {
+                        // Unwrap safety: We checked `url.cannot_be_a_base()`, and `url.path()` having
+                        // an extension implies at least one segment.
+                        let last = url.path_segments().unwrap().next_back().unwrap();
+                        last[..last.len() - 4].to_owned()
+                    };
+                    url.path_segments_mut().unwrap().pop().push(&last);
+                }
             }
         }
 
@@ -98,6 +106,10 @@ impl CacheKey for CanonicalUrl {
     fn cache_key(&self, state: &mut CacheKeyHasher) {
         // `as_str` gives the serialisation of a url (which has a spec) and so insulates against
         // possible changes in how the URL crate does hashing.
+        // Older non-Git keys could contain artifacts from a different URL with a `.git` suffix.
+        if !self.0.scheme().starts_with("git+") {
+            1u8.cache_key(state);
+        }
         self.0.as_str().cache_key(state);
     }
 }
@@ -145,7 +157,17 @@ pub struct RepositoryUrl {
 
 impl RepositoryUrl {
     pub fn new(url: SafeUrl) -> Self {
-        let mut url = CanonicalUrl::new(url).0;
+        Self::canonicalize(url, true)
+    }
+
+    /// Build a resource identifier for a URL whose scheme determines whether it refers to Git.
+    pub fn from_url(url: SafeUrl) -> Self {
+        let is_git = url.scheme().starts_with("git+");
+        Self::canonicalize(url, is_git)
+    }
+
+    fn canonicalize(url: SafeUrl, is_git: bool) -> Self {
+        let mut url = CanonicalUrl::canonicalize(url, is_git).0;
 
         // If a Git URL ends in a reference (like a branch, tag, or commit), remove it.
         if url.scheme().starts_with("git+") {
@@ -218,6 +240,35 @@ impl std::fmt::Display for RepositoryUrl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repository_normalization_is_specific_to_git() -> Result<(), SafeUrlError> {
+        let plain = SafeUrl::parse("https://example.org/simple")?;
+        let dotted = SafeUrl::parse("https://example.org/simple.git/")?;
+        assert_ne!(
+            CanonicalUrl::new(plain.clone()),
+            CanonicalUrl::new(dotted.clone())
+        );
+        assert_ne!(
+            RepositoryUrl::from_url(plain.clone()),
+            RepositoryUrl::from_url(dotted.clone())
+        );
+        assert_eq!(
+            RepositoryUrl::new(plain.clone()),
+            RepositoryUrl::new(dotted)
+        );
+
+        // Either index could have populated the old, shared cache entry.
+        assert_ne!(
+            crate::cache_digest(&CanonicalUrl::new(plain.clone())),
+            crate::cache_digest(&plain)
+        );
+        assert_ne!(
+            CanonicalUrl::new(SafeUrl::parse("https://github.com/Org/files/One")?),
+            CanonicalUrl::new(SafeUrl::parse("https://github.com/org/files/one")?),
+        );
+        Ok(())
+    }
 
     #[test]
     fn user_credential_does_not_affect_cache_key() -> Result<(), SafeUrlError> {
@@ -368,8 +419,8 @@ mod tests {
         );
 
         assert_eq!(
-            CanonicalUrl::new(SafeUrl::parse("HTTPS://github.com/PYPA/Éxample")?),
-            CanonicalUrl::new(SafeUrl::parse("https://github.com/pypa/%C3%89xample")?),
+            CanonicalUrl::new(SafeUrl::parse("git+https://github.com/PYPA/Éxample")?),
+            CanonicalUrl::new(SafeUrl::parse("git+https://github.com/pypa/%C3%89xample")?),
         );
         assert_ne!(
             CanonicalUrl::new(SafeUrl::parse("https://github.com/pypa/Éxample")?),

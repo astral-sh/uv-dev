@@ -1455,7 +1455,7 @@ impl Identifier for SafeUrl {
     }
 
     fn resource_id(&self) -> ResourceId {
-        ResourceId::Url(uv_cache_key::RepositoryUrl::new(self.clone()))
+        ResourceId::Url(uv_cache_key::RepositoryUrl::from_url(self.clone()))
     }
 }
 
