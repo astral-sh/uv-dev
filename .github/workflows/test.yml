@@ -244,7 +244,10 @@ jobs:
 
   cargo-test-windows:
     timeout-minutes: 15
-    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    runs-on:
+      - nscloud-windows-2022-amd64-16x32-with-cache
+      - nscloud-cache-tag-uv-rust-windows-${{ github.repository_id }}
+      - nscloud-cache-allow-commit-from-main
     name: "cargo test on windows ${{ matrix.partition }} of 3"
     strategy:
       fail-fast: false
@@ -278,15 +281,22 @@ jobs:
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      # Keep `uv.exe` on the workspace drive so its reported path matches test snapshots.
+      - uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9 # v1
         with:
-          prefix-key: v1-rust-workspace
-          key: ${{ hashFiles('Cargo.toml') }}
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/.fingerprint
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/build
+            ${{ env.UV_WORKSPACE }}/target/fast-build-nightly/deps
+
+      - uses: astral-sh/github-actions/rust-workspace-cache/prune@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+        with:
           workspace: ${{ env.UV_WORKSPACE }}
+          target-directory: target
           profile: fast-build-nightly
-          # Use the same cache entry across the partitions
-          add-job-id-key: false
-          save-if: ${{ inputs.save-rust-cache == 'true' }}
+          enabled: ${{ github.ref == 'refs/heads/main' && inputs.save-rust-cache == 'true' }}
 
       - name: "Create NTFS test directory (low hardlink limit)"
         run: New-Item -Path "C:\uv" -ItemType Directory -Force
