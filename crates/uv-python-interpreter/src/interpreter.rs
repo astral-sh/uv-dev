@@ -274,6 +274,7 @@ impl Interpreter {
                     gil_disabled: self.gil_disabled,
                     debug_enabled: self.debug_enabled,
                     is_cross: false,
+                    prefer_portable_linux: false,
                 },
             )?;
             self.tags.set(tags).expect("tags should not be set");
