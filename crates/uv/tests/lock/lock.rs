@@ -24100,17 +24100,23 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_repository_without_git() -> Result<()> {
-    lock_gitoxide_local_repository(false)
+    lock_gitoxide_local_repository(false, false)
 }
 
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_lfs_without_git() -> Result<()> {
-    lock_gitoxide_local_repository(true)
+    lock_gitoxide_local_repository(true, false)
 }
 
 #[cfg(feature = "test-git")]
-fn lock_gitoxide_local_repository(lfs: bool) -> Result<()> {
+#[test]
+fn lock_gitoxide_local_lfs_submodule_without_git() -> Result<()> {
+    lock_gitoxide_local_repository(true, true)
+}
+
+#[cfg(feature = "test-git")]
+fn lock_gitoxide_local_repository(lfs: bool, submodule: bool) -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let repository = context.temp_dir.child("local dependency");
     let pyproject = indoc! {r#"
@@ -24168,7 +24174,38 @@ fn lock_gitoxide_local_repository(lfs: bool) -> Result<()> {
         ])
         .assert()
         .success();
-    let url = SafeUrl::from_directory_path(repository.path()).unwrap();
+    let mut url = SafeUrl::from_directory_path(repository.path()).unwrap();
+    if submodule {
+        let parent = context.temp_dir.child("parent");
+        Command::new("git")
+            .arg("init")
+            .arg(parent.path())
+            .assert()
+            .success();
+        Command::new("git")
+            .current_dir(parent.path())
+            .env("GIT_LFS_SKIP_SMUDGE", "1")
+            .args(["-c", "protocol.file.allow=always", "submodule", "add"])
+            .arg(url.as_str())
+            .arg("child")
+            .assert()
+            .success();
+        Command::new("git")
+            .current_dir(parent.path())
+            .args([
+                "-c",
+                "user.name=Example",
+                "-c",
+                "user.email=example@example.com",
+                "commit",
+                "-m",
+                "Add child",
+            ])
+            .assert()
+            .success();
+        url = SafeUrl::from_directory_path(parent.path()).unwrap();
+        url.set_fragment(Some("subdirectory=child"));
+    }
     context
         .temp_dir
         .child("pyproject.toml")
@@ -24182,7 +24219,9 @@ fn lock_gitoxide_local_repository(lfs: bool) -> Result<()> {
     context
         .lock()
         .arg("--offline")
-        .arg("--preview-features").arg("gitoxide")
+        .arg("--preview-features")
+        .arg("gitoxide")
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .env(EnvVars::UV_GIT_LFS, lfs.to_string())
         .env(EnvVars::PATH, context.bin_dir.path())
         .assert()

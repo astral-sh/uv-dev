@@ -854,7 +854,6 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
 
 /// Fetch and validate the LFS objects required for a revision.
 fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
-    let url = remote.url();
     if repo.backend == Backend::Gitoxide {
         if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote)? {
             return Ok(true);
@@ -862,8 +861,40 @@ fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) ->
         debug!("Falling back to Git LFS for this repository");
         repo.backend = Backend::Cli;
     }
+    fetch_lfs_with_cli(repo, remote, revision.as_str())
+}
+
+pub(super) fn checkout_lfs_extension(
+    repo: &gix::Repository,
+    commit: gix::ObjectId,
+    remote: &GitRemote,
+) -> Result<()> {
+    let path = repo
+        .workdir()
+        .context("Git LFS checkout needs a worktree")?;
+    let git = GitRepository {
+        path: path.to_owned(),
+        backend: Backend::Cli,
+    };
+    anyhow::ensure!(
+        fetch_lfs_with_cli(&git, remote, &commit.to_string())?,
+        "Git LFS could not fetch the submodule's objects"
+    );
+    GIT_LFS
+        .as_ref()
+        .map_err(|err| anyhow!("{err:#}"))?
+        .clone()
+        .arg("checkout")
+        .cwd(path)
+        .exec_with_output()
+        .map_err(|err| redact_git_error(err, remote.url()))?;
+    Ok(())
+}
+
+fn fetch_lfs_with_cli(repo: &GitRepository, remote: &GitRemote, revision: &str) -> Result<bool> {
+    let url = remote.url();
     if remote.offline {
-        if repo.lfs_fsck_objects(revision.as_str()) {
+        if repo.lfs_fsck_objects(revision) {
             return Ok(true);
         }
         return Err(GitError::TransportNotAllowed.into());
@@ -884,7 +915,7 @@ fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) ->
 
     cmd.arg("fetch")
         .arg(url.as_str())
-        .arg(revision.as_str())
+        .arg(revision)
         // We should not support requesting LFS artifacts with skip smudge being set.
         // While this may not be necessary, it's added to avoid any potential future issues.
         .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
@@ -900,7 +931,7 @@ fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) ->
     // We may want to allow the user to skip validation in the future via
     // UV_GIT_LFS_NO_VALIDATION environment variable on rare cases where
     // validation costs outweigh the benefit.
-    let validation_result = repo.lfs_fsck_objects(revision.as_str());
+    let validation_result = repo.lfs_fsck_objects(revision);
 
     Ok(validation_result)
 }

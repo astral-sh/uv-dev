@@ -183,8 +183,8 @@ flate2 = { version = "1.0.33", default-features = false, features = [
 fs-err = { version = "3.2.2", default-features = false, features = ["tokio"] }
 futures = { version = "0.3.30", default-features = false, features = ["async-await", "executor"] }
 futures-lite = { version = "2.6.1", default-features = false, features = ["std"] }
-gix = { git = "https://github.com/zanieb/gitoxide", rev = "46fe3359477a993d3a81da158e75d89b1d86954b", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "revision", "sha1", "worktree-mutation"] }
-gix-lfs = { git = "https://github.com/zanieb/gitoxide", rev = "46fe3359477a993d3a81da158e75d89b1d86954b", features = ["download"] }
+gix = { git = "https://github.com/zanieb/gitoxide", rev = "19347f1a6c0feea067d25a316f45241b069341e3", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "revision", "sha1", "worktree-mutation"] }
+gix-lfs = { git = "https://github.com/zanieb/gitoxide", rev = "19347f1a6c0feea067d25a316f45241b069341e3", features = ["download"] }
 glob = { version = "0.3.1", default-features = false }
 globset = { version = "0.4.15", default-features = false }
 globwalk = { version = "0.9.1", default-features = false }

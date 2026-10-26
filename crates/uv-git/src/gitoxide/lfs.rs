@@ -78,10 +78,6 @@ fn entries(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Selec
             }
             Some(_) => true,
         })
-        || index
-            .entries()
-            .iter()
-            .any(|entry| entry.mode.is_submodule())
     {
         return Ok(None);
     }
@@ -183,6 +179,33 @@ pub(super) fn checkout(
     Ok(())
 }
 
+pub(super) fn checkout_submodules(repo: &gix::Repository, parent: &GitRemote) -> Result<()> {
+    let Some(modules) = repo.submodules()? else {
+        return Ok(());
+    };
+    for module in modules {
+        let (Some(commit), Some(child)) = (module.index_id()?, module.open()?) else {
+            continue;
+        };
+        let url = module.resolved_url()?;
+        let url = if url.scheme == gix::url::Scheme::File && url.host().is_none() {
+            SafeUrl::from_file_path(gix::path::from_bstr(&url.path)?)
+                .map_err(|()| anyhow::anyhow!("Invalid local submodule path"))?
+        } else {
+            SafeUrl::parse(url.to_bstring().to_str()?)?
+        };
+        let insecure = parent.disable_ssl && same_origin(parent.url(), &url);
+        let remote = GitRemote::new(url, insecure, parent.offline);
+        if fetch_objects(&child, commit, &remote)? {
+            checkout(&child, &child, commit)?;
+        } else {
+            crate::git::checkout_lfs_extension(&child, commit, &remote)?;
+        }
+        checkout_submodules(&child, &remote)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn contains(database: &Path, revision: GitOid) -> Result<bool> {
     let repo = open(database)?;
     let commit = gix::ObjectId::from_hex(revision.as_str().as_bytes())?;
@@ -200,19 +223,27 @@ pub(crate) fn contains(database: &Path, revision: GitOid) -> Result<bool> {
 pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Result<bool> {
     let repo = gix::open_opts(database, source.network_options([]))?;
     let commit = gix::ObjectId::from_hex(revision.as_str().as_bytes())?;
+    fetch_objects(&repo, commit, source)
+}
+
+fn fetch_objects(
+    repo: &gix::Repository,
+    commit: gix::ObjectId,
+    source: &GitRemote,
+) -> Result<bool> {
     if repo
         .config_snapshot()
         .boolean("remote.uv-promisor.promisor")
         == Some(true)
     {
-        materialize_tree(&repo, commit, source)?;
+        materialize_tree(repo, commit, source)?;
     }
-    let Some(entries) = entries(&repo, commit)? else {
+    let Some(entries) = entries(repo, commit)? else {
         return Ok(false);
     };
     let mut missing = BTreeMap::new();
     for entry in &entries.files {
-        if !missing.contains_key(&entry.oid) && !cached(&repo, entry.pointer())? {
+        if !missing.contains_key(&entry.oid) && !cached(repo, entry.pointer())? {
             missing.insert(&entry.oid, entry.pointer());
         }
     }
@@ -230,16 +261,18 @@ pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Re
             .transpose()?
         {
             if endpoint.scheme == gix::url::Scheme::File {
+                let local = gix::path::from_bstr(&remote.path)?.canonicalize()?;
+                let target = gix::path::from_bstr(&endpoint.path)?.canonicalize()?;
                 if endpoint.host().is_some()
-                    || gix::path::from_bstr(&endpoint.path)?.canonicalize()?
-                        != gix::path::from_bstr(&remote.path)?.canonicalize()?
+                    || (target != local
+                        && !(local.ends_with(".git") && local.parent() == Some(target.as_path())))
                 {
                     return Ok(false);
                 }
-                return fetch_local(&repo, &remote, missing.into_values());
+                return fetch_local(repo, &remote, missing.into_values());
             }
         } else {
-            return fetch_local(&repo, &remote, missing.into_values());
+            return fetch_local(repo, &remote, missing.into_values());
         }
     }
     let remote = SafeUrl::parse(remote.to_bstring().to_str()?)?;
@@ -321,7 +354,7 @@ pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Re
             let action = &actions[pointer.oid];
             let url = SafeUrl::parse(&action.href)?;
             let response = get_object(client_for(&url), &endpoint, &url, action)?;
-            store(&repo, pointer, response)?;
+            store(repo, pointer, response)?;
         }
     }
     Ok(true)

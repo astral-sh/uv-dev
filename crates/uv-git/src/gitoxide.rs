@@ -256,9 +256,6 @@ pub(crate) fn checkout(
     if let Some(modules) = repo.submodules()? {
         for module in modules {
             if module.index_id()?.is_some() {
-                if remote.offline {
-                    return Err(GitError::TransportNotAllowed.into());
-                }
                 module.init(false)?;
             }
         }
@@ -267,14 +264,19 @@ pub(crate) fn checkout(
             destination,
             options(crate::git::submodule_auth_config(remote.url())),
         )?;
+        let mut update = gix::submodule::update::Options::new(true, true);
+        update.fetch = if remote.offline {
+            gix::submodule::update::Fetch::LocalOnly
+        } else {
+            gix::submodule::update::Fetch::PreferLocal
+        };
         if let Some(modules) = repo.submodules()? {
             for module in modules {
-                module.update_submodule(
-                    Discard,
-                    &AtomicBool::new(false),
-                    &gix::submodule::update::Options::new(true, true),
-                )?;
+                module.update_submodule(Discard, &AtomicBool::new(false), &update)?;
             }
+        }
+        if with_lfs {
+            lfs::checkout_submodules(&repo, remote)?;
         }
     }
     Ok(())
