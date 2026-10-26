@@ -430,7 +430,9 @@ impl GitCheckout {
                 database.lfs_ready == Some(true),
             )
             .map_err(|err| redact_git_error(err, original_remote_url))?;
-            paths::create(into.with_extension(CHECKOUT_READY_EXTENSION))?;
+            if database.lfs_ready != Some(false) {
+                paths::create(into.with_extension(CHECKOUT_READY_EXTENSION))?;
+            }
             return Ok(Self::new(
                 revision,
                 GitRepository {

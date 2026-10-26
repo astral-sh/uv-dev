@@ -24100,23 +24100,38 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_repository_without_git() -> Result<()> {
-    lock_gitoxide_local_repository(false, false)
+    lock_gitoxide_local_repository(LocalGitFixture::Plain)
 }
 
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_lfs_without_git() -> Result<()> {
-    lock_gitoxide_local_repository(true, false)
+    lock_gitoxide_local_repository(LocalGitFixture::Lfs)
 }
 
 #[cfg(feature = "test-git")]
 #[test]
 fn lock_gitoxide_local_lfs_submodule_without_git() -> Result<()> {
-    lock_gitoxide_local_repository(true, true)
+    lock_gitoxide_local_repository(LocalGitFixture::LfsSubmodule)
 }
 
 #[cfg(feature = "test-git")]
-fn lock_gitoxide_local_repository(lfs: bool, submodule: bool) -> Result<()> {
+#[test]
+fn lock_gitoxide_local_lfs_retries_an_incomplete_checkout() -> Result<()> {
+    lock_gitoxide_local_repository(LocalGitFixture::LfsRetry)
+}
+
+#[cfg(feature = "test-git")]
+enum LocalGitFixture {
+    Plain,
+    Lfs,
+    LfsSubmodule,
+    LfsRetry,
+}
+
+#[cfg(feature = "test-git")]
+fn lock_gitoxide_local_repository(fixture: LocalGitFixture) -> Result<()> {
+    let lfs = !matches!(fixture, LocalGitFixture::Plain);
     let context = uv_test::test_context!("3.13");
     let repository = context.temp_dir.child("local dependency");
     let pyproject = indoc! {r#"
@@ -24175,7 +24190,7 @@ fn lock_gitoxide_local_repository(lfs: bool, submodule: bool) -> Result<()> {
         .assert()
         .success();
     let mut url = SafeUrl::from_directory_path(repository.path()).unwrap();
-    if submodule {
+    if matches!(fixture, LocalGitFixture::LfsSubmodule) {
         let parent = context.temp_dir.child("parent");
         Command::new("git")
             .arg("init")
@@ -24216,16 +24231,28 @@ fn lock_gitoxide_local_repository(lfs: bool, submodule: bool) -> Result<()> {
         requires-python = ">=3.13"
         dependencies = ["local-package @ git+{url}"]
     "#})?;
-    context
-        .lock()
-        .arg("--offline")
-        .arg("--preview-features")
-        .arg("gitoxide")
-        .env("GIT_ALLOW_PROTOCOL", "file")
-        .env(EnvVars::UV_GIT_LFS, lfs.to_string())
-        .env(EnvVars::PATH, context.bin_dir.path())
-        .assert()
-        .success();
+    let lock = || {
+        let mut cmd = context.lock();
+        cmd.arg("--preview-features")
+            .arg("gitoxide")
+            .env("GIT_ALLOW_PROTOCOL", "file")
+            .env(EnvVars::UV_GIT_LFS, lfs.to_string())
+            .env(EnvVars::PATH, context.bin_dir.path());
+        cmd
+    };
+    if matches!(fixture, LocalGitFixture::LfsRetry) {
+        lock()
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "lfs.transfer.maxretries")
+            .env("GIT_CONFIG_VALUE_0", "1")
+            .env(EnvVars::UV_INTERNAL__TEST_LFS_DISABLED, "1")
+            .assert()
+            .failure();
+        for entry in WalkDir::new(context.cache_dir.child("git-v1/checkouts").path()) {
+            assert!(entry?.path().extension().is_none_or(|ext| ext != "ok"));
+        }
+    }
+    lock().arg("--offline").assert().success();
     assert!(
         context
             .read("uv.lock")
