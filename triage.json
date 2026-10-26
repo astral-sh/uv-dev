@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18506,
+        "title": "Roadmap: `uv audit`",
+        "url": "https://github.com/astral-sh/uv/issues/18506",
+        "state": "open",
+        "reason": "The May 6 discussion explicitly requests keeping an individual ignore active until a fix satisfies exclude-newer, describing the same CI/pre-commit workflow. This is the closest existing discussion for the primary request. The thread also covers CVSS thresholds; maintainers cite missing or misleading scores and favor exposing scores over built-in filtering."
+      },
+      {
+        "kind": "issue",
+        "number": 18995,
+        "title": "Feature request: advisory-aware exclude-newer that exempts CVE fixes from the cooldown window",
+        "url": "https://github.com/astral-sh/uv/issues/18995",
+        "state": "closed",
+        "reason": "Reports the same audit-versus-cooldown CI conflict and proposes the automatic security-fix exemption in option 3. Maintainers favored explicit, reviewed package overrides and more precise exemptions; closure does not indicate that advisory-based bypasses were implemented."
+      },
+      {
+        "kind": "issue",
+        "number": 19864,
+        "title": "Structured bypasses for exclude-newer",
+        "url": "https://github.com/astral-sh/uv/issues/19864",
+        "state": "open",
+        "reason": "Tracks more precise cooldown exceptions, with concrete security-fix examples and concerns about persistent package-wide bypasses. It is the current discussion for explicit constraint/version-based exceptions, rather than advisory-aware audit suppression or automatic CVE exemptions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18737,
+        "title": "uv audit: `--ignore` and `--ignore-until-fixed`",
+        "url": "https://github.com/astral-sh/uv/pull/18737",
+        "state": "merged",
+        "reason": "Merged March 30, 2026, introducing per-advisory ignores until a known fix version appears. Its stated semantics and the current implementation do not test whether that fix satisfies resolver constraints or cooldowns; this establishes feature history, not a previous fix for the reported interaction."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18921,
+        "title": "Add `allow-bypass` option to `exclude-newer` for allowing direct pinned dependencies",
+        "url": "https://github.com/astral-sh/uv/pull/18921",
+        "state": "open",
+        "reason": "Referenced by astral-sh/uv#19864 as an implementation direction for explicit pinned-dependency cooldown bypasses. Its body says it is not ready for review. It does not implement cooldown-aware ignore-until-fixed or automatic security-advisory exemptions."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separately searched ignore-until-fixed with exclude-newer, the proposed flag names, and the existing term ignore-until-non-excluded-fix; broadened to audit/cooldown, installable or available fixes, security-fix bypasses, quarantine, CVSS, severity thresholds, and structured exceptions. Inspected area:uv-audit issues, candidate comments, and referenced PRs; followed astral-sh/uv#18914 to its replacement astral-sh/uv#19864. PR keyword searches returned no hits, so linked PRs were inspected directly, including reviews. Ruled out astral-sh/uv#20983 (blanket ignoring of unfixed advisories), astral-sh/uv#19265 (removing stale ignore configuration), and astral-sh/uv#19428 (automatic remediation) as duplicates of cooldown-aware suppression. Checked source, existing tests, and the merged ignore-feature PR; found no prior cooldown-aware fix or regression evidence."
+  },
+  "type": "duplicate",
+  "type_reason": "The primary request and CI trigger are already discussed explicitly in the May 6 comments on astral-sh/uv#18506. The automatic-exemption alternative is also covered by astral-sh/uv#18995, with more precise manual bypasses tracked in astral-sh/uv#19864. Discussion can be centralized in those existing threads. Current code checks for known fix versions without checking installability, consistent with the original feature; no previously fixed behavior is shown to have regressed.",
+  "summary": "astral-sh/uv#18506 contains the exact cooldown-aware ignore request. astral-sh/uv#18995 covers automatic security exemptions, while astral-sh/uv#19864 and astral-sh/uv#18921 track explicit bypasses. astral-sh/uv#18737 establishes the current ignore semantics.",
+  "draft_response": "Your CI scenario is already described in the May 6 discussion on astral-sh/uv#18506, including an ignore that lasts until a fix satisfies exclude-newer. Please continue the cooldown-aware ignore proposal there.\n\nCurrently, --ignore-until-fixed checks whether the advisory lists a fix version; it does not check whether your resolver settings permit installing it. Automatic security-fix exemptions were discussed in astral-sh/uv#18995, where maintainers favored explicit, reviewed overrides. More precise bypasses are tracked in astral-sh/uv#19864. The roadmap also discusses CVSS filtering and concerns about missing or misleading scores.\n\nIf you decide to install a fix before its cooldown expires, --exclude-newer-package <package>=false provides a manual exception for that package. Automatic cooldown-aware ignores are not currently implemented."
+}
