@@ -27,6 +27,8 @@ on:
 
 permissions: {}
 
+cache-mode: none
+
 env:
   ACTIONS_CACHE_MODE: none
   UV_LOCKED: "1"
