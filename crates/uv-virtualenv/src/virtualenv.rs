@@ -191,6 +191,9 @@ pub(crate) fn create(
             )));
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            #[cfg(target_os = "macos")]
+            macos::create_directory(&absolute)?;
+            #[cfg(not(target_os = "macos"))]
             fs_err::create_dir_all(location)?;
         }
         Err(err) => return Err(Error::Io(err)),
@@ -957,4 +960,53 @@ fn copy_launcher_windows(
     }
 
     Err(Error::NotFound(base_python.user_display().to_string()))
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::io;
+    use std::path::Path;
+    use std::ptr;
+
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::CFString;
+    use core_foundation::url::{CFURL, CFURLSetResourcePropertyForKey};
+
+    pub(super) fn create_directory(path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs_err::create_dir_all(parent)?;
+        }
+        // Only change backup and sync settings on a directory that uv created.
+        match fs_err::create_dir(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => {
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+
+        let Some(url) = CFURL::from_path(path, true) else {
+            return Ok(());
+        };
+        let excluded = CFBoolean::true_value();
+        // Using property names avoids linking against symbols unavailable on older macOS versions.
+        for key in [
+            "NSURLIsExcludedFromBackupKey",
+            "NSURLUbiquitousItemIsExcludedFromSyncKey",
+        ] {
+            let key = CFString::new(key);
+            // SAFETY: The URL, key, and Boolean remain valid for this call. A null error
+            // pointer is permitted; unsupported properties must not prevent venv creation.
+            unsafe {
+                CFURLSetResourcePropertyForKey(
+                    url.as_concrete_TypeRef(),
+                    key.as_concrete_TypeRef(),
+                    excluded.as_CFTypeRef(),
+                    ptr::null_mut(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
