@@ -245,7 +245,7 @@ impl GitRepository {
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
     pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Self {
-        let backend = Backend::for_remote(&url);
+        let backend = Backend::from_preview();
         Self {
             url,
             backend,

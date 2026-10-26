@@ -240,8 +240,9 @@ mod tests {
 
         ### `gitoxide` {#gitoxide}
 
-        Use gitoxide for supported Git dependency fetches and checkouts. Some URLs and configurations
-        require Git or Git LFS. SSH fetches use the configured SSH command.
+        Use gitoxide for Git dependencies, `uv init`, and Git-based build cache keys. SSH and checkout
+        filters use their configured commands. Credential helpers, some local fetches, and Git LFS
+        extensions may require Git.
 
         ### `index-by-name` {#index-by-name}
 

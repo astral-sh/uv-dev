@@ -23,20 +23,11 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    pub(crate) fn for_remote(url: &SafeUrl) -> Self {
-        if uv_preview::is_enabled(PreviewFeature::Gitoxide) && Self::supports(url) {
+    pub(crate) fn from_preview() -> Self {
+        if uv_preview::is_enabled(PreviewFeature::Gitoxide) {
             Self::Gitoxide
         } else {
             Self::Cli
-        }
-    }
-
-    fn supports(url: &SafeUrl) -> bool {
-        match url.scheme() {
-            "http" | "https" | "git" => true,
-            "file" => !url.has_host(),
-            "ssh" => url.has_host() && url.password().is_none(),
-            _ => false,
         }
     }
 }
@@ -60,7 +51,8 @@ impl GitRemote {
 fn can_persist_promisor(url: &SafeUrl) -> bool {
     !url.as_str().contains('?')
         && url.fragment().is_none()
-        && (url.scheme() != "ssh" || matches!(url.username(), "" | "git"))
+        && (url.scheme() != "ssh"
+            || (url.password().is_none() && matches!(url.username(), "" | "git")))
 }
 
 pub(super) fn options() -> gix::open::Options {
@@ -100,7 +92,7 @@ pub(crate) fn fetch(
     }
     let local = remote
         .url(Direction::Fetch)
-        .is_some_and(|url| url.scheme == gix::url::Scheme::File && url.host().is_none());
+        .is_some_and(|url| url.scheme == gix::url::Scheme::File);
     let interrupt = AtomicBool::new(false);
     if local && remote.try_fetch_local(&interrupt)?.is_some() {
         return Ok(());
@@ -108,9 +100,16 @@ pub(crate) fn fetch(
     if source.offline && !local {
         return Err(GitError::TransportNotAllowed.into());
     }
-    let fetch = remote
-        .connect(Direction::Fetch)?
-        .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
+    let mut connection = remote.connect(Direction::Fetch)?;
+    if source.offline {
+        // A partial local source may try to fetch missing objects from its own remote.
+        connection = connection.with_transport_options(Box::new(
+            gix::protocol::transport::client::blocking_io::file::Options {
+                allow_protocols: "file".to_owned(),
+            },
+        ));
+    }
+    let fetch = connection.prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
     let outcome = if local || !can_persist_promisor(url) {
         fetch
     } else {
@@ -373,18 +372,15 @@ mod tests {
 
     #[test]
     fn promisor_urls_can_be_stored_without_credentials() -> Result<()> {
-        for (raw, supported, persistent) in [
-            ("https://forge.example/pkg", true, true),
-            ("https://forge.example/cgi?repo=pkg", true, false),
-            ("ssh://git@forge.example:2222/pkg", true, true),
-            ("ssh://user@forge.example/pkg", true, false),
-            ("ssh://git:secret@forge.example/pkg", false, true),
+        for (raw, persistent) in [
+            ("https://forge.example/pkg", true),
+            ("https://forge.example/cgi?repo=pkg", false),
+            ("ssh://git@forge.example:2222/pkg", true),
+            ("ssh://user@forge.example/pkg", false),
+            ("ssh://git:secret@forge.example/pkg", false),
         ] {
             let url = SafeUrl::parse(raw)?;
-            assert_eq!(Backend::supports(&url), supported);
-            if supported {
-                assert_eq!(can_persist_promisor(&url), persistent);
-            }
+            assert_eq!(can_persist_promisor(&url), persistent);
         }
         Ok(())
     }
