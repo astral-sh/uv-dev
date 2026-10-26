@@ -8,7 +8,7 @@ Classification: duplicate
 
 The reporter uses uv 0.13.5 on macOS 15 and Ubuntu 26.04 and limits `tool.uv.environments` to macOS and Linux x86_64/aarch64. They want an expression such as `platform_libc == 'glibc'` to exclude musl because some dependencies distribute Go binaries as wheels without musl support. Setting an artificially high musl value in the `minimum-libc-version` preview reportedly caused resolution failure.
 
-The report does not identify the dependencies, provide the failing command or error output, or include the attempted preview configuration. Whether those packages have usable source distributions is unverified.
+The reporter now supplies a minimal `ruff` project and the command `uv lock`, reporting that musllinux wheels remain in `uv.lock` with a glibc-only baseline. This clarifies that removing those wheel entries is part of the desired behavior. The original Go-binary dependencies, high-musl-version configuration, and resolution error remain unidentified; the new example does not reproduce that earlier failure.
 
 Duplicate of astral-sh/uv#11743. astral-sh/uv#21671 proposed libc exclusions but closed unmerged; merged astral-sh/uv#21651 provides coverage requirements only.
 
@@ -27,13 +27,36 @@ no-build-package = ["example-bin"]
 
 These are settings under `[tool.uv]`; `example-bin` is an illustrative package name, not a dependency identified by the reporter. The baseline should match the oldest glibc version the project intends to support. The existing `required-environments` guidance identifies the Linux architectures for which coverage is required.
 
-This provides a practical way to require compatible wheels for dependencies that cannot be built from source. It does not introduce a libc environment marker, exclude musl installations, or remove musl wheels from the lockfile. The reporter has not confirmed whether this configuration resolves their problem, and the affected packages and original resolution error remain unknown.
+This provides a practical way to require compatible wheels for dependencies that cannot be built from source. It does not introduce a libc environment marker, exclude musl installations, or remove musl wheels from the lockfile. The reporter's subsequent `ruff` example tests wheel retention with a glibc-only baseline; it does not include `no-build-package` or confirm the wheel-only configuration works for the original binary dependencies. The original resolution error remains unknown.
 
 Evidence: maintainer comment 6419641097, dated 2026-10-26, in astral-sh/uv#22913. The supplied full discussion identifies the author as a repository member.
 
+## Reporter-provided example: retained musllinux wheels
+
+The reporter's comment at 2026-10-26 18:49:37 UTC in astral-sh/uv#22913 provides this `pyproject.toml`:
+
+```toml
+[project]
+name = "musllinux-exclude"
+version = "0.1.0"
+description = "Trying to exclude musllinux"
+requires-python = ">=3.15"
+dependencies = ["ruff"]
+
+[tool.uv]
+preview-features = ["minimum-libc-version"]
+minimum-libc-version = { glibc = "2.31" }
+```
+
+Run `uv lock` and inspect `uv.lock`. The reporter says musllinux wheels remain; their expectation is that the glibc-only configuration should omit them. This is a user-provided example, not an independently executed reproduction. No lockfile, selected Ruff version, or command output is attached. The Python requirement is `>=3.15`; no new uv version or platform is specified beyond the original report.
+
+The example omits `environments`, `required-environments`, and `no-build-package`. It therefore differs from the original restricted-environment configuration and does not test the maintainer's package-specific build prohibition. Adding coverage requirements would not itself remove musllinux wheel entries: `docs/concepts/resolution.md:256` explicitly says these wheels are retained, and `minimum_libc_retains_locked_wheels` in `crates/uv/tests/lock/minimum_libc.rs:25` snapshots a musllinux wheel alongside manylinux wheels even with a Linux `required-environments` entry and glibc-only baseline. The documentation and existing test were inspected; no commands from the example or tests were executed.
+
+This supplies actionable configuration for investigating the exclusion request and confirms the distinction between requiring glibc coverage and filtering lockfile artifacts. It does not show that a musl wheel satisfies a glibc requirement, establish an installation failure, or reproduce the original failure with an artificially high musl baseline.
+
 ## Classification
 
-astral-sh/uv#11743 already tracks the same missing capability to exclude musllinux from supported environments when dependencies lack musl wheels. The preview setting adds libc coverage requirements and does not implement exclusion; the alternative exclusion PR was never merged. The report supplies no error or dependency reproduction establishing a separate correctness bug or regression.
+astral-sh/uv#11743 already tracks the same missing capability to exclude musllinux from supported environments when dependencies lack musl wheels. The preview setting adds libc coverage requirements and does not implement exclusion; the alternative exclusion PR was never merged. The supplied `ruff` example reports documented wheel retention, not a separate correctness bug or regression. No error or reproduction has been supplied for the original high-musl-version resolution failure.
 
 The existing issue asks for the same supported-environment restriction and cites the same missing dependency wheels as its motivation. Its extra emphasis on an early unsupported-platform error does not make the underlying request different. Duplicate takes precedence over enhancement or question.
 
@@ -75,6 +98,6 @@ The link from astral-sh/uv#11743 to astral-sh/uv#7816 was inspected: that issue 
 
 ## Handoff
 
-The exclusion request remains covered by astral-sh/uv#11743. For the immediate wheel-only dependency need, the maintainer has supplied a glibc-only baseline combined with `no-build-package`; confirmation from the reporter is still needed. If investigation continues, the missing inputs are the affected dependency names, complete configuration, failing command, and full error after applying the relevant coverage and build restrictions. Do not recommend the unmerged structured-environment or libc-marker syntax.
+The exclusion request remains covered by astral-sh/uv#11743. The reporter has supplied a concrete `ruff` configuration and `uv lock` command for the narrower observation that musllinux wheels remain in the lockfile. Assess this as an artifact-exclusion request: coverage requirements and `no-build-package` do not prune those wheels. For the separate original resolution failure, the missing inputs remain the actual binary dependency names, high-musl-version configuration, failing command, and full error. The maintainer's wheel-only configuration has not been confirmed for those dependencies. Do not recommend the unmerged structured-environment or libc-marker syntax.
 
 This is an internal maintainer handoff. No public response was drafted or posted for this context update, and no GitHub changes were made.
