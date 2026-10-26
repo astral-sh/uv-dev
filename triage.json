@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16576,
+        "title": "Unexpected dependency resolving with `platform_machine` and `--python-platform`",
+        "url": "https://github.com/astral-sh/uv/issues/16576",
+        "state": "open",
+        "reason": "Closest command-level discussion: a 32-bit Windows target supplies x86 while a 32-bit interpreter on a 64-bit host reports AMD64, changing dependency selection. Maintainers discuss the ambiguous host architecture and require overrides to be host-independent. This does not establish the separate x64 target spelling bug as a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22594,
+        "title": "Honor `pylock.toml` environment restrictions during installation",
+        "url": "https://github.com/astral-sh/uv/pull/22594",
+        "state": "merged",
+        "reason": "Merged October 15, 2026, and released in uv 0.13.2, adding the exact reported error and evaluation of pylock environments against the target markers. This exposes the incorrect Windows x64 mapping for pylock installs; it neither changes nor fixes that mapping."
+      },
+      {
+        "kind": "issue",
+        "number": 18298,
+        "title": "false positive error installing playwright when `required-environments = [\"sys_platform == 'win32' and platform_machine == 'x86_64'\"]`",
+        "url": "https://github.com/astral-sh/uv/issues/18298",
+        "state": "open",
+        "reason": "Maintainers confirm AMD64 is the Windows x64 marker expected by wheel compatibility checks. This concerns a user-supplied x86_64 marker in required-environments, whereas the new report concerns uv itself generating that incorrect value through --python-platform."
+      },
+      {
+        "kind": "issue",
+        "number": 14040,
+        "title": "uv cannot find resolution for required-environment `sys_platform == 'win32' and platform_machine == 'AMD64'`",
+        "url": "https://github.com/astral-sh/uv/issues/14040",
+        "state": "closed",
+        "reason": "Historical rejection of valid Windows AMD64 required-environments in uv 0.7.13. Its linked fix corrected markers inferred from wheels, a different path from the explicit target environment used for pylock installation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14041,
+        "title": "Fix implied `platform_machine` marker for `win_amd64` platform tag",
+        "url": "https://github.com/astral-sh/uv/pull/14041",
+        "state": "merged",
+        "reason": "Merged June 16, 2025, fixing astral-sh/uv#14040 by changing win_amd64 wheel-implied markers from x86_64 to AMD64. The diff does not change target_triple.rs, and the corrected wheel mapping remains in the checkout; this is related precedent, not evidence that the reported target override regressed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18327,
+        "title": "Add documentation for common marker values",
+        "url": "https://github.com/astral-sh/uv/pull/18327",
+        "state": "merged",
+        "reason": "Merged March 5, 2026, closing astral-sh/uv#18300 and documenting AMD64 for Windows x64. Confirms the documented expectation cited by the reporter; it changed documentation and configuration examples, not the target override."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open/closed issues and open/closed/merged PRs with authenticated gh: literal platform_machine/AMD64 and target-triple searches, the exact lockfile error, --python-platform dependency markers, and pylock Windows environments; conceptual searches covered Windows marker compatibility, host/interpreter architecture, target overrides, and area:windows. Keyword PR search omitted known linked PRs, so all 13,295 PR titles were also filtered for related terms. Inspected strongest candidates, comments, timelines, and fix diffs, including the pylock validation and documentation chains. Ruled out astral-sh/uv#15060 (32-bit wheel filtering), astral-sh/uv#19308 (native sync), astral-sh/uv#18127 and astral-sh/uv#18163 with astral-sh/uv#18166 (host querying/caching), astral-sh/uv#20396 and astral-sh/uv#22596 (pylock enforcement/export), and astral-sh/uv#22099 (Windows ARM emulation). No exact duplicate or prior fix of the x64 target mapping was found."
+  },
+  "type": "bug",
+  "type_reason": "The source explicitly assigns x86_64 to both Windows x64 target names, contradicting the documented AMD64 marker and causing valid pylock environments and conditional packages to fail marker evaluation. The closest open discussions concern 32-bit host/target ambiguity or wheel filtering, not this x64 override. The historical wheel-marker fix remains present and never changed this mapping, so no regression or exact duplicate was established.",
+  "summary": "Closest items cover 32-bit target ambiguity, the pylock validation that exposes this mismatch, and earlier Windows wheel-marker fixes/documentation. No exact duplicate was found.",
+  "draft_response": "You're right: both Windows x64 targets currently supply `x86_64` for `platform_machine`, while the documented Windows x64 value is `AMD64`. This explains your pylock environment rejection and the skipped `AMD64`-guarded packages. astral-sh/uv#16576 concerns the separate 32-bit host/target ambiguity; astral-sh/uv#14041 corrected wheel-tag inference but did not change this override. The next step is to correct the target mapping and add regression coverage for your pylock example and conditional dependencies."
+}
