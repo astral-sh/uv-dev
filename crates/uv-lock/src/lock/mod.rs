@@ -6269,10 +6269,7 @@ impl From<ExcludeNewerWire> for ExcludeNewer {
             (None, Some(span)) => Some(ExcludeNewerValue::relative(span)),
             (None, None) => None,
         };
-        Self {
-            global,
-            package: wire.exclude_newer_package,
-        }
+        Self::new(global, wire.exclude_newer_package)
     }
 }
 

@@ -76,17 +76,28 @@ impl ExcludeNewerValue {
 
     /// Return the effective [`Timestamp`].
     ///
-    /// For [`Relative`](Self::Relative) values this is computed from the span and the current
-    /// time on each call.
+    /// Relative values are calculated at the current time.
     pub fn timestamp(&self) -> Timestamp {
         match self {
             Self::Absolute(timestamp) => *timestamp,
-            Self::Relative(span) => {
-                let now = current_time();
-                now.checked_sub(span.0.abs())
-                    .map_or(now.timestamp(), |cutoff| cutoff.timestamp())
-            }
+            Self::Relative(_) => self.timestamp_at(Self::reference_time()),
         }
+    }
+
+    /// Return the effective cutoff, using `reference` for relative values.
+    pub fn timestamp_at(&self, reference: Timestamp) -> Timestamp {
+        match self {
+            Self::Absolute(timestamp) => *timestamp,
+            Self::Relative(span) => reference
+                .to_zoned(TimeZone::UTC)
+                .checked_sub(span.0.abs())
+                .map_or(reference, |cutoff| cutoff.timestamp()),
+        }
+    }
+
+    /// Capture the reference time for relative upload cutoffs.
+    pub fn reference_time() -> Timestamp {
+        current_time().timestamp()
     }
 
     /// Return the [`ExcludeNewerSpan`], if any.
@@ -234,16 +245,7 @@ impl FromStr for ExcludeNewerValue {
 
         let span_err = match input.parse::<Span>() {
             Ok(span) => {
-                let now = if let Ok(test_time) =
-                    std::env::var("UV_INTERNAL__TEST_CURRENT_TIMESTAMP")
-                {
-                    test_time
-                        .parse::<Timestamp>()
-                        .expect("UV_INTERNAL__TEST_CURRENT_TIMESTAMP must be a valid RFC 3339 timestamp")
-                        .to_zoned(TimeZone::UTC)
-                } else {
-                    Timestamp::now().to_zoned(TimeZone::UTC)
-                };
+                let now = current_time();
 
                 if span.get_years() != 0 {
                     let years = span

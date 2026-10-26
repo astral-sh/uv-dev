@@ -394,7 +394,7 @@ impl ExcludeNewerPackage {
 }
 
 /// A setting that excludes files newer than a timestamp, at a global level or per-package.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ExcludeNewer {
     /// Global timestamp that applies to all packages if no package-specific timestamp is set.
@@ -403,15 +403,52 @@ pub struct ExcludeNewer {
     /// Per-package timestamps that override the global timestamp.
     #[serde(default, skip_serializing_if = "ExcludeNewerPackage::is_empty")]
     pub package: ExcludeNewerPackage,
+    /// Used only to evaluate relative cutoffs during this resolution.
+    #[serde(skip, default = "ExcludeNewerValue::reference_time")]
+    reference_time: Timestamp,
+}
+
+// The reference time is execution state, not part of the configured policy.
+impl PartialEq for ExcludeNewer {
+    fn eq(&self, other: &Self) -> bool {
+        self.global == other.global && self.package == other.package
+    }
+}
+
+impl Eq for ExcludeNewer {}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "the reference time is execution state and should not appear in the settings"
+)]
+impl std::fmt::Debug for ExcludeNewer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExcludeNewer")
+            .field("global", &self.global)
+            .field("package", &self.package)
+            .finish()
+    }
+}
+
+impl Default for ExcludeNewer {
+    fn default() -> Self {
+        Self::new(None, ExcludeNewerPackage::default())
+    }
 }
 
 impl ExcludeNewer {
+    /// Create an upload policy that evaluates relative artifact cutoffs against the same instant.
+    pub fn new(global: Option<ExcludeNewerValue>, package: ExcludeNewerPackage) -> Self {
+        Self {
+            global,
+            package,
+            reference_time: ExcludeNewerValue::reference_time(),
+        }
+    }
+
     /// Create a new exclude newer configuration with just a global timestamp.
     pub fn global(global: ExcludeNewerValue) -> Self {
-        Self {
-            global: Some(global),
-            package: ExcludeNewerPackage::default(),
-        }
+        Self::new(Some(global), ExcludeNewerPackage::default())
     }
 
     fn warn_index_exclude_newer_preview() {
@@ -431,16 +468,21 @@ impl ExcludeNewer {
         let global = global.and_then(ExcludeNewerOverride::into_value);
         let package: ExcludeNewerPackage = package.into_iter().collect();
 
-        Self { global, package }
+        Self::new(global, package)
     }
 
     /// Returns the effective exclude-newer timestamp for a specific package, falling back to the
     /// global value if no package-specific setting exists.
     pub fn exclude_newer_package(&self, package_name: &PackageName) -> Option<Timestamp> {
         match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => Some(value.timestamp()),
+            Some(ExcludeNewerOverride::Enabled(value)) => {
+                Some(value.timestamp_at(self.reference_time))
+            }
             Some(ExcludeNewerOverride::Disabled) => None,
-            None => self.global.as_ref().map(ExcludeNewerValue::timestamp),
+            None => self
+                .global
+                .as_ref()
+                .map(|value| value.timestamp_at(self.reference_time)),
         }
     }
 
@@ -462,9 +504,10 @@ impl ExcludeNewer {
         index: Option<&ExcludeNewerOverride>,
     ) -> Option<(Timestamp, EffectiveExcludeNewerSource)> {
         match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => {
-                Some((value.timestamp(), EffectiveExcludeNewerSource::Package))
-            }
+            Some(ExcludeNewerOverride::Enabled(value)) => Some((
+                value.timestamp_at(self.reference_time),
+                EffectiveExcludeNewerSource::Package,
+            )),
             Some(ExcludeNewerOverride::Disabled) => None,
             None => match index {
                 Some(ExcludeNewerOverride::Disabled) => {
@@ -474,14 +517,16 @@ impl ExcludeNewer {
                 Some(ExcludeNewerOverride::Enabled(value)) => Some((
                     {
                         Self::warn_index_exclude_newer_preview();
-                        value.timestamp()
+                        value.timestamp_at(self.reference_time)
                     },
                     EffectiveExcludeNewerSource::Index,
                 )),
-                None => self
-                    .global
-                    .as_ref()
-                    .map(|value| (value.timestamp(), EffectiveExcludeNewerSource::Global)),
+                None => self.global.as_ref().map(|value| {
+                    (
+                        value.timestamp_at(self.reference_time),
+                        EffectiveExcludeNewerSource::Global,
+                    )
+                }),
             },
         }
     }
@@ -497,6 +542,7 @@ impl ExcludeNewer {
         let packages = packages.into_iter().collect::<FxHashSet<_>>();
         Self {
             global: self.global,
+            reference_time: self.reference_time,
             package: ExcludeNewerPackage(
                 self.package
                     .into_iter()
@@ -534,7 +580,7 @@ impl ExcludeNewer {
 impl std::fmt::Display for ExcludeNewer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(global) = &self.global {
-            write!(f, "global: {global}")?;
+            write!(f, "global: {}", global.timestamp_at(self.reference_time))?;
             if !self.package.is_empty() {
                 write!(f, ", ")?;
             }
@@ -546,7 +592,7 @@ impl std::fmt::Display for ExcludeNewer {
             }
             match setting {
                 ExcludeNewerOverride::Enabled(timestamp) => {
-                    write!(f, "{name}: {}", timestamp.as_ref())?;
+                    write!(f, "{name}: {}", timestamp.timestamp_at(self.reference_time))?;
                 }
                 ExcludeNewerOverride::Disabled => {
                     write!(f, "{name}: disabled")?;
@@ -555,5 +601,36 @@ impl std::fmt::Display for ExcludeNewer {
             first = false;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_cutoffs_share_the_resolution_time() {
+        let _preview = uv_preview::test::with_features(&[PreviewFeature::IndexExcludeNewer]);
+        let span: ExcludeNewerValue = "1 day".parse().unwrap();
+        let mut policy = ExcludeNewer::global(span.clone());
+        policy.reference_time = "2026-01-03T00:00:00Z".parse().unwrap();
+        let cutoff: Timestamp = "2026-01-02T00:00:00Z".parse().unwrap();
+        let package: PackageName = "override".parse().unwrap();
+        let other: PackageName = "other".parse().unwrap();
+        policy.package.insert(package.clone(), span.clone().into());
+        let index = span.into();
+
+        assert_eq!(policy.exclude_newer_package(&other), Some(cutoff));
+        assert_eq!(policy.exclude_newer_package(&package), Some(cutoff));
+        assert_eq!(
+            policy.exclude_newer_package_for_index(&other, Some(&index)),
+            Some(cutoff)
+        );
+        assert_eq!(
+            policy
+                .filter_packages([&other])
+                .exclude_newer_package(&other),
+            Some(cutoff)
+        );
     }
 }
