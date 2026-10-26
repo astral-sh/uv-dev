@@ -141,6 +141,56 @@ fn python_upgrade_without_version() {
 }
 
 #[test]
+fn python_upgrade_freethreaded() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_filtered_latest_python_versions();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("3.14.7").arg("3.14.7t"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 2 versions in [TIME]
+     + cpython-3.14.7+freethreaded-[PLATFORM] (python3.14t)
+     + cpython-3.14.7-[PLATFORM] (python3.14)
+    ");
+
+    // Installed variants are lost when deriving upgrade requests, leaving free-threaded Python
+    // outdated even though a newer patch is available: astral-sh/uv#22831.
+    uv_snapshot!(context.filters(), context.python_upgrade(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
+
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.14t{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.14.7
+    ");
+
+    // The outdated free-threaded installation is also ignored when checking for further upgrades.
+    uv_snapshot!(context.filters(), context.python_upgrade(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    All versions already on latest supported patch release
+    ");
+
+    // An explicit variant request finds and installs the available upgrade.
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("3.14t"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     + cpython-3.14.[LATEST]+freethreaded-[PLATFORM] (python3.14t)
+    ");
+}
+
+#[test]
 fn python_upgrade_transparent_from_venv() {
     let context = uv_test::test_context_with_versions!(&["3.13"])
         .with_filtered_python_keys()

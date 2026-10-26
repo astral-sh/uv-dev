@@ -335,6 +335,30 @@ fn python_reinstall_patch() {
 }
 
 #[test]
+fn python_reinstall_freethreaded() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("3.14.7t"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.7 in [TIME]
+     + cpython-3.14.7+freethreaded-[PLATFORM] (python3.14t)
+    ");
+
+    // Deriving a request from an installed interpreter loses its variant, so reinstalling
+    // free-threaded Python incorrectly installs standard Python instead: astral-sh/uv#22831.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.14.7t").arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.7 in [TIME]
+     + cpython-3.14.7-[PLATFORM] (python3.14)
+    ");
+}
+
+#[test]
 fn python_install_automatic() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
