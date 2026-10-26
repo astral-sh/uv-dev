@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with installed uv 0.13.5 on Ubuntu Linux x86_64 using CPython 3.12.3 and temporary fixtures/caches. With the reported empty pylock.toml restricted to sys_platform == 'win32' and platform_machine == 'AMD64', running `uv pip install --no-config --preview-features pylock --dry-run --target t --python-version 3.11 --python-platform x86_64-pc-windows-msvc -r pylock.toml` exits 2: 'The target environment is not supported by the lockfile'. Changing only AMD64 to x86_64 exits 0: 'Would make no changes'. Replacing the target with windows produces the same rejection and acceptance. This reproduces the reported mismatch with uv's documented AMD64 value. Updated $RUNNER_TEMP/issue-context/README.md with commands, results, limitations, and existing test coverage. No checkout files or GitHub state were changed."
+}
