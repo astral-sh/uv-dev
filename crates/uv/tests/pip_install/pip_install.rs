@@ -16124,6 +16124,97 @@ fn pep_751_incompatible_environment() -> Result<()> {
 }
 
 #[test]
+fn pep_751_windows_amd64_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let pylock_toml = context.temp_dir.child("pylock.toml");
+    pylock_toml.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "test"
+        requires-python = ">=3.11"
+        environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+        packages = []
+    "#})?;
+
+    // CPython reports AMD64 on x86-64 Windows, so this lock should be accepted (astral-sh/uv#22920).
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features").arg("pylock")
+        .arg("--dry-run")
+        .arg("--target").arg("target")
+        .arg("--python-version").arg("3.11")
+        .arg("--python-platform").arg("x86_64-pc-windows-msvc")
+        .arg("-r").arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    error: The target environment is not supported by the lockfile
+    ");
+
+    pylock_toml.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "test"
+        requires-python = ">=3.11"
+        environments = ["sys_platform == 'win32' and platform_machine == 'x86_64'"]
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features").arg("pylock")
+        .arg("--dry-run")
+        .arg("--target").arg("target")
+        .arg("--python-version").arg("3.11")
+        .arg("--python-platform").arg("x86_64-pc-windows-msvc")
+        .arg("-r").arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Checked in [TIME]
+    Would make no changes
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_windows_amd64_package_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "test"
+        requires-python = ">=3.11"
+
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "sys_platform == 'win32' and platform_machine == 'AMD64'"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    // The Windows target should select this package instead of silently skipping it (astral-sh/uv#22920).
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features").arg("pylock")
+        .arg("--offline")
+        .arg("--dry-run")
+        .arg("--target").arg("target")
+        .arg("--python-version").arg("3.11")
+        .arg("--python-platform").arg("x86_64-pc-windows-msvc")
+        .arg("-r").arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Checked in [TIME]
+    Would make no changes
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn pep_751_package_requires_python() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
