@@ -12,9 +12,10 @@ use crate::git::{GitError, GitRemote, remote_url_root};
 
 pub(crate) mod lfs;
 
-// Fetch small blobs, including LFS pointers, in the first pack. Larger blobs in
-// history can be omitted until a checkout needs them.
-const FETCH_FILTER: gix::remote::fetch::Filter = gix::remote::fetch::Filter::BlobLimit(4096);
+// Request small blobs, including LFS pointers, in the first filtered pack.
+// Larger blobs can be omitted until needed for a checkout.
+const FETCH_FILTER: gix::remote::fetch::Filter =
+    gix::remote::fetch::Filter::BlobLimit(gix_lfs::Pointer::SIZE_CUTOFF as u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
