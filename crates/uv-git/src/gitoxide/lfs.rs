@@ -197,7 +197,7 @@ pub(super) fn checkout_submodules(repo: &gix::Repository, parent: &GitRemote) ->
         };
         let insecure = parent.disable_ssl && same_origin(parent.url(), &url);
         let remote = GitRemote::new(url, insecure, parent.offline);
-        if fetch_objects(&child, commit, &remote)? {
+        if fetch_objects(&child, commit, &remote, None)? {
             checkout(&child, &child, commit, &remote)?;
         } else {
             crate::git::checkout_lfs_extension(&child, commit, &remote)?;
@@ -220,23 +220,29 @@ pub(crate) fn contains(repo: &gix::Repository, revision: GitOid) -> Result<bool>
     Ok(true)
 }
 
-pub(crate) fn fetch(database: &Path, revision: GitOid, source: &GitRemote) -> Result<bool> {
+pub(crate) fn fetch(
+    database: &Path,
+    revision: GitOid,
+    source: &GitRemote,
+    fetcher: Option<&mut super::ObjectFetcher>,
+) -> Result<bool> {
     let repo = gix::open_opts(database, source.network_options([]))?;
     let commit = gix::ObjectId::from_hex(revision.as_str().as_bytes())?;
-    fetch_objects(&repo, commit, source)
+    fetch_objects(&repo, commit, source, fetcher)
 }
 
 fn fetch_objects(
     repo: &gix::Repository,
     commit: gix::ObjectId,
     source: &GitRemote,
+    fetcher: Option<&mut super::ObjectFetcher>,
 ) -> Result<bool> {
     if repo
         .config_snapshot()
         .boolean("remote.uv-promisor.promisor")
         == Some(true)
     {
-        materialize_tree(repo, commit, source)?;
+        materialize_tree(repo, commit, source, fetcher)?;
     }
     let Some(entries) = entries(repo, commit)? else {
         return Ok(false);

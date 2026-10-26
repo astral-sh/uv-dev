@@ -12,6 +12,10 @@ use crate::git::{GitError, GitRemote, remote_url_root};
 
 pub(crate) mod lfs;
 
+pub(crate) type ObjectFetcher = gix::remote::fetch::ObjectFetcher<
+    Box<dyn gix::protocol::transport::client::blocking_io::Transport + Send>,
+>;
+
 // Request small blobs, including LFS pointers, in the first filtered pack.
 // Larger blobs can be omitted until needed for a checkout.
 const FETCH_FILTER: gix::remote::fetch::Filter =
@@ -80,7 +84,7 @@ pub(crate) fn fetch(
     source: &GitRemote,
     refspecs: &[String],
     all_tags: bool,
-) -> Result<()> {
+) -> Result<Option<ObjectFetcher>> {
     let url = source.url();
     let options = source.network_options([]);
     let mut repo = gix::open_opts(path, options)?;
@@ -96,7 +100,7 @@ pub(crate) fn fetch(
         .is_some_and(|url| url.scheme == gix::url::Scheme::File);
     let interrupt = AtomicBool::new(false);
     if local && remote.try_fetch_local(&interrupt)?.is_some() {
-        return Ok(());
+        return Ok(None);
     }
     if source.offline && !local {
         return Err(GitError::TransportNotAllowed.into());
@@ -111,12 +115,13 @@ pub(crate) fn fetch(
         ));
     }
     let fetch = connection.prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
-    let outcome = if local || !can_persist_promisor(url) {
-        fetch
+    let (outcome, objects) = if local || !can_persist_promisor(url) {
+        (fetch.receive(Discard, &interrupt)?, None)
     } else {
-        fetch.with_filter(FETCH_FILTER)
-    }
-    .receive(Discard, &interrupt)?;
+        fetch
+            .with_filter(FETCH_FILTER)
+            .receive_with_object_fetcher(Discard, &interrupt)?
+    };
     if let gix::remote::fetch::Status::Change {
         write_pack_bundle, ..
     } = outcome.status
@@ -126,7 +131,7 @@ pub(crate) fn fetch(
     {
         set_promisor(&mut repo, url)?;
     }
-    Ok(())
+    Ok(objects)
 }
 
 fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
@@ -146,6 +151,7 @@ fn materialize_tree(
     repo: &gix::Repository,
     commit: gix::ObjectId,
     remote: &GitRemote,
+    mut fetcher: Option<&mut ObjectFetcher>,
 ) -> Result<()> {
     let root = repo.find_commit(commit)?.tree_id()?.detach();
     loop {
@@ -178,30 +184,14 @@ fn materialize_tree(
         if remote.offline {
             return Err(GitError::TransportNotAllowed.into());
         }
-        // Commits in a partial clone can have incomplete trees. Advertising them as haves
-        // would let the server omit the very objects required for the checkout.
-        let repo = gix::open_opts(
-            repo.git_dir(),
-            remote.network_options(["fetch.negotiationAlgorithm=noop".to_owned()]),
-        )?;
-        let objects = missing.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let outcome = repo
-            .remote_at(remote.url.as_str())?
-            .with_refspecs(objects.iter().map(String::as_str), Direction::Fetch)?
-            .with_fetch_tags(gix::remote::fetch::Tags::None)
-            .connect(Direction::Fetch)?
-            .prepare_fetch(Discard, gix::remote::ref_map::Options::default())?
-            .receive(Discard, &AtomicBool::new(false))?;
-        anyhow::ensure!(
-            missing.iter().all(|id| repo.has_object(id)),
-            "Git server did not supply the requested checkout objects"
-        );
-        if let gix::remote::fetch::Status::Change {
-            write_pack_bundle, ..
-        } = outcome.status
-            && let Some(keep) = write_pack_bundle.keep_path
-        {
-            fs_err::remove_file(keep)?;
+        let interrupt = AtomicBool::new(false);
+        if let Some(fetcher) = fetcher.as_deref_mut() {
+            fetcher.fetch(repo, &missing, Discard, &interrupt)?;
+        } else {
+            let repo = gix::open_opts(repo.git_dir(), remote.network_options([]))?;
+            repo.remote_at(remote.url.as_str())?
+                .connect(Direction::Fetch)?
+                .fetch_objects(&missing, Discard, &interrupt)?;
         }
     }
 }
@@ -212,6 +202,7 @@ pub(crate) fn checkout(
     revision: uv_git_types::GitOid,
     remote: &GitRemote,
     with_lfs: bool,
+    fetcher: Option<&mut ObjectFetcher>,
 ) -> Result<gix::Repository> {
     let source = open(database)?;
     let commit = gix::hash::ObjectId::from_hex(revision.as_str().as_bytes())?;
@@ -220,7 +211,7 @@ pub(crate) fn checkout(
         .boolean("remote.uv-promisor.promisor")
         == Some(true);
     if partial {
-        materialize_tree(&source, commit, remote)?;
+        materialize_tree(&source, commit, remote, fetcher)?;
     }
     let mut repo = init(destination)?;
     copy_cached_objects(&source, &repo)?;

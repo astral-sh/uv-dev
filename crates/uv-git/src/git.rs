@@ -90,6 +90,8 @@ pub(crate) struct GitDatabase {
     remote: GitRemote,
     /// Underlying Git repository instance for this database.
     repo: GitRepository,
+    /// A transport retained from this database's fetch for requesting missing objects, when available.
+    object_fetcher: Option<crate::gitoxide::ObjectFetcher>,
     /// Git LFS artifacts have been initialized (if requested).
     lfs_ready: Option<bool>,
 }
@@ -267,12 +269,12 @@ impl GitRemote {
         let locked_reference = locked_rev.map(GitReference::Commit);
         let reference = locked_reference.as_ref().unwrap_or(reference);
         if let Some(mut db) = db {
-            fetch(&db.repo, &self, reference)
+            db.object_fetcher = fetch(&db.repo, &self, reference)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&db.repo, &self, &rev)
+                    let lfs_ready = fetch_lfs(&db.repo, &self, &rev, db.object_fetcher.as_mut())
                         .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
@@ -291,12 +293,12 @@ impl GitRemote {
 
         fs_err::create_dir_all(into)?;
         let repo = GitRepository::init(into, self.backend)?;
-        fetch(&repo, &self, reference)
+        let mut object_fetcher = fetch(&repo, &self, reference)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&repo, &self, &rev)
+                fetch_lfs(&repo, &self, &rev, object_fetcher.as_mut())
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -305,6 +307,7 @@ impl GitRemote {
             GitDatabase {
                 remote: self,
                 repo,
+                object_fetcher,
                 lfs_ready,
             },
             rev,
@@ -317,6 +320,7 @@ impl GitRemote {
         Ok(GitDatabase {
             remote: self.clone(),
             repo,
+            object_fetcher: None,
             lfs_ready: None,
         })
     }
@@ -324,7 +328,7 @@ impl GitRemote {
 
 impl GitDatabase {
     /// Checkouts to a revision at `destination` from this database.
-    pub(crate) fn copy_to(&self, rev: GitOid, destination: &Path) -> Result<GitCheckout> {
+    pub(crate) fn copy_to(mut self, rev: GitOid, destination: &Path) -> Result<GitCheckout> {
         // If the existing checkout exists, and it is fresh, use it.
         // A non-fresh checkout can happen if the checkout operation was
         // interrupted. In that case, the checkout gets deleted and a new
@@ -335,7 +339,7 @@ impl GitDatabase {
             .filter(GitCheckout::is_fresh)
         {
             Some(co) => co.with_lfs_ready(self.lfs_ready),
-            None => GitCheckout::clone_into(destination, self, rev, self.remote.url())?,
+            None => GitCheckout::clone_into(destination, &mut self, rev)?,
         };
         Ok(checkout)
     }
@@ -400,12 +404,8 @@ impl GitCheckout {
 
     /// Clone a repo for a `revision` into a local path from a `database`.
     /// This is a filesystem-to-filesystem clone.
-    fn clone_into(
-        into: &Path,
-        database: &GitDatabase,
-        revision: GitOid,
-        original_remote_url: &SafeUrl,
-    ) -> Result<Self> {
+    fn clone_into(into: &Path, database: &mut GitDatabase, revision: GitOid) -> Result<Self> {
+        let original_remote_url = database.remote.url();
         // Invalidate readiness before replacing the checkout, including an interrupted clone.
         match fs_err::remove_file(into.with_extension(CHECKOUT_READY_EXTENSION)) {
             Ok(()) => {}
@@ -428,6 +428,7 @@ impl GitCheckout {
                 revision,
                 &database.remote,
                 database.lfs_ready == Some(true),
+                database.object_fetcher.as_mut(),
             )
             .map_err(|err| redact_git_error(err, original_remote_url))?;
             if database.lfs_ready != Some(false) {
@@ -648,14 +649,18 @@ pub(super) fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
 }
 
 /// Fetch the references needed to resolve a Git dependency.
-fn fetch(repo: &GitRepository, remote: &GitRemote, reference: &GitReference) -> Result<()> {
+fn fetch(
+    repo: &GitRepository,
+    remote: &GitRemote,
+    reference: &GitReference,
+) -> Result<Option<crate::gitoxide::ObjectFetcher>> {
     let remote_url = remote.url();
     if let GitReference::Commit(commit) = reference
         && repo
             .resolve(reference)
             .is_ok_and(|local_commit| *commit == local_commit)
     {
-        return Ok(());
+        return Ok(None);
     }
 
     // Translate the reference desired here into an actual list of refspecs
@@ -717,41 +722,23 @@ fn fetch(repo: &GitRepository, remote: &GitRemote, reference: &GitReference) -> 
             tags,
             remote.disable_ssl,
             remote.offline,
-        ),
+        )
+        .map(|()| None),
         Backend::Gitoxide => crate::gitoxide::fetch(&repo.path, remote, refspecs, tags)
             .map_err(|err| redact_git_error(err, remote_url)),
     };
     let result = match refspec_strategy {
         RefspecStrategy::All => fetch_refspecs(&refspecs),
         RefspecStrategy::First => {
-            // Try each refspec
-            let mut errors = refspecs
-                .iter()
-                .map_while(|refspec| {
-                    let fetch_result = fetch_refspecs(std::slice::from_ref(refspec));
-
-                    // Stop after the first success and log failures
-                    match fetch_result {
-                        Err(ref err) => {
-                            debug!("Failed to fetch refspec `{refspec}`: {err}");
-                            Some(fetch_result)
-                        }
-                        Ok(()) => None,
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            if errors.len() == refspecs.len() {
-                if let Some(result) = errors.pop() {
-                    // Use the last error for the message
-                    result
-                } else {
-                    // Can only occur if there were no refspecs to fetch
-                    Ok(())
+            let mut result = Ok(None);
+            for refspec in &refspecs {
+                result = fetch_refspecs(std::slice::from_ref(refspec));
+                match &result {
+                    Ok(_) => break,
+                    Err(err) => debug!("Failed to fetch refspec `{refspec}`: {err}"),
                 }
-            } else {
-                Ok(())
             }
+            result
         }
     };
     match reference {
@@ -843,9 +830,14 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
 });
 
 /// Fetch the LFS objects for a revision and validate them when validation is available.
-fn fetch_lfs(repo: &GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
+fn fetch_lfs(
+    repo: &GitRepository,
+    remote: &GitRemote,
+    revision: &GitOid,
+    fetcher: Option<&mut crate::gitoxide::ObjectFetcher>,
+) -> Result<bool> {
     if repo.native.is_some() {
-        if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote)? {
+        if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote, fetcher)? {
             return Ok(true);
         }
         debug!("Using the Git LFS extension for this repository");
