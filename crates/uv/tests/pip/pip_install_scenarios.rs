@@ -4149,6 +4149,7 @@ fn python_greater_than_current_backtrack_many() {
 ///     └── a-4.0.0
 ///         └── requires python>=3.12 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn python_greater_than_current_backtrack() {
     let context = uv_test::test_context!("3.9");
@@ -4188,6 +4189,7 @@ fn python_greater_than_current_backtrack() {
 ///     └── a-4.0.0
 ///         └── requires python>=3.12 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn python_greater_than_current_excluded() {
     let context = uv_test::test_context!("3.9");
@@ -4256,6 +4258,7 @@ fn python_greater_than_current_excluded() {
 ///     └── a-3.5.0
 ///         └── requires python>=3.11 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn python_greater_than_current_many() {
     let context = uv_test::test_context!("3.9");
@@ -4318,6 +4321,7 @@ fn python_greater_than_current_patch() {
 ///     └── a-1.0.0
 ///         └── requires python>=3.10 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn python_greater_than_current() {
     let context = uv_test::test_context!("3.9");
@@ -4349,6 +4353,7 @@ fn python_greater_than_current() {
 ///     └── a-1.0.0
 ///         └── requires python<=3.8 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn python_less_than_current() {
     let context = uv_test::test_context!("3.9");

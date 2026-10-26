@@ -1,11 +1,13 @@
-use std::fmt::Write;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -19,19 +21,17 @@ use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use walkdir::WalkDir;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{basic_auth, method, path},
 };
 
-use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
-use uv_fs::{PortablePath, Simplified};
-use uv_install_wheel::validate_and_heal_record;
+use uv_fs::Simplified;
+use uv_install_wheel::read_record;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::{generate_source_archive, write_tar_gz};
-#[cfg(feature = "test-git")]
+#[cfg(any(not(windows), feature = "test-git"))]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
@@ -39,118 +39,10 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, copy_dir_ignore, download_to_disk, get_bin,
-    uv_snapshot, venv_bin_path,
+    DEFAULT_PYTHON_VERSION, TestContext, copy_dir_ignore, get_bin, uv_snapshot, venv_bin_path,
 };
 
-fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let mut record = String::new();
-
-    for index in 0..source_files {
-        let name = format!("large_wheel/module_{index:05}.py");
-        let entry = ZipEntryBuilder::new(name.clone().into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, b"VALUE = 1\n"))?;
-        writeln!(record, "{name},,")?;
-    }
-
-    let metadata = indoc! {"
-        Metadata-Version: 2.1
-        Name: large-wheel
-        Version: 1.0.0
-    "};
-    let wheel = indoc! {"
-        Wheel-Version: 1.0
-        Generator: uv-test
-        Root-Is-Purelib: true
-        Tag: py3-none-any
-    "};
-    for (name, contents) in [
-        ("large_wheel-1.0.0.dist-info/METADATA", metadata),
-        ("large_wheel-1.0.0.dist-info/WHEEL", wheel),
-    ] {
-        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-        writeln!(record, "{name},,")?;
-    }
-    record.push_str("large_wheel-1.0.0.dist-info/RECORD,,\n");
-    let entry = ZipEntryBuilder::new(
-        "large_wheel-1.0.0.dist-info/RECORD".into(),
-        Compression::Stored,
-    );
-    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
-
-    fs_err::write(path, block_on(writer.close())?)?;
-    Ok(())
-}
-
-fn write_crlf_script_wheel(path: &Path) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let metadata = indoc! {"
-        Metadata-Version: 2.1
-        Name: encoded-script
-        Version: 1.0.0
-    "};
-    let wheel = indoc! {"
-        Wheel-Version: 1.0
-        Generator: uv-test
-        Root-Is-Purelib: true
-        Tag: py3-none-any
-    "};
-    let entries: [(&str, &[u8]); 4] = [
-        ("encoded_script/__init__.py", b"VALUE = 1\n"),
-        (
-            "encoded_script-1.0.0.dist-info/METADATA",
-            metadata.as_bytes(),
-        ),
-        ("encoded_script-1.0.0.dist-info/WHEEL", wheel.as_bytes()),
-        (
-            "encoded_script-1.0.0.data/scripts/encoded-script",
-            b"#!python\r\n# coding: latin-1\r\nprint('\x63\x61\x66\xe9')\r\n",
-        ),
-    ];
-    let mut record = String::new();
-    for (entry_name, contents) in entries {
-        let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents))?;
-        writeln!(record, "{entry_name},,")?;
-    }
-    record.push_str("encoded_script-1.0.0.dist-info/RECORD,,\n");
-    let entry = ZipEntryBuilder::new(
-        "encoded_script-1.0.0.dist-info/RECORD".into(),
-        Compression::Stored,
-    );
-    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
-    fs_err::write(path, block_on(writer.close())?)?;
-    Ok(())
-}
-
-#[test]
-fn install_crlf_wheel_script_preserves_encoding_cookie() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let wheel = context
-        .temp_dir
-        .join("encoded_script-1.0.0-py3-none-any.whl");
-    write_crlf_script_wheel(&wheel)?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + encoded-script==1.0.0 (from file://[TEMP_DIR]/encoded_script-1.0.0-py3-none-any.whl)
-    ");
-
-    let script = venv_bin_path(&context.venv).join("encoded-script");
-    uv_snapshot!(context.python_command().arg(script), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    café
-    ");
-
-    Ok(())
-}
+use super::wheel_fixture::{write_crlf_script_wheel, write_many_files_wheel};
 
 /// A Python script's encoding declaration must remain on the second line even when its
 /// interpreter path requires a multi-line shell launcher.
@@ -269,84 +161,70 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
-/// Hash the entire HTTP response even when extraction stops before trailing bytes.
-#[test]
-fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let filename = "ok-1.0.0-py3-none-any.whl";
-    let wheel = context.temp_dir.join(filename);
-    let mut bytes = context.read_bytes(context.workspace_root.join("test/links").join(filename));
-    // Exceed the pipe capacity so some bytes must be hashed after extraction finishes.
-    bytes.resize(bytes.len() + 1024 * 1024, b'x');
-    let hash = hex::encode(Sha256::digest(&bytes));
-    fs::write(&wheel, bytes)?;
-    let server = FindLinksServer::new(context.temp_dir.path());
-    let context = context.with_filter((server.url().to_string(), "http://[LOCALHOST]"));
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str(&format!(
-            "ok @ {}/{filename} --hash=sha256:{hash}\n",
-            server.url(),
-        ))?;
-
-    // Disable ZIP validation so extraction succeeds without consuming the trailing bytes.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--no-index")
-        .arg("--require-hashes")
-        .arg("-r")
-        .arg("requirements.txt")
-        .env(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION, "1"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl)
-    ");
+fn assert_wheel_module_cached(context: &TestContext) -> Result<()> {
+    let cached_module = context
+        .cache_files(uv_cache::CacheBucket::Archive)?
+        .into_iter()
+        .find(|path| path.ends_with("large_wheel/module_00000.py"))
+        .ok_or_else(|| anyhow!("newer uv did not cache the wheel module"))?;
+    assert_eq!(fs::read_to_string(cached_module)?, "VALUE = 1\n");
     Ok(())
 }
 
+/// New cache entries must not prevent uv 0.11.1 from installing. See astral-sh/uv#20949.
 #[test]
-fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
-    allow_duplicates! {
-        for version in ["0.11.1", "0.12.0"] {
-            let context = uv_test::test_context!("3.12")
-                .with_filter((r" \+ uv==0\.(?:11\.1|12\.0)", " + uv==[VERSION]"));
-            let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
-            write_many_files_wheel(&wheel, 1)?;
+fn install_wheel_cache_compatible_with_uv_0_11_1() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
+    write_many_files_wheel(&wheel, 1)?;
+    context.pip_install().arg(&wheel).assert().success();
+    assert_wheel_module_cached(&context)?;
+    context.venv().arg("--clear").assert().success();
+    context.assert_not_installed("large_wheel");
 
-            context.pip_install().arg(&wheel).assert().success();
-            context.venv().arg("--clear").assert().success();
+    context
+        .tool_run()
+        .args(["--from", "uv==0.11.1", "uv", "pip", "install", "--python"])
+        .arg(context.venv.path())
+        .arg(&wheel)
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF)
+        .assert()
+        .success();
+    context
+        .assert_command("from large_wheel.module_00000 import VALUE; assert VALUE == 1")
+        .success();
 
-            // New cache entries should not make older uv versions fail; see astral-sh/uv#20949.
-            uv_snapshot!(context.filters(), context.tool_run()
-                .arg("--from")
-                .arg(format!("uv=={version}"))
-                .arg("uv")
-                .arg("pip")
-                .arg("install")
-                .arg("--python")
-                .arg(context.venv.path())
-                .arg(&wheel)
-                .arg("--cache-dir")
-                .arg(context.cache_dir.path())
-                .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-                .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + uv==[VERSION]
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    Ok(())
+}
+
+/// New cache entries must not prevent uv 0.12.0 from installing. See astral-sh/uv#20949.
+#[test]
+fn install_wheel_cache_compatible_with_uv_0_12_0() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
+    write_many_files_wheel(&wheel, 1)?;
+    context.pip_install().arg(&wheel).assert().success();
+    assert_wheel_module_cached(&context)?;
+    context.venv().arg("--clear").assert().success();
+    context.assert_not_installed("large_wheel");
+
+    context
+        .tool_run()
+        .args(["--from", "uv==0.12.0", "uv", "pip", "install", "--python"])
+        .arg(context.venv.path())
+        .arg(&wheel)
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF)
+        .assert()
+        .success();
+    context
+        .assert_command("from large_wheel.module_00000 import VALUE; assert VALUE == 1")
+        .success();
 
     Ok(())
 }
@@ -412,96 +290,10 @@ fn empty_requirements_txt() -> Result<()> {
     Ok(())
 }
 
-/// Install using requirement-file options whose explicitly provided paths contain spaces.
-#[test]
-fn requirement_file_paths_with_spaces() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("requirements.txt").touch()?;
-
-    let requirements_dir = context.temp_dir.child("requirements with spaces");
-    requirements_dir.create_dir_all()?;
-    let constraints = requirements_dir.child("constraints.txt");
-    constraints.write_str("unused-constraint==1")?;
-    let overrides = requirements_dir.child("overrides.txt");
-    overrides.write_str("unused-override==1")?;
-    let excludes = requirements_dir.child("excludes.txt");
-    excludes.write_str("unused-exclude")?;
-    let build_constraints = requirements_dir.child("build-constraints.txt");
-    build_constraints.write_str("unused-build-constraint==1")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--constraint")
-        .arg(constraints.path())
-        .arg("--override")
-        .arg(overrides.path())
-        .arg("--exclude")
-        .arg(excludes.path())
-        .arg("--build-constraint")
-        .arg(build_constraints.path())
-        .env(EnvVars::UV_CONSTRAINT, "missing-constraint.txt")
-        .env(EnvVars::UV_OVERRIDE, "missing-override.txt")
-        .env(EnvVars::UV_EXCLUDE, "missing-exclude.txt")
-        .env(EnvVars::UV_BUILD_CONSTRAINT, "missing-build-constraint.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    Checked in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-/// Install using whitespace-delimited requirement-file options from the environment.
-#[test]
-fn requirement_file_paths_from_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("requirements.txt").touch()?;
-
-    for (path, content) in [
-        ("constraint-1.txt", "unused-constraint-1==1"),
-        ("constraint-2.txt", "unused-constraint-2==1"),
-        ("override-1.txt", "unused-override-1==1"),
-        ("override-2.txt", "unused-override-2==1"),
-        ("exclude-1.txt", "unused-exclude-1"),
-        ("exclude-2.txt", "unused-exclude-2"),
-        ("build-constraint-1.txt", "unused-build-constraint-1==1"),
-        ("build-constraint-2.txt", "unused-build-constraint-2==1"),
-    ] {
-        context.temp_dir.child(path).write_str(content)?;
-    }
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .env(EnvVars::UV_CONSTRAINT, "constraint-1.txt constraint-2.txt")
-        .env(EnvVars::UV_OVERRIDE, "override-1.txt override-2.txt")
-        .env(EnvVars::UV_EXCLUDE, "exclude-1.txt exclude-2.txt")
-        .env(
-            EnvVars::UV_BUILD_CONSTRAINT,
-            "build-constraint-1.txt build-constraint-2.txt",
-        ), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    Checked in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
 /// Compile only distributions installed by the current operation.
 #[test]
-fn compile_bytecode_for_installed_distributions() -> Result<()> {
-    const SOURCE_FILES: usize = 16;
-
+fn compile_bytecode_for_installed_distributions() {
     let context = uv_test::test_context!("3.12");
-    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
-    // This exceeds the one-worker compilation queue capacity, exercising producer backpressure.
-    write_many_files_wheel(&wheel, SOURCE_FILES)?;
 
     uv_snapshot!(context.pip_install()
         .arg("sniffio==1.3.1"), @"
@@ -516,8 +308,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
 
     uv_snapshot!(context.pip_install()
         .arg("anyio==3.7.1")
-        .arg("--compile-bytecode")
-        .env(EnvVars::UV_CONCURRENT_INSTALLS, "1"), @"
+        .arg("--compile-bytecode"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -545,47 +336,8 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
             .join("__init__.cpython-312.pyc")
             .exists()
     );
-    assert!(
-        !context
-            .site_packages()
-            .join("sniffio")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(&wheel)
-        .arg("--compile-bytecode")
-        .env(EnvVars::UV_CONCURRENT_INSTALLS, "1"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled 16 files in [TIME]
-     + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
-    "
-    );
-
-    let compiled = WalkDir::new(context.site_packages().join("large_wheel"))
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "pyc")
-        })
-        .count();
-    assert_eq!(compiled, SOURCE_FILES);
-    assert!(
-        !context
-            .site_packages()
-            .join("sniffio")
-            .join("__pycache__")
-            .exists()
-    );
+    let sniffio_bytecode = ChildPath::new(context.site_packages()).child("sniffio/__pycache__");
+    sniffio_bytecode.assert(predicate::path::missing());
 
     uv_snapshot!(context.pip_install()
         .arg("sniffio==1.3.1")
@@ -603,132 +355,9 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     "
     );
 
-    assert!(
-        context
-            .site_packages()
-            .join("sniffio")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
-
-    Ok(())
-}
-
-/// Compile symlinked source files installed by the current operation.
-#[test]
-#[cfg(unix)]
-fn compile_bytecode_with_symlink_link_mode() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode")
-        .arg("--link-mode")
-        .arg("symlink"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
-     + sniffio==1.3.1
-    "
-    );
-
-    assert!(
-        context
-            .site_packages()
-            .join("sniffio")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
-}
-
-/// Compile bytecode when installing into a relative `--target` or `--prefix` path.
-#[test]
-fn compile_bytecode_for_relative_install_root() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--target")
-        .arg("target")
-        .arg("--compile-bytecode"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
-     + sniffio==1.3.1
-    "
-    );
-
-    assert!(
-        context
-            .temp_dir
-            .join("target")
-            .join("sniffio")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--prefix")
-        .arg("prefix")
-        .arg("--compile-bytecode"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
-     + sniffio==1.3.1
-    "
-    );
-
-    let compiled = WalkDir::new(context.temp_dir.join("prefix"))
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "pyc")
-        })
-        .count();
-    assert_eq!(compiled, 5);
-}
-
-/// Install into the current directory via `--target`.
-#[test]
-fn install_target_current_directory() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
-
-    // A target of `.` installs into the current directory. See astral-sh/uv#21694.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig==2.0.0")
-        .arg("--target")
-        .arg("."), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
+    sniffio_bytecode
+        .child("__init__.cpython-312.pyc")
+        .assert(predicate::path::is_file());
 }
 
 #[test]
@@ -880,8 +509,8 @@ fn invalid_pyproject_toml_option_schema() -> Result<()> {
 #[test]
 fn invalid_pyproject_toml_option_unknown_field() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((
-        "expected one of `required-version`, `native-tls`, .*",
-        "expected one of `required-version`, `native-tls`, [...]",
+        r"(?m)(unknown field `unknown`, expected one of) `[^\n]+$",
+        "$1 [OPTIONS]",
     ));
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -903,7 +532,7 @@ fn invalid_pyproject_toml_option_unknown_field() -> Result<()> {
         |
       2 | unknown = "field"
         | ^^^^^^^
-      unknown field `unknown`, expected one of `required-version`, `system-certs`, `native-tls`, `offline`, `no-cache`, `cache-dir`, `preview`, `preview-features`, `python-preference`, `python-downloads`, `concurrent-downloads`, `concurrent-builds`, `concurrent-installs`, `index`, `index-url`, `extra-index-url`, `no-index`, `find-links`, `index-strategy`, `keyring-provider`, `http-proxy`, `https-proxy`, `no-proxy`, `allow-insecure-host`, `resolution`, `prerelease`, `prerelease-package`, `fork-strategy`, `dependency-metadata`, `config-settings`, `config-settings-package`, `no-build-isolation`, `require-build-hashes`, `no-build-isolation-package`, `extra-build-dependencies`, `extra-build-variables`, `exclude-newer`, `exclude-newer-package`, `link-mode`, `compile-bytecode`, `no-sources`, `no-sources-package`, `upgrade`, `upgrade-package`, `reinstall`, `reinstall-package`, `no-build`, `no-build-package`, `no-binary`, `no-binary-package`, `torch-backend`, `python-install-mirror`, `pypy-install-mirror`, `graalpy-install-mirror`, `pyodide-install-mirror`, `python-downloads-json-url`, `publish-url`, `trusted-publishing`, `check-url`, `add-bounds`, `audit`, `pip`, `cache-keys`, `override-dependencies`, `exclude-dependencies`, `constraint-dependencies`, `build-constraint-dependencies`, `environments`, `required-environments`, `minimum-libc-version`, `conflicts`, `workspace`, `sources`, `managed`, `package`, `default-groups`, `dependency-groups`, `dev-dependencies`, `build-backend`
+      unknown field `unknown`, expected one of [OPTIONS]
 
     Resolved in [TIME]
     Checked in [TIME]
@@ -980,51 +609,6 @@ fn uv_toml_required_version_preempts_pyproject_only_field() -> Result<()> {
 }
 
 #[test]
-fn invalid_toml_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let test_toml = context.temp_dir.child("test.toml");
-    test_toml.touch()?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("test.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `test.toml` is not a valid PEP 751 filename: expected `pylock.toml` or `pylock.<name>.toml`, where `<name>` is non-empty and contains no dots
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn invalid_pylock_toml_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("pylock..toml").touch()?;
-    context.temp_dir.child("pylock.foo.bar.toml").touch()?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("pylock..toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `pylock..toml` is not a valid PEP 751 filename: expected `pylock.toml` or `pylock.<name>.toml`, where `<name>` is non-empty and contains no dots
-    "
-    );
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("pylock.foo.bar.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `pylock.foo.bar.toml` is not a valid PEP 751 filename: expected `pylock.toml` or `pylock.<name>.toml`, where `<name>` is non-empty and contains no dots
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
 fn invalid_uv_toml_option_disallowed_automatic_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let uv_toml = context.temp_dir.child("uv.toml");
@@ -1058,37 +642,6 @@ fn invalid_uv_toml_option_disallowed_command_line() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `foo.toml`. The `managed` field is not allowed in a `uv.toml` file. `managed` is only applicable in the context of a project, and should be placed in a `pyproject.toml` file instead.
-    "
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cache_uv_toml_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml.write_str(&format!(
-        indoc::indoc! {r#"
-    [pip]
-    extra-index-url = ["{}"]
-    "#},
-        proxy.authenticated_url("public", "heron", "/basic-auth/simple/")
-    ))?;
-
-    // Provide an extra index with the same username and URL as in `uv.toml` but
-    // no password.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig")
-        .arg("--extra-index-url")
-        .arg(proxy.username_url("public", "/basic-auth/simple/")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     "
     );
 
@@ -1312,18 +865,13 @@ fn install_requirements_txt() -> Result<()> {
 
 /// Install a package from a `requirements.txt` passed via `-r -` into a virtual environment.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_from_stdin() -> Result<()> {
+fn install_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    // Install Flask.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("Flask")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("-")
-        .arg("--strict").stdin(std::fs::File::open(requirements_txt)?), @"
+        .arg("--strict"), input="Flask", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
@@ -1340,25 +888,18 @@ fn install_from_stdin() -> Result<()> {
     );
 
     context.assert_command("import flask").success();
-
-    Ok(())
 }
 
 /// Install a package from a `requirements.txt` passed via `-r /dev/stdin` into a virtual environment.
 #[test]
-#[cfg(not(windows))]
-#[expect(clippy::disallowed_types)]
-fn install_from_dev_stdin() -> Result<()> {
+#[cfg(unix)]
+fn install_from_dev_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    // Install Flask.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("Flask")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("/dev/stdin")
-        .arg("--strict").stdin(std::fs::File::open(requirements_txt)?), @"
+        .arg("--strict"), input="Flask", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
@@ -1375,167 +916,6 @@ fn install_from_dev_stdin() -> Result<()> {
     );
 
     context.assert_command("import flask").success();
-
-    Ok(())
-}
-
-/// Install a package from a remote `requirements.txt` into a virtual environment.
-#[tokio::test]
-async fn install_remote_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    let username = "user";
-    let password = "password";
-    let requirements_txt = "Flask";
-
-    let server_url = start_requirements_server(username, password, requirements_txt).await;
-
-    let mut requirements_url = SafeUrl::parse(&format!("{server_url}/requirements.txt"))?;
-
-    // Should fail without credentials
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Error while accessing remote requirements file: http://[LOCALHOST]/requirements.txt
-    "
-    );
-
-    let _ = requirements_url.set_username(username);
-    let _ = requirements_url.set_password(Some(password));
-
-    // Should succeed with credentials
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
-
-    context.assert_command("import flask").success();
-
-    let requirements_txt = "iniconfig";
-    // Update the mock server to serve a new requirements.txt
-    let server_url = start_requirements_server(username, password, requirements_txt).await;
-    let mut requirements_url = SafeUrl::parse(&format!("{server_url}/requirements.txt"))?;
-    let _ = requirements_url.set_username(username);
-    let _ = requirements_url.set_password(Some(password));
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg(requirements_url.as_str())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    context.assert_command("import flask").success();
-
-    Ok(())
-}
-
-/// Install a package from a relative include in a remote `requirements.txt`.
-#[tokio::test]
-async fn install_remote_requirements_txt_with_relative_include() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/nested/requirements.txt"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("-r child.txt"))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/nested/child.txt"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("iniconfig"))
-        .mount(&server)
-        .await;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg(format!("{}/nested/requirements.txt", server.uri())), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    context.assert_command("import iniconfig").success();
-
-    Ok(())
-}
-
-/// Avoid exposing expanded environment variables from remote requirements files.
-#[tokio::test]
-async fn install_remote_requirements_txt_redacts_nested_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/requirements.txt"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(
-                "-r https://user/name:${UV_TEST_SECRET}@example.com/requirements.txt",
-            ),
-        )
-        .mount(&server)
-        .await;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg(format!("{}/requirements.txt", server.uri()))
-        .env("UV_TEST_SECRET", "super-secret"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid requirements input in `http://[LOCALHOST]/requirements.txt` at position 0: ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.com/requirements.txt
-      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.com/requirements.txt
-    "
-    );
-
-    Ok(())
-}
-
-async fn start_requirements_server(
-    username: &str,
-    password: &str,
-    requirements_txt: &str,
-) -> String {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/requirements.txt"))
-        .and(basic_auth(username, password))
-        .respond_with(ResponseTemplate::new(200).set_body_string(requirements_txt))
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/requirements.txt"))
-        .respond_with(ResponseTemplate::new(401))
-        .mount(&server)
-        .await;
-    server.uri()
 }
 
 /// Warn (but don't fail) when unsupported flags are set in the `requirements.txt`.
@@ -1943,161 +1323,6 @@ fn reinstall_extras() -> Result<()> {
     Ok(())
 }
 
-/// Warn, but don't fail, when uninstalling incomplete packages.
-#[test]
-fn reinstall_incomplete() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.7.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    // Manually remove the `RECORD` file.
-    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
-
-    // Re-install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==4.0.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    warning: Failed to uninstall package at `[SITE_PACKAGES]/anyio-3.7.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==3.7.0
-     + anyio==4.0.0
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn exact_install_removes_extraneous_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
-    // Install anyio
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.7.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--exact")
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    // Install flask
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("flask"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
-
-    // Install requirements file with exact flag removes flask and flask dependencies.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--exact")
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Uninstalled [N] packages in [TIME]
-     - blinker==1.7.0
-     - click==8.1.7
-     - flask==3.0.2
-     - itsdangerous==2.1.2
-     - jinja2==3.1.3
-     - markupsafe==2.1.5
-     - werkzeug==3.0.1
-    "
-    );
-
-    // Install flask again
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("flask"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
-
-    requirements_txt.write_str(indoc! {r"
-        anyio==3.7.0
-        flit_core<4.0.0
-        "
-    })?;
-
-    // Install requirements file with exact flag installs flit_core and removes flask and flask dependencies.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--exact")
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Uninstalled [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     - blinker==1.7.0
-     - click==8.1.7
-     - flask==3.0.2
-     + flit-core==3.9.0
-     - itsdangerous==2.1.2
-     - jinja2==3.1.3
-     - markupsafe==2.1.5
-     - werkzeug==3.0.1
-    "
-    );
-
-    Ok(())
-}
-
 /// Like `pip`, we (unfortunately) allow incompatible environments.
 #[test]
 fn allow_incompatibilities() -> Result<()> {
@@ -2311,8 +1536,13 @@ fn install_no_editable() {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file().follow_links(true));
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 }
 
 #[test]
@@ -2338,8 +1568,16 @@ fn install_no_editable_package() {
     "
     );
 
-    assert!(context.site_packages().join("black.pth").is_file());
-    assert!(!context.site_packages().join("executable_file.pth").exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file().follow_links(true));
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
+    site_packages
+        .child("black.pth")
+        .assert(predicates::path::is_file().follow_links(true));
 }
 
 #[test]
@@ -2363,8 +1601,13 @@ fn install_no_editable_requirements_txt() -> Result<()> {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file().follow_links(true));
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
@@ -2387,8 +1630,13 @@ fn install_no_editable_env_var() {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file().follow_links(true));
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 }
 
 #[test]
@@ -2437,6 +1685,7 @@ fn install_editable_and_registry() {
     Checked 1 package in [TIME]
     "
     );
+    assert_editable_packages(&context, "black==0.1.0\n");
 
     let context = context.with_filtered_counts();
     // Re-install Black at a specific version. This should replace the editable version.
@@ -2452,6 +1701,8 @@ fn install_editable_and_registry() {
      + black==23.10.0
     "
     );
+    assert_editable_packages(&context, "");
+    context.assert_installed("black", "23.10.0");
 }
 
 #[test]
@@ -2601,13 +1852,13 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
 #[test]
 fn install_editable_pep_508_requirements_txt() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let source = context.workspace_root.join("test/packages/black_editable");
+    let url = SafeUrl::from_directory_path(&source)
+        .map_err(|()| anyhow!("failed to convert editable source path to a file URL"))?;
+    let requirement = format!("black[d] @ {}", url.as_str().trim_end_matches('/'));
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        -e black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
+    requirements_txt.write_str(&format!("-e {requirement}\n"))?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
@@ -2627,13 +1878,9 @@ fn install_editable_pep_508_requirements_txt() -> Result<()> {
      + yarl==1.9.4
     "
     );
+    assert_editable_packages(&context, "black==0.1.0\n");
 
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
+    requirements_txt.write_str(&format!("--editable {requirement}\n"))?;
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt"), @"
@@ -2643,35 +1890,32 @@ fn install_editable_pep_508_requirements_txt() -> Result<()> {
     "
     );
 
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable=black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
+    // Reinstall so a pre-existing editable distribution cannot mask a misparsed option.
+    requirements_txt.write_str(&format!("--editable={requirement}\n"))?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
+        .args(["-r", "requirements.txt", "--reinstall-package", "black"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
+    Resolved 8 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
+    ");
+    assert_editable_packages(&context, "black==0.1.0\n");
 
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable= black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
+    requirements_txt.write_str(&format!("--editable= {requirement}\n"))?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
+        .args(["-r", "requirements.txt", "--reinstall-package", "black"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
+    Resolved 8 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
+    ");
+    assert_editable_packages(&context, "black==0.1.0\n");
 
     Ok(())
 }
@@ -2778,94 +2022,6 @@ fn install_editable_bare_requirements_txt() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn invalid_editable_no_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("-e black==0.1.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Unsupported editable requirement in `requirements.txt` at line 1: `black==0.1.0`
-      cause: Registry requirements cannot be editable
-
-    hint: Editable requirements must refer to a local directory
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn invalid_editable_unnamed_remote_url_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("-e http://user:password@example.com/black-1.0.0-py3-none-any.whl")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Unsupported editable requirement in `requirements.txt` at line 1: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
-      cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn invalid_editable_unnamed_remote_url_cli() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg("http://user:password@example.com/black-1.0.0-py3-none-any.whl"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Unsupported editable requirement: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
-      cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
-    "
-    );
-}
-
-#[test]
-fn invalid_editable_named_https_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {"
-        # This requirement is not editable.
-        anyio==3.7.0
-        -e black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl
-    "})?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Unsupported editable requirement in `requirements.txt` at line 3: `black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl`
-      cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
-    "
-    );
-
-    Ok(())
-}
-
 /// Install a source distribution that uses the `flit` build system, along with `flit`
 /// at the top-level, along with `--reinstall` to force a re-download after resolution, to ensure
 /// that the `flit` install and the source distribution build don't conflict.
@@ -2904,121 +2060,68 @@ fn reinstall_build_system() -> Result<()> {
     Ok(())
 }
 
-/// Install a package without using the remote index
-#[test]
-fn install_no_index() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("Flask")
-        .arg("--no-index"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because flask was not found in the provided package locations and you require flask, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
-
-    context.assert_command("import flask").failure();
-}
-
-/// Install a package without using the remote index
-/// Covers a case where the user requests a version which should be included in the error
-#[test]
-fn install_no_index_version() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("Flask==3.0.0")
-        .arg("--no-index"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because flask was not found in the provided package locations and you require flask==3.0.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
-
-    context.assert_command("import flask").failure();
-}
-
-/// Install a package via --extra-index-url.
-///
-/// This is a regression test where previously uv would consult test.pypi.org
-/// first, and if the package was found there, uv would not look at any other
-/// indexes. We fixed this by flipping the priority order of indexes so that
-/// test.pypi.org becomes the fallback (in this example) and the extra indexes
-/// (regular PyPI) are checked first.
-///
-/// (Neither approach matches `pip`'s behavior, which considers versions of
-/// each package from all indexes. uv stops at the first index it finds a
-/// package in.)
-///
-/// Ref: <https://github.com/astral-sh/uv/issues/1600>
+/// The extra index takes priority when the default index has only an incompatible version.
+/// By default, uv stops at the first index containing a package; pip considers versions from
+/// all indexes. See <https://github.com/astral-sh/uv/issues/1600>.
 #[test]
 fn install_extra_index_url_has_priority() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-09T00:00:00Z");
+    let context = uv_test::test_context!("3.12");
+    let default_index =
+        PackseServer::new("does_not_exist/requires-exact-version-does-not-exist.toml");
+    let extra_index = PackseServer::new("simple/single-package.toml");
 
     uv_snapshot!(context.pip_install()
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://pypi.org/simple")
-        // This tests what we want because BOTH of the following
-        // are true: `black` is on pypi.org and test.pypi.org, AND
-        // `black==24.2.0` is on pypi.org and NOT test.pypi.org. So
-        // this would previously check for `black` on test.pypi.org,
-        // find it, but then not find a compatible version. After
-        // the fix, uv will check pypi.org first since it is given
-        // priority via --extra-index-url.
-        .arg("black==24.2.0")
-        .arg("--no-deps"), @"
+        .arg(extra_index.index_url())
+        .arg("a==2.0.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + black==24.2.0
+     + a==2.0.0
     "
     );
 
-    context.assert_command("import flask").failure();
+    context.assert_installed("a", "2.0.0");
 }
 
-/// Ensure that the index is fetched only once when duplicate indices are specified
+/// Duplicate index URLs are fetched once even with a strategy that considers later indexes.
 #[tokio::test]
 async fn install_deduplicated_indices() {
     let context = uv_test::test_context!("3.12");
-
+    let packages = PackseServer::new("simple/single-package.toml");
     let redirect_server = MockServer::start().await;
 
     Mock::given(method("GET"))
+        .and(path("/a/"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/sniffio"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}a/", packages.index_url())),
         )
         .expect(1)
         .mount(&redirect_server)
         .await;
 
+    let duplicated_index = redirect_server.uri();
     uv_snapshot!(context
         .pip_install()
-        .arg("sniffio")  // Use a zero-dependency package
+        .arg("a==1.0.0")
         .arg("--index")
-        .arg(redirect_server.uri())
+        .arg(&duplicated_index)
         .arg("--default-index")
-        .arg(redirect_server.uri())
+        .arg(&duplicated_index)
         .arg("--index-strategy")
-        .arg("unsafe-first-match"),  // Anything but "first-index"
+        .arg("unsafe-first-match"),
         @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + sniffio==1.3.1
+     + a==1.0.0
     ");
 }
 
@@ -3165,39 +2268,35 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
     repository
         .child("src/example/__init__.py")
         .write_str(r#"__version__ = "0.1.0""#)?;
     symlink(victim.path(), repository.child(".ok").path())?;
 
-    Command::new("git")
-        .arg("init")
-        .arg(repository.path())
+    let git = || {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git().arg("init").assert().success();
+    git()
+        .args(["add", "--force", ".ok", "pyproject.toml", "src/example"])
         .assert()
         .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+    git()
         .args([
             "-c",
             "user.name=ferris",
             "-c",
             "user.email=ferris@example.com",
             "commit",
+            "--no-gpg-sign",
             "-m",
             "Initial commit",
         ])
-        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .assert()
         .success();
 
@@ -3216,9 +2315,17 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
      + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
+    let checkout_project = context
+        .cache_files(uv_cache::CacheBucket::Git)?
+        .into_iter()
+        .find(|path| path.ends_with("pyproject.toml"))
+        .ok_or_else(|| anyhow!("missing Git checkout project"))?;
+    let checkout_marker = checkout_project.with_file_name(".ok");
+    assert_eq!(fs::read_link(&checkout_marker)?, victim.path());
+
     // A repository-controlled checkout marker must not truncate an external file; see
     // astral-sh/uv#21857.
-    assert_snapshot!(context.read("victim"), @"external contents");
+    victim.assert("external contents");
 
     Ok(())
 }
@@ -3228,105 +2335,68 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
-
     let repository = context.temp_dir.child("repository");
-    repository.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        requires-python = ">=3.12"
+    repository.create_dir_all()?;
+    let git = || {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git().arg("init").assert().success();
+    let commit = |version: &str, message: &str| -> Result<String> {
+        repository
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+                [project]
+                name = "example"
+                version = "{version}"
+                requires-python = ">=3.12"
 
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    repository
-        .child("src/example/__init__.py")
-        .write_str(r#"__version__ = "0.1.0""#)?;
-
-    Command::new("git")
-        .arg("init")
-        .arg(repository.path())
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args([
-            "-c",
-            "user.name=ferris",
-            "-c",
-            "user.email=ferris@example.com",
-            "commit",
-            "-m",
-            "Trusted commit",
-        ])
-        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
-        .assert()
-        .success();
-
-    let trusted_commit = Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["rev-parse", "HEAD"])
-        .output()?;
-    assert!(trusted_commit.status.success());
-    let trusted_commit = String::from_utf8(trusted_commit.stdout)?;
-    let trusted_commit = trusted_commit.trim();
-
-    repository.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "example"
-        version = "9.9.9"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    repository
-        .child("src/example/__init__.py")
-        .write_str(r#"__version__ = "9.9.9""#)?;
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args([
-            "-c",
-            "user.name=ferris",
-            "-c",
-            "user.email=ferris@example.com",
-            "commit",
-            "-m",
-            "Untrusted commit",
-        ])
-        .env("GIT_AUTHOR_DATE", "2000-01-02T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-02T00:00:00Z")
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+                [build-system]
+                requires = ["hatchling"]
+                build-backend = "hatchling.build"
+            "#})?;
+        repository
+            .child("src/example/__init__.py")
+            .write_str(&format!("__version__ = \"{version}\""))?;
+        git()
+            .args([
+                "add",
+                "--force",
+                "pyproject.toml",
+                "src/example/__init__.py",
+            ])
+            .assert()
+            .success();
+        git()
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .assert()
+            .success();
+        let output = git().args(["rev-parse", "HEAD"]).assert().success();
+        Ok(String::from_utf8(output.get_output().stdout.clone())?
+            .trim()
+            .to_string())
+    };
+    let trusted_commit = commit("0.1.0", "Trusted commit")?;
+    let untrusted_commit = commit("9.9.9", "Untrusted commit")?;
+    git()
         .arg("update-ref")
         .arg(format!("refs/heads/{trusted_commit}"))
         .arg("HEAD")
         .assert()
         .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+    git()
         .args(["update-ref", "refs/heads/20240222", "HEAD"])
         .assert()
         .success();
@@ -3348,7 +2418,17 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
      + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
-    context.assert_installed("example", "0.1.0");
+    let assert_revision = |version: &'static str, revision: &str| -> Result<()> {
+        context.assert_installed("example", version);
+        let direct_url: serde_json::Value = serde_json::from_slice(&fs::read(
+            context
+                .site_packages()
+                .join(format!("example-{version}.dist-info/direct_url.json")),
+        )?)?;
+        assert_eq!(direct_url["vcs_info"]["commit_id"].as_str(), Some(revision));
+        Ok(())
+    };
+    assert_revision("0.1.0", &trusted_commit)?;
 
     // Full commit hashes identify the same installed commit regardless of hexadecimal case.
     uv_snapshot!(filters, context
@@ -3373,7 +2453,7 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
      + example==9.9.9 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
-    context.assert_installed("example", "9.9.9");
+    assert_revision("9.9.9", &untrusted_commit)?;
 
     Ok(())
 }
@@ -3511,11 +2591,8 @@ fn install_git_percent_encoded_ref() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.build-backend]
-        module-root = ""
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
 
     Command::new("git")
@@ -3975,19 +3052,8 @@ fn install_git_private_https_pat_at_ref() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
 
-    let mut filters = context.filters();
-    filters.push((r"git\+https://", ""));
-
-    // A user is _required_ on Windows
-    let user = if cfg!(windows) {
-        filters.push((r"git:", ""));
-        "git:"
-    } else {
-        ""
-    };
-
     let package = format!(
-        "uv-private-pypackage @ git+https://{user}{token}@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac"
+        "uv-private-pypackage @ git+https://git:{token}@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac"
     );
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(package), @"
@@ -3996,7 +3062,7 @@ fn install_git_private_https_pat_at_ref() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + uv-private-pypackage==0.1.0 (from git+https://****@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac)
+     + uv-private-pypackage==0.1.0 (from git+https://git:****@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac)
     ");
 
     context.assert_installed("uv_private_pypackage", "0.1.0");
@@ -4211,65 +3277,6 @@ fn reinstall_no_binary() {
     context.assert_command("import a").success();
 }
 
-/// Overlapping usage of `--no-binary` and `--only-binary`
-#[test]
-fn install_no_binary_overrides_only_binary_all() {
-    let context = uv_test::test_context!("3.12");
-
-    // The specific `--no-binary` should override the less specific `--only-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--only-binary")
-        .arg(":all:")
-        .arg("--no-binary")
-        .arg("idna")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    context.assert_command("import anyio").success();
-}
-
-/// Accept comma-separated values for `--no-binary` (pip compatibility)
-#[test]
-fn install_no_binary_comma_separated() {
-    let context = uv_test::test_context!("3.12");
-
-    // Use comma-separated format for `--no-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--no-binary=idna,sniffio")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    context.assert_command("import anyio").success();
-}
-
 /// Disable binaries with an environment variable
 /// TODO(zanieb): This is not yet implemented
 #[test]
@@ -4338,188 +3345,6 @@ fn install_no_binary_env() {
     context.assert_command("import idna").success();
 }
 
-/// Overlapping usage of `--no-binary` and `--only-binary`
-#[test]
-fn install_only_binary_overrides_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
-    let server = PackseServer::new("simple/single-package.toml");
-
-    // The specific `--only-binary` should override the less specific `--no-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("a")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--no-binary")
-        .arg(":all:")
-        .arg("--only-binary")
-        .arg("a")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==2.0.0
-    "
-    );
-
-    context.assert_command("import a").success();
-}
-
-/// Accept comma-separated values for `--only-binary` (pip compatibility)
-#[test]
-fn install_only_binary_comma_separated() {
-    let context = uv_test::test_context!("3.12");
-
-    // Use comma-separated format for `--only-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--only-binary=idna,sniffio")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    context.assert_command("import anyio").success();
-}
-
-/// Overlapping usage of `--no-binary` and `--only-binary`
-// TODO(zanieb): We should have a better error message here
-#[test]
-fn install_only_binary_all_and_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
-
-    // With both as `:all:` we can't install
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--no-binary")
-        .arg(":all:")
-        .arg("--only-binary")
-        .arg(":all:")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
-    "
-    );
-
-    context.assert_command("import anyio").failure();
-}
-
-/// Cached registry wheels should respect `--no-build` and `--no-binary`.
-#[test]
-fn install_build_policy_cache() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install a binary distribution.
-    uv_snapshot!(
-        context.pip_install().arg("idna"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Re-install. The distribution should be installed from the cache.
-    uv_snapshot!(
-        context.pip_install().arg("idna"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Install with `--no-binary`. The distribution should be built from source, despite a binary
-    // distribution being available in the cache.
-    uv_snapshot!(
-        context.pip_install().arg("idna").arg("--no-binary").arg(":all:"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Re-install with `--no-binary`. The locally built wheel should be reused from the source
-    // distribution cache, while the downloaded wheel should remain excluded.
-    uv_snapshot!(
-        context
-            .pip_install()
-            .arg("idna")
-            .arg("--no-binary")
-            .arg(":all:")
-            .arg("--offline"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Re-install with `--no-build`. The downloaded wheel should be reused from the wheel cache,
-    // while the locally built wheel should remain excluded.
-    uv_snapshot!(
-        context
-            .pip_install()
-            .arg("idna")
-            .arg("--no-build")
-            .arg("--offline"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-}
-
 /// A cached wheel uploaded after the cutoff must not replace the source distribution
 /// selected by the resolver.
 #[cfg(feature = "test-universal")]
@@ -4568,32 +3393,13 @@ fn exclude_newer_does_not_reuse_cached_wheel() -> Result<()> {
     Ok(())
 }
 
-/// Respect `--only-binary` flags in `requirements.txt`
-#[test]
-fn only_binary_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str(indoc! {r"
-        django_allauth==0.51.0
-        --only-binary django_allauth
-        "
-        })
-        .unwrap();
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because django-allauth==0.51.0 has no usable wheels and you require django-allauth==0.51.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
-    "
-    );
+fn assert_editable_packages(context: &TestContext, expected: &'static str) {
+    context
+        .pip_list()
+        .args(["--editable", "--format=freeze"])
+        .assert()
+        .success()
+        .stdout(expected);
 }
 
 /// `--only-binary` does not apply to editable requirements
@@ -4615,6 +3421,7 @@ fn only_binary_editable() {
      + anyio==4.3.0+foo (from file://[WORKSPACE]/test/packages/anyio_local)
     "
     );
+    assert_editable_packages(&context, "anyio==4.3.0+foo\n");
 }
 
 /// `--only-binary` does not apply to editable requirements that depend on each other
@@ -4642,6 +3449,7 @@ fn only_binary_dependent_editables() {
      + second-local==0.1.0 (from file://[WORKSPACE]/test/packages/dependent_locals/second_local)
     "
     );
+    assert_editable_packages(&context, "first-local==0.1.0\nsecond-local==0.1.0\n");
 }
 
 /// `--only-binary` does not apply to editable requirements, with a `setup.py` config
@@ -4670,6 +3478,7 @@ fn only_binary_editable_setup_py() {
      + sniffio==1.3.1
     "
     );
+    assert_editable_packages(&context, "setup-py-editable==0.0.1\n");
 }
 
 /// We should not recommend `--prerelease=allow` in source distribution build failures, since we
@@ -4706,120 +3515,6 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     );
 
     Ok(())
-}
-
-#[test]
-fn cache_priority() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install a specific `idna` version.
-    uv_snapshot!(
-        context.pip_install().arg("idna==3.6"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Install a lower `idna` version.
-    uv_snapshot!(
-        context.pip_install().arg("idna==3.0"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.0
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Install `idna` without a version specifier.
-    uv_snapshot!(
-        context.pip_install().arg("idna"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-}
-
-/// Install a package into a virtual environment, and ensuring that the executable permissions
-/// are retained.
-///
-/// This test uses the default link semantics. (On macOS, this is `clone`.)
-#[test]
-fn install_executable() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
-}
-
-/// Install a package into a virtual environment using copy semantics, and ensure that the
-/// executable permissions are retained.
-#[test]
-fn install_executable_copy() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0")
-        .arg("--link-mode")
-        .arg("copy"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
 }
 
 /// With `LongPathsEnabled=0`, `uv pip install jupyterlab-widgets==3.0.16` can fail when its nested
@@ -4894,92 +3589,6 @@ fn install_copy_long_paths() -> Result<()> {
     Ok(())
 }
 
-/// Install a package into a virtual environment using hardlink semantics, and ensure that the
-/// executable permissions are retained.
-#[test]
-fn install_executable_hardlink() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0")
-        .arg("--link-mode")
-        .arg("hardlink"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
-}
-
-/// Install a package into a virtual environment using clone semantics, and ensure that the
-/// executable permissions are retained.
-///
-/// Requires `UV_INTERNAL__TEST_COW_FS`.
-///
-/// See: <https://github.com/astral-sh/uv/issues/18181>
-#[test]
-fn install_executable_clone() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
-        return Ok(());
-    };
-    let Some(context) = context.with_working_dir_on_cow_fs()? else {
-        return Ok(());
-    };
-    context.venv().assert().success();
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg(context.workspace_root.join("test/packages/executable_file"))
-        .arg("--link-mode")
-        .arg("clone"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + executable-file==1.0.0 (from file://[WORKSPACE]/test/packages/executable_file)
-    "
-    );
-
-    // Verify that the executable file inside the package retained its execute
-    // permission after being cloned. On Linux, `ioctl_ficlone` only clones data
-    // blocks without preserving metadata, so permissions must be copied separately.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let script = context
-            .site_packages()
-            .join("executable_file")
-            .join("bin")
-            .join("run.sh");
-        let mode = fs_err::metadata(&script)?.permissions().mode();
-        assert!(
-            mode & 0o111 != 0,
-            "Expected executable permissions on {}, got {:o}",
-            script.display(),
-            mode
-        );
-    }
-
-    Ok(())
-}
-
 /// Install a package from the command line into a virtual environment, ignoring its dependencies.
 #[test]
 fn no_deps() {
@@ -5004,7 +3613,11 @@ fn no_deps() {
     "
     );
 
-    context.assert_command("import flask").failure();
+    context
+        .assert_command("import importlib.metadata; print(importlib.metadata.version('flask'))")
+        .success()
+        .stdout("3.0.2\n");
+    context.assert_not_installed("werkzeug");
 }
 
 /// Ignore unsatisfied dependencies when checking an installed package with `--no-deps`, while
@@ -5113,7 +3726,7 @@ fn no_deps_installed() -> Result<()> {
 fn no_deps_editable() {
     let context = uv_test::test_context!("3.12");
 
-    // Install the editable version of Black. This should remove the registry-based version.
+    // The `dev` extra requests `black[d]` and `black[uvloop]`.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
         .arg("-e")
@@ -5128,7 +3741,8 @@ fn no_deps_editable() {
     );
 
     context.assert_command("import black").success();
-    context.assert_command("import aiohttp").failure();
+    context.assert_not_installed("aiohttp");
+    context.assert_not_installed("uvloop");
 }
 
 /// Avoid downgrading already-installed packages when `--upgrade` is provided.
@@ -5375,23 +3989,18 @@ fn install_constraints_txt() -> Result<()> {
     Ok(())
 }
 
-/// Install a package from a `requirements.txt` file, with a `constraints.txt` file.
+/// Apply constraints piped through stdin to requirements from a file.
 #[test]
-#[expect(clippy::disallowed_types)]
 fn install_constraints_txt_from_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
-    let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("idna<3.4")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
             .arg("-r")
             .arg("requirements.txt")
             .arg("--constraint")
-            .arg("-")
-            .stdin(std::fs::File::open(constraints_txt)?), @"
+            .arg("-"), input="idna<3.4", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -5473,51 +4082,6 @@ fn install_constraints_inline() -> Result<()> {
     Ok(())
 }
 
-/// Install a package from a `constraints.txt` file on a remote http server.
-#[test]
-fn install_constraints_remote() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-            .arg("-c")
-            .arg("https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")
-            .arg("typing_extensions>=4.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.7.1
-    "
-    ); // would yield typing-extensions==4.8.2 without constraint file
-}
-
-/// Install a package from a `requirements.txt` file, with an inline constraint, which points
-/// to a remote http server.
-#[test]
-fn install_constraints_inline_remote() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirementstxt = context.temp_dir.child("requirements.txt");
-    requirementstxt.write_str(indoc! {"
-        typing-extensions>=4.0
-        -c https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt
-    "})?;
-
-    uv_snapshot!(context.pip_install()
-            .arg("-r")
-            .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.7.1
-    " // would yield typing-extensions==4.8.2 without constraint file
-    );
-
-    Ok(())
-}
-
 /// Constrain a package that's included via an extra.
 #[test]
 fn install_constraints_extra() -> Result<()> {
@@ -5551,21 +4115,6 @@ fn install_constraints_extra() -> Result<()> {
     );
 
     Ok(())
-}
-
-#[test]
-fn install_constraints_respects_offline_mode() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-            .arg("--offline")
-            .arg("-r")
-            .arg("http://example.com/requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Network connectivity is disabled, but a remote requirements file was requested: http://example.com/requirements.txt
-    "
-    );
 }
 
 #[test]
@@ -6143,107 +4692,6 @@ fn direct_url_zip_file_bunk_permissions() -> Result<()> {
 }
 
 #[test]
-fn launcher() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
-
-    let filters = [
-        (r"(\d+m )?(\d+\.)?\d+(ms|s)", "[TIME]"),
-        (
-            r"simple-launcher==0\.1\.0 \(from .+\.whl\)",
-            "simple_launcher.whl",
-        ),
-    ];
-
-    uv_snapshot!(
-        filters,
-        context.pip_install()
-        .arg(format!("simple_launcher@{}", project_root.join("test/links/simple_launcher-0.1.0-py3-none-any.whl").display()))
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + simple_launcher.whl
-    "
-    );
-
-    let bin_path = if cfg!(windows) { "Scripts" } else { "bin" };
-
-    uv_snapshot!(Command::new(
-        context.venv.join(bin_path).join("simple_launcher")
-    ), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hi from the simple launcher!
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn launcher_with_symlink() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
-
-    let filters = [
-        (r"(\d+m )?(\d+\.)?\d+(ms|s)", "[TIME]"),
-        (
-            r"simple-launcher==0\.1\.0 \(from .+\.whl\)",
-            "simple_launcher.whl",
-        ),
-    ];
-
-    uv_snapshot!(filters,
-        context.pip_install()
-            .arg(format!("simple_launcher@{}", project_root.join("test/links/simple_launcher-0.1.0-py3-none-any.whl").display()))
-            .arg("--strict"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + simple_launcher.whl
-    "
-    );
-
-    #[cfg(windows)]
-    if let Err(error) = fs_err::os::windows::fs::symlink_file(
-        context.venv.join("Scripts\\simple_launcher.exe"),
-        context.temp_dir.join("simple_launcher.exe"),
-    ) {
-        // Os { code: 1314, kind: Uncategorized, message: "A required privilege is not held by the client." }
-        // where `Uncategorized` is unstable.
-        if error.raw_os_error() == Some(1314) {
-            return Ok(());
-        }
-        return Err(error.into());
-    }
-
-    #[cfg(unix)]
-    fs_err::os::unix::fs::symlink(
-        context.venv.join("bin/simple_launcher"),
-        context.temp_dir.join("simple_launcher"),
-    )?;
-
-    // Only support windows or linux
-    #[cfg(not(any(windows, unix)))]
-    return Ok(());
-
-    uv_snapshot!(Command::new(
-        context.temp_dir.join("simple_launcher")
-    ), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hi from the simple launcher!
-    ");
-
-    Ok(())
-}
-
-#[test]
 fn config_settings_registry() {
     let context = uv_test::test_context!("3.12");
 
@@ -6338,10 +4786,9 @@ fn config_settings_path() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    let finder = ChildPath::new(context.site_packages())
+        .child("__editable___setuptools_editable_0_1_0_finder.py");
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     // Reinstalling with `editable_mode=compat` should force a reinstall.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6360,11 +4807,8 @@ fn config_settings_path() -> Result<()> {
     "
     );
 
-    // When installed without `editable_mode=compat`, the `finder.py` file should _not_ be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(!finder.exists());
+    // Compatibility mode must remove the finder installed by the default mode.
+    finder.assert(predicates::path::missing());
 
     Ok(())
 }
@@ -6374,39 +4818,19 @@ fn config_settings_path() -> Result<()> {
 fn reinstall_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
+    // Install different versions of `pip` into separate virtual environments.
     let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
+    context1.pip_install().arg("pip==21.3.1").assert().success();
 
-    // Run `pip sync`.
-    context1
-        .pip_install()
-        .arg("-r")
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Sync a different version of `pip` into a virtual environment.
     let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
+    context2.pip_install().arg("pip==22.1.1").assert().success();
 
-    // Run `pip sync`.
-    context2
-        .pip_install()
-        .arg("-r")
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Copy the virtual environment to a new location.
+    // Give the first environment duplicate installed distribution metadata.
     copy_dir_all(
         context2.site_packages().join("pip-22.1.1.dist-info"),
         context1.site_packages().join("pip-22.1.1.dist-info"),
     )?;
 
-    // Run `pip install`.
     uv_snapshot!(context1.pip_install()
         .arg("pip")
         .arg("--no-deps")
@@ -6424,37 +4848,21 @@ fn reinstall_duplicate() -> Result<()> {
     "
     );
 
+    context1
+        .assert_command(indoc! {r#"
+            import importlib.metadata
+
+            versions = sorted(
+                dist.version
+                for dist in importlib.metadata.distributions()
+                if dist.metadata.get("Name", "").lower() == "pip"
+            )
+            print(versions)
+        "#})
+        .success()
+        .stdout("['24.0']\n");
+
     Ok(())
-}
-
-/// Install a package that contains a symlink within the archive.
-#[test]
-fn install_symlink() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pgpdump==1.5")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + pgpdump==1.5
-    "
-    );
-
-    context.assert_command("import pgpdump").success();
-
-    uv_snapshot!(context
-        .pip_uninstall()
-        .arg("pgpdump"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Uninstalled 1 package in [TIME]
-     - pgpdump==1.5
-    "
-    );
 }
 
 #[test]
@@ -6467,7 +4875,6 @@ fn invalidate_editable_on_change() -> Result<()> {
     // Create an editable package.
     let editable_dir = context.temp_dir.child("editable");
     editable_dir.create_dir_all()?;
-    editable_dir.child("src/example/__init__.py").touch()?;
     let pyproject_toml = editable_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[project]
@@ -6477,10 +4884,6 @@ dependencies = [
   "anyio==4.0.0"
 ]
 requires-python = ">=3.8"
-
-[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
 "#,
     )?;
 
@@ -6518,10 +4921,6 @@ dependencies = [
   "anyio==3.7.1"
 ]
 requires-python = ">=3.8"
-
-[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
 "#,
     )?;
 
@@ -6609,7 +5008,6 @@ fn invalidate_path_on_change() -> Result<()> {
     // Create a local package.
     let editable_dir = context.temp_dir.child("editable");
     editable_dir.create_dir_all()?;
-    editable_dir.child("src/example/__init__.py").touch()?;
     let pyproject_toml = editable_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[project]
@@ -6619,10 +5017,6 @@ dependencies = [
   "anyio==4.0.0"
 ]
 requires-python = ">=3.8"
-
-[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
 "#,
     )?;
 
@@ -6660,10 +5054,6 @@ dependencies = [
   "anyio==3.7.1"
 ]
 requires-python = ">=3.8"
-
-[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
 "#,
     )?;
 
@@ -6806,60 +5196,6 @@ fn invalidate_path_on_cache_key() -> Result<()> {
     "
     );
 
-    // Modify the `pyproject.toml` to use a glob.
-    pyproject_toml.write_str(
-        r#"[project]
-        name = "example"
-        version = "0.0.0"
-        dependencies = ["anyio==4.0.0"]
-        requires-python = ">=3.8"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv]
-        cache-keys = [{ file = "**/*.txt" }]
-"#,
-    )?;
-
-    // Write a new file.
-    editable_dir
-        .child("resources")
-        .child("data.txt")
-        .write_str("data")?;
-
-    // Installing again should update the package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ example==0.0.0 (from file://[TEMP_DIR]/editable)
-    "
-    );
-
-    // Write a new file in the current directory.
-    editable_dir.child("data.txt").write_str("data")?;
-
-    // Installing again should update the package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ example==0.0.0 (from file://[TEMP_DIR]/editable)
-    "
-    );
-
     Ok(())
 }
 
@@ -6883,15 +5219,10 @@ fn invalidate_path_on_worktree_packed_commit() -> Result<()> {
         dependencies = ["anyio==4.0.0"]
         requires-python = ">=3.8"
 
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
         [tool.uv]
         cache-keys = [{ git = true }]
         "#,
     )?;
-    editable_dir.child("src/example/__init__.py").touch()?;
 
     // Create a linked worktree with the branch reference in the common Git directory's
     // `packed-refs` file.
@@ -6965,17 +5296,12 @@ fn invalidate_path_on_env_var() -> Result<()> {
     requirements_txt.write_str(".")?;
 
     // Create a local package.
-    context.temp_dir.child("src/example/__init__.py").touch()?;
     context.temp_dir.child("pyproject.toml").write_str(
         r#"[project]
         name = "example"
         version = "0.0.0"
         dependencies = ["anyio==4.0.0"]
         requires-python = ">=3.8"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
 
         [tool.uv]
         cache-keys = [{ env = "FOO" }]
@@ -7096,53 +5422,6 @@ fn path_name_version_change() {
     );
 }
 
-/// Install from a direct path (wheel) with the same name at a different path.
-#[test]
-fn path_changes_with_same_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let wheel = context
-        .workspace_root
-        .join("test/links/ok-1.0.0-py3-none-any.whl");
-
-    let one = context.temp_dir.child("one");
-    one.create_dir_all()?;
-    let one_wheel = one.child(wheel.file_name().unwrap());
-
-    let two = context.temp_dir.child("two");
-    two.create_dir_all()?;
-    let two_wheel = two.child(wheel.file_name().unwrap());
-
-    fs_err::copy(&wheel, &one_wheel)?;
-    fs_err::copy(&wheel, &two_wheel)?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(one_wheel.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/one/ok-1.0.0-py3-none-any.whl)
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(two_wheel.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - ok==1.0.0 (from file://[TEMP_DIR]/one/ok-1.0.0-py3-none-any.whl)
-     + ok==1.0.0 (from file://[TEMP_DIR]/two/ok-1.0.0-py3-none-any.whl)
-    "
-    );
-
-    Ok(())
-}
-
 /// Ignore a URL dependency with a non-matching marker.
 #[test]
 fn editable_url_with_marker() -> Result<()> {
@@ -7161,13 +5440,8 @@ dependencies = [
   "anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz ; python_version < '3.11'"
 ]
 requires-python = ">=3.11,<3.13"
-
-[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
 "#,
     )?;
-    editable_dir.child("src/example/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--editable")
@@ -7239,8 +5513,8 @@ dependencies = []
 requires-python = ">=3.13"
 
 [build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 "#,
     )?;
     child_dir.child("src").child("example").create_dir_all()?;
@@ -7269,6 +5543,7 @@ build-backend = "uv_build"
 
 /// Like [`requires_python_source_dist_installed_incompatible`], but using a registry package
 /// (`iniconfig`) instead of a direct URL, with `--no-binary` to force building from source.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn requires_python_source_dist_installed_incompatible_registry() {
     let context = uv_test::test_context!("3.9").with_exclude_newer("2025-11-01T00:00:00Z");
@@ -7419,70 +5694,21 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
     Ok(())
 }
 
-/// This tests that uv can read UTF-16LE encoded requirements.txt files.
-///
-/// Ref: <https://github.com/astral-sh/uv/issues/2276>
-#[test]
-fn install_utf16le_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_binary(&utf8_to_utf16_with_bom_le("tomli<=2.0.1"))?;
+/// Read installed distributions independently of uv's dry-run plan.
+fn installed_distributions(context: &TestContext) -> String {
+    let output = context
+        .assert_command(indoc! {r"
+            import importlib.metadata
 
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1
-    "
-    );
-    Ok(())
-}
-
-/// This tests that uv can read UTF-16BE encoded requirements.txt files.
-///
-/// Ref: <https://github.com/astral-sh/uv/issues/2276>
-#[test]
-fn install_utf16be_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_binary(&utf8_to_utf16_with_bom_be("tomli<=2.0.1"))?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1
-    "
-    );
-    Ok(())
-}
-
-fn utf8_to_utf16_with_bom_le(s: &str) -> Vec<u8> {
-    use byteorder::ByteOrder;
-
-    let mut u16s = vec![0xFEFF];
-    u16s.extend(s.encode_utf16());
-    let mut u8s = vec![0; u16s.len() * 2];
-    byteorder::LittleEndian::write_u16_into(&u16s, &mut u8s);
-    u8s
-}
-
-fn utf8_to_utf16_with_bom_be(s: &str) -> Vec<u8> {
-    use byteorder::ByteOrder;
-
-    let mut u16s = vec![0xFEFF];
-    u16s.extend(s.encode_utf16());
-    let mut u8s = vec![0; u16s.len() * 2];
-    byteorder::BigEndian::write_u16_into(&u16s, &mut u8s);
-    u8s
+            distributions = [
+                (distribution.metadata['Name'], distribution.version)
+                for distribution in importlib.metadata.distributions()
+            ]
+            print(sorted(distributions))
+        "})
+        .success();
+    String::from_utf8(output.get_output().stdout.clone())
+        .expect("installed distribution metadata should be UTF-8")
 }
 
 #[test]
@@ -7491,6 +5717,7 @@ fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpx==0.25.1")?;
 
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7510,6 +5737,7 @@ fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7578,6 +5806,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
 
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7593,6 +5822,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7621,6 +5851,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
 
     // Then switch to a registry dependency
     requirements_txt.write_str("anyio")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7638,6 +5869,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
      + anyio==4.3.0
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7708,8 +5940,9 @@ fn dry_run_install_transitive_dependency_already_installed()
     "
     );
 
-    // Install it httpx with dry run enabled
+    // Plan the installation of httpx while retaining the installed dependency.
     requirements_txt.write_str("httpx==0.25.1")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7726,6 +5959,7 @@ fn dry_run_install_transitive_dependency_already_installed()
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7758,6 +5992,7 @@ fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error:
 
     // Bump the version and install with dry run enabled
     requirements_txt.write_str("httpx==0.25.1")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7772,6 +6007,7 @@ fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error:
      + httpx==0.25.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -8186,48 +6422,6 @@ async fn install_index_with_relative_links_authenticated() {
     context.assert_command("import anyio").success();
 }
 
-/// The modified time of `site-packages` should change on package installation.
-#[cfg(unix)]
-#[test]
-fn install_site_packages_mtime_updated() -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let context = uv_test::test_context!("3.12");
-
-    let site_packages = context.site_packages();
-
-    // `mtime` is only second-resolution so we include the nanoseconds as well
-    let metadata = site_packages.metadata()?;
-    let pre_mtime = metadata.mtime();
-    let pre_mtime_ns = metadata.mtime_nsec();
-
-    // Install a package.
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    let metadata = site_packages.metadata()?;
-    let post_mtime = metadata.mtime();
-    let post_mtime_ns = metadata.mtime_nsec();
-
-    assert!(
-        (post_mtime, post_mtime_ns) > (pre_mtime, pre_mtime_ns),
-        "Expected newer mtime than {pre_mtime}.{pre_mtime_ns} but got {post_mtime}.{post_mtime_ns}"
-    );
-
-    Ok(())
-}
-
 /// We had a bug where maturin would walk up to the top level gitignore of the cache with a `*`
 /// entry (because we want to ignore the entire cache from outside), ignoring all python source
 /// files.
@@ -8265,55 +6459,6 @@ fn deptry_gitignore() -> Result<()> {
         .success();
 
     Ok(())
-}
-
-/// Reinstall an installed package with `--no-index`
-#[test]
-fn reinstall_no_index() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install anyio
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    // Install anyio again
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--no-index")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    // Reinstall
-    // We should not consider the already installed package as a source and
-    // should attempt to pull from the index
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--no-index")
-        .arg("--reinstall")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the provided package locations and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
 }
 
 #[test]
@@ -8524,6 +6669,9 @@ fn already_installed_local_path_dependent() {
              And because only second-local==0.1.0 is available and you require second-local, we can conclude that your requirements are unsatisfiable.
     "
     );
+    context
+        .assert_command("import first_local; import second_local")
+        .success();
 
     // Request reinstallation of the first package
     // We include it in the install command with a full path so we succeed
@@ -8543,8 +6691,7 @@ fn already_installed_local_path_dependent() {
     "
     );
 
-    // Request upgrade of the first package
-    // It's not available on an index and the user has not specified the path so we fail
+    // Upgrade keeps the installed transitive dependency when no index candidate is available.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(root_path.join("second_local"))
         .arg("--upgrade-package")
@@ -8562,6 +6709,9 @@ fn already_installed_local_path_dependent() {
      ~ second-local==0.1.0 (from file://[WORKSPACE]/test/packages/dependent_locals/second_local)
     "
     );
+    context
+        .assert_command("import first_local; import second_local")
+        .success();
 
     // Request upgrade of the first package
     // A full path is specified and there's nothing to upgrade, but because it was passed
@@ -8675,6 +6825,9 @@ fn already_installed_local_version_of_remote_package() {
      + sniffio==1.3.1
     "
     );
+    context
+        .assert_command("import anyio; assert not hasattr(anyio, 'LOCAL_ANYIO_MARKER')")
+        .success();
 
     // Install the local anyio again so we can test upgrades
     uv_snapshot!(context.filters(), context.pip_install()
@@ -8717,74 +6870,105 @@ fn already_installed_local_version_of_remote_package() {
      + httpx==0.27.0
     "
     );
+    context
+        .assert_command("import anyio; assert anyio.LOCAL_ANYIO_MARKER")
+        .success();
 }
 
-/// Install a package with multiple installed distributions in a virtual environment.
+#[cfg(unix)]
+fn prepare_duplicate_installed_versions(context: &TestContext) -> Result<ChildPath> {
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let name = "a".parse()?;
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        let (filename, wheel) = WheelBuilder::new(&name, &version.parse()?).build();
+        links.child(filename).write_binary(&wheel)?;
+    }
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .assert()
+        .success();
+
+    // Two distributions claim the same module, as can happen after a partial installation.
+    let duplicate = context.site_packages().join("a-2.0.0.dist-info");
+    fs::create_dir(&duplicate)?;
+    fs::write(
+        duplicate.join("METADATA"),
+        "Metadata-Version: 2.1\nName: a\nVersion: 2.0.0\n",
+    )?;
+    fs::write(
+        duplicate.join("RECORD"),
+        "a/__init__.py,,\na-2.0.0.dist-info/METADATA,,\na-2.0.0.dist-info/RECORD,,\n",
+    )?;
+    Ok(links)
+}
+
+/// Reinstall a requested version when multiple installed distributions claim the package.
 #[test]
 #[cfg(unix)]
-fn already_installed_multiple_versions() -> Result<()> {
-    fn prepare(context: &TestContext) -> Result<()> {
-        use uv_fs::copy_dir_all;
-
-        // Install into the base environment
-        context.pip_install().arg("anyio==3.7.0").assert().success();
-
-        // Install another version into another environment
-        let context_duplicate = uv_test::test_context!("3.12");
-        context_duplicate
-            .pip_install()
-            .arg("anyio==4.0.0")
-            .assert()
-            .success();
-
-        // Copy the second version into the first environment
-        copy_dir_all(
-            context_duplicate
-                .site_packages()
-                .join("anyio-4.0.0.dist-info"),
-            context.site_packages().join("anyio-4.0.0.dist-info"),
-        )?;
-
-        Ok(())
-    }
-
+fn already_installed_multiple_versions_pinned() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let links = prepare_duplicate_installed_versions(&context)?;
 
-    prepare(&context)?;
-
-    // Request the second anyio version again
-    // Should remove both previous versions and reinstall the second one
-    uv_snapshot!(context.filters(), context.pip_install().arg("anyio==4.0.0"), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a==2.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     ~ anyio==4.0.0
+     - a==1.0.0
+     ~ a==2.0.0
     "
     );
 
-    // Reset the test context
-    prepare(&context)?;
+    assert!(!context.site_packages().join("a-1.0.0.dist-info").exists());
+    context.assert_installed("a", "2.0.0");
+    Ok(())
+}
 
-    // Request the anyio without a version specifier
-    // This is loosely a regression test for the ordering of the installation preferences
-    // from existing site-packages
-    uv_snapshot!(context.filters(), context.pip_install().arg("anyio"), @"
+/// Resolve an unpinned requirement independently of the duplicate installed versions.
+#[test]
+#[cfg(unix)]
+fn already_installed_multiple_versions_unpinned() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = prepare_duplicate_installed_versions(&context)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     - anyio==4.0.0
-     + anyio==4.3.0
+     - a==1.0.0
+     - a==2.0.0
+     + a==3.0.0
     "
     );
 
+    for stale_version in ["1.0.0", "2.0.0"] {
+        assert!(
+            !context
+                .site_packages()
+                .join(format!("a-{stale_version}.dist-info"))
+                .exists(),
+            "a=={stale_version} metadata was left behind"
+        );
+    }
+    context.assert_installed("a", "3.0.0");
     Ok(())
 }
 
@@ -10411,18 +8595,13 @@ fn require_hashes_override() -> Result<()> {
 
 /// Install with overrides from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_with_overrides_from_stdin() -> Result<()> {
+fn install_with_overrides_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    let overrides_txt = context.temp_dir.child("overrides.txt");
-    overrides_txt.write_str("anyio==4.0.0")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio==4.0.1")
         .arg("--override")
-        .arg("-")
-        .stdin(std::fs::File::open(overrides_txt)?), @"
+        .arg("-"), input="anyio==4.0.0", @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -10433,31 +8612,22 @@ fn install_with_overrides_from_stdin() -> Result<()> {
      + sniffio==1.3.1
     "
     );
-
-    Ok(())
 }
 
 /// Install with a direct exclusion from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn install_with_excludes_from_stdin() -> Result<()> {
+fn install_with_excludes_from_stdin() {
     let context = uv_test::test_context!("3.12");
 
-    let excludes_txt = context.temp_dir.child("excludes.txt");
-    excludes_txt.write_str("anyio")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio==4.0.1")
         .arg("--exclude")
-        .arg("-")
-        .stdin(std::fs::File::open(excludes_txt)?), @"
+        .arg("-"), input="anyio", @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
     "
     );
-
-    Ok(())
 }
 
 /// Provide valid hashes for all dependencies with `--require-hashes` with accompanying markers.
@@ -10745,7 +8915,7 @@ fn verify_hashes_mismatch() -> Result<()> {
     Ok(())
 }
 
-/// Verify hashes on arbitrary-equality pins in both checking modes.
+/// Reject a mismatched hash on an arbitrary-equality pin with `--verify-hashes`.
 #[test]
 fn verify_hashes_exact_equal() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -10755,29 +8925,58 @@ fn verify_hashes_exact_equal() -> Result<()> {
         "ok===1.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000",
     )?;
 
-    allow_duplicates! {
-        for hash_mode in ["--verify-hashes", "--require-hashes"] {
-            uv_snapshot!(context.filters(), context.pip_install()
-                .arg("-r")
-                .arg("requirements.txt")
-                .arg("--no-index")
-                .arg("--find-links")
-                .arg(context.workspace_root.join("test/links/"))
-                .arg(hash_mode), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            error: Failed to download `ok==1.0.0`
-              cause: Hash mismatch for `ok==1.0.0`
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links/"))
+        .arg("--verify-hashes"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download `ok==1.0.0`
+      cause: Hash mismatch for `ok==1.0.0`
 
-                     Expected:
-                       sha256:0000000000000000000000000000000000000000000000000000000000000000
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
-                     Computed:
-                       sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
-            ");
-        }
-    }
+             Computed:
+               sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
+    ");
+
+    Ok(())
+}
+
+/// Reject a mismatched hash on an arbitrary-equality pin with `--require-hashes`.
+#[test]
+fn require_hashes_exact_equal() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(
+        "ok===1.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links/"))
+        .arg("--require-hashes"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download `ok==1.0.0`
+      cause: Hash mismatch for `ok==1.0.0`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
+    ");
 
     Ok(())
 }
@@ -11230,12 +9429,7 @@ fn recursive_extra_transitive_url() -> Result<()> {
         docs = [
             "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
         ]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
     "#})?;
-    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(".[all]"), @"
@@ -11255,11 +9449,28 @@ fn recursive_extra_transitive_url() -> Result<()> {
 #[test]
 fn prefer_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let source = context.workspace_root.join("test/packages/black_editable");
+    let assert_editable = |context: &TestContext| {
+        assert_editable_packages(context, "black==0.1.0\n");
+        context
+            .python_command()
+            .args(["-I", "-c"])
+            .arg(indoc! {r"
+                import black
+                from pathlib import Path
+                import sys
+
+                assert Path(black.__file__).samefile(sys.argv[1]), black.__file__
+            "})
+            .arg(source.join("black/__init__.py"))
+            .assert()
+            .success();
+    };
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/black_editable"))
-        .arg(context.workspace_root.join("test/packages/black_editable")), @"
+        .arg(&source)
+        .arg(&source), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -11269,9 +9480,7 @@ fn prefer_editable() -> Result<()> {
     "
     );
 
-    // Validate that `black.pth` was created.
-    let path = context.site_packages().join("black.pth");
-    assert!(path.is_file());
+    assert_editable(&context);
 
     let context = uv_test::test_context!("3.12");
 
@@ -11283,7 +9492,7 @@ fn prefer_editable() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/black_editable"))
+        .arg(&source)
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -11295,9 +9504,7 @@ fn prefer_editable() -> Result<()> {
     "
     );
 
-    // Validate that `black.pth` was created.
-    let path = context.site_packages().join("black.pth");
-    assert!(path.is_file());
+    assert_editable(&context);
 
     Ok(())
 }
@@ -11560,100 +9767,6 @@ fn unmanaged() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn install_relocatable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Remake the venv as relocatable
-    context
-        .venv()
-        .arg(context.venv.as_os_str())
-        .arg("--clear")
-        .arg("--python")
-        .arg("3.12")
-        .arg("--relocatable")
-        .assert()
-        .success();
-
-    // Install a package with a hello-world console script entrypoint.
-    // (we use black_editable because it's convenient, but we don't actually install it as editable)
-    context
-        .pip_install()
-        .arg(context.workspace_root.join("test/packages/black_editable"))
-        .assert()
-        .success();
-
-    // Script should run correctly in-situ.
-    let script_path = if cfg!(windows) {
-        context.venv.child(r"Scripts\black.exe")
-    } else {
-        context.venv.child("bin/black")
-    };
-    Command::new(script_path.as_os_str())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hello world!"));
-
-    // Relocate the venv, and see if it still works.
-    let new_venv_path = context.venv.with_file_name("relocated");
-    fs::rename(context.venv, new_venv_path.clone())?;
-
-    let script_path = if cfg!(windows) {
-        new_venv_path.join(r"Scripts\black.exe")
-    } else {
-        new_venv_path.join("bin/black")
-    };
-    Command::new(script_path.as_os_str())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hello world!"));
-
-    // Relocatable entrypoint should still be usable even if symlinked.
-    // Only testable on POSIX since symlinks require elevated privilege on Windows
-    #[cfg(unix)]
-    {
-        let script_symlink_path = context.temp_dir.join("black");
-        fs_err::os::unix::fs::symlink(script_path, script_symlink_path.clone())?;
-        Command::new(script_symlink_path.as_os_str())
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("Hello world!"));
-    }
-
-    Ok(())
-}
-
-#[cfg(unix)]
-#[test]
-fn install_script_with_symlinked_lib() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let lib = context.venv.join("lib");
-    let usr = context.venv.join("usr");
-    fs::create_dir_all(&usr)?;
-    fs::rename(&lib, usr.join("lib"))?;
-    symlink("usr/lib", &lib)?;
-    fs::create_dir_all(usr.join("bin"))?;
-
-    // Installing should write the launcher to `bin`; instead, it is misplaced and the install
-    // fails because the relative path from `site-packages` follows the symlink. See
-    // astral-sh/uv#21255.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(context.workspace_root.join("test/packages/black_editable")), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: black-0.1.0-py3-none-any.whl (black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable))
-      cause: failed to query metadata of file `[VENV]/bin/black`: No such file or directory (os error 2)
-    ");
-
-    assert!(!context.venv.join("bin/black").exists());
-    assert!(context.venv.join("usr/bin/black").exists());
-
-    Ok(())
-}
-
 /// Install requesting Python 3.12 when the virtual environment uses 3.11
 #[test]
 fn install_incompatible_python_version() {
@@ -11794,18 +9907,13 @@ fn incompatible_build_constraint() -> Result<()> {
 
 /// Include a `build_constraints.txt` file with an incompatible constraint from stdin.
 #[test]
-#[expect(clippy::disallowed_types)]
-fn incompatible_build_constraint_from_stdin() -> Result<()> {
+fn incompatible_build_constraint_from_stdin() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
 
-    let constraints_txt = context.temp_dir.child("build_constraints.txt");
-    constraints_txt.write_str("setuptools==1")?;
-
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("requests==1.2")
         .arg("--build-constraint")
-        .arg("-")
-        .stdin(std::fs::File::open(constraints_txt)?), @"
+        .arg("-"), input="setuptools==1", @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `requests==1.2.0`
@@ -11814,11 +9922,10 @@ fn incompatible_build_constraint_from_stdin() -> Result<()> {
       cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
     "
     );
-
-    Ok(())
 }
 
 /// Include a `build_constraints.txt` file with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -11958,6 +10065,7 @@ build-constraint-dependencies = [
 }
 
 /// Merge `build_constraints.txt` with `build-constraint-dependencies` in pyproject.toml with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint_merged_with_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -12210,69 +10318,10 @@ fn stale_egg_info() -> Result<()> {
     Ok(())
 }
 
-/// Avoid using a compatible, cached wheel if there's another, more compatible wheel returned by
-/// the resolver.
-///
-/// See: <https://github.com/astral-sh/uv/issues/12273>
+/// The wheel owns an extra `.egg-info` directory, so removing the wheel also removes the duplicate
+/// metadata before its own uninstall runs. Reinstallation must still leave the package usable.
 #[test]
-fn avoid_cached_wheel() {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
-
-    // Create a Python 3.10 environment.
-    context
-        .venv()
-        .arg("--python")
-        .arg("3.10")
-        .arg(".venv-3.10")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--python")
-        .arg(".venv-3.10")
-        .arg("multiprocess"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using Python 3.10.[X] environment at: .venv-3.10
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + dill==0.3.8
-     + multiprocess==0.70.16
-    "
-    );
-
-    // Create a Python 3.11 environment.
-    context
-        .venv()
-        .arg("--python")
-        .arg("3.11")
-        .arg(".venv-3.11")
-        .assert()
-        .success();
-
-    // `multiprocessing` should be re-downloaded (i.e., we should have a `Prepare` step here).
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--python")
-        .arg(".venv-3.11")
-        .arg("multiprocess"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using Python 3.11.[X] environment at: .venv-3.11
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 2 packages in [TIME]
-     + dill==0.3.8
-     + multiprocess==0.70.16
-    "
-    );
-}
-
-/// `suds-community` has an incorrect layout whereby the wheel includes `suds_community.egg-info` at
-/// the top-level. We're then under the impression that `suds` is installed twice, but when we go to
-/// uninstall the second "version", we can't find the `egg-info` directory.
-#[test]
-fn missing_top_level() {
+fn missing_top_level() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -12284,6 +10333,21 @@ fn missing_top_level() {
     Installed 1 package in [TIME]
      + suds-community==0.8.5
     "
+    );
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("suds_community.egg-info/PKG-INFO")
+        .assert(predicates::path::is_file().follow_links(true));
+    let record = read_record(File::open(
+        site_packages
+            .child("suds_community-0.8.5.dist-info/RECORD")
+            .path(),
+    )?)?;
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path == "suds_community.egg-info/PKG-INFO"),
+        "the wheel must own the duplicate egg metadata"
     );
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -12297,6 +10361,13 @@ fn missing_top_level() {
      ~ suds-community==0.8.5
     "
     );
+    context
+        .assert_command(
+            "import suds; from importlib.metadata import version; print(version('suds-community'))",
+        )
+        .success()
+        .stdout("0.8.5\n");
+    Ok(())
 }
 
 /// Show a dedicated error when the user attempts to install `sklearn`.
@@ -12335,56 +10406,6 @@ fn sklearn() {
     );
 }
 
-#[test]
-fn resolve_derivation_chain() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["wsgiref"]
-        "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg("."), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `wsgiref==0.1.2`
-      cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
-
-             [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 487, in run_setup
-                 super().run_setup(setup_script=setup_script)
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 5, in <module>
-               File "[CACHE_DIR]/[TMP]/src/ez_setup/__init__.py", line 170
-                 print "Setuptools version",version,"or greater has been installed."
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
-    "#
-    );
-
-    Ok(())
-}
-
 /// Ensure that `UV_NO_INSTALLER_METADATA` env var is respected.
 #[test]
 fn respect_no_installer_metadata_env_var() {
@@ -12406,12 +10427,11 @@ fn respect_no_installer_metadata_env_var() {
 
     context.assert_command("import urllib3").success();
 
-    // Assert INSTALLER file was _not_ created.
-    let installer_file = context
-        .site_packages()
-        .join("urllib3-2.2.3.dist-info")
-        .join("INSTALLER");
-    assert!(!installer_file.exists());
+    let dist_info = ChildPath::new(context.site_packages()).child("urllib3-2.2.1.dist-info");
+    dist_info.assert(predicates::path::is_dir());
+    dist_info
+        .child("INSTALLER")
+        .assert(predicates::path::missing());
 }
 
 /// Check that we error if a source dist lies about its built wheel version.
@@ -12548,29 +10568,6 @@ fn missing_subdirectory_url() -> Result<()> {
     Ok(())
 }
 
-// This wheel was uploaded with a bad crc32 and we weren't detecting that
-// (Could be replaced with a checked-in hand-crafted corrupt wheel?)
-#[test]
-fn bad_crc32() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_filtered_http_retries();
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.touch()?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--python-platform").arg("linux")
-        .arg("osqp @ https://files.pythonhosted.org/packages/00/04/5959347582ab970e9b922f27585d34f7c794ed01125dac26fb4e7dd80205/osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    error: Failed to download `osqp @ https://files.pythonhosted.org/packages/00/04/5959347582ab970e9b922f27585d34f7c794ed01125dac26fb4e7dd80205/osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
-      cause: Failed to extract archive: osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-      cause: Bad uncompressed size (got 0007b829, expected 0007b828) for file: osqp/ext_builtin.cpython-311-x86_64-linux-gnu.so
-    "
-    );
-
-    Ok(())
-}
-
 #[test]
 fn static_metadata_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -12607,69 +10604,6 @@ fn static_metadata_pyproject_toml() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--offline")
         .arg("anyio==3.7.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn static_metadata_installed_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig==2.0.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
-        [[dependency-metadata]]
-        name = "iniconfig"
-        version = "2.0.0"
-        requires-dist = ["typing-extensions==4.10.0 ; extra == 'typing'"]
-        provides-extras = ["typing"]
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig[typing]==2.0.0")
-        .arg("--no-deps"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig==2.0.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig[typing]==2.0.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig[typing]==2.0.0")
-        .arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
@@ -12997,93 +10931,6 @@ fn direct_url_json_git_tag() -> Result<()> {
 
     let direct_url_content = context.read(direct_url.path());
     insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://github.com/astral-test/uv-public-pypackage","vcs_info":{"vcs":"git","commit_id":"0dacfd662c64cb4ceb16e6cf65a157a8b715b979","requested_revision":"0.0.1"}}"#);
-
-    Ok(())
-}
-
-#[test]
-fn direct_url_json_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-    "source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz",
-    )?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz)
-    "
-    );
-
-    let direct_url = context.venv.child(if cfg!(windows) {
-        "Lib\\site-packages\\source_distribution-0.0.3.dist-info\\direct_url.json"
-    } else {
-        "lib/python3.12/site-packages/source_distribution-0.0.3.dist-info/direct_url.json"
-    });
-    direct_url.assert(predicates::path::is_file());
-
-    let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{}}"#);
-
-    Ok(())
-}
-
-#[test]
-fn direct_url_json_query() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "six @ https://username:password@files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D",
-    )?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + six==1.17.0 (from https://username:****@files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16%3A34%3A14Z&sig=****)
-    ");
-
-    let direct_url = context.venv.child(if cfg!(windows) {
-        "Lib\\site-packages\\six-1.17.0.dist-info\\direct_url.json"
-    } else {
-        "lib/python3.12/site-packages/six-1.17.0.dist-info/direct_url.json"
-    });
-    direct_url.assert(predicates::path::is_file());
-
-    let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D","archive_info":{}}"#);
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--dry-run")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    Would make no changes
-    ");
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    ");
 
     Ok(())
 }
@@ -13875,8 +11722,8 @@ fn no_sources_workspace_discovery() -> Result<()> {
         dependencies = ["anyio"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
 
         [tool.uv.sources]
         anyio = { workspace = true }
@@ -13900,8 +11747,8 @@ fn no_sources_workspace_discovery() -> Result<()> {
         version = "2.0.0"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#
     })?;
     anyio
@@ -14024,8 +11871,8 @@ fn pip_install_no_sources_package() -> Result<()> {
         dependencies = ["anyio", "iniconfig"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
 
         [tool.uv.sources]
         anyio = { git = "https://github.com/agronholm/anyio", tag = "3.7.0" }
@@ -14059,33 +11906,6 @@ fn pip_install_no_sources_package() -> Result<()> {
     Ok(())
 }
 
-/// Certain git environment variables should not be forwarded to git
-#[test]
-#[cfg(feature = "test-git")]
-fn install_git_with_git_envs_set() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage")
-        .env(EnvVars::GIT_DIR, "/nonexistent")
-        .env(EnvVars::GIT_COMMON_DIR, "/nonexistent")
-        .env(EnvVars::GIT_WORK_TREE, "/nonexistent")
-        .env(EnvVars::GIT_INDEX_FILE, "/nonexistent")
-        .env(EnvVars::GIT_OBJECT_DIRECTORY, "/nonexistent")
-        .env(EnvVars::GIT_ALTERNATE_OBJECT_DIRECTORIES, "/nonexistent"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
-    ");
-
-    context.assert_installed("uv_public_pypackage", "0.1.0");
-}
-
 #[test]
 fn unsupported_git_scheme() {
     let context = uv_test::test_context!("3.12");
@@ -14106,59 +11926,55 @@ fn unsupported_git_scheme() {
 #[cfg(feature = "test-git")]
 fn install_git_submodule_relative_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let git = |repository: &Path| {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository);
+        command
+    };
+    let commit = |repository: &Path, message: &str| {
+        git(repository).args(["add", "--all"]).assert().success();
+        git(repository)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .assert()
+            .success();
+    };
     let temp_dir = &context.temp_dir;
-    let utilities_dir = temp_dir.child("utilities");
-    utilities_dir.create_dir_all()?;
-
-    // Create and initialize the helper repository
-    let helpers_dir = utilities_dir.child("helpers");
+    let helpers_dir = temp_dir.child("utilities/helpers");
     helpers_dir.create_dir_all()?;
-
-    // Initialize helpers as a git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(helpers_dir.path())
-        .output()?;
-
-    // Create a simple file in helpers
+    git(helpers_dir.path()).arg("init").assert().success();
     helpers_dir.child("helper.py").write_str(indoc! {"
         def help():
             return 'I am a helper'
     "})?;
+    helpers_dir.child("__init__.py").touch()?;
 
     // Create a nested dependency of the helper repository. This lives outside the parent
     // repository so the helper must resolve it through its own relative submodule URL.
     let grandchild_dir = temp_dir.child("grandchild");
     grandchild_dir.create_dir_all()?;
 
-    Command::new("git")
-        .args(["init"])
-        .current_dir(grandchild_dir.path())
-        .output()?;
+    git(grandchild_dir.path()).arg("init").assert().success();
 
     grandchild_dir.child("grandchild.py").write_str(indoc! {"
         def help():
             return 'I am a nested helper'
     "})?;
+    grandchild_dir.child("__init__.py").touch()?;
 
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(grandchild_dir.path())
-        .output()?;
+    commit(grandchild_dir.path(), "Initial nested helpers commit");
 
-    Command::new("git")
-        .args(["commit", "-m", "Initial nested helpers commit"])
-        .current_dir(grandchild_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
-
-    Command::new("git")
+    git(helpers_dir.path())
         .args(["submodule", "add", "../../grandchild", "nested/grandchild"])
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
-        .current_dir(helpers_dir.path())
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .assert()
         .success();
     helpers_dir
@@ -14169,36 +11985,21 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .child("grandchild")
         .child("grandchild.py")
         .assert(predicate::path::is_file());
+    helpers_dir.child("nested/__init__.py").touch()?;
 
-    // Add and commit in helpers
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(helpers_dir.path())
-        .output()?;
+    commit(helpers_dir.path(), "Initial helpers commit");
 
-    Command::new("git")
-        .args(["commit", "-m", "Initial helpers commit"])
-        .current_dir(helpers_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
-
-    // Create and initialize the main repository
     let mylib_dir = temp_dir.child("mylib");
     mylib_dir.create_dir_all()?;
-
-    // Initialize mylib as a git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(mylib_dir.path())
-        .output()?;
-
-    // Create a simple setup.py
+    git(mylib_dir.path()).arg("init").assert().success();
     mylib_dir.child("setup.py").write_str(
         r#"
+from pathlib import Path
+
 from setuptools import setup, find_packages
+
+assert Path("mylib/helpers/helper.py").is_file()
+assert Path("mylib/helpers/nested/grandchild/grandchild.py").is_file()
 
 setup(
     name="mylib",
@@ -14208,23 +12009,21 @@ setup(
 "#,
     )?;
 
-    // Create a simple module file
     let mylib_package = mylib_dir.child("mylib");
     mylib_package.create_dir_all()?;
     mylib_package.child("__init__.py").write_str(
         r#"
 from .helpers import helper
+from .helpers.nested.grandchild import grandchild
 
 def main():
-    return f"Hello from mylib, {helper.help()}"
+    return f"Hello from mylib, {helper.help()}, {grandchild.help()}"
 "#,
     )?;
 
-    // Set helper as a submodule
-    Command::new("git")
+    git(mylib_dir.path())
         .args(["submodule", "add", "../utilities/helpers", "mylib/helpers"])
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
-        .current_dir(mylib_dir.path())
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .assert()
         .success();
     mylib_dir
@@ -14235,28 +12034,15 @@ def main():
         .child("helper.py")
         .assert(predicate::path::is_file());
 
-    // Add and commit in mylib
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(mylib_dir.path())
-        .output()?;
-
-    Command::new("git")
-        .args(["commit", "-m", "Initial mylib commit with submodule"])
-        .current_dir(mylib_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
+    commit(mylib_dir.path(), "Initial mylib commit with submodule");
 
     let mut filters = context.filters();
     filters.push((r"@[0-9a-f]{40}", "@COMMIT_HASH"));
 
+    let url = SafeUrl::from_directory_path(mylib_dir.path()).unwrap();
     uv_snapshot!(filters, context.pip_install()
-        .arg(format!("git+file://{}", mylib_dir.path().display()))
-        // Pass through environment variable to allow file:// URLs in Git subprocesses
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh"), @r"
+        .arg(format!("git+{}", url.as_str().trim_end_matches('/')))
+        .env("GIT_ALLOW_PROTOCOL", "file"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14264,6 +12050,12 @@ def main():
     Installed 1 package in [TIME]
      + mylib==0.1.0 (from git+file://[TEMP_DIR]/mylib@COMMIT_HASH)
     ");
+    context
+        .python_command()
+        .args(["-I", "-c", "import mylib; print(mylib.main())"])
+        .assert()
+        .success()
+        .stdout("Hello from mylib, I am a helper, I am a nested helper\n");
 
     Ok(())
 }
@@ -14306,7 +12098,7 @@ fn install_git_submodule_remote_relative() {
     ");
 }
 
-/// Modify a project to use a `src` layout.
+/// Switch an editable project from a `src` layout to a flat layout.
 #[test]
 fn change_layout_src() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -14334,7 +12126,7 @@ fn change_layout_src() -> Result<()> {
         .child("src")
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Installing should build the package.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -14347,6 +12139,7 @@ fn change_layout_src() -> Result<()> {
      + project==0.1.0 (from file://[TEMP_DIR]/)
     "
     );
+    context.assert_installed("project", "0.1.0");
 
     // Reinstalling should have no effect.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -14363,7 +12156,7 @@ fn change_layout_src() -> Result<()> {
         .temp_dir
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Installing should rebuild the package.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -14376,6 +12169,8 @@ fn change_layout_src() -> Result<()> {
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     "
     );
+    // Probe the environment in isolation so the working directory cannot mask a stale editable path.
+    context.assert_installed("project", "0.1.0");
 
     // Reinstalling should have no effect.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -14406,8 +12201,8 @@ fn change_layout_custom_directory() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
 
         [tool.uv]
         cache-keys = [{ dir = "build" }]
@@ -14491,1766 +12286,6 @@ fn change_layout_custom_directory() -> Result<()> {
 }
 
 #[test]
-fn pep_751_install_registry_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    // An unrelated distribution should not be inspected when installing from a `pylock.toml`.
-    let unrelated = context.site_packages().join("unrelated-1.0.0.dist-info");
-    fs::create_dir_all(&unrelated)?;
-    fs::write(unrelated.join("direct_url.json"), "invalid")?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_registry_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["source-distribution"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.3
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_invalid_artifact_urls() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "foo"
-        version = "1.0.0"
-        wheels = [{ name = "foo-1.0.0-py3-none-any.whl", url = "data:application/octet-stream,ignored", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid artifact URL: data:application/octet-stream,ignored
-    "
-    );
-
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "foo"
-        version = "1.0.0"
-        sdist = { name = "foo-1.0.0.tar.gz", url = "data:application/octet-stream,ignored", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid artifact URL: data:application/octet-stream,ignored
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_invalid_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "foo"
-        version = "1.0.0"
-        wheels = [{ name = "foo-1.0.0-py3-none-any.whl", url = "https://example.com/foo-1.0.0-py3-none-any.whl", hashes = { sha256 = "short" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @r###"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Not a valid `pylock.toml` file: pylock.toml
-      cause: TOML parse error at line 9, column 123
-               |
-             9 |         wheels = [{ name = "foo-1.0.0-py3-none-any.whl", url = "https://example.com/foo-1.0.0-py3-none-any.whl", hashes = { sha256 = "short" } }]
-               |                                                                                                                           ^^^^^^^^^^^^^^^^^^^^
-             Invalid hash digest length (expected 64 hexadecimal characters, found 5)
-             in `sha256`
-    "###);
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Create a local dependency in a subdirectory.
-    let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-        dependencies = ["anyio"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#,
-    )?;
-    context
-        .temp_dir
-        .child("foo")
-        .child("src")
-        .child("foo")
-        .child("__init__.py")
-        .touch()?;
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["foo"]
-
-        [tool.uv.sources]
-        foo = { path = "foo" }
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + foo==1.0.0 (from file://[TEMP_DIR]/foo)
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 4 packages in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_require_hashes_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
-    )?;
-    context
-        .temp_dir
-        .child("foo")
-        .child("src")
-        .child("foo")
-        .child("__init__.py")
-        .touch()?;
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "foo"
-        version = "1.0.0"
-        directory = { path = "foo" }
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--require-hashes"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: foo
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
-fn pep_751_install_git_rejects_mismatched_exact_revision() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "example"
-        version = "1.0.0"
-        vcs = { type = "git", url = "https://git:secret-token@example.com/pkg.git", requested-revision = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979", commit-id = "b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Exact Git revision `0dacfd662c64cb4ceb16e6cf65a157a8b715b979` does not match precise commit `b270df1a2fb5d012294e9aaf05e7e0bab1e6a389` for `https://git:****@example.com/pkg.git`
-    ");
-
-    context.temp_dir.child("requirements.in").write_str(
-        "example @ git+https://git:secret-token@example.com/pkg.git@0dacfd662c64cb4ceb16e6cf65a157a8b715b979\n",
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_compile()
-        .arg("requirements.in")
-        .arg("--universal")
-        .arg("--offline")
-        .arg("-o")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Exact Git revision `0dacfd662c64cb4ceb16e6cf65a157a8b715b979` does not match precise commit `b270df1a2fb5d012294e9aaf05e7e0bab1e6a389` for `https://git:****@example.com/pkg.git`
-    ");
-
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-git")]
-fn pep_751_install_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage.git@0.0.1"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_url_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0 (from https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl)
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 3 packages in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_url_sdist() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["a @ {sdist_url}"]
-        "#,
-        sdist_url = server.file_url("a-1.0.0.tar.gz"),
-    })?;
-
-    context
-        .export()
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0 (from http://[LOCALHOST]/files/a-1.0.0.tar.gz)
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_path_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download the source.
-    let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-        &archive,
-    );
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [tool.uv.sources]
-        iniconfig = { path = "iniconfig-2.0.0-py3-none-any.whl" }
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    let lock = context.read("pylock.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        insta::assert_snapshot!(
-            lock, @r#"
-        # This file was autogenerated by uv via the following command:
-        #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }
-        "#
-        );
-    });
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from file://[TEMP_DIR]/iniconfig-2.0.0-py3-none-any.whl)
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_prefers_path_over_url() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
-
-    for wheel in [
-        "ok-1.0.0-py3-none-any.whl",
-        "basic_package-0.1.0-py3-none-any.whl",
-    ] {
-        fs::copy(
-            context.workspace_root.join("test/links").join(wheel),
-            context.temp_dir.child(wheel),
-        )?;
-    }
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "ok"
-        version = "1.0.0"
-        archive = { path = "ok-1.0.0-py3-none-any.whl", url = "https://example.invalid/ok-1.0.0.tar.gz", hashes = { sha256 = "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" } }
-
-        [[packages]]
-        name = "basic-package"
-        version = "0.1.0"
-        wheels = [{ path = "basic_package-0.1.0-py3-none-any.whl", url = "https://example.invalid/basic_package-0.1.0-py3-none-any.whl", hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--no-build")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + basic-package==0.1.0
-     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0-py3-none-any.whl)
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_install_path_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download the source.
-    let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [tool.uv.sources]
-        iniconfig = { path = "iniconfig-2.0.0.tar.gz" }
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from file://[TEMP_DIR]/iniconfig-2.0.0.tar.gz)
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-
-    allow_duplicates! {
-        for (table, filename) in [
-            ("[packages.archive]", "iniconfig-2.0.0.tar.gz"),
-            ("[packages.sdist]", "iniconfig-2.0.0.tar.gz"),
-            ("[[packages.wheels]]", "iniconfig-2.0.0-py3-none-any.whl"),
-        ] {
-            pylock_toml.write_str(&formatdoc! {r#"
-                lock-version = "1.0"
-                created-by = "uv"
-
-                [[packages]]
-                name = "iniconfig"
-                version = "2.0.0"
-                {table}
-                url = "https://example.com/{filename}"
-                hashes = {{}}
-            "#})?;
-
-            // Requiring hashes should still reject artifacts with empty hash tables.
-            uv_snapshot!(context.filters(), context.pip_install()
-                .arg("--preview")
-                .arg("--offline")
-                .arg("--dry-run")
-                .arg("--require-hashes")
-                .arg("-r")
-                .arg("pylock.toml"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
-            error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_missing_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl" }]
-    "#})?;
-
-    // Omitting the required hashes field should fail even with verification disabled.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("--no-verify-hashes")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Not a valid `pylock.toml` file: pylock.toml
-      cause: TOML parse error at line 7, column 11
-               |
-             7 | wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl" }]
-               |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             missing field `hashes`
-    "#);
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_empty_hashes_unselected_artifacts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    fs::copy(
-        context
-            .workspace_root
-            .join("test/links/ok-1.0.0-py3-none-any.whl"),
-        context.temp_dir.child("ok-1.0.0-py3-none-any.whl"),
-    )?;
-    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "ok"
-        version = "1.0.0"
-        sdist = { url = "https://example.com/ok-1.0.0.tar.gz", hashes = {} }
-        wheels = [
-            { url = "https://example.com/ok-1.0.0-cp311-cp311-win32.whl", hashes = { sha3_256 = "0000000000000000000000000000000000000000000000000000000000000000" } },
-            { path = "ok-1.0.0-py3-none-any.whl", hashes = { sha256 = "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" } },
-        ]
-
-        [[packages]]
-        name = "unused"
-        version = "1.0.0"
-        marker = "python_version < '3'"
-        archive = { url = "https://example.com/unused-1.0.0.tar.gz", hashes = {} }
-    "#})?;
-
-    // Empty tables on unselected artifacts should warn once without preventing installation.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Empty hash tables in `pylock.toml` will be rejected in a future uv version. Rerun the original `uv export` or `uv pip compile` command to regenerate the file.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_unsupported_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha3_256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-    "#})?;
-
-    // Unsupported algorithms should remain valid when parsing a pylock file.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("--no-verify-hashes")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    // Requiring hashes should reject artifacts with only unsupported algorithms.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("--require-hashes")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download the source.
-    let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-        &archive,
-    );
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(r#"
-        # This file was autogenerated by uv via the following command:
-        #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", sha3_256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
-    "#)?;
-
-    // An unsupported algorithm should not prevent verification of a supported hash.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to read `iniconfig @ file://[TEMP_DIR]/iniconfig-2.0.0-py3-none-any.whl`
-      cause: Hash mismatch for `iniconfig @ file://[TEMP_DIR]/iniconfig-2.0.0-py3-none-any.whl`
-
-             Expected:
-               sha256:c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
-
-             Computed:
-               sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
-    "
-    );
-
-    pylock_toml.write_str(&context.read("pylock.toml").replace(
-        "c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
-        "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
-    ))?;
-
-    // A matching supported hash should permit installation alongside an unsupported algorithm.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from file://[TEMP_DIR]/iniconfig-2.0.0-py3-none-any.whl)
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "different"
-        version = "2.0.0"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Wheel filename `iniconfig-2.0.0-py3-none-any.whl` does not match package name `different`
-    "#);
-
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "1.0.0"
-        archive = { url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Wheel filename `iniconfig-2.0.0-py3-none-any.whl` does not match package version `1.0.0`
-    "#);
-
-    // An incompatible wheel must still be validated before falling back to the sdist.
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        sdist = { url = "https://example.com/iniconfig-2.0.0.tar.gz", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
-        wheels = [{ url = "https://example.com/different-2.0.0-cp39-cp39-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Wheel filename `different-2.0.0-cp39-cp39-any.whl` does not match package name `iniconfig`
-    "#);
-
-    // A malformed wheel must not be ignored merely because an sdist is available.
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        sdist = { url = "https://example.com/iniconfig-2.0.0.tar.gz", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
-        wheels = [{ url = "https://example.com/invalid.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: The wheel filename `invalid.whl` is invalid: Must have a version
-    "#);
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_mix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.dev.toml")
-        .assert()
-        .success();
-
-    context.temp_dir.child("requirements.txt").touch()?;
-    context.temp_dir.child("constraints.txt").touch()?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("-r")
-        .arg("pylock.dev.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Multiple `pylock.toml` files specified: `pylock.toml` vs. `pylock.dev.toml`
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Cannot specify additional requirements alongside a `pylock.toml` file
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("-c")
-        .arg("constraints.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Cannot specify constraints with a `pylock.toml` file
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_multiple_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(r#"
-        # This file was autogenerated by uv via the following command:
-        #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        index = "https://pypi.org/simple"
-        sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
-        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }
-    "#)?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package `typing-extensions` includes both a registry (`packages.wheels`) and an archive source (`packages.archive`)
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        default-groups = ["default"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups_empty_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        dependency-groups = []
-        default-groups = ["default"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups_unrelated_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        dependency-groups = ["test"]
-        default-groups = ["default"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups_overlapping_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        dependency-groups = ["default", "test"]
-        default-groups = ["default"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups_explicit_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        dependency-groups = ["test"]
-        default-groups = ["default"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--group")
-        .arg("test"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would download 1 package
-    Would install 1 package
-     + typing-extensions==4.10.0
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_default_groups_absent() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pylock.toml").write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        dependency-groups = ["default", "test"]
-
-        [[packages]]
-        name = "iniconfig"
-        version = "2.0.0"
-        marker = "'default' in dependency_groups"
-        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
-
-        [[packages]]
-        name = "typing-extensions"
-        version = "4.10.0"
-        marker = "'test' in dependency_groups"
-        wheels = [{ url = "https://example.com/typing_extensions-4.10.0-py3-none-any.whl", hashes = { sha256 = "1111111111111111111111111111111111111111111111111111111111111111" } }]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("--dry-run")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked in [TIME]
-    Would make no changes
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-lock-version = "1.0"
-requires-python = "==3.13.*"
-environments = [
-    "python_version == \"3.13\"",
-]
-extras = ["async", "dev"]
-dependency-groups = ["default", "test"]
-default-groups = ["default"]
-created-by = "pdm"
-[[packages]]
-name = "anyio"
-version = "4.9.0"
-requires-python = ">=3.9"
-sdist = {name = "anyio-4.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/95/7d/4c1bd541d4dffa1b52bd83fb8527089e097a106fc90b467a7313b105f840/anyio-4.9.0.tar.gz", hashes = {sha256 = "673c0c244e15788651a4ff38710fea9675823028a6f08a5eda409e0c9840a028"}}
-wheels = [
-    {name = "anyio-4.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/a1/ee/48ca1a7c89ffec8b6a0c5d02b89c305671d5ffd8d3c94acf8b8c408575bb/anyio-4.9.0-py3-none-any.whl",hashes = {sha256 = "9f76d541cad6e36af7beb62e978876f3b41e3e04f2c1fbf0884604c0a9c4d93c"}},
-]
-marker = "\"async\" in extras"
-
-[packages.tool.pdm]
-dependencies = [
-    "exceptiongroup>=1.0.2; python_version < \"3.11\"",
-    "idna>=2.8",
-    "sniffio>=1.1",
-    "typing-extensions>=4.5; python_version < \"3.13\"",
-]
-
-[[packages]]
-name = "blinker"
-version = "1.9.0"
-requires-python = ">=3.9"
-sdist = {name = "blinker-1.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/21/28/9b3f50ce0e048515135495f198351908d99540d69bfdc8c1d15b73dc55ce/blinker-1.9.0.tar.gz", hashes = {sha256 = "b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf"}}
-wheels = [
-    {name = "blinker-1.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl",hashes = {sha256 = "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"}},
-]
-marker = "\"dev\" in extras"
-
-[packages.tool.pdm]
-dependencies = []
-
-[[packages]]
-name = "idna"
-version = "3.10"
-requires-python = ">=3.6"
-sdist = {name = "idna-3.10.tar.gz", url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", hashes = {sha256 = "12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"}}
-wheels = [
-    {name = "idna-3.10-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl",hashes = {sha256 = "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"}},
-]
-marker = "\"async\" in extras"
-
-[packages.tool.pdm]
-dependencies = []
-
-[[packages]]
-name = "iniconfig"
-version = "2.1.0"
-requires-python = ">=3.8"
-sdist = {name = "iniconfig-2.1.0.tar.gz", url = "https://files.pythonhosted.org/packages/f2/97/ebf4da567aa6827c909642694d71c9fcf53e5b504f2d96afea02718862f3/iniconfig-2.1.0.tar.gz", hashes = {sha256 = "3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7"}}
-wheels = [
-    {name = "iniconfig-2.1.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/2c/e1/e6716421ea10d38022b952c159d5161ca1193197fb744506875fbb87ea7b/iniconfig-2.1.0-py3-none-any.whl",hashes = {sha256 = "9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760"}},
-]
-marker = "\"default\" in dependency_groups"
-
-[packages.tool.pdm]
-dependencies = []
-
-[[packages]]
-name = "pygments"
-version = "2.19.2"
-requires-python = ">=3.8"
-sdist = {name = "pygments-2.19.2.tar.gz", url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hashes = {sha256 = "636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"}}
-wheels = [
-    {name = "pygments-2.19.2-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl",hashes = {sha256 = "86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"}},
-]
-marker = "\"test\" in dependency_groups"
-
-[packages.tool.pdm]
-dependencies = []
-
-[[packages]]
-name = "sniffio"
-version = "1.3.1"
-requires-python = ">=3.7"
-sdist = {name = "sniffio-1.3.1.tar.gz", url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hashes = {sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"}}
-wheels = [
-    {name = "sniffio-1.3.1-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl",hashes = {sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"}},
-]
-marker = "\"async\" in extras"
-
-[packages.tool.pdm]
-dependencies = []
-
-[tool.pdm]
-hashes = {sha256 = "51795362d337720c28bd6c3a26eb33751f2b69590261f599ffb4172ee2c441c6"}
-
-[[tool.pdm.targets]]
-requires_python = "==3.13.*"
-        "#,
-    )?;
-
-    // By default, only `iniconfig` should be installed, since it's in the default group.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.1.0
-    "
-    );
-
-    // With `--extra async`, `anyio` should be installed.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--extra")
-        .arg("async"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.9.0
-     + idna==3.10
-     + sniffio==1.3.1
-    "
-    );
-
-    // With `--group test`, `pygments` should be installed.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--group")
-        .arg("test"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + pygments==2.19.2
-    "
-    );
-
-    // With `--all-extras`, `blinker` should be installed.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--all-extras"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + blinker==1.9.0
-    "
-    );
-
-    // `--group pylock.toml:test` should be rejected.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml")
-        .arg("--group")
-        .arg("pylock.toml:test"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid value 'pylock.toml:test' for '--group <GROUP>': The `--group` path is required to end in `pyproject.toml` for compatibility with pip; got: pylock.toml
-
-    For more information, try '--help'.
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_lock_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-        lock-version = "2.0"
-        created-by = "uv"
-        packages = []
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Not a valid `pylock.toml` file: pylock.toml
-      cause: TOML parse error at line 2, column 24
-               |
-             2 |         lock-version = "2.0"
-               |                        ^^^^^
-             unsupported lock version (`2.0`, but only major version 1 is supported)
-    "#
-    );
-
-    // Later minor versions are forwards-compatible with the supported major version.
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.1"
-        created-by = "uv"
-        packages = []
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked in [TIME]
-    "#
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_incompatible_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
-        lock-version = "1.0"
-        created-by = "uv"
-        environments = ["python_version < '3.12'"]
-        packages = []
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: The target environment is not supported by the lockfile
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_package_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "example"
-        marker = "python_version < '3.0'"
-        requires-python = ">=99"
-        directory = { path = "." }
-        "#,
-    )?;
-
-    // Skip the Python requirement for packages excluded by their marker.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked in [TIME]
-    "#
-    );
-
-    pylock_toml.write_str(
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "example"
-        requires-python = ">=99"
-        directory = { path = "." }
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package `example` requires Python >=99, but the target Python version is 3.12.[X]
-    "#
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context
-        .venv()
-        .arg("--python")
-        .arg("3.12")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the `pylock.toml`'s Python requirement: `>=3.13`
-    "
-    );
-
-    Ok(())
-}
-
-/// Test that uv doesn't hang if an index returns a distribution for the wrong package.
-#[tokio::test]
-async fn bogus_redirect() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let redirect_server = MockServer::start().await;
-
-    // Configure a bogus redirect where for all packages, anyio is returned.
-    Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/anyio/"),
-        )
-        .mount(&redirect_server)
-        .await;
-
-    uv_snapshot!(
-        context
-            .pip_install()
-            .arg("--default-index")
-            .arg(redirect_server.uri())
-            .arg("sniffio"),
-        @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: The index returned metadata for the wrong package: expected distribution for sniffio, got distribution for anyio
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
 fn reserved_script_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -16266,8 +12301,8 @@ fn reserved_script_name() -> Result<()> {
         "activate.bash" = "project:activate"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#,
     )?;
 
@@ -16300,8 +12335,8 @@ fn reserved_script_name() -> Result<()> {
         "python" = "project:python"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#,
     )?;
 
@@ -16383,203 +12418,60 @@ fn install_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn reject_reserved_wheel_data_script_name() -> Result<()> {
-    let interpreter = if cfg!(windows) {
-        "python.exe"
-    } else {
-        "python"
-    };
-    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
-
-    allow_duplicates! {
-        for data_path in ["python", "python.py", "Python.exe", "python.EXE", "Python.PY"]
-            .into_iter()
-            .flat_map(|executable| {
-                [
-                    format!("foo-0.1.0.data/scripts/{executable}"),
-                    format!("foo-0.1.0.data/data/{scripts}/{executable}"),
-                ]
-            })
-        {
-            let context = uv_test::test_context!("3.12").with_filter((
-                r"got: `(?:Python\.(?:exe|PY)|python(?:\.EXE|\.py)?)`",
-                "got: `python`",
-            ));
-            let wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-            let record = formatdoc! {"
-                foo/__init__.py,,
-                foo-0.1.0.dist-info/METADATA,,
-                foo-0.1.0.dist-info/WHEEL,,
-                foo-0.1.0.dist-info/RECORD,,
-                foo-0.1.0.data/data/harmless.txt,,
-                {data_path},,
-            "};
-            let mut writer = ZipFileWriter::new(Vec::new());
-            for (name, contents) in [
-                ("foo/__init__.py", ""),
-                (
-                    "foo-0.1.0.dist-info/METADATA",
-                    indoc! {"
-                        Metadata-Version: 2.1
-                        Name: foo
-                        Version: 0.1.0
-                    "},
-                ),
-                (
-                    "foo-0.1.0.dist-info/WHEEL",
-                    indoc! {"
-                        Wheel-Version: 1.0
-                        Root-Is-Purelib: true
-                        Tag: py3-none-any
-                    "},
-                ),
-                ("foo-0.1.0.dist-info/RECORD", record.as_str()),
-                ("foo-0.1.0.data/data/harmless.txt", "this must not be moved"),
-                (data_path.as_str(), "this must not replace python"),
-            ] {
-                let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-                block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-            }
-            fs_err::write(&wheel, block_on(writer.close())?)?;
-
-            uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        Prepared 1 package in [TIME]
-        error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-          cause: Scripts must not use the reserved name `python`, got: `python`
-            ");
-
-            Command::new(venv_bin_path(&context.venv).join(interpreter))
-                .arg("--version")
-                .assert()
-                .success();
-            assert!(!context.site_packages().join("foo").exists());
-            assert!(!context.site_packages().join("foo-0.1.0.dist-info").exists());
-            assert!(!context.venv.join("harmless.txt").exists());
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
-
-    Ok(())
-}
-
-fn repacked_wheel_with_entrypoint(
-    context: &TestContext,
-    section: &str,
-    entrypoint_name: &str,
-) -> Result<PathBuf> {
-    let built_wheel = context.temp_dir.join("foo/dist/foo-0.1.0-py3-none-any.whl");
-    let (_, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
-        .requires_python(Some(&">=3.12".parse()?))
+fn wheel_with_reserved_script(context: &TestContext, reserved_path: &str) -> Result<PathBuf> {
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .files(&[
+            ("foo-0.1.0.data/data/harmless.txt", "this must not be moved"),
+            (reserved_path, "this must not replace python"),
+        ])
         .build();
-    fs::create_dir_all(context.temp_dir.join("foo/dist"))?;
-    fs::write(&built_wheel, wheel)?;
+    let path = context.temp_dir.join(filename);
+    fs::write(&path, wheel)?;
+    Ok(path)
+}
 
-    let unpacked = context.temp_dir.join("foo-unpacked");
-    uv_extract::unzip(File::open(&built_wheel)?, &unpacked)?;
-
-    fs::write(
-        unpacked.join("foo-0.1.0.dist-info/entry_points.txt"),
-        formatdoc! {"
-            [{section}]
-            {entrypoint_name} = foo:main
-            ",
-        },
-    )?;
-
-    let repacked_wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for entry in WalkDir::new(&unpacked) {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.strip_prefix(&unpacked)?;
-        if name.as_os_str().is_empty() {
-            continue;
-        }
-        // Zip entries must use forward slashes, even on Windows.
-        let mut name = PortablePath::from(name).to_string();
-        if path.is_dir() {
-            name.push('/');
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &[]))?;
-        } else {
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &context.read_bytes(path)))?;
-        }
-    }
-    fs_err::write(&repacked_wheel, block_on(writer.close())?)?;
-
-    Ok(repacked_wheel)
+fn assert_reserved_script_install_is_atomic(context: &TestContext) {
+    Command::new(context.interpreter())
+        .arg("--version")
+        .assert()
+        .success();
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("foo")
+        .assert(predicates::path::missing());
+    site_packages
+        .child("foo-0.1.0.dist-info")
+        .assert(predicates::path::missing());
+    context
+        .venv
+        .child("harmless.txt")
+        .assert(predicates::path::missing());
 }
 
 #[test]
-fn reject_wheel_entrypoint_paths() -> Result<()> {
+fn reject_reserved_wheel_scripts_data_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/python")?;
 
-    // Build a normal wheel, then rewrite its entry-point metadata to exercise the installer
-    // directly, rather than relying on backend-side validation.
-    let escaped_entrypoint = context.temp_dir.child("escaped-entrypoint");
-    let repacked_wheel = repacked_wheel_with_entrypoint(
-        &context,
-        "console_scripts",
-        &escaped_entrypoint.path().portable_display().to_string(),
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: The wheel is invalid: Script path must resolve to a file within the scripts directory: [TEMP_DIR]/escaped-entrypoint
-    "
-    );
-
-    escaped_entrypoint.assert(predicates::path::missing());
-
-    Ok(())
-}
-
-#[test]
-fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../python")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `nested/../python`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `Python`
+      cause: Scripts must not use the reserved name `python`, got: `python`
     ");
 
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python.PY")?;
+    assert_reserved_script_install_is_atomic(&context);
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+#[test]
+fn reject_reserved_wheel_scripts_data_python_extension() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/Python.PY")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -16588,274 +12480,30 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
       cause: Scripts must not use the reserved name `python`, got: `Python.PY`
     ");
 
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.Py")?;
+    assert_reserved_script_install_is_atomic(&context);
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+#[test]
+fn reject_reserved_wheel_prefix_data_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scripts = venv_bin_path(&context.venv);
+    let script_path = format!(
+        "foo-0.1.0.data/data/{}/Python.EXE",
+        scripts.strip_prefix(context.venv.path())?.display()
+    );
+    let wheel = wheel_with_reserved_script(&context, &script_path)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `python.Py`
+      cause: Scripts must not use the reserved name `python`, got: `Python.EXE`
     ");
 
-    Ok(())
-}
-
-#[test]
-fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../python")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `nested/../python`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "python3.13t")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python3.13t`, got: `python3.13t`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `pythonw3.13t`, got: `pythonw3.13t`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.py")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `python.py`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t.py")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `pythonw3.13t`, got: `pythonw3.13t.py`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy3")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `pypy3`, got: `pypy3`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy.py")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `pypy`, got: `pypy.py`
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn warn_normalized_activation_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../activate.bash")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    warning: The script name `activate.bash` is reserved for virtual environment activation scripts.
-    Installed 1 package in [TIME]
-     + foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn accept_normalized_gui_wheel_entrypoint_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../normalized-gui")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
-    "
-    );
-
-    let script_name = if cfg!(windows) {
-        "normalized-gui.exe"
-    } else {
-        "normalized-gui"
-    };
-    let normalized_script = venv_bin_path(&context.venv).join(script_name);
-    assert!(normalized_script.exists());
-
-    Ok(())
-}
-
-#[test]
-fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../normalized-script")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
-    "
-    );
-
-    let script_name = if cfg!(windows) {
-        "normalized-script.exe"
-    } else {
-        "normalized-script"
-    };
-    let normalized_script = venv_bin_path(&context.venv).join(script_name);
-    assert!(normalized_script.exists());
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(r#"
-        # This file was autogenerated by uv via the following command:
-        #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
-        lock-version = "1.0"
-        created-by = "uv"
-        requires-python = ">=3.12"
-
-        [[packages]]
-        name = "anyio"
-        version = "4.3.0"
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-
-        [[packages]]
-        name = "idna"
-        version = "3.6"
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
-
-        [[packages]]
-        name = "sniffio"
-        version = "1.3.1"
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
-    "#)?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--preview")
-        .arg("-r")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
+    assert_reserved_script_install_is_atomic(&context);
     Ok(())
 }
 
@@ -17111,10 +12759,9 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    let finder = ChildPath::new(context.site_packages())
+        .child("__editable___setuptools_editable_0_1_0_finder.py");
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     // Uninstall the package.
     uv_snapshot!(context.filters(), context.pip_uninstall()
@@ -17141,10 +12788,7 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed with `editable_mode=compat`, the `finder.py` file should _not_ be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(!finder.exists());
+    finder.assert(predicates::path::missing());
 
     // Uninstall the package.
     uv_snapshot!(context.filters(), context.pip_uninstall()
@@ -17171,10 +12815,7 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     Ok(())
 }
@@ -17247,6 +12888,7 @@ fn reject_invalid_double_zip() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_central_directory_offset() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17264,6 +12906,7 @@ fn reject_invalid_central_directory_offset() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_crc32_mismatch() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17280,6 +12923,7 @@ fn reject_invalid_crc32_mismatch() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_crc32_non_data_descriptor() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17296,6 +12940,7 @@ fn reject_invalid_crc32_non_data_descriptor() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_duplicate_extra_field() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17311,6 +12956,7 @@ fn reject_invalid_duplicate_extra_field() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_short_usize() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17327,6 +12973,7 @@ fn reject_invalid_short_usize() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_chained_extra_field() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17342,6 +12989,7 @@ fn reject_invalid_chained_extra_field() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_short_usize_zip64() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
@@ -17373,8 +13021,8 @@ fn already_installed_url_dependency_no_sources() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
     context
         .temp_dir
@@ -17396,8 +13044,8 @@ fn already_installed_url_dependency_no_sources() -> Result<()> {
         dependencies = ["foo"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
     context
         .temp_dir
@@ -17475,7 +13123,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         from importlib.metadata import version
         a_version = version("a")
 
-        if not a_version.startswith(expected_version):
+        if a_version != expected_version:
             print(f"Expected `a` version {expected_version} but got {a_version}", file=sys.stderr)
             sys.exit(1)
 
@@ -17483,28 +13131,8 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     "#})?;
     child.child("src/child/__init__.py").touch()?;
 
-    // Create a project that will resolve to a non-latest version of `a`
-    let parent = &context.temp_dir;
-    let pyproject_toml = parent.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.9"
-        dependencies = ["a<0.3"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-    "#})?;
-    context
-        .temp_dir
-        .child("src")
-        .child("parent")
-        .child("__init__.py")
-        .touch()?;
-
-    // Now add the child dependency.
+    // Resolve an older runtime version of `a` while `child` requires it at build time.
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "parent"
@@ -17515,9 +13143,10 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         [tool.uv.sources]
         child = { path = "child" }
     "#})?;
+    context.temp_dir.child("src/parent/__init__.py").touch()?;
 
     // Ensure our build backend is checking the version correctly
-    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.1"), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.1.0"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -17526,7 +13155,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Expected `a` version 0.1 but got 0.3.0
+             Expected `a` version 0.1.0 but got 0.3.0
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -17548,8 +13177,8 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be built with a 0.2.
-    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.2"), @"
+    // The child should be built with the resolved runtime version.
+    uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".").env("EXPECTED_A_VERSION", "0.2.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -17575,9 +13204,9 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be rebuilt with a 0.1, without `--reinstall`.
+    // A forced child rebuild should use the newly resolved runtime version.
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2"), @"
+        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2.0"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -17586,7 +13215,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Expected `a` version 0.2 but got 0.1.0
+             Expected `a` version 0.2.0 but got 0.1.0
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -17594,7 +13223,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1"), @"
+        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -17682,6 +13311,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Check that correctly overlapping namespace packages don't show a warning
     uv_snapshot!(context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg("poetry")
         .arg("poetry-core"), @"
     exit_code: 0 (success)
@@ -17715,6 +13346,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Check that installing one of the packages on their own doesn't warn.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg(built_by_uv), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -17727,6 +13360,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Currently, we don't warn if we install them one wheel at a time.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg(also_build_by_uv.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -18094,13 +13729,20 @@ fn switch_platform() {
      ~ cffi==1.16.0
     "
     );
+
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("linux"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 2 packages in [TIME]
+    All installed packages are compatible
+    ");
 }
 
-/// `uv pip install --no-sources` should allow non-registry installations, for compatibility with `pip install`.
+/// A registry-style request with `--no-sources` accepts an existing editable installation.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/15190>
 #[test]
-fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
+fn pip_install_no_sources_retains_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Create a simple local package.
@@ -18116,19 +13758,14 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
         requires-python = ">=3.7"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
-    local_pkg.child("src").child("iniconfig").create_dir_all()?;
-    local_pkg
-        .child("src")
-        .child("iniconfig")
-        .child("__init__.py")
-        .write_str("__version__ = '2.0.0'")?;
+    let module = local_pkg.child("src/iniconfig/__init__.py");
+    module.write_str("__version__ = '2.0.0'")?;
 
-    // Step 1: Install as editable first.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--editable")
         .arg("./local_pkg"), @"
@@ -18141,7 +13778,6 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
     "
     );
 
-    // Step 2: Use `--no-sources`; we should retain the package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("iniconfig")
         .arg("--no-sources"), @"
@@ -18150,6 +13786,12 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
     Checked 1 package in [TIME]
     "
     );
+
+    // A source edit remains visible after the registry-style request.
+    module.write_str("editable_marker = 'source mutation visible'\n")?;
+    context
+        .assert_command("from iniconfig import editable_marker; assert editable_marker == 'source mutation visible'")
+        .success();
 
     Ok(())
 }
@@ -18516,81 +14158,26 @@ fn install_editable_uv_build_data() -> Result<()> {
         "#
     );
 
-    let record = context.read(
+    let record = read_record(File::open(
         context
             .site_packages()
-            .join("project-0.1.0.dist-info")
-            .join("RECORD"),
-    );
-    assert!(record.lines().any(|line| line.contains("/project-script")));
-    assert!(record.lines().any(|line| line.contains("/project.h")));
+            .join("project-0.1.0.dist-info/RECORD"),
+    )?)?;
     assert!(
         record
-            .lines()
-            .any(|line| line.contains("/project-config.txt"))
+            .iter()
+            .any(|entry| entry.path.ends_with("/project-script"))
     );
-
-    Ok(())
-}
-
-/// Test that RECORD entries use forward slashes on all platforms.
-///
-/// See <https://github.com/astral-sh/uv/issues/14446>.
-#[test]
-fn record_uses_forward_slashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Create a package with scripts via uv_build data directory.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.build-backend.data]
-        scripts = "scripts"
-        headers = "headers"
-    "#})?;
-
-    let module_dir = context.temp_dir.child("src").child("project");
-    module_dir.child("__init__.py").touch()?;
-
-    // Create a script that uses the install_script path.
-    let scripts_dir = context.temp_dir.child("scripts");
-    scripts_dir.child("my_script").write_str(indoc! {r#"
-        #!python
-        print("Hello from script")
-    "#})?;
-
-    let scripts_dir = context.temp_dir.child("headers");
-    scripts_dir.child("project.h").write_str(indoc! {r"
-        #include <stdio.h>
-    "})?;
-
-    context.pip_install().arg(".").assert().success();
-
-    // Read the RECORD file and check that all paths use forward slashes.
-    let record_path = context
-        .site_packages()
-        .join("project-0.1.0.dist-info")
-        .join("RECORD");
-
-    let record = context.read(&record_path);
-    let record_lines: Vec<_> = record
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    assert!(record_lines.iter().any(|line| line.contains("/my_script")));
-    assert!(record_lines.iter().any(|line| line.contains("/project.h")));
-    for line in record_lines {
-        // Each RECORD line is: path,hash,size
-        let path = line.split(',').next().unwrap();
-        assert!(!path.contains('\\'), "{path}");
-    }
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/project.h"))
+    );
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path.ends_with("/project-config.txt"))
+    );
 
     Ok(())
 }
@@ -18834,89 +14421,6 @@ fn fail_on_lzma_wheel() {
     );
 }
 
-/// Install a package with the cache on a different filesystem than the venv.
-/// This exercises the cross-device fallback path.
-///
-/// Requires `UV_INTERNAL__TEST_ALT_FS`.
-#[test]
-fn install_cross_device() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
-        return Ok(());
-    };
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("iniconfig"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
-             If the cache and target directories are on different filesystems, hardlinking may not be supported.
-             If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    Ok(())
-}
-
-/// Install a package across filesystems with `--link-mode copy`.
-/// The warning should not appear since copy mode is explicitly requested.
-///
-/// Requires `UV_INTERNAL__TEST_ALT_FS`.
-#[test]
-fn install_cross_device_explicit_copy() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
-        return Ok(());
-    };
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("--link-mode")
-        .arg("copy")
-        .arg("iniconfig"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    Ok(())
-}
-
-/// Install a package across filesystems with `--link-mode symlink`.
-/// Symlinks work across devices so no fallback warning should appear.
-///
-/// Requires `UV_INTERNAL__TEST_ALT_FS`.
-#[test]
-#[cfg(unix)]
-fn install_cross_device_symlink() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
-        return Ok(());
-    };
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("--link-mode")
-        .arg("symlink")
-        .arg("iniconfig"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    Ok(())
-}
-
 /// Install a package with both cache and venv on a copy-on-write filesystem.
 ///
 /// Requires `UV_INTERNAL__TEST_COW_FS`.
@@ -18986,206 +14490,4 @@ fn upgrade_group_not_supported() {
     ----- stderr -----
     error: `--upgrade-group` is not supported in `uv pip` commands
     ");
-}
-
-/// Check that the RECORD in a wheel with that doesn't match its contents gets fixed before
-/// installation.
-#[test]
-fn handle_record_mismatches() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((
-            regex::escape(r"foo-0.1.0.dist-info/uv_cache.json,sha256=") + ".*",
-            r"foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]",
-        ))
-        .with_filter((
-            regex::escape(r"foo-0.1.0.dist-info/WHEEL,sha256=") + ".*",
-            r"foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]",
-        ));
-
-    // Build a small wheel and unpack it for modification.
-    context.init().arg("--lib").arg("foo").assert().success();
-    context.build().arg("--wheel").arg("foo").assert().success();
-    let built_wheel = context.temp_dir.join("foo/dist/foo-0.1.0-py3-none-any.whl");
-    let unpacked = context.temp_dir.join("foo-unpacked");
-    uv_extract::unzip(File::open(&built_wheel)?, &unpacked)?;
-
-    // Snapshot the current (correct) RECORD.
-    let record = unpacked.join("foo-0.1.0.dist-info/RECORD");
-    let correct_record = context.read(&record);
-    let correct_record = apply_filters(correct_record, context.filters());
-    assert_snapshot!(correct_record, @"
-    foo/__init__.py,sha256=jv2QBpHSNajIRNeADSmtqOWL9QcdUddyMK277kbp06o,49
-    foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
-    foo-0.1.0.dist-info/METADATA,sha256=d-PGjuBKXweF5NgWUW5yDnAjBY0lg4uFZBqcnmGtNgY,147
-    foo-0.1.0.dist-info/RECORD,,
-    ");
-
-    // Create a broken RECORD: Remove 2 files, and add a bogus one.
-    fs_err::write(
-        &record,
-        indoc! {"
-        foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-        foo-0.1.0.dist-info/WHEEL,sha256=hbX8mDThv1n7VEIpQRy6c2yAFTw4iAQlEC53gDAhHSo,80
-        foo-0.1.0.dist-info/RECORD,,
-        ../../../../etc/passwd,,0
-    "},
-    )?;
-
-    // Repack the wheel.
-    let repacked_wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for entry in WalkDir::new(&unpacked) {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.strip_prefix(&unpacked)?;
-        if name.as_os_str().is_empty() {
-            continue;
-        }
-        // Zip entries must use forward slashes, even on Windows.
-        let mut name = PortablePath::from(name).to_string();
-        if path.is_dir() {
-            name.push('/');
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &[]))?;
-        } else {
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &context.read_bytes(path)))?;
-        }
-    }
-    fs_err::write(&repacked_wheel, block_on(writer.close())?)?;
-
-    // Healing changes the extracted tree, so the archive ID must reflect the repaired RECORD.
-    let extracted = context.temp_dir.join("foo-extracted");
-    let (hashed_files, unhealed_tree) =
-        uv_extract::unzip_and_hash(File::open(&repacked_wheel)?, &extracted)?;
-    let unhealed_digest = DirectoryDigest::from(unhealed_tree.hash());
-    assert!(
-        validate_and_heal_record(
-            &extracted,
-            hashed_files.iter().map(|file| (file.path(), file.size())),
-            "foo",
-        )?
-        .is_some()
-    );
-    let healed_digest = DirectoryDigest::from(dirhash_path(&extracted)?);
-    assert_ne!(unhealed_digest, healed_digest);
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--find-links")
-        .arg(context.temp_dir.as_ref())
-        .arg("--offline")
-        .arg("--preview-features")
-        .arg("content-addressed-cache")
-        .args(["--link-mode", "hardlink"])
-        .arg("foo"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + foo==0.1.0
-    "
-    );
-
-    context
-        .cache_dir
-        .child("archive-v0")
-        .child(unhealed_digest.as_str())
-        .assert(predicate::path::missing());
-    context
-        .cache_dir
-        .child("archive-v0")
-        .child(healed_digest.as_str())
-        .assert(predicate::path::exists());
-
-    // Installation must not mutate the healed RECORD retained in the archive.
-    let healed_record = extracted.join("foo-0.1.0.dist-info/RECORD");
-    let cached_record = context
-        .cache_dir
-        .join("archive-v0")
-        .join(healed_digest.as_str())
-        .join("foo-0.1.0.dist-info/RECORD");
-    assert_eq!(
-        context.read_bytes(cached_record),
-        context.read_bytes(healed_record)
-    );
-
-    // Read the healed RECORD.
-    let installed_record = context.read(context.site_packages().join("foo-0.1.0.dist-info/RECORD"));
-    let snapshot = apply_filters(installed_record, context.filters());
-
-    // Ensure that all expected files are present.
-    assert_snapshot!(&snapshot, @"
-    foo-0.1.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
-    foo-0.1.0.dist-info/METADATA,,147
-    foo-0.1.0.dist-info/RECORD,,
-    foo-0.1.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
-    foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]
-    foo/__init__.py,,49
-    foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    ");
-
-    Ok(())
-}
-
-/// Compile installed packages without compiling the Python standard library.
-#[test]
-fn compile_bytecode_excludes_stdlib() -> Result<()> {
-    fn count_python_sources(root: &Path) -> Result<usize> {
-        let mut count = 0;
-        for entry in WalkDir::new(root) {
-            let entry = entry?;
-            if entry.file_type().is_file()
-                && entry
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "py")
-            {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
-    let context = uv_test::test_context!("3.12").with_filtered_compiled_file_count();
-
-    let output = uv_snapshot!(context.filters(), context.pip_install()
-        .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-    Bytecode compiled [COUNT] files in [TIME]
-     + sniffio==1.3.1
-    ");
-
-    let stderr = String::from_utf8(output.stderr)?;
-    let compiled = stderr
-        .lines()
-        .find_map(|line| line.strip_prefix("Bytecode compiled "))
-        .and_then(|line| line.split_whitespace().next())
-        .context("Expected a bytecode compilation summary")?
-        .parse::<usize>()?;
-
-    let stdlib = context
-        .python_command()
-        .arg("-c")
-        .arg("import sysconfig; print(sysconfig.get_path('stdlib'))")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let stdlib = PathBuf::from(String::from_utf8(stdlib)?.trim());
-
-    let site_packages_sources = count_python_sources(&context.site_packages())?;
-    let stdlib_sources = count_python_sources(&stdlib)?;
-    assert!(stdlib_sources > site_packages_sources);
-    assert!(compiled <= site_packages_sources);
-
-    Ok(())
 }

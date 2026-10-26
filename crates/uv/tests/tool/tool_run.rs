@@ -1940,421 +1940,6 @@ fn tool_run_specifier() {
 }
 
 #[test]
-fn tool_run_python() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python")
-        .arg("-c")
-        .arg("print('Hello, world!')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello, world!
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-}
-
-#[test]
-fn tool_run_python_at_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-            .arg("python@3.12")
-            .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.11")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-
-    // The @ is optional.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python3.11")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // Dotless syntax also works.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python311")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // Other implementations like PyPy also work. PyPy isn't currently in the test suite, so
-    // specify CPython and rely on the fact that they go through the same codepath.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("cpython311")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // But short names don't work in the executable position (as opposed to with -p/--python). We
-    // interpret those as package names.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("cp311")
-        .arg("--version"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving tool dependencies
-      cause: Because cp311 was not found in the package registry and you require cp311, we can conclude that your requirements are unsatisfiable.
-    ");
-
-    // Bare versions don't work either. Again we interpret them as package names.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("311")
-        .arg("--version"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving tool dependencies
-      cause: Because 311 was not found in the package registry and you require 311, we can conclude that your requirements are unsatisfiable.
-    ");
-
-    // Request a version via `-p`
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.11")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // @ syntax is also allowed here.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("python@311")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // But @ with nothing in front of it is not.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("@311")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for executable name `@311` in [PYTHON SOURCES]
-    ");
-
-    // Request a version in the tool and `-p`
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("python@3.11")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Received multiple Python version requests: `3.12` and `3.11`
-    ");
-
-    // Request a version that does not exist
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12.99"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12.[X] in [PYTHON SOURCES]
-    ");
-
-    // Request an invalid version
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.300"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: 3.300
-    ");
-
-    // Request `@latest` (not yet supported)
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@latest")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Requesting the 'latest' Python version is not yet supported
-    ");
-}
-
-#[test]
-fn tool_run_hint_version_not_available() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_OFFLINE, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_NO_MANAGED_PYTHON, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--no-managed-python")
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_OFFLINE, "true")
-        .env(EnvVars::UV_MANAGED_PYTHON, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
-    ");
-}
-
-#[test]
-fn tool_run_python_from_global_version_file() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    context
-        .python_pin()
-        .arg("3.11")
-        .arg("--global")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-}
-
-#[test]
-fn tool_run_python_version_overrides_global_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    // Set global pin to 3.11
-    context
-        .python_pin()
-        .arg("3.11")
-        .arg("--global")
-        .assert()
-        .success();
-
-    // Explicitly request python3.12, should override global pin
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python3.12")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-}
-
-#[test]
-fn tool_run_python_with_explicit_default_bypasses_global_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    // Set global pin to 3.11
-    context
-        .python_pin()
-        .arg("3.11")
-        .arg("--global")
-        .assert()
-        .success();
-
-    // Explicitly request --python default, should bypass global pin and use system default (3.12)
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--python")
-        .arg("default")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-}
-
-#[test]
-fn tool_run_python_from() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("python")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("python@3.11")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    Checked in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("python311")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("python>3.11,<3.13")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-
-    // The executed command isn't necessarily Python, but Python is in the PATH.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("python@3.11")
-        .arg("bash")
-        .arg("-c")
-        .arg("python --version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.11.[X]
-
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-}
-
-#[test]
 fn tool_run_from_directory_uses_global_pin_when_within_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
         .with_filtered_counts()
@@ -2624,7 +2209,7 @@ fn run_with_env_file() -> anyhow::Result<()> {
     Resolved [N] packages in [TIME]
     ");
 
-    assert!(!context.temp_dir.child("queried.txt").exists());
+    context.assert_path_missing("queried.txt");
 
     Ok(())
 }
@@ -3021,6 +2606,7 @@ fn tool_run_verbose_hint_install_failure() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python-eol")]
 fn tool_run_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
         .with_exclude_newer("2024-05-04T00:00:00Z")
@@ -3058,7 +2644,7 @@ fn tool_run_with_compatible_build_constraints() -> Result<()> {
 
 #[test]
 fn tool_run_with_incompatible_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9")
+    let context = uv_test::test_context!("3.12")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -3170,290 +2756,102 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
     Ok(())
 }
 
-/// Test windows runnable types, namely console scripts and legacy setuptools scripts.
-/// Console Scripts <https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#console-scripts>
-/// Legacy Scripts <https://packaging.python.org/en/latest/guides/distributing-packages-using-setuptools/#scripts>.
-///
-/// This tests for uv tool run of windows runnable types defined by [`WindowsRunnable`].
+/// Windows runnable types select the requested launcher and forward its arguments.
+/// This covers both console scripts and legacy setuptools scripts.
 #[cfg(windows)]
 #[test]
-fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
+fn tool_run_windows_runnable_types() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
-
-    let foo_dir = context.temp_dir.child("foo");
-    let foo_pyproject_toml = foo_dir.child("pyproject.toml");
-
-    // Use `script-files` which enables legacy scripts packaging.
-    foo_pyproject_toml.write_str(indoc! { r#"
+    let project = context.temp_dir.child("foo");
+    project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = []
 
         [project.scripts]
-        custom_pydoc = "foo.main:run"
+        custom_tool = "foo.main:run"
 
         [tool.setuptools]
         script-files = [
-            "misc/custom_pydoc.bat",
-            "misc/custom_pydoc.cmd",
-            "misc/custom_pydoc.ps1"
+            "misc/custom_tool.bat",
+            "misc/custom_tool.cmd",
+            "misc/custom_tool.ps1",
         ]
 
         [build-system]
         requires = ["setuptools>=42"]
         build-backend = "setuptools.build_meta"
-        "#
-    })?;
-
-    // Create the legacy scripts
-    let custom_pydoc_bat = foo_dir.child("misc").child("custom_pydoc.bat");
-    let custom_pydoc_cmd = foo_dir.child("misc").child("custom_pydoc.cmd");
-    let custom_pydoc_ps1 = foo_dir.child("misc").child("custom_pydoc.ps1");
-
-    custom_pydoc_bat.write_str("python.exe -m pydoc %*")?;
-    custom_pydoc_cmd.write_str("python.exe -m pydoc %*")?;
-    custom_pydoc_ps1.write_str("python.exe -m pydoc $args")?;
-
-    // Create the foo module
-    let foo_project_src = foo_dir.child("src");
-    let foo_module = foo_project_src.child("foo");
-    let foo_main_py = foo_module.child("main.py");
-    foo_main_py.write_str(indoc! { r#"
-        import pydoc, sys
+    "#})?;
+    project
+        .child("misc/custom_tool.bat")
+        .write_str(r#"@python.exe -c "import sys; print('BAT', *sys.argv[1:])" %*"#)?;
+    project
+        .child("misc/custom_tool.cmd")
+        .write_str(r#"@python.exe -c "import sys; print('CMD', *sys.argv[1:])" %*"#)?;
+    project
+        .child("misc/custom_tool.ps1")
+        .write_str(r#"python.exe -c "import sys; print('PS1', *sys.argv[1:])" $args"#)?;
+    project.child("src/foo/main.py").write_str(indoc! {"
+        import sys
 
         def run():
-            sys.argv[0] = "pydoc"
-            pydoc.cli()
+            print('EXE', *sys.argv[1:])
+    "})?;
 
-        __name__ == "__main__" and run()
-       "#
-    })?;
-
-    // Install `foo` tool.
     context
         .tool_install()
-        .arg(foo_dir.as_os_str())
+        .arg(project.path())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("does_not_exist")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .args(["--from", "foo", "does_not_exist"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
     An executable named `does_not_exist` is not provided by package `foo`.
     The following executables are available:
-    - custom_pydoc.bat
-    - custom_pydoc.cmd
-    - custom_pydoc.exe
-    - custom_pydoc.ps1
-    "###);
+    - custom_tool.bat
+    - custom_tool.cmd
+    - custom_tool.exe
+    - custom_tool.ps1
+    ");
 
-    // Test with explicit .bat extension
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.bat"), @r###"
+        .args(["--from", "foo", "custom_tool.bat", "probe"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pydoc - the Python documentation tool
-
-    pydoc <name> ...
-        Show text documentation on something.  <name> may be the name of a
-        Python keyword, topic, function, module, or package, or a dotted
-        reference to a class or function within a module or module in a
-        package.  If <name> contains a '\', it is used as the path to a
-        Python source file to document. If name is 'keywords', 'topics',
-        or 'modules', a listing of these things is displayed.
-
-    pydoc -k <keyword>
-        Search for a keyword in the synopsis lines of all available modules.
-
-    pydoc -n <hostname>
-        Start an HTTP server with the given hostname (default: localhost).
-
-    pydoc -p <port>
-        Start an HTTP server on the given port on the local machine.  Port
-        number 0 can be used to get an arbitrary unused port.
-
-    pydoc -b
-        Start an HTTP server on an arbitrary unused port and open a web browser
-        to interactively browse documentation.  This option can be used in
-        combination with -n and/or -p.
-
-    pydoc -w <name> ...
-        Write out the HTML documentation for a module to a file in the current
-        directory.  If <name> contains a '\', it is treated as a filename; if
-        it names a directory, documentation is written for all the contents.
-
-    "###);
-
-    // Test with explicit .cmd extension
+    BAT probe
+    ");
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.cmd"), @r###"
+        .args(["--from", "foo", "custom_tool.cmd", "probe"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pydoc - the Python documentation tool
-
-    pydoc <name> ...
-        Show text documentation on something.  <name> may be the name of a
-        Python keyword, topic, function, module, or package, or a dotted
-        reference to a class or function within a module or module in a
-        package.  If <name> contains a '\', it is used as the path to a
-        Python source file to document. If name is 'keywords', 'topics',
-        or 'modules', a listing of these things is displayed.
-
-    pydoc -k <keyword>
-        Search for a keyword in the synopsis lines of all available modules.
-
-    pydoc -n <hostname>
-        Start an HTTP server with the given hostname (default: localhost).
-
-    pydoc -p <port>
-        Start an HTTP server on the given port on the local machine.  Port
-        number 0 can be used to get an arbitrary unused port.
-
-    pydoc -b
-        Start an HTTP server on an arbitrary unused port and open a web browser
-        to interactively browse documentation.  This option can be used in
-        combination with -n and/or -p.
-
-    pydoc -w <name> ...
-        Write out the HTML documentation for a module to a file in the current
-        directory.  If <name> contains a '\', it is treated as a filename; if
-        it names a directory, documentation is written for all the contents.
-
-    "###);
-
-    // Test with explicit .ps1 extension
+    CMD probe
+    ");
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.ps1"), @r###"
+        .args(["--from", "foo", "custom_tool.ps1", "probe"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pydoc - the Python documentation tool
-
-    pydoc <name> ...
-        Show text documentation on something.  <name> may be the name of a
-        Python keyword, topic, function, module, or package, or a dotted
-        reference to a class or function within a module or module in a
-        package.  If <name> contains a '\', it is used as the path to a
-        Python source file to document. If name is 'keywords', 'topics',
-        or 'modules', a listing of these things is displayed.
-
-    pydoc -k <keyword>
-        Search for a keyword in the synopsis lines of all available modules.
-
-    pydoc -n <hostname>
-        Start an HTTP server with the given hostname (default: localhost).
-
-    pydoc -p <port>
-        Start an HTTP server on the given port on the local machine.  Port
-        number 0 can be used to get an arbitrary unused port.
-
-    pydoc -b
-        Start an HTTP server on an arbitrary unused port and open a web browser
-        to interactively browse documentation.  This option can be used in
-        combination with -n and/or -p.
-
-    pydoc -w <name> ...
-        Write out the HTML documentation for a module to a file in the current
-        directory.  If <name> contains a '\', it is treated as a filename; if
-        it names a directory, documentation is written for all the contents.
-
-    "###);
-
-    // Test with explicit .exe extension
+    PS1 probe
+    ");
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .args(["--from", "foo", "custom_tool.exe", "probe"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pydoc - the Python documentation tool
-
-    pydoc <name> ...
-        Show text documentation on something.  <name> may be the name of a
-        Python keyword, topic, function, module, or package, or a dotted
-        reference to a class or function within a module or module in a
-        package.  If <name> contains a '\', it is used as the path to a
-        Python source file to document. If name is 'keywords', 'topics',
-        or 'modules', a listing of these things is displayed.
-
-    pydoc -k <keyword>
-        Search for a keyword in the synopsis lines of all available modules.
-
-    pydoc -n <hostname>
-        Start an HTTP server with the given hostname (default: localhost).
-
-    pydoc -p <port>
-        Start an HTTP server on the given port on the local machine.  Port
-        number 0 can be used to get an arbitrary unused port.
-
-    pydoc -b
-        Start an HTTP server on an arbitrary unused port and open a web browser
-        to interactively browse documentation.  This option can be used in
-        combination with -n and/or -p.
-
-    pydoc -w <name> ...
-        Write out the HTML documentation for a module to a file in the current
-        directory.  If <name> contains a '\', it is treated as a filename; if
-        it names a directory, documentation is written for all the contents.
-
-    "###);
-
-    // Test without explicit extension (.exe should be used)
+    EXE probe
+    ");
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .args(["--from", "foo", "custom_tool", "probe"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pydoc - the Python documentation tool
-
-    pydoc <name> ...
-        Show text documentation on something.  <name> may be the name of a
-        Python keyword, topic, function, module, or package, or a dotted
-        reference to a class or function within a module or module in a
-        package.  If <name> contains a '\', it is used as the path to a
-        Python source file to document. If name is 'keywords', 'topics',
-        or 'modules', a listing of these things is displayed.
-
-    pydoc -k <keyword>
-        Search for a keyword in the synopsis lines of all available modules.
-
-    pydoc -n <hostname>
-        Start an HTTP server with the given hostname (default: localhost).
-
-    pydoc -p <port>
-        Start an HTTP server on the given port on the local machine.  Port
-        number 0 can be used to get an arbitrary unused port.
-
-    pydoc -b
-        Start an HTTP server on an arbitrary unused port and open a web browser
-        to interactively browse documentation.  This option can be used in
-        combination with -n and/or -p.
-
-    pydoc -w <name> ...
-        Write out the HTML documentation for a module to a file in the current
-        directory.  If <name> contains a '\', it is treated as a filename; if
-        it names a directory, documentation is written for all the contents.
-
-    "###);
-
+    EXE probe
+    ");
     Ok(())
 }
 

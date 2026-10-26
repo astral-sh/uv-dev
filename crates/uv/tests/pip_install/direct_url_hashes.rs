@@ -1,6 +1,7 @@
-//! Tests for direct URL hashes discovered from package metadata.
+//! Tests for hash verification of direct URL requirements.
 
 use anyhow::Result;
+use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use predicates::prelude::predicate;
@@ -8,9 +9,58 @@ use sha2::{Digest, Sha256};
 use wiremock::MockServer;
 
 use uv_redacted::SafeUrl;
+use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+use uv_test::find_links::FindLinksServer;
 use uv_test::packse::{WheelBuilder, mount_mismatched_distribution};
 use uv_test::{TestContext as UvTestContext, uv_snapshot};
+
+/// Hash the entire HTTP response even when extraction stops before trailing bytes.
+#[test]
+fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let mut bytes = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let archive_hash = hex::encode(Sha256::digest(&bytes));
+    // Exceed the pipe capacity so some bytes must be hashed after extraction finishes.
+    bytes.resize(bytes.len() + 1024 * 1024, b'x');
+    let response_hash = hex::encode(Sha256::digest(&bytes));
+    let wheelhouse = context.temp_dir.child("wheelhouse");
+    wheelhouse.child(filename).write_binary(&bytes)?;
+    let server = FindLinksServer::new(wheelhouse.path());
+    let requirements = context.temp_dir.child("requirements.txt");
+    let write_requirement = |hash: &str| {
+        requirements.write_str(&format!(
+            "ok @ {}/{filename} --hash=sha256:{hash}\n",
+            server.url()
+        ))
+    };
+    let install = || {
+        let mut command = context.pip_install();
+        command
+            .arg("--no-index")
+            .arg("--require-hashes")
+            .arg("-r")
+            .arg(requirements.path())
+            // Let extraction finish without consuming the trailing bytes.
+            .env(EnvVars::UV_INSECURE_NO_ZIP_VALIDATION, "1");
+        command
+    };
+
+    write_requirement(&archive_hash)?;
+    install()
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Hash mismatch"))
+        .stderr(predicate::str::contains(format!("sha256:{archive_hash}")))
+        .stderr(predicate::str::contains(format!("sha256:{response_hash}")));
+    context.assert_not_installed("ok");
+
+    write_requirement(&response_hash)?;
+    install().assert().success();
+    context.assert_installed("ok", "1.0.0");
+    Ok(())
+}
 
 /// A test context for exercising hashes discovered from forged wheel metadata.
 ///

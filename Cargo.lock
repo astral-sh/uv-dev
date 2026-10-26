@@ -5765,6 +5765,7 @@ dependencies = [
  "uv-workspace-commands",
  "walkdir",
  "which",
+ "windows-registry",
  "wiremock",
 ]
 
@@ -7961,6 +7962,7 @@ dependencies = [
  "assert_fs",
  "astral_async_zip",
  "base64 0.22.1",
+ "csv",
  "flate2",
  "fs-err",
  "futures",
@@ -7997,6 +7999,7 @@ dependencies = [
  "uv-python-types",
  "uv-redacted",
  "uv-static",
+ "uv-toml",
  "uv-version",
  "walkdir",
  "wiremock",

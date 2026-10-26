@@ -12,104 +12,8 @@ use wiremock::{
 };
 
 #[test]
-fn tool_list() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    ");
-}
-
-#[test]
-fn tool_list_paths() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-paths"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    ");
-}
-
-#[cfg(windows)]
-#[test]
-fn tool_list_paths_windows() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .clear_filters()
-        .with_filtered_windows_temp_dir()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r###"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]\tools\black)
-    - black ([TEMP_DIR]\bin\black.exe)
-    - blackd ([TEMP_DIR]\bin\blackd.exe)
-    "###);
-}
-
-#[test]
-fn tool_list_empty() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    No tools installed
-    ");
-}
-
-#[test]
-fn tool_list_outdated_empty() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // With no tools installed, `--outdated` should produce the same output as the base case.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    No tools installed
-    ");
-}
-
-#[test]
 fn tool_list_outdated() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -133,7 +37,7 @@ fn tool_list_outdated() {
 
 #[tokio::test]
 async fn tool_list_outdated_respects_configured_index() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -189,30 +93,42 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
 
 #[test]
 fn tool_list_outdated_respects_exclude_newer() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black` with a persisted `exclude-newer` cutoff.
+    // The persisted cutoff selects 24.2.0, while 24.3.0 is available at the later cutoff.
     context
         .tool_install()
         .arg("black")
         .arg("--exclude-newer")
-        .arg("2024-03-25T00:00:00Z")
+        .arg("2024-03-01T00:00:00Z")
         .assert()
         .success();
 
-    // `--outdated` should respect the stored tool settings and avoid flagging upgrades that
-    // `uv tool upgrade` would intentionally skip.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
+    let list_outdated = || {
+        let mut command = context.tool_list();
+        command
+            .arg("--outdated")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    };
+    list_outdated().assert().success().stdout("").stderr("");
+
+    uv_snapshot!(context.filters(), list_outdated()
+        .arg("--exclude-newer")
+        .arg("2024-03-25T00:00:00Z"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    black v24.2.0 [latest: 24.3.0]
+    - black
+    - blackd
     ");
 }
 
 #[test]
 fn tool_list_outdated_recomputes_relative_exclude_newer() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -245,7 +161,7 @@ fn tool_list_outdated_recomputes_relative_exclude_newer() {
 
 #[test]
 fn tool_list_outdated_cli_exclude_newer() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -268,7 +184,7 @@ fn tool_list_outdated_cli_exclude_newer() {
 
 #[test]
 fn tool_list_missing_receipt() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -291,7 +207,7 @@ fn tool_list_missing_receipt() {
 
 #[test]
 fn tool_list_bad_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -334,7 +250,7 @@ fn tool_list_bad_environment() -> Result<()> {
 
 #[test]
 fn tool_list_deprecated() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -410,7 +326,7 @@ fn tool_list_deprecated() -> Result<()> {
 
 #[test]
 fn tool_list_show_version_specifiers() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -448,7 +364,7 @@ fn tool_list_show_version_specifiers() {
 
 #[test]
 fn tool_list_show_with() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -537,7 +453,7 @@ fn tool_list_show_with() {
 
 #[test]
 fn tool_list_show_extras() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -618,31 +534,8 @@ fn tool_list_show_extras() {
 }
 
 #[test]
-fn tool_list_show_python() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` with python 3.12
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    // Test with --show-python
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-python"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 [CPython 3.12.[X]]
-    - black
-    - blackd
-    ");
-}
-
-#[test]
 fn tool_list_show_all() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 

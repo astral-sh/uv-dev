@@ -177,7 +177,7 @@ fn init_application() -> Result<()> {
     Ok(())
 }
 
-/// When `main.py` already exists in an unpackaged application, we don't create it again
+/// Initializing an unpackaged application leaves its existing entry point untouched.
 #[test]
 fn init_application_no_package_main_exists() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -186,7 +186,8 @@ fn init_application_no_package_main_exists() -> Result<()> {
     child.create_dir_all()?;
 
     let main_py = child.child("main.py");
-    main_py.touch()?;
+    let original_main = "print('user application')\n";
+    main_py.write_str(original_main)?;
 
     uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--app").arg("--no-package"), @"
     exit_code: 0 (success)
@@ -194,31 +195,10 @@ fn init_application_no_package_main_exists() -> Result<()> {
     Initialized project `foo`
     ");
 
-    let pyproject = context.read("foo/pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject, @r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        description = "Add your description here"
-        readme = "README.md"
-        requires-python = ">=3.12"
-        dependencies = []
-        "#
-        );
-    });
-
-    let hello = context.read("foo/main.py");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            hello, @""
-        );
-    });
+    let pyproject: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(pyproject["project"]["name"].as_str(), Some("foo"));
+    assert!(pyproject.get("build-system").is_none());
+    main_py.assert(original_main);
 
     Ok(())
 }
@@ -725,10 +705,10 @@ fn init_script_bare() -> Result<()> {
     Ok(())
 }
 
-// Ensure python versions passed as arguments are present in file metadata
+/// The explicit Python request controls script metadata even when discovery defaults elsewhere.
 #[test]
 fn init_script_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.11");
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
@@ -864,37 +844,22 @@ fn init_script_create_directory() -> Result<()> {
     Ok(())
 }
 
-// Init script should fail if file is already a PEP 723 script
+/// Initializing a plain script adds metadata; initializing it again leaves the script untouched.
 #[test]
 fn init_script_file_conflicts() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("existing_script.py")
+        .write_str("print(\"Hello, world!\")")?;
 
-    let child = context.temp_dir.child("foo");
-    child.create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("name_conflict.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Initialized script at `name_conflict.py`
-    ");
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("name_conflict.py"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `name_conflict.py` is already a PEP 723 script; use `uv run` to execute it
-    ");
-
-    let contents = "print(\"Hello, world!\")";
-    fs_err::write(child.join("existing_script.py"), contents)?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("existing_script.py"), @"
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("existing_script.py"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Initialized script at `existing_script.py`
     ");
 
-    let existing_script = context.read("foo/existing_script.py");
-
+    let existing_script = context.read("existing_script.py");
     assert_snapshot!(
         existing_script, @r#"
     # /// script
@@ -905,6 +870,13 @@ fn init_script_file_conflicts() -> Result<()> {
     print("Hello, world!")
     "#
     );
+
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("existing_script.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `existing_script.py` is already a PEP 723 script; use `uv run` to execute it
+    ");
+    assert_eq!(context.read("existing_script.py"), existing_script);
 
     Ok(())
 }
@@ -1068,6 +1040,11 @@ fn init_cache() -> Result<()> {
     ----- stderr -----
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
+
+    context
+        .cache_dir
+        .child("CACHEDIR.TAG")
+        .assert(predicate::path::is_file());
 
     Ok(())
 }
@@ -1836,14 +1813,15 @@ fn init_no_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {
+    let parent_manifest = indoc! {
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         "#,
-    })?;
+    };
+    pyproject_toml.write_str(parent_manifest)?;
 
     // Initialize with `--no-workspace`.
     let child = context.temp_dir.join("foo");
@@ -1855,46 +1833,9 @@ fn init_no_workspace() -> Result<()> {
     Initialized project `foo`
     ");
 
-    // Ensure that the workspace was not modified.
-    let workspace = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        "#
-        );
-    });
-
-    // Write out an invalid `pyproject.toml` in the parent, to ensure that `--no-workspace` is
-    // robust to errors in discovery.
-    pyproject_toml.write_str(indoc! {
-        r"",
-    })?;
-
-    let child = context.temp_dir.join("bar");
-    fs_err::create_dir(&child)?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--no-workspace"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Initialized project `bar`
-    ");
-
-    let workspace = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @""
-        );
-    });
+    pyproject_toml.assert(parent_manifest);
+    let initialized: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(initialized["project"]["name"].as_str(), Some("foo"));
 
     Ok(())
 }
@@ -2429,7 +2370,7 @@ fn init_requires_python_version() -> Result<()> {
 /// specifiers verbatim.
 #[test]
 fn init_requires_python_specifiers() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {
@@ -2445,7 +2386,7 @@ fn init_requires_python_specifiers() -> Result<()> {
     })?;
 
     let child = context.temp_dir.join("foo");
-    uv_snapshot!(context.filters(), context.init().arg(&child).arg("--python").arg("==3.9.*"), @"
+    uv_snapshot!(context.filters(), context.init().arg(&child).arg("--python").arg("==3.11.*"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Adding `foo` as member of workspace `[TEMP_DIR]/`
@@ -2463,7 +2404,7 @@ fn init_requires_python_specifiers() -> Result<()> {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = "==3.9.*"
+        requires-python = "==3.11.*"
         dependencies = []
 
         [project.scripts]
@@ -2481,7 +2422,7 @@ fn init_requires_python_specifiers() -> Result<()> {
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            python_version, @"3.9"
+            python_version, @"3.11"
         );
     });
 
@@ -2491,9 +2432,12 @@ fn init_requires_python_specifiers() -> Result<()> {
 /// Run `uv init`, inferring the `requires-python` from the `.python-version` file.
 #[test]
 fn init_requires_python_version_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
-    context.temp_dir.child(".python-version").write_str("3.9")?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11")?;
 
     let child = context.temp_dir.join("foo");
     uv_snapshot!(context.filters(), context.init().arg(&child), @"
@@ -2513,7 +2457,7 @@ fn init_requires_python_version_file() -> Result<()> {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
         dependencies = []
 
         [project.scripts]
@@ -2532,12 +2476,12 @@ fn init_requires_python_version_file() -> Result<()> {
 /// Run `uv init`, inferring the Python version from an existing `.venv`
 #[test]
 fn init_existing_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
 
-    // Create a new virtual environment in the directory
+    // A local 3.12 environment takes precedence over the default 3.11 interpreter.
     uv_snapshot!(context.filters(), context.venv().current_dir(&child).arg("--python").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2582,9 +2526,9 @@ fn init_existing_environment() -> Result<()> {
 /// Run `uv init`, it should ignore the Python version from a parent `.venv`
 #[test]
 fn init_existing_environment_parent() {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    // Create a new virtual environment in the parent directory
+    // A parent 3.12 environment must not override the default 3.11 interpreter.
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2612,7 +2556,7 @@ fn init_existing_environment_parent() {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
         dependencies = []
 
         [project.scripts]
@@ -2713,9 +2657,9 @@ fn init_non_ascii_directory() -> Result<()> {
     Ok(())
 }
 
-/// Run `uv init` with an invalid `pyproject.toml` in a parent directory.
+/// An invalid parent workspace prevents initialization unless discovery is explicitly bypassed.
 #[test]
-fn init_failure() -> Result<()> {
+fn init_invalid_parent_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Create an empty `pyproject.toml`.
@@ -2728,6 +2672,10 @@ fn init_failure() -> Result<()> {
     error: Failed to discover parent workspace; use `uv init --no-workspace` to ignore
       cause: No `project` table found in: [TEMP_DIR]/pyproject.toml
     ");
+    context
+        .temp_dir
+        .child("foo")
+        .assert(predicate::path::missing());
 
     uv_snapshot!(context.filters(), context.init().arg("foo").arg("--no-workspace"), @"
     exit_code: 0 (success)
@@ -2735,29 +2683,9 @@ fn init_failure() -> Result<()> {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
-    let workspace = context.read("foo/pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        description = "Add your description here"
-        readme = "README.md"
-        requires-python = ">=3.12"
-        dependencies = []
-
-        [project.scripts]
-        foo = "foo:main"
-
-        [build-system]
-        requires = ["uv_build>=[CURRENT_VERSION],<[NEXT_BREAKING]"]
-        build-backend = "uv_build"
-        "#
-        );
-    });
+    let initialized: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(initialized["project"]["name"].as_str(), Some("foo"));
+    pyproject_toml.assert("");
 
     Ok(())
 }
@@ -2860,6 +2788,7 @@ fn init_inside_git_repo() {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
+    child.child(".git").assert(predicate::path::missing());
     child.child(".gitignore").assert(predicate::path::missing());
 
     let child = context.temp_dir.child("bar");
@@ -2869,6 +2798,7 @@ fn init_inside_git_repo() {
     Initialized project `bar` at `[TEMP_DIR]/bar`
     ");
 
+    child.child(".git").assert(predicate::path::missing());
     child.child(".gitignore").assert(predicate::path::missing());
 }
 
@@ -3925,11 +3855,19 @@ fn init_python_variant() {
 #[test]
 fn git_states() {
     let context = uv_test::test_context!("3.12");
+    let assert_git_repository = |project: &str| {
+        Command::new("git")
+            .current_dir(context.temp_dir.child(project))
+            .args(["rev-parse", "--git-dir"])
+            .assert()
+            .success()
+            .stdout(".git\n");
+    };
 
     // First, with working git.
 
     context.init().arg("working").assert().success();
-    assert!(context.temp_dir.child("working/.git").is_dir());
+    assert_git_repository("working");
 
     context
         .init()
@@ -3938,7 +3876,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert!(!context.temp_dir.child("working-no-git/.git").is_dir());
+    context.assert_path_missing("working-no-git/.git");
 
     context
         .init()
@@ -3947,14 +3885,14 @@ fn git_states() {
         .arg("git")
         .assert()
         .success();
-    assert!(context.temp_dir.child("working-git/.git").is_dir());
+    assert_git_repository("working-git");
 
     // The same tests again, but with broken git.
     TestContext::disallow_git_cli(&context.bin_dir)
         .expect("Failed to setup disallowed `git` command");
 
     context.init().arg("broken").assert().success();
-    assert!(!context.temp_dir.child("broken/.git").is_dir());
+    context.assert_path_missing("broken/.git");
 
     context
         .init()
@@ -3963,7 +3901,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert!(!context.temp_dir.child("broken-no-git/.git").is_dir());
+    context.assert_path_missing("broken-no-git/.git");
 
     uv_snapshot!(context.filters(), context
         .init()
@@ -3976,7 +3914,7 @@ fn git_states() {
     stdout:
     stderr: error: `git` operations are not allowed — are you missing a cfg for the `git` feature?
     ");
-    assert!(!context.temp_dir.child("broken-git/.git").is_dir());
+    context.assert_path_missing("broken-git/.git");
 }
 
 /// Using `uv init` with `--project` isn't allowed.

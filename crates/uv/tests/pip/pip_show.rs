@@ -1,18 +1,24 @@
+#[cfg(feature = "test-python")]
 use anyhow::Result;
+#[cfg(feature = "test-python")]
 use assert_cmd::prelude::*;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
+#[cfg(feature = "test-python")]
+use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
+#[cfg(feature = "test-python")]
 use indoc::indoc;
 
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_static::EnvVars;
 
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::copy_dir_ignore;
+#[cfg(feature = "test-python")]
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
 #[test]
 fn show_empty() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.pip_show(), @"
     exit_code: 1 (failure)
@@ -23,7 +29,7 @@ fn show_empty() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_requires_multiple() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -64,78 +70,76 @@ fn show_requires_multiple() -> Result<()> {
     Ok(())
 }
 
-/// Asserts that the Python version marker in the metadata is correctly evaluated.
-/// `click` v8.1.7 requires `importlib-metadata`, but only when `python_version < "3.8"`.
+/// Show active requirements while omitting requirements for another Python version.
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 fn show_python_version_marker() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("click==8.1.7")?;
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "show-python-marker"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.click.versions."8.1.7"]
+        requires = [
+            "active-dependency ; python_version >= '3.8'",
+            "importlib-metadata ; python_version < '3.8'",
+        ]
+        [packages.active-dependency.versions."1.0.0"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
 
     uv_snapshot!(context
         .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+        .args(["click==8.1.7", "--strict", "--default-index"])
+        .arg(index.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + active-dependency==1.0.0
      + click==8.1.7
-    "
-    );
+    ");
 
-    context.assert_command("import click").success();
-
-    let mut filters = context.filters();
-    if cfg!(windows) {
-        filters.push(("Requires: colorama", "Requires:"));
-    }
-
-    uv_snapshot!(filters, context.pip_show()
-        .arg("click"), @"
+    uv_snapshot!(context.filters(), context.pip_show().arg("click"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: click
     Version: 8.1.7
     Location: [SITE_PACKAGES]/
-    Requires:
+    Requires: active-dependency
     Required-by:
-    "
-    );
+    ");
 
     Ok(())
 }
 
+/// Lookup results, missing-package warnings, and quiet exit codes share the same environment.
 #[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_single_package() -> Result<()> {
+#[cfg(feature = "test-python")]
+fn show_package_lookup_results() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "show-package-lookups"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.markupsafe.versions."2.1.3"]
+        [packages.pip.versions."21.3.1"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let install = |requirement: &str| {
+        context
+            .pip_install()
+            .args([requirement, "--strict", "--default-index"])
+            .arg(index.index_url())
+            .assert()
+            .success();
+    };
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + markupsafe==2.1.3
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe"), @"
+    install("MarkupSafe==2.1.3");
+    uv_snapshot!(context.filters(), context.pip_show().arg("MARKUPSAFE"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -143,44 +147,10 @@ fn show_found_single_package() -> Result<()> {
     Location: [SITE_PACKAGES]/
     Requires:
     Required-by:
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_multiple_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe")
-        .arg("pip"), @"
+    install("pip==21.3.1");
+    uv_snapshot!(context.filters(), context.pip_show().args(["pip", "MarkupSafe", "markupsafe"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -194,45 +164,9 @@ fn show_found_multiple_packages() -> Result<()> {
     Location: [SITE_PACKAGES]/
     Requires:
     Required-by:
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_one_out_of_three() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe")
-        .arg("flask")
-        .arg("django"), @"
+    uv_snapshot!(context.filters(), context.pip_show().args(["markupsafe", "flask", "django"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -243,95 +177,19 @@ fn show_found_one_out_of_three() -> Result<()> {
 
     ----- stderr -----
     warning: Package(s) not found for: django, flask
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_one_out_of_two_quiet() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+    uv_snapshot!(context.pip_show().args(["markupsafe", "flask", "--quiet"]), @"
     exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    // Flask isn't installed, but markupsafe is, so the command should succeed.
-    uv_snapshot!(context.pip_show()
-        .arg("markupsafe")
-        .arg("flask")
-        .arg("--quiet"), @"
-    exit_code: 0 (success)
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_empty_quiet() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    // Flask isn't installed, so the command should fail.
-    uv_snapshot!(context.pip_show()
-        .arg("flask")
-        .arg("--quiet"), @"
+    ");
+    uv_snapshot!(context.pip_show().args(["flask", "--quiet"]), @"
     exit_code: 1 (failure)
-    "
-    );
-
+    ");
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -366,40 +224,24 @@ fn show_editable() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 fn show_required_by_multiple() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("idna-3.6.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: idna\nVersion: 3.6\n")?;
+    site_packages
+        .child("anyio-4.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: anyio\nVersion: 4.0.0\nRequires-Dist: idna\n")?;
+    site_packages
+        .child("requests-2.31.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\nRequires-Dist: idna; python_version >= '3.8'\n")?;
+    site_packages
+        .child("legacy-1.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: legacy\nVersion: 1.0.0\nRequires-Dist: idna; python_version < '3.8'\n")?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        anyio==4.0.0
-        requests==2.31.0
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==4.0.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
-    "
-    );
-
-    context.assert_command("import requests").success();
-
-    // idna is required by anyio and requests
+    // Reverse dependencies include active requirements and omit inactive markers.
     uv_snapshot!(context.filters(), context.pip_show()
         .arg("idna"), @"
     exit_code: 0 (success)
@@ -415,8 +257,49 @@ fn show_required_by_multiple() -> Result<()> {
     Ok(())
 }
 
+/// Strict validation reports problems throughout the environment, including packages not shown.
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
+fn show_strict_validates_entire_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let wheel_metadata = indoc! {"
+        Wheel-Version: 1.0
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let visible = site_packages.child("visible-1.0.0.dist-info");
+    visible
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: visible\nVersion: 1.0.0\n")?;
+    visible.child("WHEEL").write_str(wheel_metadata)?;
+    let broken = site_packages.child("broken-1.0.0.dist-info");
+    broken.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.1
+        Name: broken
+        Version: 1.0.0
+        Requires-Dist: missing-dependency>=2
+    "})?;
+    broken.child("WHEEL").write_str(wheel_metadata)?;
+
+    uv_snapshot!(context.filters(), context.pip_show().args(["visible", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: visible
+    Version: 1.0.0
+    Location: [SITE_PACKAGES]/
+    Requires:
+    Required-by:
+
+    ----- stderr -----
+    warning: The package `broken` requires `missing-dependency>=2`, but it's not installed
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_files() {
     let context = uv_test::test_context!("3.12");
 
@@ -437,9 +320,19 @@ fn show_files() {
     "
     );
 
-    // Windows has a different files order.
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.pip_show().arg("requests").arg("--files"), @"
+    let snapshot = uv_test::capture_uv_snapshot!(
+        context.filters(),
+        context.pip_show().arg("requests").arg("--files")
+    );
+    let (header, files) = snapshot.split_once("Files:\n").expect("missing file list");
+    let mut files = files.lines().collect::<Vec<_>>();
+    assert!(
+        files.iter().all(|line| line.starts_with("  ")),
+        "unexpected output after file list: {snapshot}"
+    );
+    // RECORD ordering varies by platform; the listed paths should not.
+    files.sort_unstable();
+    insta::assert_snapshot!(format!("{header}Files:\n{}\n", files.join("\n")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: requests
@@ -477,7 +370,7 @@ fn show_files() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -523,7 +416,7 @@ fn show_target() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 

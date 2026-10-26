@@ -9,6 +9,7 @@ fn tool_dir() {
     ----- stdout -----
     [TEMP_DIR]/tools
     ");
+    context.assert_path_missing("tools");
 }
 
 #[test]
@@ -20,4 +21,5 @@ fn tool_dir_bin() {
     ----- stdout -----
     [TEMP_DIR]/bin
     ");
+    context.assert_path_missing("bin");
 }

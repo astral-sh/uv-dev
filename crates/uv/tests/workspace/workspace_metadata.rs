@@ -1,31 +1,31 @@
 use std::path::Path;
+use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-pypi")]
+use toml_edit::DocumentMut;
 
+use uv_normalize::PackageName;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
-use uv_test::{copy_dir_ignore, uv_snapshot};
+#[cfg(feature = "test-pypi")]
+use uv_test::copy_dir_ignore;
+use uv_test::uv_snapshot;
 
-fn write_wheel(
-    path: &Path,
-    name: &str,
-    dist_info_prefix: &str,
-    files: &[(&str, &str)],
-) -> Result<()> {
-    write_wheel_with_metadata(path, name, "0.1.0", dist_info_prefix, "", files)
+fn write_wheel(path: &Path, name: &str, files: &[(&str, &str)]) -> Result<()> {
+    write_wheel_with_metadata(path, name, "0.1.0", "", files)
 }
 
 fn write_wheel_with_metadata(
     path: &Path,
     name: &str,
     version: &str,
-    dist_info_prefix: &str,
     additional_metadata: &str,
     files: &[(&str, &str)],
 ) -> Result<()> {
@@ -38,6 +38,10 @@ fn write_wheel_with_metadata(
         record.push(format!("{file_path},,"));
     }
 
+    let dist_info_prefix = format!(
+        "{}-{version}",
+        name.parse::<PackageName>()?.as_dist_info_name()
+    );
     let metadata_path = format!("{dist_info_prefix}.dist-info/METADATA");
     let entry = ZipEntryBuilder::new(metadata_path.clone().into(), Compression::Stored);
     let metadata = formatdoc! {"
@@ -71,6 +75,16 @@ fn write_wheel_with_metadata(
     Ok(())
 }
 
+#[track_caller]
+fn assert_metadata_field_absent(metadata: &serde_json::Value, field: &str) {
+    assert!(
+        metadata
+            .as_object()
+            .is_some_and(|fields| !fields.contains_key(field)),
+        "expected a workspace metadata object without `{field}`, got:\n{metadata:#}"
+    );
+}
+
 /// Test basic metadata output for a simple workspace with one member.
 #[test]
 fn workspace_metadata_simple() {
@@ -80,8 +94,21 @@ fn workspace_metadata_simple() {
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
+    let lockfile = workspace.child("uv.lock");
+    // Neither query should reuse metadata cached by the other.
+    let original_cache = context.cache_dir.path().to_path_buf();
+    let context = context.with_cache_dir("quiet-cache");
+    let quiet = context
+        .workspace_metadata()
+        .current_dir(&workspace)
+        .arg("--quiet")
+        .assert()
+        .success()
+        .stderr("");
+    assert!(!lockfile.exists(), "quiet metadata persisted a lockfile");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    let context = context.with_cache_dir(original_cache);
+    let metadata = uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -130,58 +157,9 @@ fn workspace_metadata_simple() {
     );
 
     assert!(!workspace.child(".venv").exists());
+    assert!(!lockfile.exists(), "metadata persisted a lockfile");
+    assert_eq!(quiet.get_output().stdout, metadata.stdout);
 }
-
-#[test]
-fn workspace_metadata_quiet() {
-    let context = uv_test::test_context!("3.12");
-    context.init().arg("foo").assert().success();
-
-    let workspace = context.temp_dir.child("foo");
-
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "workspace_root": "[TEMP_DIR]/foo",
-      "workspace": {
-        "path": "[TEMP_DIR]/foo",
-        "id": "workspace+[TEMP_DIR]/foo"
-      },
-      "requires_python": ">=3.12",
-      "conflicts": {
-        "sets": []
-      },
-      "members": [
-        {
-          "name": "foo",
-          "path": "[TEMP_DIR]/foo",
-          "id": "foo==0.1.0@editable+[TEMP_DIR]/foo"
-        }
-      ],
-      "resolution": {
-        "foo==0.1.0@editable+[TEMP_DIR]/foo": {
-          "name": "foo",
-          "version": "0.1.0",
-          "source": {
-            "editable": "[TEMP_DIR]/foo"
-          },
-          "kind": "package",
-          "dependencies": []
-        },
-        "workspace+[TEMP_DIR]/foo": {
-          "kind": "workspace",
-          "path": "[TEMP_DIR]/foo",
-          "dependencies": []
-        }
-      }
-    }
-    "#);
-}
-
 #[test]
 fn workspace_metadata_extra_quiet() {
     let context = uv_test::test_context!("3.12");
@@ -211,6 +189,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .success();
     let empty_metadata: serde_json::Value =
         serde_json::from_slice(&empty_output.get_output().stdout)?;
+    assert_metadata_field_absent(&empty_metadata, "environment");
 
     environment
         .child("pyvenv.cfg")
@@ -223,16 +202,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .success();
     let broken_metadata: serde_json::Value =
         serde_json::from_slice(&broken_output.get_output().stdout)?;
-
-    insta::assert_json_snapshot!(serde_json::json!({
-        "broken_environment": broken_metadata.get("environment"),
-        "empty_environment": empty_metadata.get("environment"),
-    }), @r#"
-    {
-      "broken_environment": null,
-      "empty_environment": null
-    }
-    "#);
+    assert_metadata_field_absent(&broken_metadata, "environment");
 
     // Remove the manifest to check environment discovery from the lockfile alone.
     fs_err::remove_file(workspace.child("pyproject.toml"))?;
@@ -243,7 +213,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .assert()
         .success();
     let broken: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::assert_json_snapshot!(broken.get("environment"), @"null");
+    assert_metadata_field_absent(&broken, "environment");
 
     let output = context
         .workspace_metadata()
@@ -253,7 +223,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .assert()
         .success();
     let missing: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::assert_json_snapshot!(missing.get("environment"), @"null");
+    assert_metadata_field_absent(&missing, "environment");
     assert!(!workspace.child("missing-env").exists());
 
     Ok(())
@@ -419,11 +389,11 @@ fn workspace_metadata_lockfile() -> Result<()> {
 
     pyproject_toml.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
     let assert = context.workspace_metadata().assert().success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let member_id = metadata["members"][0]["id"]
+    let live_metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let live_member_id = live_metadata["members"][0]["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing workspace member ID"))?;
-    insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.2.0""#);
+    insta::assert_json_snapshot!(live_metadata["resolution"][live_member_id]["version"], @r#""0.2.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
     // Synchronization must respect an explicit request not to update the lockfile.
@@ -451,12 +421,27 @@ fn workspace_metadata_lockfile() -> Result<()> {
     insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.1.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
-    context
+    let synced = context
         .workspace_metadata()
         .arg("--sync")
         .assert()
         .success();
-    assert_ne!(lockfile, context.read("uv.lock"));
+    let synced_metadata: serde_json::Value = serde_json::from_slice(&synced.get_output().stdout)?;
+    let synced_lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    let project = synced_lock
+        .packages()
+        .iter()
+        .find(|package| package.name().as_str() == "project")
+        .context("missing synced project package")?;
+    let synced_version = project
+        .version()
+        .context("missing synced project version")?
+        .to_string();
+    assert_eq!(synced_version, "0.2.0");
+    assert_eq!(
+        synced_metadata["resolution"][live_member_id]["version"].as_str(),
+        Some(synced_version.as_str())
+    );
     context
         .workspace_metadata()
         .arg("--locked")
@@ -727,7 +712,6 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     write_wheel(
         extraneous.path(),
         "metadata-extra",
-        "metadata_extra-0.1.0",
         &[("extra_module.py", "")],
     )?;
 
@@ -795,22 +779,13 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
-    insta::assert_json_snapshot!(serde_json::json!({
-        "extraneous_installed": context
-            .pip_show()
-            .arg("metadata-extra")
-            .output()?
-            .status
-            .success(),
-        "installed_packages": metadata["environment"]["packages"],
-        "modules": metadata.get("modules"),
-    }), @r#"
-    {
-      "extraneous_installed": false,
-      "installed_packages": {},
-      "modules": null
-    }
-    "#);
+    insta::assert_json_snapshot!(metadata["environment"]["packages"], @"{}");
+    assert_metadata_field_absent(&metadata, "modules");
+    uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: metadata-extra
+    ");
 
     Ok(())
 }
@@ -822,12 +797,7 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
     let child = context
         .temp_dir
         .child("metadata_edge_child-0.1.0-py3-none-any.whl");
-    write_wheel(
-        child.path(),
-        "metadata-edge-child",
-        "metadata_edge_child-0.1.0",
-        &[],
-    )?;
+    write_wheel(child.path(), "metadata-edge-child", &[])?;
     let child_url = SafeUrl::from_file_path(child.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
@@ -838,7 +808,6 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
         first.path(),
         "metadata-edge",
         "1.0.0",
-        "metadata_edge-1.0.0",
         &formatdoc! {"
             Provides-Extra: feature
             Requires-Dist: metadata-edge-child @ {child_url}; extra == 'feature'
@@ -855,7 +824,6 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
         second.path(),
         "metadata-edge",
         "2.0.0",
-        "metadata_edge-2.0.0",
         &formatdoc! {"
             Provides-Extra: feature
             Requires-Dist: metadata-edge-child @ {child_url}; extra == 'feature'
@@ -946,7 +914,7 @@ fn workspace_metadata_dependency_edges_include_parent_reachability() -> Result<(
     let child = context
         .temp_dir
         .child("metadata_child-0.1.0-py3-none-any.whl");
-    write_wheel(child.path(), "metadata-child", "metadata_child-0.1.0", &[])?;
+    write_wheel(child.path(), "metadata-child", &[])?;
     let child_url = SafeUrl::from_file_path(child.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
@@ -957,7 +925,6 @@ fn workspace_metadata_dependency_edges_include_parent_reachability() -> Result<(
         parent.path(),
         "metadata-parent",
         "0.1.0",
-        "metadata_parent-0.1.0",
         &format!("Requires-Dist: metadata-child @ {child_url}\n"),
         &[],
     )?;
@@ -1062,14 +1029,19 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
+    let target = uv_fs::verbatim_path(&target);
+    let assert_environment_root = |metadata: &serde_json::Value| {
+        let root = metadata["environment"]["root"]
+            .as_str()
+            .expect("metadata should contain an environment root");
+        assert_eq!(uv_fs::verbatim_path(Path::new(root)), target);
+    };
 
-    assert_eq!(
-        metadata["environment"]["root"].as_str().map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&metadata);
+    let cache = context.cache_dir.child("environments-v2");
     assert_eq!(
         target.parent(),
-        Some(context.cache_dir.child("environments-v2").path())
+        Some(uv_fs::verbatim_path(cache.path()).as_ref())
     );
 
     let assert = context
@@ -1080,10 +1052,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
-    assert_eq!(
-        metadata["environment"]["root"].as_str().map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&metadata);
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1096,12 +1065,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .assert()
         .success();
     let lockfile_metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    assert_eq!(
-        lockfile_metadata["environment"]["root"]
-            .as_str()
-            .map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&lockfile_metadata);
     let mut filters = context.filters();
     filters.push((
         r#"(\[CACHE_DIR\]/environments-v2/)[^/" ]+"#,
@@ -1117,16 +1081,23 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
 #[test]
 fn workspace_metadata_sync_active_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let wheel_url = SafeUrl::from_file_path(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )
+    .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = []
-        "#,
-    )?;
+        dependencies = ["ok @ {wheel_url}"]
+        "#})?;
 
     context
         .venv()
@@ -1156,6 +1127,14 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
         metadata["environment"]["root"].as_str().map(Path::new),
         Some(active.path())
     );
+    context
+        .pip_show()
+        .arg("--python")
+        .arg(active.path())
+        .arg("ok")
+        .assert()
+        .success();
+    context.assert_not_installed("ok");
 
     let assert = context
         .workspace_metadata()
@@ -1218,7 +1197,6 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     write_wheel(
         required.path(),
         "metadata-required",
-        "metadata_required-0.1.0",
         &[("required_module.py", "")],
     )?;
     let required_url = SafeUrl::from_file_path(required.path())
@@ -1230,7 +1208,6 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     write_wheel(
         extraneous.path(),
         "metadata-extra",
-        "metadata_extra-0.1.0",
         &[("extra_module.py", "")],
     )?;
 
@@ -1258,44 +1235,30 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let extraneous_installed = context
-        .pip_show()
-        .arg("metadata-extra")
-        .output()?
-        .status
-        .success();
-    let required_installed = context
+    context.pip_show().arg("metadata-extra").assert().success();
+    context
         .pip_show()
         .arg("metadata-required")
-        .output()?
-        .status
+        .assert()
         .success();
-
+    let modules = metadata["modules"].clone();
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "extraneous_installed": extraneous_installed,
-            "modules": metadata["modules"],
-            "required_installed": required_installed,
-        }), @r#"
+        insta::assert_json_snapshot!(modules, @r#"
         {
-          "extraneous_installed": true,
-          "modules": {
-            "extra_module": {
-              "owners": [
-                {
-                  "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
-                }
-              ]
-            },
-            "required_module": {
-              "owners": [
-                {
-                  "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
-                }
-              ]
-            }
+          "extra_module": {
+            "owners": [
+              {
+                "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+              }
+            ]
           },
-          "required_installed": true
+          "required_module": {
+            "owners": [
+              {
+                "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+              }
+            ]
+          }
         }
         "#);
     });
@@ -1307,40 +1270,29 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let extraneous_installed = context
-        .pip_show()
-        .arg("metadata-extra")
-        .output()?
-        .status
-        .success();
-    let required_installed = context
-        .pip_show()
-        .arg("metadata-required")
-        .output()?
-        .status
-        .success();
-
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "extraneous_installed": extraneous_installed,
-            "modules": metadata["modules"],
-            "required_installed": required_installed,
-        }), @r#"
+        insta::assert_json_snapshot!(metadata["modules"], @r#"
         {
-          "extraneous_installed": false,
-          "modules": {
-            "required_module": {
-              "owners": [
-                {
-                  "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
-                }
-              ]
-            }
-          },
-          "required_installed": true
+          "required_module": {
+            "owners": [
+              {
+                "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+              }
+            ]
+          }
         }
         "#);
     });
+    uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: metadata-extra
+    ");
+    context
+        .pip_show()
+        .arg("metadata-required")
+        .assert()
+        .success();
 
     // Remove the manifest and required distribution to exercise installation from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1421,7 +1373,6 @@ fn workspace_metadata_includes_existing_environment() -> Result<()> {
     write_wheel(
         installed_owner.path(),
         "installed-owner",
-        "installed_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
 
@@ -1431,7 +1382,6 @@ fn workspace_metadata_includes_existing_environment() -> Result<()> {
     write_wheel(
         missing_owner.path(),
         "missing-owner",
-        "missing_owner-0.1.0",
         &[("missing_module.py", "")],
     )?;
 
@@ -1507,7 +1457,11 @@ dependencies = [
         "#);
     });
 
-    context.pip_show().arg("missing-owner").assert().failure();
+    let assert_environment_unchanged = || {
+        context.assert_command("import installed_module").success();
+        context.assert_not_installed("missing_module");
+    };
+    assert_environment_unchanged();
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1517,38 +1471,9 @@ dependencies = [
         .assert()
         .success();
     let lockfile_metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(lockfile_metadata["environment"], @r#"
-        {
-          "packages": {
-            "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl": {
-              "editable": false,
-              "name": "installed-owner",
-              "path": "[SITE_PACKAGES]/installed_owner-0.1.0.dist-info",
-              "version": "0.1.0"
-            }
-          },
-          "python": {
-            "implementation": "cpython",
-            "path": "[VENV]/[BIN]/[PYTHON]",
-            "version": "3.12.[X]"
-          },
-          "root": "[VENV]/"
-        }
-        "#);
-        insta::assert_json_snapshot!(lockfile_metadata["modules"], @r#"
-        {
-          "installed_module": {
-            "owners": [
-              {
-                "package_id": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
-              }
-            ]
-          }
-        }
-        "#);
-    });
-    context.pip_show().arg("missing-owner").assert().failure();
+    assert_eq!(lockfile_metadata["environment"], metadata["environment"]);
+    assert_eq!(lockfile_metadata["modules"], metadata["modules"]);
+    assert_environment_unchanged();
 
     let override_env = context.temp_dir.child("override-env");
     context.venv().arg(override_env.path()).assert().success();
@@ -1571,8 +1496,8 @@ dependencies = [
           "root": "[TEMP_DIR]/override-env"
         }
         "#);
-        insta::assert_json_snapshot!(metadata.get("modules"), @"null");
     });
+    assert_metadata_field_absent(&metadata, "modules");
 
     Ok(())
 }
@@ -1589,7 +1514,6 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
     write_wheel(
         wheel.path(),
         "installed-owner",
-        "installed_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
     let wheel_url = SafeUrl::from_file_path(wheel.path())
@@ -1674,6 +1598,14 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
         "#);
     });
 
+    let interpreter = metadata["environment"]["python"]["path"]
+        .as_str()
+        .context("workspace metadata did not report the synchronized interpreter")?;
+    Command::new(interpreter)
+        .args(["-I", "-c", "import installed_module"])
+        .assert()
+        .success();
+
     Ok(())
 }
 
@@ -1684,10 +1616,10 @@ fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
         .with_filtered_virtualenv_bin();
 
     let gpu_a = context.temp_dir.child("gpu_a-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_a.path(), "gpu-a", "gpu_a-0.1.0", &[("gpu/a.py", "")])?;
+    write_wheel(gpu_a.path(), "gpu-a", &[("gpu/a.py", "")])?;
 
     let gpu_b = context.temp_dir.child("gpu_b-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_b.path(), "gpu-b", "gpu_b-0.1.0", &[("gpu/b.py", "")])?;
+    write_wheel(gpu_b.path(), "gpu-b", &[("gpu/b.py", "")])?;
 
     let typing_extensions = context
         .temp_dir
@@ -1695,7 +1627,6 @@ fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
     write_wheel(
         typing_extensions.path(),
         "typing-extensions",
-        "typing_extensions-0.1.0",
         &[
             ("typing_extensions.py", ""),
             ("café.py", ""),
@@ -1918,8 +1849,7 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_311.path(),
         "module-owner",
-        "module_owner-0.1.0",
-        &[("shared.py", "")],
+        &[("shared.py", "SOURCE = 'py311'\n")],
     )?;
 
     let py312_dir = context.temp_dir.child("py312");
@@ -1928,8 +1858,7 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_312.path(),
         "module-owner",
-        "module_owner-0.1.0",
-        &[("shared.py", "")],
+        &[("shared.py", "SOURCE = 'py312'\n")],
     )?;
 
     let module_owner_311_url = SafeUrl::from_file_path(module_owner_311.path())
@@ -1959,6 +1888,10 @@ dependencies = [
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let module_owners = serde_json::to_string_pretty(&metadata["modules"])?;
+    context
+        .assert_command("import shared; print(shared.SOURCE, end='')")
+        .success()
+        .stdout("py312");
 
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_snapshot!(module_owners, @r#"
@@ -1977,6 +1910,7 @@ dependencies = [
     Ok(())
 }
 
+/// Keep a stale virtual-project distribution distinct from selected owners in the same environment.
 #[test]
 fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1984,23 +1918,31 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
     let stale_owner = context
         .temp_dir
         .child("module_owner_root-0.1.0-py3-none-any.whl");
+    write_wheel(stale_owner.path(), "module-owner-root", &[("stale.py", "")])?;
+    let selected_owner = context
+        .temp_dir
+        .child("selected_owner-0.1.0-py3-none-any.whl");
     write_wheel(
-        stale_owner.path(),
-        "module-owner-root",
-        "module_owner_root-0.1.0",
-        &[("stale.py", "")],
+        selected_owner.path(),
+        "selected-owner",
+        &[("selected.py", "")],
     )?;
+    let selected_owner_url = SafeUrl::from_file_path(selected_owner.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"[project]
-name = "module-owner-root"
-version = "0.1.0"
-requires-python = ">=3.12"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "module-owner-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["selected-owner @ {selected_owner_url}"]
 
-[tool.uv]
-package = false
-"#,
-    )?;
+            [tool.uv]
+            package = false
+        "#})?;
 
     context
         .pip_install()
@@ -2010,17 +1952,29 @@ package = false
 
     let assert = context
         .workspace_metadata()
-        .arg("--sync")
+        .args(["--sync", "--offline"])
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    insta::with_settings!({ filters => context.filters() }, {
+    context
+        .assert_command("import stale; import selected")
+        .success();
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    insta::with_settings!({ filters => filters }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "modules": metadata["modules"],
             "resolution": metadata["resolution"],
         }), @r#"
         {
           "modules": {
+            "selected": {
+              "owners": [
+                {
+                  "package_id": "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+                }
+              ]
+            },
             "stale": {
               "owners": [
                 {
@@ -2031,13 +1985,34 @@ package = false
           },
           "resolution": {
             "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
-              "dependencies": [],
+              "dependencies": [
+                {
+                  "id": "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+                }
+              ],
               "kind": "package",
               "name": "module-owner-root",
               "source": {
                 "virtual": "[TEMP_DIR]/"
               },
               "version": "0.1.0"
+            },
+            "selected-owner==0.1.0@path+[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl": {
+              "dependencies": [],
+              "kind": "package",
+              "name": "selected-owner",
+              "source": {
+                "path": "[TEMP_DIR]/selected_owner-0.1.0-py3-none-any.whl"
+              },
+              "version": "0.1.0",
+              "wheels": [
+                {
+                  "filename": "selected_owner-0.1.0-py3-none-any.whl",
+                  "hashes": {
+                    "sha256": "[SHA256]"
+                  }
+                }
+              ]
             },
             "workspace+[TEMP_DIR]/": {
               "dependencies": [],
@@ -2061,7 +2036,6 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
     write_wheel(
         installed_owner.path(),
         "module-owner",
-        "module_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
     let locked_owner = context
@@ -2071,7 +2045,6 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
         locked_owner.path(),
         "module-owner",
         "0.2.0",
-        "module_owner-0.2.0",
         "",
         &[("replacement_module.py", "")],
     )?;
@@ -2335,12 +2308,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
     let declared = context
         .temp_dir
         .child("missing_record-0.1.0-py3-none-any.whl");
-    write_wheel(
-        declared.path(),
-        "missing-record",
-        "missing_record-0.1.0",
-        &[],
-    )?;
+    write_wheel(declared.path(), "missing-record", &[])?;
     let declared_url = SafeUrl::from_file_path(declared.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
     pyproject.write_str(&formatdoc! {r#"
@@ -2369,7 +2337,7 @@ fn workspace_metadata_module_owners_failure_is_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let gpu_a = context.temp_dir.child("gpu_a-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_a.path(), "gpu-a", "gpu_a-0.1.0", &[("gpu/a.py", "")])?;
+    write_wheel(gpu_a.path(), "gpu-a", &[("gpu/a.py", "")])?;
 
     let gpu_a_url = SafeUrl::from_file_path(gpu_a.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
@@ -3158,6 +3126,19 @@ fn workspace_metadata_with_excluded() -> Result<()> {
             .join("test/workspaces/albatross-project-in-excluded"),
         &workspace,
     )?;
+    assert!(
+        workspace
+            .child("excluded/bird-feeder/pyproject.toml")
+            .is_file(),
+        "fixture must contain the excluded project"
+    );
+    let pyproject = workspace.child("pyproject.toml");
+    let mut manifest = context.read(&pyproject).parse::<DocumentMut>()?;
+    manifest["tool"]["uv"]["workspace"]["members"]
+        .as_array_mut()
+        .expect("workspace fixture must define members")
+        .push("excluded/*");
+    pyproject.write_str(&manifest.to_string())?;
 
     uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)

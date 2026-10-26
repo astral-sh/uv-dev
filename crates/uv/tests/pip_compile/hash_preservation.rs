@@ -1,0 +1,215 @@
+//! Reuse and regeneration of hashes from an existing requirements file.
+
+use anyhow::Result;
+use assert_cmd::assert::Assert;
+use assert_cmd::prelude::*;
+use assert_fs::prelude::*;
+use indoc::indoc;
+
+use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::Scenario;
+use uv_test::{TestContext, uv_snapshot};
+
+struct HashFixture {
+    context: TestContext,
+    index: PackseServer,
+}
+
+impl HashFixture {
+    fn new() -> Self {
+        let scenario: Scenario = toml::from_str(indoc! {r#"
+            name = "hash-preservation"
+
+            [root]
+            [expected]
+            satisfiable = true
+
+            [packages.a.versions."1.0.0"]
+            wheel_tags = ["py2-none-any", "py3-none-any"]
+
+            [packages.a.versions."2.0.0"]
+            wheel_tags = ["py2-none-any", "py3-none-any"]
+        "#})
+        .expect("valid hash fixture scenario");
+        Self {
+            context: uv_test::test_context!("3.12"),
+            index: PackseServer::from_scenario(&scenario),
+        }
+    }
+
+    /// The fixture publishes a compatible wheel, an incompatible wheel, and one source archive.
+    fn hashes(&self, version: &str) -> [String; 3] {
+        let filenames = [
+            format!("a-{version}-py2-none-any.whl"),
+            format!("a-{version}-py3-none-any.whl"),
+            format!("a-{version}.tar.gz"),
+        ];
+        let mut hashes = filenames.map(|filename| {
+            self.index
+                .files()
+                .find(|(candidate, _)| *candidate == filename.as_str())
+                .unwrap_or_else(|| panic!("fixture index does not contain {filename}"))
+                .1
+                .to_owned()
+        });
+        hashes.sort_unstable();
+        assert!(
+            hashes.windows(2).all(|pair| pair[0] != pair[1]),
+            "fixture artifact hashes must differ"
+        );
+        hashes
+    }
+
+    fn write_inputs(&self, requirement: &str, previous: &str) -> Result<()> {
+        self.context
+            .temp_dir
+            .child("requirements.in")
+            .write_str(requirement)?;
+        self.context
+            .temp_dir
+            .child("requirements.txt")
+            .write_str(previous)?;
+        Ok(())
+    }
+
+    fn assert_output(&self, output: Assert, expected: &str) {
+        output.stdout(expected.to_owned());
+        assert_eq!(self.context.read("requirements.txt"), expected);
+    }
+}
+
+fn expected_requirement(version: &str, hashes: &[String]) -> String {
+    let mut lines = vec![format!("a=={version}")];
+    lines.extend(hashes.iter().map(|hash| format!("--hash=sha256:{hash}")));
+    format!("{}\n", lines.join(" \\\n    "))
+}
+
+/// `--generate-hashes` retains the existing hashes when the package is not upgraded.
+#[test]
+fn preserve_hashes_no_upgrade() -> Result<()> {
+    let fixture = HashFixture::new();
+    let hashes = fixture.hashes("1.0.0");
+    let previous = expected_requirement("1.0.0", &hashes[..2]);
+    fixture.write_inputs("a", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &previous);
+    Ok(())
+}
+
+/// `--upgrade` regenerates hashes even when the pinned version does not change.
+#[test]
+fn preserve_hashes_upgrade() -> Result<()> {
+    let fixture = HashFixture::new();
+    let hashes = fixture.hashes("1.0.0");
+    let previous = expected_requirement("1.0.0", &hashes[..2]);
+    fixture.write_inputs("a==1.0.0", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .arg("--upgrade")
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("1.0.0", &hashes));
+    Ok(())
+}
+
+/// `--generate-hashes` adds hashes to a pin that has none, without requiring an upgrade.
+#[test]
+fn preserve_hashes_no_existing_hashes() -> Result<()> {
+    let fixture = HashFixture::new();
+    let hashes = fixture.hashes("1.0.0");
+    fixture.write_inputs("a", "a==1.0.0")?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("1.0.0", &hashes));
+    Ok(())
+}
+
+/// Changing the requirement to a newer version regenerates the hashes.
+#[test]
+fn preserve_hashes_newer_version() -> Result<()> {
+    let fixture = HashFixture::new();
+    let old_hashes = fixture.hashes("1.0.0");
+    let new_hashes = fixture.hashes("2.0.0");
+    let previous = expected_requirement("1.0.0", &old_hashes[..2]);
+    fixture.write_inputs("a==2.0.0", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("2.0.0", &new_hashes));
+    Ok(())
+}
+
+/// An unsuccessful resolution must leave the existing pinned requirements usable.
+#[test]
+fn preserve_hashes_after_resolution_failure() -> Result<()> {
+    let fixture = HashFixture::new();
+    let hashes = fixture.hashes("1.0.0");
+    let previous = format!(
+        "# Existing lockfile\n{}",
+        expected_requirement("1.0.0", &hashes[..2])
+    );
+    let output = fixture.context.temp_dir.child("requirements.txt");
+    output.write_str(&previous)?;
+    fixture
+        .context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("a==3.0.0\n")?;
+
+    uv_snapshot!(fixture.context.pip_compile()
+        .args(["requirements.in", "--output-file", "requirements.txt", "--generate-hashes", "--index-url"])
+        .arg(fixture.index.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because there is no version of a==3.0.0 and you require a==3.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+    output.assert(previous);
+    Ok(())
+}

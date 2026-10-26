@@ -2,7 +2,7 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn debug_warn() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.pip_debug(), @"
     exit_code: 2 (failure)

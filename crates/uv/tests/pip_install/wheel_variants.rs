@@ -1,4 +1,5 @@
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use predicates::prelude::predicate;
@@ -7,6 +8,7 @@ use sha2::{Digest, Sha256};
 use uv_distribution_types::PEP_825_SCHEMA;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -679,19 +681,25 @@ fn ordinary_wheels_are_selected_over_variants() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
+    let (filename, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
+        .files(&[("ok/ordinary.py", "selected = True\n")])
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+
+    // Both variants contain valid wheel data, so rejecting an invalid archive cannot cause uv to
+    // fall back to the ordinary wheel.
     fs_err::copy(
         context
             .workspace_root
             .join("test/links/ok-1.0.0-py3-none-any.whl"),
-        links.child("ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-9-py3-none-any-cpu.whl"),
     )?;
-    // A higher build tag and a newer version must not make a variant selectable.
-    links
-        .child("ok-1.0.0-9-py3-none-any-cpu.whl")
-        .write_str("invalid wheel")?;
-    links
-        .child("ok-2.0.0-py3-none-any-null.whl")
-        .write_str("invalid wheel")?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-2.0.0-py3-none-any.whl"),
+        links.child("ok-2.0.0-py3-none-any-null.whl"),
+    )?;
 
     uv_snapshot!(
         context.filters(),
@@ -712,6 +720,10 @@ fn ordinary_wheels_are_selected_over_variants() -> Result<()> {
      + ok==1.0.0
     "
     );
+    context
+        .assert_command("from ok import ordinary; assert ordinary.selected")
+        .success();
+
     Ok(())
 }
 
@@ -771,6 +783,8 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
     let server = MockServer::start().await;
     let context = uv_test::test_context!("3.12").with_filter((server.uri(), "http://[LOCALHOST]"));
     let sdist = generate_source_archive(&"ok".parse()?, &"1.0.0".parse()?, "", None)?;
+    let variant_filename = "ok-1.0.0-py3-none-any-cpu.whl";
+    let variant_path = format!("/files/{variant_filename}");
 
     let simple_index = json!({
         "meta": { "api-version": "1.0" },
@@ -782,8 +796,8 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
                 "hashes": {},
             },
             {
-                "filename": "ok-1.0.0-py3-none-any-cpu.whl",
-                "url": format!("{}/files/ok-1.0.0-py3-none-any-cpu.whl", server.uri()),
+                "filename": variant_filename,
+                "url": format!("{}{variant_path}", server.uri()),
                 "hashes": {},
             },
         ],
@@ -799,6 +813,11 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
     Mock::given(method("GET"))
         .and(path("/files/ok-1.0.0.tar.gz"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist))
+        .mount(&server)
+        .await;
+    Mock::given(path(variant_path))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -907,8 +926,7 @@ fn universal_lock_excludes_variant_wheels() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
+async fn variant_only_index() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/simple/ok/"))
@@ -916,9 +934,16 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
             r#"<a href="../../files/ok-2.0.0-py3-none-any-null.whl">ok-2.0.0-py3-none-any-null.whl</a>"#,
             "text/html",
         ))
+        .expect(1..)
         .mount(&server)
         .await;
-    let context = uv_test::test_context!("3.12").with_filter((server.uri(), "http://[LOCALHOST]"));
+    server
+}
+
+#[tokio::test]
+async fn registry_variant_wheels_are_not_selectable() {
+    let server = variant_only_index().await;
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(
         context.filters(),
@@ -938,15 +963,21 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
              And because you require ok, we can conclude that your requirements are unsatisfiable.
     "
     );
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from file://[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl)
-    ");
+}
+
+#[tokio::test]
+async fn registry_variant_wheels_are_not_outdated_candidates() {
+    let server = variant_only_index().await;
+    let context = uv_test::test_context!("3.12");
+    let installed_wheel = context
+        .workspace_root
+        .join("test/links/ok-1.0.0-py3-none-any.whl");
+    context
+        .pip_install()
+        .arg(installed_wheel)
+        .assert()
+        .success();
+
     uv_snapshot!(context.filters(), context.pip_list()
         .arg("--outdated")
         .arg("--format")
@@ -960,5 +991,4 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
     ----- stdout -----
     []
     ");
-    Ok(())
 }
