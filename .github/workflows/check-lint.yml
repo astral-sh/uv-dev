@@ -137,7 +137,7 @@ jobs:
     name: "clippy on windows"
     timeout-minutes: 15
     if: ${{ inputs.code-changed == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: namespace-profile-windows-2022-x86-64-4
+    runs-on: namespace-profile-windows-2022-x86-64-4x8
     env:
       RUSTC_BOOTSTRAP: "1"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
