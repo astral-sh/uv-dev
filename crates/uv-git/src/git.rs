@@ -883,7 +883,7 @@ fn fetch_lfs(
         if crate::gitoxide::lfs::fetch(&repo.path, *revision, url, offline)? {
             return Ok(true);
         }
-        debug!("Using Git LFS for repository-specific transfer settings");
+        debug!("Falling back to Git LFS for this repository");
         repo.backend = Backend::Cli;
     }
     if offline {
