@@ -64,6 +64,15 @@ jobs:
           # Warm the cache for Unix-only tests
           uv python install 3.12d 3.13d 3.13t 3.13td
 
+      - name: "Cache Python archives for patch-version tests"
+        env:
+          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+        run: >-
+          uv python install
+          --install-dir "${{ runner.temp }}/uv-python-archive-seed"
+          --no-bin --no-registry
+          3.10.17 3.12.4 3.12.5 3.12.6
+
       - name: "Install Linux test dependencies"
         run: |
           # Try the next configured mirror after the first failed download.
@@ -200,6 +209,15 @@ jobs:
           # Warm the cache for Unix-only tests
           uv python install 3.12d 3.13d 3.13t 3.13td
 
+      - name: "Cache Python archives for patch-version tests"
+        env:
+          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+        run: >-
+          uv python install
+          --install-dir "${{ runner.temp }}/uv-python-archive-seed"
+          --no-bin --no-registry
+          3.10.17 3.12.4 3.12.5 3.12.6
+
       - name: "Cargo test"
         env:
           # Retry more than default to reduce flakes in CI
@@ -273,6 +291,15 @@ jobs:
         env:
           UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
         run: uv python install
+
+      - name: "Cache Python archives for patch-version tests"
+        env:
+          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+        run: >-
+          uv python install
+          --install-dir "${{ runner.temp }}/uv-python-archive-seed"
+          --no-bin --no-registry
+          3.10.17 3.12.4 3.12.5 3.12.6
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
