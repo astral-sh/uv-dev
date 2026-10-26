@@ -12,6 +12,10 @@ use crate::git::{GitError, GitRemote, remote_url_root};
 
 pub(crate) mod lfs;
 
+// Fetch small blobs, including LFS pointers, in the first pack. Larger blobs in
+// history can be omitted until a checkout needs them.
+const FETCH_FILTER: gix::remote::fetch::Filter = gix::remote::fetch::Filter::BlobLimit(4096);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
     Cli,
@@ -110,7 +114,7 @@ pub(crate) fn fetch(
     let outcome = if local || !can_persist_promisor(url) {
         fetch
     } else {
-        fetch.with_filter(gix::remote::fetch::Filter::TreeDepth(0))
+        fetch.with_filter(FETCH_FILTER)
     }
     .receive(Discard, &interrupt)?;
     if let gix::remote::fetch::Status::Change {
@@ -129,7 +133,10 @@ fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
     let mut config = repo.config_edit()?;
     config.set_raw_value("remote.uv-promisor.url", url.without_credentials().as_str())?;
     config.set_raw_value("remote.uv-promisor.promisor", "true")?;
-    config.set_raw_value("remote.uv-promisor.partialclonefilter", "tree:0")?;
+    config.set_raw_value(
+        "remote.uv-promisor.partialclonefilter",
+        FETCH_FILTER.to_string(),
+    )?;
     config.commit()?;
     Ok(())
 }
