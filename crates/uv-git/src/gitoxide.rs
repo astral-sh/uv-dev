@@ -251,7 +251,7 @@ pub(crate) fn checkout(
     repo.committer_or_set_generic_fallback()?;
     repo.reset(commit, gix::repository::reset::ResetMode::Hard)?;
     if with_lfs {
-        lfs::checkout(&source, &repo, commit)?;
+        lfs::checkout(&source, &repo, commit, remote)?;
     }
     if let Some(modules) = repo.submodules()? {
         for module in modules {

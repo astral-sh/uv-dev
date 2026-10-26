@@ -148,14 +148,15 @@ pub(super) fn checkout(
     source: &gix::Repository,
     checkout: &gix::Repository,
     commit: gix::ObjectId,
+    remote: &GitRemote,
 ) -> Result<()> {
+    let Some(selection) = entries(source, commit)? else {
+        return crate::git::checkout_lfs_extension(checkout, commit, remote);
+    };
     let worktree = checkout
         .workdir()
         .context("Git LFS checkout needs a worktree")?;
-    for entry in entries(source, commit)?
-        .context("Git LFS checkout requires an extension filter")?
-        .files
-    {
+    for entry in selection.files {
         let path = object_path(&entry.oid);
         let from = source.common_dir().join(&path);
         let local = checkout.common_dir().join(&path);
@@ -197,7 +198,7 @@ pub(super) fn checkout_submodules(repo: &gix::Repository, parent: &GitRemote) ->
         let insecure = parent.disable_ssl && same_origin(parent.url(), &url);
         let remote = GitRemote::new(url, insecure, parent.offline);
         if fetch_objects(&child, commit, &remote)? {
-            checkout(&child, &child, commit)?;
+            checkout(&child, &child, commit, &remote)?;
         } else {
             crate::git::checkout_lfs_extension(&child, commit, &remote)?;
         }

@@ -287,7 +287,7 @@ impl GitRemote {
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&mut db.repo, &self, &rev)
+                    let lfs_ready = fetch_lfs(&db.repo, &self, &rev)
                         .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
@@ -311,7 +311,7 @@ impl GitRemote {
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&mut repo, &self, &rev)
+                fetch_lfs(&repo, &self, &rev)
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -853,13 +853,12 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
 });
 
 /// Fetch and validate the LFS objects required for a revision.
-fn fetch_lfs(repo: &mut GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
+fn fetch_lfs(repo: &GitRepository, remote: &GitRemote, revision: &GitOid) -> Result<bool> {
     if repo.backend == Backend::Gitoxide {
         if crate::gitoxide::lfs::fetch(&repo.path, *revision, remote)? {
             return Ok(true);
         }
-        debug!("Falling back to Git LFS for this repository");
-        repo.backend = Backend::Cli;
+        debug!("Using the Git LFS extension for this repository");
     }
     fetch_lfs_with_cli(repo, remote, revision.as_str())
 }
@@ -878,7 +877,7 @@ pub(super) fn checkout_lfs_extension(
     };
     anyhow::ensure!(
         fetch_lfs_with_cli(&git, remote, &commit.to_string())?,
-        "Git LFS could not fetch the submodule's objects"
+        "Git LFS could not fetch the checkout's objects"
     );
     GIT_LFS
         .as_ref()
@@ -908,7 +907,13 @@ fn fetch_lfs_with_cli(repo: &GitRepository, remote: &GitRemote, revision: &str) 
         return Ok(false);
     };
 
-    if remote.disable_ssl {
+    if remote.disable_ssl && remote.backend == Backend::Gitoxide {
+        let origin = remote_url_root(url.without_credentials().into_owned());
+        cmd = GIT.as_ref().cloned()?;
+        cmd.arg("-c")
+            .arg(format!("http.{}.sslVerify=false", origin.as_str()))
+            .arg("lfs");
+    } else if remote.disable_ssl {
         debug!("Disabling SSL verification for Git LFS");
         cmd.env(EnvVars::GIT_SSL_NO_VERIFY, "true");
     }
