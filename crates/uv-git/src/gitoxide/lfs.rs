@@ -254,12 +254,7 @@ fn fetch_objects(
         .remote_at(source.url.as_str())?
         .sanitized_url_and_version(gix::remote::Direction::Fetch)?;
     if remote.scheme == gix::url::Scheme::File && remote.host().is_none() {
-        if let Some(endpoint) = entries
-            .endpoint
-            .as_ref()
-            .map(|v| gix::url::parse(v))
-            .transpose()?
-        {
+        if let Some(endpoint) = entries.endpoint.as_ref().map(gix::url::parse).transpose()? {
             if endpoint.scheme == gix::url::Scheme::File {
                 let local = gix::path::from_bstr(&remote.path)?.canonicalize()?;
                 let target = gix::path::from_bstr(&endpoint.path)?.canonicalize()?;

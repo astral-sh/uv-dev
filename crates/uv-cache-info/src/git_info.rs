@@ -134,7 +134,11 @@ impl Tags {
 
 #[cfg(feature = "gitoxide")]
 fn discover(path: &Path) -> gix::Result<gix::Repository> {
-    gix::discover_opts(path, Default::default(), gix::open::Options::isolated())
+    gix::discover_opts(
+        path,
+        gix::discover::upwards::Options::default(),
+        gix::open::Options::isolated(),
+    )
 }
 
 struct GitRepository {

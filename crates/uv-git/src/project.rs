@@ -24,7 +24,7 @@ pub enum VersionControlError {
 fn discover(path: &Path) -> Result<Option<gix::Repository>> {
     match gix::discover_opts(
         path,
-        Default::default(),
+        gix::discover::upwards::Options::default(),
         gitoxide::options().bail_if_untrusted(true),
     ) {
         Ok(repo) => Ok(Some(repo)),
