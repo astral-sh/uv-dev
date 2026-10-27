@@ -16,14 +16,17 @@ astral-sh/uv#21177 and astral-sh/uv#20025 explain earlier quinn-proto alerts and
 The checked-out lockfile is below all three requested targets. Repository member EliteTK
 has assessed the reported dependencies and states that the vulnerabilities have no impact
 on current uv usage: quinn-proto is not compiled into uv, and the zerovec crates parse
-ICU data compiled into uv rather than untrusted data. EliteTK intends to look into version
-bumps anyway; no completed update, linked implementation PR, or release date is supplied.
+ICU data compiled into uv rather than untrusted data. Repository member woodruffw confirms
+that these dependencies will be updated through normal periodic updates because the
+reported vulnerabilities do not affect reachable code within uv. No completed update,
+linked implementation PR, or release date is supplied.
 
 ## Current maintainer assessment
 
-Source: EliteTK's comment on astral-sh/uv#22936, posted 2026-10-26 at 20:41:28 UTC
-(comment ID 6426830952). The supplied full discussion identifies EliteTK as a repository
-MEMBER.
+Sources: EliteTK's comment on astral-sh/uv#22936, posted 2026-10-26 at 20:41:28 UTC
+(comment ID 6426830952), and woodruffw's comment on the same issue, posted 2026-10-27 at
+17:10:49 UTC (comment ID 6448448882). The supplied full discussion identifies both authors
+as repository MEMBERs.
 
 - **quinn-proto:** EliteTK reports checking that it is present in Cargo.lock but is not
   compiled as part of uv's build. Its lockfile inclusion comes from a weak reference in
@@ -32,8 +35,13 @@ MEMBER.
   `icu_normalizer`, parsing ICU data compiled into uv. On that basis, the affected parsing
   does not receive untrusted data.
 - **Impact and disposition:** EliteTK concludes that the reported vulnerabilities have no
-  impact on current uv usage and will look into bumping the versions anyway. This is an
-  intention to investigate maintenance updates, not confirmation of a fix or release.
+  impact on current uv usage. woodruffw confirms that the reports do not affect reachable
+  code within uv and that the dependencies will be updated as part of normal periodic
+  updates. This establishes the maintenance approach, not completion or a release date.
+- **Scanner follow-up:** woodruffw suggests that users with an Aikido vendor relationship
+  contact the vendor to improve the findings' signal-to-noise ratio, noting that scanners
+  commonly lack reachability information. This is a maintainer recommendation for
+  addressing scanner reports, not a demonstrated workaround or a change to uv.
 
 These are attributed maintainer findings from the issue discussion. The existing local
 source checks below establish locked versions and feature configuration; this follow-up
@@ -137,13 +145,15 @@ behavior; their generic dependency titles do not describe the requested crate up
 
 ## Next step
 
-Follow up on the optional dependency bumps discussed by EliteTK and record a matching PR
-or released version when one is available. The supplied discussion does not establish
-that any of the requested updates has landed or that a security-priority release is needed.
-If later evidence challenges the applicability assessment, obtain the exact advisory,
-affected uv build/configuration, and path by which untrusted data reaches the affected code.
+Track these dependency bumps through the normal periodic update process confirmed by
+woodruffw, and record a matching PR or released version when available. The supplied
+discussion does not establish that any requested update has landed or give a release date.
+For continuing scanner alerts, the maintainer recommends working with Aikido on
+reachability-aware reporting when a vendor relationship exists. If later evidence
+challenges the applicability assessment, obtain the exact advisory, affected uv
+build/configuration, and path by which untrusted data reaches the affected code.
 
-The initial `triage.json` records the assessment before this maintainer comment; its draft
+The initial `triage.json` records the assessment before these maintainer comments; its draft
 reply and unresolved applicability wording are superseded by the current context above.
 The classification and related items remain unchanged. No public response was drafted or
 posted for this follow-up, and only this README was updated.
