@@ -100,6 +100,19 @@ project's `pyproject.toml` to invalidate the cache whenever the environment vari
 cache-keys = [{ file = "pyproject.toml" }, { env = "MY_ENV_VAR" }]
 ```
 
+When building a dependency from a source distribution, uv can reuse a wheel built with a different
+compiler if only the ambient `CC` variable changes. For a build backend that honors `CC`, pass the
+compiler path and include it in the wheel cache key by setting
+[`extra-build-variables`](../reference/settings.md#extra-build-variables) in the consuming project:
+
+```toml title="pyproject.toml"
+[tool.uv.extra-build-variables]
+example = { CC = "/opt/gcc-14/bin/gcc" }
+```
+
+Changing the configured `CC` value changes the cache key. Replacing the compiler at the same path
+does not change this key.
+
 Finally, to invalidate a project whenever a specific directory (like `src`) is created or removed,
 add the following to the project's `pyproject.toml`:
 
