@@ -85,6 +85,11 @@ lockfile contains the exact resolved versions that are installed in the project 
 file should be checked into version control, allowing for consistent and reproducible installations
 across machines.
 
+If an index supplies no hashes for a distribution, `uv.lock` can record its URL without a hash. In
+that case, `uv sync --locked` can accept different bytes served at the same URL without detecting
+the change. To require a hash, configure the preview
+[`hash-algorithm` setting](../indexes.md#requiring-a-hash-algorithm) for that index.
+
 A lockfile ensures that developers working on the project are using a consistent set of package
 versions. Additionally, it ensures when deploying the project as an application that the exact set
 of used package versions is known.
