@@ -16,8 +16,8 @@ use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExcludeNewer,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -25,9 +25,9 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    FileLocation, FirstParty, GitDirectorySourceDist, IndexLocations, IndexUrl, Name, Node,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -66,6 +66,10 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
 pub enum PylockTomlErrorKind {
     #[error("The target environment is not supported by the lockfile")]
     IncompatibleEnvironment,
+    #[error(
+        "No locked wheel or source distribution for `{0}` has a recorded upload time before {1}"
+    )]
+    NoDistributionBeforeCutoff(PackageName, Timestamp),
     #[error("Multiple active package entries found for `{0}`")]
     DuplicateActivePackage(PackageName),
     #[error(
@@ -1262,6 +1266,8 @@ impl<'lock> PylockToml {
         groups: &[GroupName],
         tags: &Tags,
         build_options: &BuildOptions,
+        exclude_newer: &ExcludeNewer,
+        index_locations: &IndexLocations,
     ) -> Result<Resolution, PylockTomlError> {
         if let Some(environments) = &self.environments
             && !environments
@@ -1279,7 +1285,7 @@ impl<'lock> PylockToml {
         let root = graph.add_node(Node::Root);
         let mut active_packages = HashSet::new();
 
-        for package in self.packages {
+        for mut package in self.packages {
             // Omit packages that aren't relevant to the current environment.
             if !package.marker.evaluate_pep751(markers, extras, groups) {
                 continue;
@@ -1358,6 +1364,42 @@ impl<'lock> PylockToml {
                 validate_wheel_filename(&filename, &package.name, package.version.as_ref())?;
             }
 
+            // Wheel and source-distribution entries can carry upload times. Archive, directory,
+            // and VCS entries are outside the registry cutoff policy.
+            if package
+                .wheels
+                .as_ref()
+                .is_some_and(|wheels| !wheels.is_empty())
+                || package.sdist.is_some()
+            {
+                let index = package
+                    .index
+                    .as_ref()
+                    .map(|url| IndexUrl::from(VerbatimUrl::from_url(url.as_url().clone())));
+                let index_override = index
+                    .as_ref()
+                    .and_then(|index| index_locations.exclude_newer_for(index));
+                if let Some(cutoff) =
+                    exclude_newer.exclude_newer_package_for_index(&package.name, index_override)
+                {
+                    let before_cutoff =
+                        |time: Option<Timestamp>| time.is_some_and(|time| time < cutoff);
+                    if let Some(wheels) = &mut package.wheels {
+                        wheels.retain(|wheel| before_cutoff(wheel.upload_time));
+                    }
+                    package.sdist = package
+                        .sdist
+                        .filter(|sdist| before_cutoff(sdist.upload_time));
+                    if package.wheels.as_ref().is_none_or(Vec::is_empty) && package.sdist.is_none()
+                    {
+                        return Err(PylockTomlErrorKind::NoDistributionBeforeCutoff(
+                            package.name,
+                            cutoff,
+                        )
+                        .into());
+                    }
+                }
+            }
             let no_binary = build_options.no_binary_package(&package.name);
             let no_build = build_options.no_build_package(&package.name);
             let is_wheel = package

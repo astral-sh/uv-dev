@@ -429,6 +429,8 @@ pub async fn pip_sync(
             &extras,
             &groups,
             &build_options,
+            &exclude_newer,
+            &index_locations,
             hash_checking,
         )?
     } else {

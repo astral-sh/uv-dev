@@ -5899,7 +5899,7 @@ fn pep_751() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -5938,7 +5938,7 @@ fn pep_751_default_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_empty_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -5978,7 +5978,7 @@ fn pep_751_default_groups_empty_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_unrelated_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6018,7 +6018,7 @@ fn pep_751_default_groups_unrelated_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_overlapping_public_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6058,7 +6058,7 @@ fn pep_751_default_groups_overlapping_public_groups() -> Result<()> {
 
 #[test]
 fn pep_751_default_groups_explicit_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6138,7 +6138,7 @@ fn pep_751_default_groups_absent() -> Result<()> {
 
 #[test]
 fn pep_751_rejects_duplicate_active_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6197,7 +6197,7 @@ fn pep_751_requires_packages() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
     let server = PackseServer::new("simple/single-package.toml");
     context
         .temp_dir
@@ -6278,7 +6278,9 @@ fn pep_751_validates_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_remote_archive_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("false")
+        .with_filtered_http_retries();
     context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6408,7 +6410,9 @@ fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("false")
+        .with_filtered_http_retries();
     let pylock = formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6469,7 +6473,9 @@ fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("false")
+        .with_filtered_http_retries();
     let (_, hash) = server
         .files()
         .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
@@ -6587,6 +6593,37 @@ fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
       cause: Size mismatch for `a @ http://[LOCALHOST]/files/a-1.0.0.tar.gz`: expected 1 bytes, but downloaded 607 bytes
     "#);
 
+    Ok(())
+}
+
+/// A locked registry wheel must have been uploaded strictly before the effective cutoff.
+#[test]
+fn pep_751_registry_upload_cutoff() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let lockfile = context.temp_dir.child("pylock.toml");
+    lockfile.write_str(
+        r#"
+        lock-version = "1.0"
+        created-by = "test"
+        [[packages]]
+        name = "example"
+        version = "1.0"
+        [[packages.wheels]]
+        url = "https://example.invalid/example-1.0-py3-none-any.whl"
+        upload-time = 2026-01-01T00:00:00Z
+        hashes = { sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+    "#,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("--exclude-newer")
+        .arg("2026-01-01T00:00:00Z")
+        .arg("pylock.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No locked wheel or source distribution for `example` has a recorded upload time before 2026-01-01T00:00:00Z
+    ");
     Ok(())
 }
 
