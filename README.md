@@ -8,13 +8,21 @@ Classification: bug
 
 Reproduced the reported installation failure on Linux x86_64 with Python 3.11.17 using both the installed uv 0.13.5 and uv 0.13.6. Installing `pypdf2==1.26.0` with `--no-cache` fails at byte 0 with `invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]`. The same installation succeeds with uv 0.12.0 and with `UV_LEGACY_TAR_BACKEND=1` on both tested 0.13 versions.
 
-This is a v7 archive compatibility regression associated with the default-backend change in astral-sh/uv#22094. The hard-link and full-length user/group-name fixes in astral-sh/uv#22516 and astral-sh/uv#22522 address different inputs and do not resolve this failure.
+This is a v7 archive compatibility regression associated with the default-backend change in astral-sh/uv#22094. The hard-link and full-length user/group-name fixes in astral-sh/uv#22516 and astral-sh/uv#22522 address different inputs and do not resolve this failure. A maintainer identifies the archive as nonconforming to the current sdist specification and raises security concerns about adding v7 support; restoring compatibility is not an agreed implementation plan.
 
 ## Classification
 
 Bug: a demonstrated compatibility regression relative to uv 0.12.0 and the legacy tar backend. The published PyPDF2 1.26.0 sdist has an all-zero first-header identity, which the pinned tar-framing 0.0.15 rejects before checksum validation and extraction policy. GNU tar and Python's `tarfile` both successfully list the archive. The runtime failure, version comparison, archive inspection, and decoder implementation agree on the rejected input.
 
 The 0.13.0 release notes document stricter archive validation; reproduction alone does not decide which old archive formats uv should support. The evidence establishes the loss of compatibility and a working fallback. No existing v7 fix or duplicate was found in the recorded issue search. Additional reporter information is not needed to reproduce the behavior.
+
+## Maintainer assessment and support policy
+
+In the October 27, 2026 discussion on astral-sh/uv#22955 (comment ID 6447485795), maintainer woodruffw identifies the sdist as invalid under the [current source distribution specification](https://packaging.python.org/en/latest/specifications/source-distribution-format/), citing its requirement for POSIX.1-2001 pax tar archives. Successful reads by GNU tar and Python's `tarfile` establish interoperability with those readers, not compliance with that sdist requirement.
+
+The maintainer explains that tar-codec also accepts GNU-format archives because Python's `tarfile` historically defaulted to that format. They qualify their understanding that v7 was never Python's default. They describe v7 as defined by the original UNIX implementation rather than a specification and raise the difficulty of implementing it securely while avoiding differing interpretations across archive readers. These are the maintainer's compatibility and security assessments; the reproduction does not independently establish the historical claim or demonstrate an exploit.
+
+The existing bug classification records the demonstrated loss of compatibility. The comment does not announce a final support decision, a fix, or a commitment to implement v7. The next decision is whether uv should support this legacy input despite its nonconformance and, if so, what precisely bounded decoding behavior is acceptable.
 
 ## Reproduction
 
@@ -115,7 +123,7 @@ The PEP 625 roadmap's non-pax restriction remains an unchecked future task; it d
 
 ## Recommended follow-up
 
-Implement v7 header decoding in tar-framing/tar-codec, integrate the resulting dependency update into uv, and change the parent v7 regression to assert successful installation. Cover the independently demonstrated publishing metadata reader as well. The confirmed workaround is `UV_LEGACY_TAR_BACKEND=1`. The existing hard-link and full-length group-name tests provide nearby integration-test patterns but do not exercise this failure.
+Clarify the intended support policy for legacy v7 sdists in light of the maintainer's specification and security concerns before implementing decoder changes or changing the parent regression to expect success. If maintainers choose to support v7, define the accepted header semantics and validation requirements in tar-framing/tar-codec, integrate the resulting dependency update into uv, and cover both installation and the independently demonstrated publishing metadata reader. If rejection remains intentional, document the compatibility boundary and assess whether the error needs clearer format-specific guidance. The confirmed workaround is `UV_LEGACY_TAR_BACKEND=1`; the comment does not establish any guarantee about its long-term availability. The existing hard-link and full-length group-name tests provide nearby integration-test patterns but do not exercise this failure.
 
 ## Fix
 
@@ -131,9 +139,9 @@ A separate metadata-consumer failure was demonstrated with the installed uv 0.13
 
 ### Focused validation and final state
 
-- `cargo test -p uv --test build build_backend::build_sdist_with_v7_tar -- --exact` passed in the debug/test profile: one test passed, 230 filtered out. This verifies that the original parent test asserts the undesirable default-backend failure and the successful legacy fallback.
+- `cargo test -p uv --test build build_backend::build_sdist_with_v7_tar -- --exact` passed in the debug/test profile: one test passed, 230 filtered out. This verifies that the original parent test asserts the default-backend failure and the successful legacy fallback.
 - Temporarily changing only the default-backend snapshot to expect successful installation, then running `INSTA_UPDATE=no cargo test -p uv --test build build_backend::build_sdist_with_v7_tar -- --exact`, failed as expected: actual exit 1 with `at byte 0: invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]`, rather than expected exit 0. No production changes preceded this check.
 - The temporary test edit was restored byte-for-byte. No production fix or test changes are retained, and the checkout is unchanged. No broader suite or release build was run.
 - `cargo fmt --all` was attempted but could not run because rustfmt is absent from the Rust 1.99.0 toolchain. There are no retained Rust changes requiring formatting.
 
-The successful baseline and expected failing success assertion confirm the regression, not a fix. Native v7 decoder support and its dependency integration remain necessary before the parent test can permanently assert the desired behavior.
+The successful baseline and expected failing success assertion confirm the compatibility regression, not a fix or a support-policy decision. If v7 support is approved, native decoder support and its dependency integration remain necessary before the parent test can permanently assert successful installation.
