@@ -1,0 +1,1 @@
+{"author":{"id":"MDQ6VXNlcjIzNDE5MDAz","is_bot":false,"login":"kyfrankie","name":"Frankie Hui"},"body":"### Question\n\nThis is to avoid lengthy download for a big repo.\n\n### Platform\n\nmacos\n\n### Version\n\nuv 0.13.5","number":22957,"title":"Does uv git dependencies support shadow fetch --depth=1","url":"https://github.com/astral-sh/uv/issues/22957"}
