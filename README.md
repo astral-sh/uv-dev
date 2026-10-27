@@ -14,18 +14,26 @@ about an unknown field and lists both preview settings as accepted fields.
 The report does not name the preview feature or show the expected and actual
 behavior that led to the original observation.
 
-Both settings intentionally exist. In the reported release, the legacy
-boolean setting remains supported and resolves identically to the boolean
-form of `preview-features`. The newer name is documented while the old name
-remains in the schema for compatibility. There is a separate, known problem
-with preview settings loaded after the operations they affect, but this
-report does not identify enough behavior to establish that relationship.
+Runtime reproduction with the installed uv 0.13.5 on Linux confirms that
+`uv sync` accepts `preview = true` without an error and that an invalid `asdf`
+field produces a warning listing both preview settings. This reproduces the
+reported acceptance and diagnostic, but does not establish a bug: both settings
+intentionally exist. The legacy boolean remains supported in the reported
+release, while the newer name is documented. In the runtime checks, both true
+settings enabled identical preview flags; `preview = false` enabled none.
+The legacy setting also suppressed the experimental `uv check` warning.
+
+The assertion that the setting silently does nothing is not established for
+the reporter's unspecified feature. Some preview features are consulted before
+configuration is loaded, but the report does not identify enough behavior to
+connect it to that known limitation. Windows and uv 0.13.1 were not tested at
+runtime.
 
 astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of both settings. astral-sh/uv#19825 tracks a narrower case of ineffective preview configuration, but no duplicate is established.
 
 ## Draft response
 
-`preview = true` is still supported in uv 0.13.1 and resolves the same way as `preview-features = true`. astral-sh/uv#18437 added the newer setting while retaining the old one for compatibility, so both names in the parser's expected-field list are intentional.
+`preview = true` is still supported in uv 0.13.1 and resolves the same way as `preview-features = true`. astral-sh/uv#18437 added the newer setting while retaining the old one for compatibility, so both names in the parser's expected-field list are intentional. In a minimal project tested with uv 0.13.5 on Linux, `uv sync` accepted the legacy setting and `--show-settings` showed the same enabled preview flags for both spellings.
 
 Could you share which preview feature you expected to enable, along with a minimal configuration, command, and expected versus actual output? Some features take effect before configuration files are loaded; missing warnings for that case are tracked in astral-sh/uv#19825. A concrete example will let us determine whether that applies here.
 
@@ -40,6 +48,121 @@ information is the particular feature and behavior, not evidence that the
 legacy option still exists. If that example establishes incorrect behavior,
 classify the resulting defect as a bug or a duplicate of its matching open
 issue. No historical fix has been shown to have regressed.
+
+## Reproduction
+
+**Outcome: reproducible**, specifically the absence of an error for
+`preview = true` and the unknown-field diagnostic naming both settings.
+These are intentional compatibility behavior. The separate assertion that
+an unnamed preview feature has no effect remains unverified.
+
+### Environment and isolation
+
+- Reported: Windows, uv 0.13.1; Python version and affected preview feature
+  were not supplied. No last known-good version or explicit upgrade sequence
+  was provided.
+- Tested: Linux x86_64, installed `uv 0.13.5 (x86_64-unknown-linux-gnu)` from
+  `/opt/hostedtoolcache/uv/0.13.5/x86_64/uv`, CPython 3.12.3 at
+  `/usr/bin/python3`. The checkout is uv 0.13.6 source and was not built.
+- All fixtures, virtual environments, cache, temporary, XDG configuration and
+  data directories were isolated under `/tmp/uv-22950-vzlk_61f`. Commands used
+  a clean environment, offline mode, disabled Python downloads, and the system
+  interpreter. No dependencies, workspace members, dependency groups, or
+  alternative configuration files were needed.
+- Full command output and per-command fixtures are retained in
+  `/tmp/uv-22950-vzlk_61f/results.json`; the controlled subprocess environment
+  is recorded in `/tmp/uv-22950-vzlk_61f/environment.json`.
+
+### Minimal fixture and commands
+
+Create `pyproject.toml` in an isolated temporary project:
+
+```toml
+[project]
+name = "preview-repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+preview = true
+```
+
+Run with a temporary cache/configuration environment and no inherited preview
+flags:
+
+```console
+uv sync --offline --python /usr/bin/python3
+uv sync --offline --python /usr/bin/python3 --show-settings
+```
+
+Both commands exited 0. Sync created `.venv`, resolved the local project,
+and completed without a parsing or deprecation warning. The settings output
+contained a populated `preview: Preview { flags: [...] }` including `Pylock`,
+`FormatCommand`, and `CheckCommand`.
+
+Then add `asdf = true` below `preview = true` and repeat:
+
+```console
+uv sync --offline --python /usr/bin/python3
+```
+
+This also exited 0, and emitted the reported warning:
+
+```text
+warning: Failed to parse `pyproject.toml` during settings discovery:
+  TOML parse error at line 9, column 1
+    |
+  9 | asdf = true
+    | ^^^^
+```
+
+The following diagnostic identified unknown field `asdf` and listed both
+`preview` and `preview-features` among the expected fields. The unknown
+`asdf` field is a deliberate invalid-input control; it is not evidence that
+`preview` is invalid.
+
+### Controls and interpretation
+
+- With the invalid field removed, replacing `preview = true` with
+  `preview-features = true` and repeating the settings command produced an
+  identical preview flags block. The complete settings outputs differed only
+  in the runtime timestamp used for `exclude-newer`.
+- Replacing the setting with `preview = false` produced `flags: []`.
+  This directly distinguishes recognized enable-all configuration from an
+  ignored setting.
+- `uv check --offline --python /usr/bin/python3` emitted the experimental
+  `uv check` warning with `preview = false`, but omitted it with
+  `preview = true`. Both commands subsequently exited 2 because offline mode
+  prevented fetching the uncached ty version manifest. This verifies the
+  warning toggle, not successful type checking.
+- `uv export --format pylock.toml --offline --python /usr/bin/python3`
+  exited 0 and emitted the empty project's pylock output with either boolean
+  value, without a preview warning in either case. This command did not
+  distinguish the settings and is not evidence of an ignored toggle.
+
+The source and release history support intentional compatibility, rather than
+removal of the old field. The documented early-loading limitation remains a
+possible explanation only if the reporter supplies an affected feature.
+To investigate that claim, request the specific feature, minimal project and
+configuration (including any `uv.toml`), exact command, expected versus actual
+output, and Python version. The observed Linux result does not establish
+Windows-specific behavior or a defect in uv 0.13.1.
+
+### Existing test coverage
+
+`crates/uv/tests/sync/show_settings.rs::preview_precedence` constructs user
+`uv.toml` and project `pyproject.toml` configurations and compares settings
+snapshots against `--preview` and disabled baselines. It covers project
+`preview = true`, equivalence and precedence of `preview-features = true`,
+project `preview = false` overriding user enable-all configuration, and CLI
+and environment overrides. Its setup and relevant assertions were inspected.
+The module requires `test-python` and `test-pypi`; this configuration test is
+ignored on Windows. It therefore supports the compatibility contract but
+cannot validate the reporter's Windows run or unspecified feature.
+
+No repository tests were added or executed, and no compilation was performed.
+Validation used the installed executable directly.
 
 ## Related
 
@@ -78,9 +201,9 @@ issue. No historical fix has been shown to have regressed.
   reporter's unspecified feature.
 
 The source in the checkout agrees with these release-specific findings.
-No build, integration test, or runtime reproduction was performed; the
-conclusion rests on source, existing test assertions, and maintainer
-discussion.
+The runtime observations in Reproduction independently confirm acceptance,
+preview flag resolution, and the invalid-field diagnostic on uv 0.13.5/Linux.
+They do not identify the feature behind the reporter's no-effect observation.
 
 ## Search coverage and excluded candidates
 
