@@ -39,6 +39,20 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
+      # Install packages before cache and Python writes to reduce potential disk contention.
+      - name: "Install Linux test dependencies"
+        run: |
+          # Try the next configured mirror after the first failed download.
+          cat /etc/apt/apt-mirrors.txt
+          printf '%s\n' \
+            'Acquire::Retries "0";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
+          sudo apt install -y --no-install-recommends --allow-downgrades \
+            git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+
       - uses: astral-sh/github-actions/rust-workspace-cache@09a77e55b9cacee25c4170194cb529300c015991
         with:
           prefix-key: v1-rust-workspace
@@ -63,19 +77,6 @@ jobs:
           uv python install
           # Warm the cache for Unix-only tests
           uv python install 3.12d 3.13d 3.13t 3.13td
-
-      - name: "Install Linux test dependencies"
-        run: |
-          # Try the next configured mirror after the first failed download.
-          cat /etc/apt/apt-mirrors.txt
-          printf '%s\n' \
-            'Acquire::Retries "0";' \
-            'Acquire::http::Timeout "10";' \
-            'Acquire::https::Timeout "10";' \
-            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-          # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
-          sudo apt install -y --no-install-recommends --allow-downgrades \
-            git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
 
       - name: "Start gnome-keyring"
         # run gnome-keyring with 'foobar' as password for the login keyring
