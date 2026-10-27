@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18922,
+        "title": "`exclude-newer`: Parsing failures should become an error",
+        "url": "https://github.com/astral-sh/uv/issues/18922",
+        "state": "open",
+        "reason": "Closest canonical discussion: uv sync continues after a settings-discovery parse warning and ignores exclude-newer. A maintainer confirmed this was unintended and noted that making it fatal is breaking. The new report adds unknown fields as another trigger for the same configuration-discarding behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18923,
+        "title": "Fail on `exclude-newer` parse errors",
+        "url": "https://github.com/astral-sh/uv/pull/18923",
+        "state": "open",
+        "reason": "Existing draft targeting astral-sh/uv#18922, opened months before this report. Its description explicitly discusses reconsidering settings parse failures more broadly, but limits the proposal to exclude-newer. The author deferred merging it in July 2026; it is not a shipped fix."
+      },
+      {
+        "kind": "issue",
+        "number": 17609,
+        "title": "tool.uv.required-version should be handled before parsing rest of pyproject.toml file",
+        "url": "https://github.com/astral-sh/uv/issues/17609",
+        "state": "closed",
+        "reason": "Historical instance of the same parse failure discarding another setting: unsupported configuration bypassed required-version. This narrower version-enforcement bug was fixed; the new report does not establish a regression of that fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18977,
+        "title": "Elevate configuration errors to `required-version` mismatches",
+        "url": "https://github.com/astral-sh/uv/pull/18977",
+        "state": "merged",
+        "reason": "Merged April 13, 2026, fixing astral-sh/uv#17609 by checking required-version after settings parsing fails. Current source retains this check but still warns and skips the file when no version mismatch is found; it does not implement general fatal validation."
+      },
+      {
+        "kind": "issue",
+        "number": 9911,
+        "title": "`pyproject.toml` TOML parse error/warning shown twice",
+        "url": "https://github.com/astral-sh/uv/issues/9911",
+        "state": "open",
+        "reason": "Adjacent settings-discovery discussion whose comments propose making parse failures fatal. Its reproduction has invalid TOML syntax and already ends in an error; this report concerns schema-invalid settings that can allow execution to succeed."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered settings discovery, unknown field, pyproject.toml parse warnings, exclude-newer, and required-version. Conceptual searches covered ignored configuration, invalid settings, fatal parsing, strict mode, warnings as errors, and CI configuration validation, without incidental package/version/platform restrictions. Fix-oriented searches and issue timelines led to astral-sh/uv#18923, astral-sh/uv#18977, and astral-sh/uv#6009; inspected their descriptions, comments, and reviews alongside current source and existing snapshots. PR keyword searches returned no hits, so linked PRs were inspected directly. Ruled out astral-sh/uv#5934 and its merged fix astral-sh/uv#6009 as diagnostic-detail improvements rather than fatal-validation fixes; astral-sh/uv#9653 requests a separate validation command; astral-sh/uv#3097 restricts executable lookup. Reporter links astral-sh/uv#6662 and astral-sh/uv#16546 concern uv bootstrapping and package-file conflicts respectively. Also inspected astral-sh/uv#22950 and astral-sh/uv#17308: preview semantics and workspace-dependent discovery are not the canonical discussion for this request."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#18922 already tracks the underlying correctness problem: settings parse failures become warnings, configuration is discarded, and execution continues. The unknown-field example and request for broader or opt-in fatal validation can be discussed there, with the existing draft astral-sh/uv#18923. Duplicate classification takes precedence. The merged astral-sh/uv#18977 only fixed required-version enforcement, so this is not evidence that a general parse-error fix regressed.",
+  "summary": "astral-sh/uv#18922 and its open draft astral-sh/uv#18923 are the closest matches. astral-sh/uv#17609 and astral-sh/uv#18977 document the narrower, already-fixed required-version case; astral-sh/uv#9911 covers duplicate parse diagnostics.",
+  "draft_response": "You're right that a settings parse failure can discard otherwise-valid settings from the same `pyproject.toml`. This is the underlying behavior tracked in astral-sh/uv#18922. The targeted proposal in astral-sh/uv#18923 is still an open draft, and making these failures fatal needs a compatibility decision. Please add your unknown-field example and request for broader validation to astral-sh/uv#18922 so we can keep the discussion together."
+}
