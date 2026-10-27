@@ -58,6 +58,22 @@ The closest excluded candidates were inspected, including comments:
 - astral-sh/uv#13791 is the broader historical export-obfuscation discussion. Maintainer comments point to astral-sh/uv#13799 for the SSH fix, while an unrelated authenticated-wheel problem was moved elsewhere.
 - astral-sh/uv#8529 requests better Git authentication configuration, including environment variables and credential providers. It is broader than retaining the already-supplied shared username, so astral-sh/uv#15034 is the closer discussion.
 
+## Reported workaround and limitation
+
+The reporter identifies `git config --global core.sshCommand "ssh -l your-desired-username"`
+as a workaround when dependency fetches can all use the same SSH account. This configures
+Git to supply the username outside the saved dependency URL; it does not restore the
+username in `pyproject.toml`.
+
+The reporter notes that the global override cannot accommodate servers requiring different
+usernames, such as a private host using the shared custom account alongside GitHub sources
+using `git`. Mixed-host dependencies therefore remain an important case when evaluating a
+solution. The comment supplies no execution output confirming the workaround or its failure;
+these are reporter-provided findings, not an independently reproduced result. No Git
+configuration was changed during this investigation.
+
+Source: muellert’s 2026-10-27 comment on astral-sh/uv#22277 (comment ID 6440854793).
+
 ## Validation and next step
 
 Recommend centralizing the shared-account SSH reproduction in astral-sh/uv#15034. The draft offers the documented `--raw` workaround and makes its different project-file representation explicit. It does not promise a fix or claim the historical export change supported arbitrary usernames.
