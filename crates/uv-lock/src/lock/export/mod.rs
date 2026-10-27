@@ -1,13 +1,12 @@
 use std::collections::VecDeque;
 use std::mem;
 
-use either::Either;
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
 use petgraph::{Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{
     DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
@@ -25,7 +24,8 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::{LockErrorKind, PackageIndex, Source};
+use crate::lock::walk::LockWalker;
+use crate::lock::{LockErrorKind, Source};
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
@@ -72,22 +72,13 @@ impl<'lock> ExportableRequirements<'lock> {
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut node_by_package = vec![None; size_guess];
 
-        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen = FxHashSet::default();
+        let mut walker = LockWalker::new(target.lock());
         let mut activated_items = FxHashSet::default();
 
         let root = graph.add_node(Node::Root);
 
         // Add the workspace packages and any additional dependency-group roots to the queue.
-        for (root_name, root_kind) in target
-            .roots()
-            .map(|root| (root, InstallableRootKind::Production))
-            .chain(
-                target
-                    .group_root(groups)
-                    .map(|root| (root, InstallableRootKind::DependencyGroups)),
-            )
-        {
+        for (root_name, root_kind) in target.roots_with_kind(groups) {
             if prune.contains(root_name) {
                 continue;
             }
@@ -121,9 +112,9 @@ impl<'lock> ExportableRequirements<'lock> {
                 );
 
                 // Push its dependencies on the queue.
-                queue.push_back((package_index, None));
+                walker.push(package_index, None);
                 for extra in extras.extra_names(dist.optional_dependencies.keys()) {
-                    queue.push_back((package_index, Some(extra)));
+                    walker.push(package_index, Some(extra));
                     activated_items
                         .insert(ConflictItem::from((dist.id.name.clone(), extra.clone())));
                 }
@@ -162,114 +153,47 @@ impl<'lock> ExportableRequirements<'lock> {
                     );
 
                     // Push its dependencies on the queue.
-                    if seen.insert((dep.index, None)) {
-                        queue.push_back((dep.index, None));
-                    }
-                    for extra in &dep.extra {
-                        if seen.insert((dep.index, Some(extra))) {
-                            queue.push_back((dep.index, Some(extra)));
-                        }
-                    }
+                    walker.push_dependency(dep);
                 }
             }
         }
 
         // Add requirements that are exclusive to the workspace root (e.g., dependency groups in
         // non-project workspace roots).
-        let root_requirements = target
-            .lock()
-            .requirements()
-            .iter()
-            .chain(
-                target
-                    .lock()
-                    .dependency_groups()
-                    .iter()
-                    .filter_map(|(group, deps)| {
-                        if target.includes_group(None, group, groups) {
-                            Some(deps)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten(),
-            )
+        for requirement in target
+            .root_requirements(groups)
             .filter(|dep| !prune.contains(&dep.name))
-            .collect::<Vec<_>>();
+        {
+            for (package_index, dist) in target.lock().packages_for_requirement(requirement) {
+                let Some(marker) = target.lock().root_requirement_marker(requirement, dist) else {
+                    continue;
+                };
+                // Add the dependency to the graph and get its index.
+                let dep_index = *node_by_package[package_index.0]
+                    .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
 
-        // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
-        if !root_requirements.is_empty() {
-            let by_name: FxHashMap<_, Vec<_>> = {
-                let names = root_requirements
-                    .iter()
-                    .map(|dep| &dep.name)
-                    .collect::<FxHashSet<_>>();
-                target.lock().packages().iter().fold(
-                    FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher),
-                    |mut map, package| {
-                        if names.contains(&package.id.name) {
-                            map.entry(&package.id.name).or_default().push(package);
-                        }
-                        map
+                // Add an edge from the root.
+                graph.add_edge(
+                    root,
+                    dep_index,
+                    Edge::Prod {
+                        marker,
+                        dep_extras: requirement.extras.iter().collect(),
                     },
-                )
-            };
+                );
 
-            for requirement in root_requirements {
-                for dist in by_name.get(&requirement.name).into_iter().flatten() {
-                    // Determine whether this entry is relevant for the requirement by
-                    // intersecting and simplifying the markers.
-                    let Some(marker) = target.lock().root_requirement_marker(requirement, dist)
-                    else {
-                        continue;
-                    };
-                    let package_index = target.lock().by_id[&dist.id];
-
-                    // Add the dependency to the graph and get its index.
-                    let dep_index = *node_by_package[package_index.0]
-                        .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
-
-                    // Add an edge from the root.
-                    graph.add_edge(
-                        root,
-                        dep_index,
-                        Edge::Prod {
-                            marker,
-                            dep_extras: requirement.extras.iter().collect(),
-                        },
-                    );
-
-                    // Push its dependencies on the queue.
-                    if seen.insert((package_index, None)) {
-                        queue.push_back((package_index, None));
-                    }
-                    for extra in &requirement.extras {
-                        if seen.insert((package_index, Some(extra))) {
-                            queue.push_back((package_index, Some(extra)));
-                        }
-                    }
-                }
+                // Push its dependencies on the queue.
+                walker.push_package(package_index, &requirement.extras);
             }
         }
 
-        // Traverse each package's regular and requested optional dependencies separately.
-        while let Some((package_index, extra)) = queue.pop_front() {
+        // Create all the relevant nodes.
+        while let Some(visit) = walker.pop() {
+            let package_index = visit.index;
+            let extra = visit.extra;
             let index = node_by_package[package_index.0].expect("queued package has a graph node");
-            let package = target.lock().package(package_index);
 
-            let deps = if let Some(extra) = extra {
-                Either::Left(
-                    package
-                        .optional_dependencies
-                        .get(extra)
-                        .into_iter()
-                        .flatten(),
-                )
-            } else {
-                Either::Right(package.dependencies.iter())
-            };
-
-            for dep in deps {
+            for dep in visit.dependencies {
                 if prune.contains(&dep.package_id.name) {
                     continue;
                 }
@@ -299,14 +223,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 

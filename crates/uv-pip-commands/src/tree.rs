@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::VecDeque;
 use std::fmt::Write;
 
 use anyhow::Result;
@@ -25,6 +24,7 @@ use uv_pypi_types::{ResolutionMetadata, ResolverMarkerEnvironment, VerbatimParse
 use uv_python_discovery::find_environment;
 use uv_python_types::{EnvironmentPreference, PythonArchitecture, PythonPreference, PythonRequest};
 use uv_resolver::{ExcludeNewer, Prerelease};
+use uv_types::OnceQueue;
 
 use crate::reporters::report_target_environment;
 use uv_command_support::ExitStatus;
@@ -293,21 +293,19 @@ impl<'env> DisplayDependencyGraph<'env> {
 
         // Step 3: Filter the graph to those nodes reachable from the target packages.
         if !package.is_empty() {
-            // Perform a DFS from the root nodes to find the reachable nodes.
-            let mut reachable = graph
+            // Walk from the root nodes to find the reachable nodes.
+            let mut queue = graph
                 .node_indices()
                 .filter(|index| package.contains(&graph[*index].name))
-                .collect::<FxHashSet<_>>();
-            let mut stack = reachable.iter().copied().collect::<VecDeque<_>>();
-            while let Some(node) = stack.pop_front() {
+                .collect::<OnceQueue<_>>();
+            while let Some(node) = queue.pop() {
                 for edge in graph.edges_directed(node, Direction::Outgoing) {
-                    if reachable.insert(edge.target()) {
-                        stack.push_back(edge.target());
-                    }
+                    queue.push(edge.target());
                 }
             }
 
             // Remove the unreachable nodes from the graph.
+            let reachable = queue.into_seen();
             graph.retain_nodes(|_, index| reachable.contains(&index));
         }
 
