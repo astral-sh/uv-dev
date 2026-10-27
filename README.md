@@ -26,28 +26,30 @@ The legacy setting also suppressed the experimental `uv check` warning.
 The assertion that the setting silently does nothing is not established for
 the reporter's unspecified feature. Some preview features are consulted before
 configuration is loaded, but the report does not identify enough behavior to
-connect it to that known limitation. Windows and uv 0.13.1 were not tested at
-runtime.
+connect it to that known limitation. Local runtime checks covered Linux and
+uv 0.13.5, not Windows or uv 0.13.1. Maintainer EliteTK separately reports
+successful tests of `preview = true` on uv 0.13.1, without specifying a
+platform or test commands, and recommends using `preview-features` instead.
 
 astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of both settings. astral-sh/uv#19825 tracks a narrower case of ineffective preview configuration, but no duplicate is established.
 
 ## Maintainer position and diagnostic policy
 
-In astral-sh/uv#22950, maintainer zanieb clarifies that the earlier
-compatibility explanation addressed a non-existent preview feature name,
-not the global `preview` option (October 27, 2026, comment ID 6433541957).
-That earlier reply therefore does not establish a maintainer decision about
-the global option. Zanieb is unsure of the latest plan for that option and
-has asked EliteTK for clarification; the supplied discussion contains no
-answer yet.
+In astral-sh/uv#22950, maintainer EliteTK reports that tests on uv 0.13.1
+show `preview = true` continues to work, although it is no longer documented
+(October 27, 2026, comment ID 6447517469). The recommendation is to encourage
+`preview-features` instead. EliteTK does not know whether the legacy option
+will ever stop working; this is neither an announced removal plan nor a
+promise of indefinite support. This answers the pending clarification about
+current behavior and the recommended setting.
 
-The release-specific source, historical PR discussion, and Linux runtime
-findings below independently establish continued support in the versions
-examined. The maintainer's uncertainty about the latest plan does not
-invalidate those findings or establish removal, a no-op, or a regression.
-The distinction is between an unknown individual preview feature name and
-the recognized global boolean setting. No new reproduction details or
-affected feature were supplied.
+This maintainer-reported result agrees with the release-specific source,
+historical PR discussion, and local Linux reproduction below. The comment
+does not include a platform, commands, or an affected feature, so it does not
+verify the reporter's Windows scenario or explain the no-effect observation.
+Zanieb's earlier compatibility explanation concerned an unknown individual
+preview feature name, as zanieb subsequently clarified; it should not be
+used as a decision about the global boolean option.
 
 The reporter questions why a diagnostic would break compatibility when
 invalid configuration currently produces only a warning, and points to
@@ -91,7 +93,10 @@ an unnamed preview feature has no effect remains unverified.
 - Reported: Windows, uv 0.13.1; Python version and affected preview feature
   were not supplied. No last known-good version or explicit upgrade sequence
   was provided.
-- Tested: Linux x86_64, installed `uv 0.13.5 (x86_64-unknown-linux-gnu)` from
+- Maintainer-reported: EliteTK tested `preview = true` successfully on uv
+  0.13.1. Platform, Python version, fixture, and commands were not provided;
+  this is separate corroboration, not an additional local reproduction.
+- Tested locally: Linux x86_64, installed `uv 0.13.5 (x86_64-unknown-linux-gnu)` from
   `/opt/hostedtoolcache/uv/0.13.5/x86_64/uv`, CPython 3.12.3 at
   `/usr/bin/python3`. The checkout is uv 0.13.6 source and was not built.
 - All fixtures, virtual environments, cache, temporary, XDG configuration and
@@ -275,11 +280,13 @@ listing supplied additional candidates.
 
 ## Maintainer next step
 
-Clarification from EliteTK on the current plan for the global `preview`
-option is pending in the supplied discussion. Do not treat zanieb's initial
-compatibility reply as a decision about that option: it concerned unknown
-individual feature names. Use the recorded release-specific evidence to
-distinguish implemented behavior from any future policy decision.
+EliteTK has clarified that the legacy setting works in tests on uv 0.13.1
+and that `preview-features` is the recommended setting. No further
+clarification is pending on that point; a future removal policy remains
+unspecified. The question classification remains supported by this report
+and the recorded source and runtime evidence. Changing to the recommended
+setting is not an established workaround for the reporter's unexplained
+no-effect observation.
 
 The reporter's objection about nonfatal warnings also has no substantive
 resolution in the supplied discussion. Consider diagnostic severity for
