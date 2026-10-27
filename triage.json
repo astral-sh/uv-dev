@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22094,
+        "title": "Use tar-codec by default",
+        "url": "https://github.com/astral-sh/uv/pull/22094",
+        "state": "merged",
+        "reason": "Switched archive extraction to tar-codec in uv 0.13.0 and introduced UV_LEGACY_TAR_BACKEND. Establishes the backend transition matching this regression's timing; it does not track a v7 compatibility fix."
+      },
+      {
+        "kind": "issue",
+        "number": 22510,
+        "title": "0.13.0: `uv build` rejects sdists whose group name is ≥32 characters (\"invalid ustar gname field: missing NUL terminator\")",
+        "url": "https://github.com/astral-sh/uv/issues/22510",
+        "state": "closed",
+        "reason": "Another 0.13.0 tar-decoder compatibility regression with the same legacy-backend workaround. Its confirmed trigger is a full-length ustar uname/gname without a NUL terminator, rather than a v7 header lacking ustar/GNU identity. Maintainer comments point to astral-sh/uv#22522."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22522,
+        "title": "Bump tar-codec to 0.0.15",
+        "url": "https://github.com/astral-sh/uv/pull/22522",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#22510 by allowing unterminated uname/gname fields; released in uv 0.13.1. The pinned tar-framing 0.0.15 still rejects all-zero identities, so this fix does not cover v7 archives."
+      },
+      {
+        "kind": "issue",
+        "number": 22492,
+        "title": "v0.13.0 fails to install pybabel-json==0.2.0",
+        "url": "https://github.com/astral-sh/uv/issues/22492",
+        "state": "closed",
+        "reason": "A contemporaneous sdist extraction regression resolved by astral-sh/uv#22516. Its error explicitly rejects hard-link members under extraction policy; the new report fails earlier during header identification."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22516,
+        "title": "Allow hard-links when extracting sdists",
+        "url": "https://github.com/astral-sh/uv/pull/22516",
+        "state": "merged",
+        "reason": "The reporter's suggested lead relaxes hard-link extraction policy and shipped in uv 0.13.1. It does not change archive identity parsing, so it is related background rather than a duplicate or fix for this failure."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Literal searches covered invalid tar identity, Invalid tar file, pre-POSIX, v7, V7_FORMAT, pypdf2, and UV_LEGACY_TAR_BACKEND. Conceptual searches covered tar headers, magic, identity, old-style archives, compatibility, and sdist extraction; cause/fix searches separately covered tar-codec, tar-framing, ustar, and the 0.13 transition. Supplemented empty PR search results by filtering titles/bodies of the latest 2,000 PRs across all states and all 626 open PRs. Inspected candidate discussions, reviews, linked fixes, and release notes. Ruled out astral-sh/uv#21641 (network reset), astral-sh/uv#20394 (compressed-stream finalization), astral-sh/uv#19883 (future PEP 625 enforcement), and astral-sh/uv#22425 (closed documentation proposal) as duplicates. No existing v7 identity failure or historical v7 fix was found."
+  },
+  "type": "bug",
+  "type_reason": "Source and archive inspection establish a compatibility failure: the published PyPDF2 1.26.0 sdist has an all-zero header identity, and the pinned tar-framing 0.0.15 rejects it. The reporter's 0.12.0 success and 0.13.0–0.13.6 failure align with the documented default-backend switch. Stricter validation documentation does not resolve the compatibility defect. Existing hard-link and uname/gname fixes address different mechanisms; no issue or PR tracking this same regression was found.",
+  "summary": "A distinct v7 tar compatibility bug following astral-sh/uv#22094. The closest reports, astral-sh/uv#22510 and astral-sh/uv#22492, were fixed by astral-sh/uv#22522 and astral-sh/uv#22516 in uv 0.13.1, but neither fix covers all-zero v7 identities.",
+  "draft_response": "The PyPDF2 archive's first header has an all-zero identity, which the pinned tar-framing 0.0.15 rejects before extraction policy is applied. This confirms a compatibility bug separate from the hard-link fix in astral-sh/uv#22516 and the user/group-name fix in astral-sh/uv#22522.\n\nYou can use `UV_LEGACY_TAR_BACKEND=1 uv pip install --no-cache pypdf2==1.26.0` as a workaround. The next step is to add v7 decoding support in tar-framing/tar-codec and a regression test for these sdists."
+}
