@@ -33,14 +33,21 @@ astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of
 
 ## Maintainer position and diagnostic policy
 
-In astral-sh/uv#22950, maintainer zanieb confirms that the behavior is
-intentional, explaining that compatibility allows settings to be removed
-without breaking users (October 27, 2026, comment ID 6432609229).
-This directly addresses the request for an error and supports retaining the
-question classification. The comment does not establish that `preview` itself
-has been removed or is a no-op: the release-specific source and runtime
-findings below show continued support. It adds no affected feature or
-reproduction details for the reporter's no-effect observation.
+In astral-sh/uv#22950, maintainer zanieb clarifies that the earlier
+compatibility explanation addressed a non-existent preview feature name,
+not the global `preview` option (October 27, 2026, comment ID 6433541957).
+That earlier reply therefore does not establish a maintainer decision about
+the global option. Zanieb is unsure of the latest plan for that option and
+has asked EliteTK for clarification; the supplied discussion contains no
+answer yet.
+
+The release-specific source, historical PR discussion, and Linux runtime
+findings below independently establish continued support in the versions
+examined. The maintainer's uncertainty about the latest plan does not
+invalidate those findings or establish removal, a no-op, or a regression.
+The distinction is between an unknown individual preview feature name and
+the recognized global boolean setting. No new reproduction details or
+affected feature were supplied.
 
 The reporter questions why a diagnostic would break compatibility when
 invalid configuration currently produces only a warning, and points to
@@ -52,7 +59,7 @@ legacy setting should be treated as invalid. The existing Linux reproduction
 confirms that the invalid-field example warns and exits 0. The linked issue
 also reports that parse failures discard other uv settings, but the recorded
 reproduction does not test that broader claim. The supplied discussion has
-no maintainer response to this warning-versus-error objection.
+no substantive maintainer decision on this warning-versus-error objection.
 
 ## Draft response
 
@@ -62,7 +69,7 @@ Could you share which preview feature you expected to enable, along with a minim
 
 ## Classification
 
-The premise that preview no longer exists is contradicted by uv 0.13.1 source and maintainer discussion: it remains supported, intentionally appears in the schema, and resolves like preview-features = true. The report does not identify the feature or observable behavior behind 'silently doing nothing', and no separate correctness defect or regression is established. The related early-loading issues cannot be treated as duplicates without that information.
+The premise that preview no longer exists is contradicted by uv 0.13.1 source and the historical discussion on astral-sh/uv#18437: it remains supported, intentionally appears in the schema, and resolves like preview-features = true. The report does not identify the feature or observable behavior behind 'silently doing nothing', and no separate correctness defect or regression is established. The related early-loading issues cannot be treated as duplicates without that information.
 
 The deliberately invalid `asdf` field demonstrates the parser's accepted
 field list; it does not demonstrate that `preview` is invalid or ignored.
@@ -268,13 +275,17 @@ listing supplied additional candidates.
 
 ## Maintainer next step
 
-The maintainer has explained the compatibility rationale, but the reporter's
-objection about nonfatal warnings remains unanswered in the supplied
-discussion. Consider diagnostic severity for genuinely invalid configuration
-with astral-sh/uv#22951; keep that policy question separate from whether the
-legacy preview setting remains supported. The existing draft above predates
-these clarifications and is retained as context, not as a recommendation to
-repeat it.
+Clarification from EliteTK on the current plan for the global `preview`
+option is pending in the supplied discussion. Do not treat zanieb's initial
+compatibility reply as a decision about that option: it concerned unknown
+individual feature names. Use the recorded release-specific evidence to
+distinguish implemented behavior from any future policy decision.
+
+The reporter's objection about nonfatal warnings also has no substantive
+resolution in the supplied discussion. Consider diagnostic severity for
+genuinely invalid configuration with astral-sh/uv#22951, separately from the
+global preview option. The existing draft above predates these clarifications
+and is retained as context, not as a recommendation to repeat it.
 
 Further investigation of the no-effect claim depends on the reporter
 identifying the preview feature and supplying minimal configuration, the exact
