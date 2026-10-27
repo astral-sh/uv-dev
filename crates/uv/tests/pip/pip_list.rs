@@ -345,6 +345,48 @@ fn list_outdated_find_links() -> Result<()> {
     Ok(())
 }
 
+/// A reported latest version must have an artifact permitted by the package's build policy.
+#[test]
+fn list_outdated_build_options() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let dist_info = ChildPath::new(context.site_packages()).child("example-1.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.2
+        Name: example
+        Version: 1.0
+    "})?;
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    links.child("example-2.0.tar.gz").touch()?;
+    links.child("example-3.0-py3-none-any.whl").touch()?;
+    let config = context.temp_dir.child("uv.toml");
+
+    config.write_str("[pip]\nno-binary = ['example']\n")?;
+    uv_snapshot!(context.pip_list()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["--outdated", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version Latest Type
+    ------- ------- ------ -----
+    example 1.0     2.0    sdist
+    ");
+
+    links.child("example-4.0.tar.gz").touch()?;
+    config.write_str("[pip]\nonly-binary = ['example']\n")?;
+    uv_snapshot!(context.pip_list()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["--outdated", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version Latest Type
+    ------- ------- ------ -----
+    example 1.0     3.0    wheel
+    ");
+    Ok(())
+}
+
 #[test]
 fn list_outdated_freeze() {
     let context = uv_test::test_context!("3.12");

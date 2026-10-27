@@ -2,6 +2,7 @@ use tokio::sync::Semaphore;
 use tracing::debug;
 
 use uv_client::{MetadataFormat, RegistryClient, VersionFiles};
+use uv_configuration::BuildOptions;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     File, IndexCapabilities, IndexEntryFilename, IndexLocations, IndexMetadataRef, IndexUrl,
@@ -21,6 +22,7 @@ pub struct LatestClient<'env> {
     pub client: &'env RegistryClient,
     pub capabilities: &'env IndexCapabilities,
     pub prerelease: &'env Prerelease,
+    pub build_options: &'env BuildOptions,
     pub exclude_newer: &'env ExcludeNewer,
     pub index_locations: &'env IndexLocations,
     pub tags: Option<&'env Tags>,
@@ -44,6 +46,16 @@ impl LatestClient<'_> {
         file: &File,
         exclude_newer: Option<&jiff::Timestamp>,
     ) -> bool {
+        match filename {
+            DistFilename::WheelFilename(_) if self.build_options.no_binary_package(package) => {
+                return false;
+            }
+            DistFilename::SourceDistFilename(_) if self.build_options.no_build_package(package) => {
+                return false;
+            }
+            DistFilename::WheelFilename(_) | DistFilename::SourceDistFilename(_) => {}
+        }
+
         // Respect any exclude-newer cutoffs that were provided.
         if let Some(exclude_newer) = exclude_newer {
             match file.upload_time_utc_ms.as_ref() {
