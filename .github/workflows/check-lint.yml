@@ -125,7 +125,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      - uses: astral-sh/github-actions/rust-workspace-cache@7a1c709a167933c8e64f25b527696f043d5ba885
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
       - name: "Clippy"
@@ -157,7 +157,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      - uses: astral-sh/github-actions/rust-workspace-cache@7a1c709a167933c8e64f25b527696f043d5ba885
         with:
           workspace: ${{ env.UV_WORKSPACE }}
           save-if: ${{ inputs.save-rust-cache == 'true' }}
@@ -206,7 +206,7 @@ jobs:
           persist-credentials: false
       - name: "Install Rust toolchain"
         run: rustup toolchain install 1.99.0
-      - uses: astral-sh/github-actions/rust-workspace-cache@8139eb474ac22fe39bb1e33b50afa426dcdaf455
+      - uses: astral-sh/github-actions/rust-workspace-cache@7a1c709a167933c8e64f25b527696f043d5ba885
         with:
           target-directory: target/hawk
           # Cache dependencies without enabling unstable Cargo freshness for Hawk.
