@@ -1,0 +1,1171 @@
+{
+  "repository": "astral-sh/uv-dev",
+  "complete": true,
+  "workflow_head": "25b866a6840f0c642d078a033094ba41ee6ed1f2",
+  "source_history": [
+    {
+      "index": 0,
+      "sha": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+      "subject": "Derive deserialization for build backend config settings (#22879)",
+      "date": "2026-10-23T16:03:34-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-distribution-types/Cargo.toml",
+        "crates/uv-distribution-types/src/config_settings.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 18,
+      "pr_can_save": true
+    },
+    {
+      "index": 1,
+      "sha": "834e65e7b43f6a20b595dd6a93c342f09df2590f",
+      "subject": "Derive deserialization for project source entries (#22880)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": ["crates/uv-workspace/src/pyproject.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 19,
+      "pr_can_save": false
+    },
+    {
+      "index": 2,
+      "sha": "28ab1fa4d1fffbe6f62296fd8eeebd030a1c4dec",
+      "subject": "Derive deserialization for workspace references (#22883)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": ["crates/uv-workspace/src/pyproject.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 20,
+      "pr_can_save": false
+    },
+    {
+      "index": 3,
+      "sha": "f7a4df41ee3fdf3b80746ecb6b5473f26b560d7b",
+      "subject": "Derive deserialization for build backend module names (#22884)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": ["crates/uv-build-backend/src/settings.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 21,
+      "pr_can_save": false
+    },
+    {
+      "index": 4,
+      "sha": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+      "subject": "Derive deserialization for tool receipt requirements (#22885)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-tool/Cargo.toml",
+        "crates/uv-tool/src/tool.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 22,
+      "pr_can_save": true
+    },
+    {
+      "index": 5,
+      "sha": "ef5b724387cd61466d825b3fdda18ed318489ff6",
+      "subject": "Derive deserialization for exclude-newer values (#22887)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "crates/uv-distribution-types/src/exclude_newer.rs",
+        "crates/uv/tests/lock_scenarios/lock_exclude_newer_relative.rs"
+      ],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 23,
+      "pr_can_save": false
+    },
+    {
+      "index": 6,
+      "sha": "c5fed68440e161dfd18b2c2b2dd5a8744ef824a5",
+      "subject": "Document when to use DeserializeUntagged (#22889)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": ["AGENTS.md"],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": false,
+      "original_history_index": 24,
+      "pr_can_save": false
+    },
+    {
+      "index": 7,
+      "sha": "f158ef25a3cf2fb9bc089ca38cc06f659066f566",
+      "subject": "Emit DeserializeUntagged scalar callbacks directly (#22890)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": ["crates/uv-macros/src/deserialize_untagged.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 25,
+      "pr_can_save": false
+    },
+    {
+      "index": 8,
+      "sha": "e46bedbacb91322b32e76b797f8828910b1b0dea",
+      "subject": "Skip the Azure APT mirror in ARMv7 CI (#22895)",
+      "date": "2026-10-23T21:22:51+00:00",
+      "changed_files": [".github/workflows/build-dev-binaries.yml"],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 26,
+      "pr_can_save": true
+    },
+    {
+      "index": 9,
+      "sha": "f912bc5d57c126cdf1e333518c5c4f2ca21cb29a",
+      "subject": "Remove the unused `Deserialize` derive from `WheelWireSource` (#22891)",
+      "date": "2026-10-23T18:02:04-04:00",
+      "changed_files": ["crates/uv-lock/src/lock/mod.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 27,
+      "pr_can_save": false
+    },
+    {
+      "index": 10,
+      "sha": "15689c8dd573ad32e009d0fdb50ec3fb70315f01",
+      "subject": "Skip the Azure APT mirror for Wine, deadsnakes, and musl (#22896)",
+      "date": "2026-10-23T18:02:27-04:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test-integration.yml"
+      ],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 28,
+      "pr_can_save": true
+    },
+    {
+      "index": 11,
+      "sha": "1cd8cf12bd622f2815406f29e3168d7f052bf1b3",
+      "subject": "Use `DeserializeUntagged` for Packse artifact settings (#22892)",
+      "date": "2026-10-23T22:21:25+00:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-test/Cargo.toml",
+        "crates/uv-test/src/packse/scenario.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 29,
+      "pr_can_save": true
+    },
+    {
+      "index": 12,
+      "sha": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596",
+      "subject": "Restore build-script input timestamps in Linux CI (#22904)",
+      "date": "2026-10-24T04:00:52+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test.yml"
+      ],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 30,
+      "pr_can_save": true
+    }
+  ],
+  "initial_sources": {
+    "before": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+    "after": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+    "refresh": "0337a04ec4e92cd756ff5c608e145f647c50937b"
+  },
+  "initial_source_history_indices": {
+    "before": 18,
+    "after": 18,
+    "refresh": 18
+  },
+  "replicas_per_commit": 3,
+  "variants": {
+    "before": "Dependencies only",
+    "after": "Workspace (no source key)",
+    "refresh": "Workspace (source key)"
+  },
+  "actions": {
+    "before": "243f4258608cb0f0dace8009ef4c5d8fbd3986c3",
+    "after": "243f4258608cb0f0dace8009ef4c5d8fbd3986c3",
+    "refresh": "7a1c709a167933c8e64f25b527696f043d5ba885"
+  },
+  "bootstrap_seed": 20261025,
+  "bootstrap_block_length": 3,
+  "bootstrap_resamples": 50000,
+  "bootstrap_sensitivity_lengths": [1, 2, 4],
+  "timing_basis": "First through last runner-log timestamp, including setup and post steps; queue time excluded.",
+  "cache_backend": "Depot Cache",
+  "branch_cache_isolation": false,
+  "cache_backend_reference": "https://depot.dev/docs/cache/integrations/github-actions",
+  "expected": {
+    "read_only": {
+      "comparisons": {
+        "after_vs_refresh": {
+          "commits": 11,
+          "before_mean": 213.67405175757574,
+          "after_mean": 200.07622321212122,
+          "saved": 13.597828545454519,
+          "speedup": 1.0679632408446558,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [205.32221927272724, 221.65109972727268],
+          "after_ci90": [190.09491615151518, 209.87084006060607],
+          "saved_ci90": [2.2976305151515533, 25.925702121212083],
+          "speedup_ci90": [1.0111820072028537, 1.1336081775205176],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 213.67405175757574,
+              "after_mean": 200.07622321212122,
+              "saved": 13.597828545454519,
+              "speedup": 1.0679632408446558,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [205.110506180303, 220.27797900606063],
+              "after_ci90": [189.6167927666667, 210.21942691363634],
+              "saved_ci90": [3.5525815333333126, 24.445722465151565],
+              "speedup_ci90": [1.0171269212988756, 1.127153394138304]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 213.67405175757574,
+              "after_mean": 200.07622321212122,
+              "saved": 13.597828545454519,
+              "speedup": 1.0679632408446558,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [205.21245809090908, 221.11710806060609],
+              "after_ci90": [190.6558122939394, 209.93003393939395],
+              "saved_ci90": [2.562473151515178, 25.10719503030299],
+              "speedup_ci90": [1.012340678382597, 1.1296257642428298]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 213.67405175757574,
+              "after_mean": 200.07622321212122,
+              "saved": 13.597828545454519,
+              "speedup": 1.0679632408446558,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [205.45410254545456, 221.46538457575755],
+              "after_ci90": [189.86348196969695, 210.2889644545454],
+              "saved_ci90": [2.0553516666666383, 26.146735757575783],
+              "speedup_ci90": [1.0099755819035308, 1.1369481644688413]
+            }
+          }
+        },
+        "before_vs_refresh": {
+          "commits": 11,
+          "before_mean": 220.7462521515151,
+          "after_mean": 200.07622321212122,
+          "saved": 20.670028939393887,
+          "speedup": 1.1033107713027923,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [218.88978742424243, 222.96897851515158],
+          "after_ci90": [190.09491615151518, 209.87084006060607],
+          "saved_ci90": [11.31797572727271, 29.851522642424232],
+          "speedup_ci90": [1.0537722794358366, 1.156461274303568],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 200.07622321212122,
+              "saved": 20.670028939393887,
+              "speedup": 1.1033107713027923,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [218.65820329393935, 222.86855517878791],
+              "after_ci90": [189.6167927666667, 210.21942691363634],
+              "saved_ci90": [10.164207468181816, 31.06299550000002],
+              "speedup_ci90": [1.0484629755346937, 1.1638121504164287]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 200.07622321212122,
+              "saved": 20.670028939393887,
+              "speedup": 1.1033107713027923,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [218.70747425606058, 223.00810624242425],
+              "after_ci90": [190.6558122939394, 209.93003393939395],
+              "saved_ci90": [10.539835086363587, 29.541071696969656],
+              "speedup_ci90": [1.0505278148013817, 1.154977872767356]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 200.07622321212122,
+              "saved": 20.670028939393887,
+              "speedup": 1.1033107713027923,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [219.02041709090906, 222.86468724242422],
+              "after_ci90": [189.86348196969695, 210.2889644545454],
+              "saved_ci90": [11.191279242424343, 29.651271333333284],
+              "speedup_ci90": [1.053218576026814, 1.1562674861271343]
+            }
+          }
+        },
+        "before_vs_after": {
+          "commits": 11,
+          "before_mean": 220.7462521515151,
+          "after_mean": 213.67405175757574,
+          "saved": 7.072200393939369,
+          "speedup": 1.0330980778235213,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [218.88978742424243, 222.96897851515158],
+          "after_ci90": [205.32221927272724, 221.65109972727268],
+          "saved_ci90": [-1.3965290909090982, 15.65906518181825],
+          "speedup_ci90": [0.9936803367983656, 1.075990689378897],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 213.67405175757574,
+              "saved": 7.072200393939369,
+              "speedup": 1.0330980778235213,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [218.65820329393935, 222.86855517878791],
+              "after_ci90": [205.110506180303, 220.27797900606063],
+              "saved_ci90": [0.27229420757571193, 15.028282639393964],
+              "speedup_ci90": [1.0012372657095314, 1.0731772066087675]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 213.67405175757574,
+              "saved": 7.072200393939369,
+              "speedup": 1.0330980778235213,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [218.70747425606058, 223.00810624242425],
+              "after_ci90": [205.21245809090908, 221.11710806060609],
+              "saved_ci90": [-0.8935702196969652, 15.39154617878793],
+              "speedup_ci90": [0.9959759758320567, 1.0749130322998772]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 220.7462521515151,
+              "after_mean": 213.67405175757574,
+              "saved": 7.072200393939369,
+              "speedup": 1.0330980778235213,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [219.02041709090906, 222.86468724242422],
+              "after_ci90": [205.45410254545456, 221.46538457575755],
+              "saved_ci90": [-1.4611425757576342, 15.617162757575784],
+              "speedup_ci90": [0.9933665954542892, 1.0757476746888959]
+            }
+          }
+        }
+      },
+      "means": {
+        "before": {
+          "job_seconds": 220.74625215151516,
+          "restore_seconds": 3.5757575757575757,
+          "main_build_seconds": 48.67363636363636,
+          "nextest_seconds": 116.77151515151515,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.6969696969697,
+          "other_seconds": 25.028373363636362,
+          "cache_post_seconds": 0.0909090909090909,
+          "cache_fetch_seconds": 0.8243105151515152,
+          "cache_extract_seconds": 1.0440252727272727
+        },
+        "after": {
+          "job_seconds": 213.67405175757577,
+          "restore_seconds": 4.484848484848484,
+          "main_build_seconds": 40.04333333333334,
+          "nextest_seconds": 118.29721212121213,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.272727272727273,
+          "other_seconds": 24.575930545454547,
+          "cache_post_seconds": 0.15151515151515152,
+          "cache_fetch_seconds": 1.2176957575757577,
+          "cache_extract_seconds": 2.0993693636363635
+        },
+        "refresh": {
+          "job_seconds": 200.07622321212122,
+          "restore_seconds": 5.606060606060606,
+          "main_build_seconds": 24.615151515151517,
+          "nextest_seconds": 118.94969696969697,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.454545454545453,
+          "other_seconds": 24.45076866666667,
+          "cache_post_seconds": 0.1818181818181818,
+          "cache_fetch_seconds": 1.2693055757575757,
+          "cache_extract_seconds": 2.116738909090909
+        }
+      },
+      "selected_job_ids": [
+        121955429014, 121955429348, 121955429419, 121955440775, 121955440977,
+        121955441054, 121955455435, 121955455645, 121955455717, 121958457168,
+        121958457444, 121958457557, 121958467769, 121958467996, 121958468065,
+        121960236939, 121960237342, 121960237409, 121963130305, 121963130543,
+        121963130551, 121963142507, 121963142691, 121963142746, 121963153991,
+        121963154179, 121963154253, 121966148427, 121966148688, 121966148698,
+        121966158828, 121966159117, 121966159296, 121966170382, 121966170590,
+        121966170676, 121970665355, 121970665588, 121970665664, 121970677832,
+        121970677991, 121970678048, 121970689299, 121970689765, 121970689827,
+        121975314222, 121975314492, 121975314549, 121975323469, 121975323616,
+        121975323627, 121975334839, 121975335088, 121975335136, 121978309862,
+        121978309977, 121978309986, 121978319909, 121978320156, 121978320220,
+        121978329909, 121978330062, 121978330141, 121982676576, 121982676729,
+        121982677155, 121982689059, 121982689084, 121982689293, 121982700950,
+        121982701163, 121982701182, 121985771818, 121985771919, 121985772131,
+        121985783574, 121985783839, 121985783842, 121985798059, 121985798252,
+        121985798267, 121990105542, 121990105661, 121990105683, 121990118595,
+        121990118668, 121990118699, 121990132434, 121990132782, 121990132853,
+        121994403632, 121994403755, 121994403789, 121994413462, 121994413671,
+        121994413740, 121994423974, 121994424074, 121994424154
+      ]
+    },
+    "normal_pr_policy": {
+      "comparisons": {
+        "after_vs_refresh": {
+          "commits": 11,
+          "before_mean": 214.6670001212121,
+          "after_mean": 203.83920006060606,
+          "saved": 10.827800060606052,
+          "speedup": 1.0531193217859307,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [205.86696600000002, 222.51174896969695],
+          "after_ci90": [194.72673663636363, 212.99023054545452],
+          "saved_ci90": [0.41587899090908237, 21.95372572727274],
+          "speedup_ci90": [1.0019984812536238, 1.1115765355300078],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 214.6670001212121,
+              "after_mean": 203.83920006060606,
+              "saved": 10.827800060606052,
+              "speedup": 1.0531193217859307,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [205.25032350606057, 221.98824960151518],
+              "after_ci90": [195.33216452575758, 212.19657070303032],
+              "saved_ci90": [0.8650757666666635, 21.45213857727274],
+              "speedup_ci90": [1.0041598928458992, 1.108382102915844]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 214.6670001212121,
+              "after_mean": 203.83920006060606,
+              "saved": 10.827800060606052,
+              "speedup": 1.0531193217859307,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [206.0284585151515, 222.01493821212117],
+              "after_ci90": [195.27190809090908, 212.63235254545452],
+              "saved_ci90": [0.27370577272721713, 21.906868969696916],
+              "speedup_ci90": [1.0012946696342262, 1.110828619264631]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 214.6670001212121,
+              "after_mean": 203.83920006060606,
+              "saved": 10.827800060606052,
+              "speedup": 1.0531193217859307,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [206.127761, 222.50575560606057],
+              "after_ci90": [194.56035521212124, 213.36053200000003],
+              "saved_ci90": [0.34756033333326286, 22.43645812121207],
+              "speedup_ci90": [1.0016803397861234, 1.113621970214631]
+            }
+          }
+        },
+        "before_vs_refresh": {
+          "commits": 11,
+          "before_mean": 221.24889875757574,
+          "after_mean": 203.83920006060606,
+          "saved": 17.409698696969684,
+          "speedup": 1.0854089826284314,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [218.6596505151515, 223.88764342424244],
+          "after_ci90": [194.72673663636363, 212.99023054545452],
+          "saved_ci90": [7.544731606060651, 27.14454575757574],
+          "speedup_ci90": [1.0355203939164281, 1.1393718573950173],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 203.83920006060606,
+              "saved": 17.409698696969684,
+              "speedup": 1.0854089826284314,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [218.07573637878787, 224.4570366590909],
+              "after_ci90": [195.33216452575758, 212.19657070303032],
+              "saved_ci90": [8.101964531818155, 26.818939393939417],
+              "speedup_ci90": [1.0382707338089832, 1.1370192750516843]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 203.83920006060606,
+              "saved": 17.409698696969684,
+              "speedup": 1.0854089826284314,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [218.11571484848488, 224.29820896969693],
+              "after_ci90": [195.27190809090908, 212.63235254545452],
+              "saved_ci90": [7.544731606060623, 26.416947792424267],
+              "speedup_ci90": [1.0355394266791937, 1.134795891309784]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 203.83920006060606,
+              "saved": 17.409698696969684,
+              "speedup": 1.0854089826284314,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [219.18504024242426, 223.34323712121213],
+              "after_ci90": [194.56035521212124, 213.36053200000003],
+              "saved_ci90": [7.462111515151463, 27.376324727272703],
+              "speedup_ci90": [1.0349741887367971, 1.1405793603195327]
+            }
+          }
+        },
+        "before_vs_after": {
+          "commits": 11,
+          "before_mean": 221.24889875757574,
+          "after_mean": 214.6670001212121,
+          "saved": 6.581898636363633,
+          "speedup": 1.030660970864861,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [218.6596505151515, 223.88764342424244],
+          "after_ci90": [205.86696600000002, 222.51174896969695],
+          "saved_ci90": [-0.6475391212120769, 14.243956393939415],
+          "speedup_ci90": [0.9970989201582812, 1.069143305622434],
+          "sensitivity": {
+            "1": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 214.6670001212121,
+              "saved": 6.581898636363633,
+              "speedup": 1.030660970864861,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [218.07573637878787, 224.4570366590909],
+              "after_ci90": [205.25032350606057, 221.98824960151518],
+              "saved_ci90": [-0.48339625757576365, 14.533544121212145],
+              "speedup_ci90": [0.9978160418001951, 1.0706322095451999]
+            },
+            "2": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 214.6670001212121,
+              "saved": 6.581898636363633,
+              "speedup": 1.030660970864861,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [218.11571484848488, 224.29820896969693],
+              "after_ci90": [206.0284585151515, 222.01493821212117],
+              "saved_ci90": [-0.026841530303052172, 13.581490939394001],
+              "speedup_ci90": [0.9998783546074973, 1.0657763172880075]
+            },
+            "4": {
+              "commits": 11,
+              "before_mean": 221.24889875757574,
+              "after_mean": 214.6670001212121,
+              "saved": 6.581898636363633,
+              "speedup": 1.030660970864861,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [219.18504024242426, 223.34323712121213],
+              "after_ci90": [206.127761, 222.50575560606057],
+              "saved_ci90": [-1.1189289999999517, 14.379493212121218],
+              "speedup_ci90": [0.9950002009301493, 1.0697803806228101]
+            }
+          }
+        }
+      },
+      "means": {
+        "before": {
+          "job_seconds": 221.24889875757577,
+          "restore_seconds": 2.696969696969697,
+          "main_build_seconds": 49.17757575757576,
+          "nextest_seconds": 117.46675757575758,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.333333333333332,
+          "other_seconds": 25.574262393939392,
+          "cache_post_seconds": 1.0909090909090908,
+          "cache_fetch_seconds": 0.7993362727272727,
+          "cache_extract_seconds": 1.0476963333333333
+        },
+        "after": {
+          "job_seconds": 214.6670001212121,
+          "restore_seconds": 4.393939393939394,
+          "main_build_seconds": 39.50818181818182,
+          "nextest_seconds": 116.68348484848485,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.484848484848484,
+          "other_seconds": 27.596545575757574,
+          "cache_post_seconds": 2.0606060606060606,
+          "cache_fetch_seconds": 1.2940877575757577,
+          "cache_extract_seconds": 2.096919727272727
+        },
+        "refresh": {
+          "job_seconds": 203.83920006060606,
+          "restore_seconds": 5.606060606060606,
+          "main_build_seconds": 24.655757575757576,
+          "nextest_seconds": 118.87621212121212,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 25.727272727272727,
+          "other_seconds": 28.97389703030303,
+          "cache_post_seconds": 5.090909090909091,
+          "cache_fetch_seconds": 1.3146287272727273,
+          "cache_extract_seconds": 2.114618939393939
+        }
+      },
+      "selected_job_ids": [
+        121955429014, 121955429348, 121955429419, 121955440775, 121955440977,
+        121955441054, 121955455435, 121955455645, 121955455717, 121958457168,
+        121958457444, 121958457557, 121958467769, 121958467996, 121958468065,
+        121960236939, 121960237342, 121960237409, 121963130305, 121963130543,
+        121963130551, 121963142507, 121963142691, 121963142746, 121963153991,
+        121963154179, 121963154253, 121967692103, 121967692327, 121967692426,
+        121970665355, 121970665588, 121970665664, 121970677832, 121970677991,
+        121970678048, 121970689299, 121970689765, 121970689827, 121975314222,
+        121975314492, 121975314549, 121975323469, 121975323616, 121975323627,
+        121975334839, 121975335088, 121975335136, 121979798469, 121979798597,
+        121979798598, 121982676576, 121982676729, 121982677155, 121982689059,
+        121982689084, 121982689293, 121982700950, 121982701163, 121982701182,
+        121987247154, 121987247488, 121987247950, 121991549188, 121991549384,
+        121991549451, 121995835339, 121995835349, 121995835431
+      ]
+    },
+    "main": {
+      "comparisons": {
+        "after_vs_refresh": {
+          "commits": 12,
+          "before_mean": 207.41440091666666,
+          "after_mean": 196.08560266666666,
+          "saved": 11.328798250000006,
+          "speedup": 1.0577747580441093,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [197.17074666666667, 217.47320475],
+          "after_ci90": [182.51671708333333, 208.98089275000004],
+          "saved_ci90": [-2.492165999999969, 26.115305749999976],
+          "speedup_ci90": [0.9879494435268642, 1.1396717494955355],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 207.41440091666666,
+              "after_mean": 196.08560266666666,
+              "saved": 11.328798250000006,
+              "speedup": 1.0577747580441093,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [196.56301528749998, 217.61931371666665],
+              "after_ci90": [183.0128078375, 209.11235597499996],
+              "saved_ci90": [-0.47682121666672117, 23.346833495833366],
+              "speedup_ci90": [0.9976696412060754, 1.1242885660747135]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 207.41440091666666,
+              "after_mean": 196.08560266666666,
+              "saved": 11.328798250000006,
+              "speedup": 1.0577747580441093,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [195.63404533333332, 218.5410130833333],
+              "after_ci90": [183.364794, 207.90136741666666],
+              "saved_ci90": [-0.8939033333333555, 24.58245866666664],
+              "speedup_ci90": [0.9956346351723635, 1.1301080980960492]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 207.41440091666666,
+              "after_mean": 196.08560266666666,
+              "saved": 11.328798250000006,
+              "speedup": 1.0577747580441093,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [199.74563933333332, 216.70622308333336],
+              "after_ci90": [183.39206616666664, 207.3594835],
+              "saved_ci90": [-3.3455422499999954, 26.42420991666674],
+              "speedup_ci90": [0.9837347343952291, 1.1429991822641972]
+            }
+          }
+        },
+        "before_vs_refresh": {
+          "commits": 12,
+          "before_mean": 221.010409,
+          "after_mean": 196.08560266666666,
+          "saved": 24.92480633333335,
+          "speedup": 1.1271118633615542,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [216.38422083333333, 226.06599016666667],
+          "after_ci90": [182.51671708333333, 208.98089275000004],
+          "saved_ci90": [10.798204250000026, 39.29927516666669],
+          "speedup_ci90": [1.0519390727640514, 1.2141537951229409],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 196.08560266666666,
+              "saved": 24.92480633333335,
+              "speedup": 1.1271118633615542,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [216.6338453041667, 226.41252510416666],
+              "after_ci90": [183.0128078375, 209.11235597499996],
+              "saved_ci90": [12.295078762500008, 37.14629136666664],
+              "speedup_ci90": [1.0590363369757672, 1.2018202063571786]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 196.08560266666666,
+              "saved": 24.92480633333335,
+              "speedup": 1.1271118633615542,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [216.54937433333336, 226.21552616666665],
+              "after_ci90": [183.364794, 207.90136741666666],
+              "saved_ci90": [12.011572083333334, 38.23247833333335],
+              "speedup_ci90": [1.057854691385822, 1.2062807995067588]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 196.08560266666666,
+              "saved": 24.92480633333335,
+              "speedup": 1.1271118633615542,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [216.46207583333333, 225.77866116666664],
+              "after_ci90": [183.39206616666664, 207.3594835],
+              "saved_ci90": [11.156028583333296, 39.05526316666669],
+              "speedup_ci90": [1.0535434381900497, 1.2091934543516918]
+            }
+          }
+        },
+        "before_vs_after": {
+          "commits": 12,
+          "before_mean": 221.010409,
+          "after_mean": 207.41440091666666,
+          "saved": 13.596008083333345,
+          "speedup": 1.0655499715701797,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [216.38422083333333, 226.06599016666667],
+          "after_ci90": [197.17074666666667, 217.47320475],
+          "saved_ci90": [7.353711749999974, 20.159996166666645],
+          "speedup_ci90": [1.033992985697744, 1.1019011658179196],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 207.41440091666666,
+              "saved": 13.596008083333345,
+              "speedup": 1.0655499715701797,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [216.6338453041667, 226.41252510416666],
+              "after_ci90": [196.56301528749998, 217.61931371666665],
+              "saved_ci90": [6.099936825000064, 21.91075485416669],
+              "speedup_ci90": [1.0282095045603339, 1.1109722919957812]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 207.41440091666666,
+              "saved": 13.596008083333345,
+              "speedup": 1.0655499715701797,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [216.54937433333336, 226.21552616666665],
+              "after_ci90": [195.63404533333332, 218.5410130833333],
+              "saved_ci90": [6.083381500000027, 22.011295083333327],
+              "speedup_ci90": [1.0280483001288347, 1.1123732120700978]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 221.010409,
+              "after_mean": 207.41440091666666,
+              "saved": 13.596008083333345,
+              "speedup": 1.0655499715701797,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [216.46207583333333, 225.77866116666664],
+              "after_ci90": [199.74563933333332, 216.70622308333336],
+              "saved_ci90": [8.71581541666663, 18.287823916666667],
+              "speedup_ci90": [1.0403951332328036, 1.0913533706117837]
+            }
+          }
+        }
+      },
+      "means": {
+        "before": {
+          "job_seconds": 221.010409,
+          "restore_seconds": 2.5,
+          "main_build_seconds": 49.30916666666667,
+          "nextest_seconds": 116.66091666666667,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.833333333333332,
+          "other_seconds": 25.706992333333336,
+          "cache_post_seconds": 0,
+          "cache_fetch_seconds": 0.823111,
+          "cache_extract_seconds": 1.0556348333333334
+        },
+        "after": {
+          "job_seconds": 207.41440091666666,
+          "restore_seconds": 4.583333333333333,
+          "main_build_seconds": 33.63333333333333,
+          "nextest_seconds": 118.1785,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 26.666666666666668,
+          "other_seconds": 24.352567583333325,
+          "cache_post_seconds": 0.16666666666666666,
+          "cache_fetch_seconds": 1.32011775,
+          "cache_extract_seconds": 2.1183994999999998
+        },
+        "refresh": {
+          "job_seconds": 196.08560266666666,
+          "restore_seconds": 4.666666666666667,
+          "main_build_seconds": 19.767500000000002,
+          "nextest_seconds": 116.31691666666667,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 25.916666666666668,
+          "other_seconds": 29.41785266666666,
+          "cache_post_seconds": 6.333333333333333,
+          "cache_fetch_seconds": 1.3555008333333334,
+          "cache_extract_seconds": 2.093403416666667
+        }
+      },
+      "selected_job_ids": [
+        121956968507, 121956968795, 121956968983, 121961679838, 121961680139,
+        121961680141, 121964651536, 121964651828, 121964651843, 121969189283,
+        121969189373, 121969189490, 121972344380, 121972344498, 121972344504,
+        121973827452, 121973827618, 121973827741, 121976829571, 121976829717,
+        121976829869, 121981228897, 121981229100, 121981229124, 121984168661,
+        121984168833, 121984168950, 121988686221, 121988686391, 121988686488,
+        121992983940, 121992984006, 121992984034, 121997097750, 121997097841,
+        121997097928
+      ]
+    },
+    "combined": {
+      "comparisons": {
+        "after_vs_refresh": {
+          "commits": 12,
+          "before_mean": 404.19248436111116,
+          "after_mean": 382.93820272222223,
+          "saved": 21.254281638888926,
+          "speedup": 1.0555031634028598,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [376.42532808333334, 431.4108932222222],
+          "after_ci90": [356.1596235833333, 410.48668408333333],
+          "saved_ci90": [-2.598622277777679, 46.774613250000016],
+          "speedup_ci90": [0.9932565089448844, 1.1253914851239604],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 404.19248436111116,
+              "after_mean": 382.93820272222223,
+              "saved": 21.254281638888926,
+              "speedup": 1.0555031634028598,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [371.7293656277778, 431.11214566111096],
+              "after_ci90": [345.87532481666665, 414.9002276305555],
+              "saved_ci90": [1.9315312611111326, 41.487053909722206],
+              "speedup_ci90": [1.0047783199193943, 1.113738683143393]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 404.19248436111116,
+              "after_mean": 382.93820272222223,
+              "saved": 21.254281638888926,
+              "speedup": 1.0555031634028598,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [373.8484524722223, 431.9213683083333],
+              "after_ci90": [356.81255305555555, 408.26580808333324],
+              "saved_ci90": [0.39988161111125464, 44.098784166666746],
+              "speedup_ci90": [1.0010368841303467, 1.1168012542299217]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 404.19248436111116,
+              "after_mean": 382.93820272222223,
+              "saved": 21.254281638888926,
+              "speedup": 1.0555031634028598,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [381.18821927777776, 427.6764993333333],
+              "after_ci90": [362.641843611111, 406.6770665833333],
+              "saved_ci90": [-3.623666333333233, 47.73482769444445],
+              "speedup_ci90": [0.9906578647527409, 1.1282726434318422]
+            }
+          }
+        },
+        "before_vs_refresh": {
+          "commits": 12,
+          "before_mean": 423.8218995277778,
+          "after_mean": 382.93820272222223,
+          "saved": 40.88369680555559,
+          "speedup": 1.1067631709631542,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [398.0757042777778, 447.5333338611112],
+          "after_ci90": [356.1596235833333, 410.48668408333333],
+          "saved_ci90": [18.170330027777823, 64.64056283333338],
+          "speedup_ci90": [1.0463405655387659, 1.1734779284208259],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 382.93820272222223,
+              "saved": 40.88369680555559,
+              "speedup": 1.1067631709631542,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [387.5931931708333, 446.5930690777778],
+              "after_ci90": [345.87532481666665, 414.9002276305555],
+              "saved_ci90": [21.454990077777893, 60.29553694166667],
+              "speedup_ci90": [1.053106515824267, 1.1658471501211103]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 382.93820272222223,
+              "saved": 40.88369680555559,
+              "speedup": 1.1067631709631542,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [388.68635969444455, 447.4370105277778],
+              "after_ci90": [356.81255305555555, 408.26580808333324],
+              "saved_ci90": [21.11278294444446, 61.641663972222204],
+              "speedup_ci90": [1.0544662977996726, 1.164853191411312]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 382.93820272222223,
+              "saved": 40.88369680555559,
+              "speedup": 1.1067631709631542,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [401.20013686111116, 445.73027297222217],
+              "after_ci90": [362.641843611111, 406.6770665833333],
+              "saved_ci90": [19.075901166666654, 63.90311622222225],
+              "speedup_ci90": [1.047889874743825, 1.172358210455047]
+            }
+          }
+        },
+        "before_vs_after": {
+          "commits": 12,
+          "before_mean": 423.8218995277778,
+          "after_mean": 404.19248436111116,
+          "saved": 19.62941516666666,
+          "speedup": 1.0485645229096578,
+          "block_length": 3,
+          "resamples": 50000,
+          "before_ci90": [398.0757042777778, 447.5333338611112],
+          "after_ci90": [376.42532808333334, 431.4108932222222],
+          "saved_ci90": [8.032150805555602, 31.86769591666672],
+          "speedup_ci90": [1.0193318137727183, 1.081078682220967],
+          "sensitivity": {
+            "1": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 404.19248436111116,
+              "saved": 19.62941516666666,
+              "speedup": 1.0485645229096578,
+              "block_length": 1,
+              "resamples": 50000,
+              "before_ci90": [387.5931931708333, 446.5930690777778],
+              "after_ci90": [371.7293656277778, 431.11214566111096],
+              "saved_ci90": [8.86185165416664, 32.23989649166667],
+              "speedup_ci90": [1.021635030075733, 1.0818568922268954]
+            },
+            "2": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 404.19248436111116,
+              "saved": 19.62941516666666,
+              "speedup": 1.0485645229096578,
+              "block_length": 2,
+              "resamples": 50000,
+              "before_ci90": [388.68635969444455, 447.4370105277778],
+              "after_ci90": [373.8484524722223, 431.9213683083333],
+              "saved_ci90": [8.01446094027775, 32.33792850000003],
+              "speedup_ci90": [1.01956121782965, 1.081935313266198]
+            },
+            "4": {
+              "commits": 12,
+              "before_mean": 423.8218995277778,
+              "after_mean": 404.19248436111116,
+              "saved": 19.62941516666666,
+              "speedup": 1.0485645229096578,
+              "block_length": 4,
+              "resamples": 50000,
+              "before_ci90": [401.20013686111116, 445.73027297222217],
+              "after_ci90": [381.18821927777776, 427.6764993333333],
+              "saved_ci90": [8.166522999999984, 30.746086249999962],
+              "speedup_ci90": [1.0198112433507018, 1.0762401770518033]
+            }
+          }
+        }
+      },
+      "means": {
+        "before": {
+          "job_seconds": 423.82189952777776,
+          "restore_seconds": 4.972222222222222,
+          "main_build_seconds": 94.38861111111112,
+          "nextest_seconds": 224.33877777777778,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 50.97222222222222,
+          "other_seconds": 49.15006619444445,
+          "cache_post_seconds": 1.0,
+          "cache_fetch_seconds": 1.5558359166666667,
+          "cache_extract_seconds": 2.016023138888889
+        },
+        "after": {
+          "job_seconds": 404.1924843611111,
+          "restore_seconds": 8.61111111111111,
+          "main_build_seconds": 69.84916666666666,
+          "nextest_seconds": 225.13836111111112,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 50.94444444444444,
+          "other_seconds": 49.64940102777777,
+          "cache_post_seconds": 2.0555555555555554,
+          "cache_fetch_seconds": 2.5063648611111113,
+          "cache_extract_seconds": 4.040575916666667
+        },
+        "refresh": {
+          "job_seconds": 382.93820272222223,
+          "restore_seconds": 9.805555555555555,
+          "main_build_seconds": 42.368611111111115,
+          "nextest_seconds": 225.2867777777778,
+          "mdtest_step_seconds": 0,
+          "apt_seconds": 49.5,
+          "other_seconds": 55.97725827777777,
+          "cache_post_seconds": 11.0,
+          "cache_fetch_seconds": 2.5605771666666666,
+          "cache_extract_seconds": 4.031804111111111
+        }
+      },
+      "selected_job_ids": [
+        121955429014, 121955429348, 121955429419, 121955440775, 121955440977,
+        121955441054, 121955455435, 121955455645, 121955455717, 121956968507,
+        121956968795, 121956968983, 121958457168, 121958457444, 121958457557,
+        121958467769, 121958467996, 121958468065, 121960236939, 121960237342,
+        121960237409, 121961679838, 121961680139, 121961680141, 121963130305,
+        121963130543, 121963130551, 121963142507, 121963142691, 121963142746,
+        121963153991, 121963154179, 121963154253, 121964651536, 121964651828,
+        121964651843, 121967692103, 121967692327, 121967692426, 121969189283,
+        121969189373, 121969189490, 121970665355, 121970665588, 121970665664,
+        121970677832, 121970677991, 121970678048, 121970689299, 121970689765,
+        121970689827, 121972344380, 121972344498, 121972344504, 121973827452,
+        121973827618, 121973827741, 121975314222, 121975314492, 121975314549,
+        121975323469, 121975323616, 121975323627, 121975334839, 121975335088,
+        121975335136, 121976829571, 121976829717, 121976829869, 121979798469,
+        121979798597, 121979798598, 121981228897, 121981229100, 121981229124,
+        121982676576, 121982676729, 121982677155, 121982689059, 121982689084,
+        121982689293, 121982700950, 121982701163, 121982701182, 121984168661,
+        121984168833, 121984168950, 121987247154, 121987247488, 121987247950,
+        121988686221, 121988686391, 121988686488, 121991549188, 121991549384,
+        121991549451, 121992983940, 121992984006, 121992984034, 121995835339,
+        121995835349, 121995835431, 121997097750, 121997097841, 121997097928
+      ]
+    },
+    "cache": {
+      "before": {
+        "uploads": 2,
+        "uploaded_bytes": 870610838,
+        "writer_post_seconds": 12.0
+      },
+      "after": {
+        "uploads": 2,
+        "uploaded_bytes": 1671659300,
+        "writer_post_seconds": 23.0
+      },
+      "refresh": {
+        "uploads": 12,
+        "uploaded_bytes": 10030705736,
+        "writer_post_seconds": 131.0
+      }
+    }
+  },
+  "cache": {
+    "before": {
+      "uploads": 2,
+      "uploaded_bytes": 870610838,
+      "writer_post_seconds": 12.0,
+      "read_archive_bytes": [
+        435432973, 435432973, 435432973, 435432973, 435432973, 435432973,
+        435432973, 435432973, 435432973, 435432973, 435432973, 435432973,
+        435301648, 435301648, 435301648, 435301648, 435301648, 435301648,
+        435301648, 435301648, 435301648, 435301648, 435301648, 435301648,
+        435301648, 435301648, 435301648, 435301648, 435301648, 435301648,
+        435309190, 435309190, 435309190
+      ],
+      "read_cache_ages": [
+        1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5,
+        6, 6, 6, 7, 7, 7, 1, 1, 1
+      ]
+    },
+    "after": {
+      "uploads": 2,
+      "uploaded_bytes": 1671659300,
+      "writer_post_seconds": 23.0,
+      "read_archive_bytes": [
+        836338013, 836338013, 836338013, 836338013, 836338013, 836338013,
+        836338013, 836338013, 836338013, 836338013, 836338013, 836338013,
+        835983062, 835983062, 835983062, 835983062, 835983062, 835983062,
+        835983062, 835983062, 835983062, 835983062, 835983062, 835983062,
+        835983062, 835983062, 835983062, 835983062, 835983062, 835983062,
+        835676238, 835676238, 835676238
+      ],
+      "read_cache_ages": [
+        1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5,
+        6, 6, 6, 7, 7, 7, 1, 1, 1
+      ]
+    },
+    "refresh": {
+      "uploads": 12,
+      "uploaded_bytes": 10030705736,
+      "writer_post_seconds": 131.0,
+      "read_archive_bytes": [
+        836325434, 836325434, 836325434, 835976822, 835976822, 835976822,
+        835976961, 835976961, 835976961, 835961213, 835961213, 835961213,
+        835988842, 835988842, 835988842, 835923907, 835923907, 835923907,
+        836022648, 836022648, 836022648, 835987384, 835987384, 835987384,
+        835778817, 835778817, 835778817, 835778119, 835778119, 835778119,
+        835702948, 835702948, 835702948
+      ],
+      "read_cache_ages": [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1
+      ]
+    }
+  },
+  "excluded_attempts": [
+    {
+      "id": 40434070917,
+      "index": 2,
+      "phase": "warm",
+      "replica": 1,
+      "source": "28ab1fa4d1fffbe6f62296fd8eeebd030a1c4dec",
+      "sequence": 6,
+      "audit_errors": ["before concluded failure"],
+      "retry_reason": "Dependency-only arm failed test_create_then_move because Secret Service returned IsLocked; both full-cache arms and the other two paired replicas passed. Replace the complete read-only triplet before any producer runs."
+    }
+  ]
+}

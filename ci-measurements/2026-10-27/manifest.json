@@ -1,0 +1,225 @@
+{
+  "project": "uv",
+  "repo": "astral-sh/uv-dev",
+  "base": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596",
+  "branch": "zb/uv-cache-refresh-history-20261027",
+  "workflow": "ci.yml",
+  "source_workflow_head": "2138f61ddcb1036f51d7a9ba773c957d628e5948",
+  "action": "243f4258608cb0f0dace8009ef4c5d8fbd3986c3",
+  "refresh_action": "7a1c709a167933c8e64f25b527696f043d5ba885",
+  "cases": {
+    "linux-tests": {
+      "label": "Linux tests",
+      "file": "test.yml",
+      "job": "cargo-test-linux",
+      "source_workflow_sha256": "f822aab853ef001e48deaadfe753b0552190586cd399a4834f14925e351c3e65",
+      "scope": "complete job",
+      "variants": ["before", "after", "refresh"],
+      "seeds": {
+        "before": "linux-tests",
+        "after": "linux-tests",
+        "refresh": "linux-tests"
+      },
+      "before_action": "astral-sh/github-actions/rust-workspace-cache@243f4258608cb0f0dace8009ef4c5d8fbd3986c3",
+      "before_workspace": "false",
+      "after_action": "astral-sh/github-actions/rust-workspace-cache@243f4258608cb0f0dace8009ef4c5d8fbd3986c3",
+      "after_workspace": "true",
+      "refresh_workspace": "true",
+      "refresh_action": "astral-sh/github-actions/rust-workspace-cache@7a1c709a167933c8e64f25b527696f043d5ba885"
+    }
+  },
+  "seed_source": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+  "initial_sources": {
+    "before": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+    "after": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+    "refresh": "0337a04ec4e92cd756ff5c608e145f647c50937b"
+  },
+  "history": [
+    {
+      "index": 0,
+      "sha": "0337a04ec4e92cd756ff5c608e145f647c50937b",
+      "subject": "Derive deserialization for build backend config settings (#22879)",
+      "date": "2026-10-23T16:03:34-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-distribution-types/Cargo.toml",
+        "crates/uv-distribution-types/src/config_settings.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 18,
+      "pr_can_save": true
+    },
+    {
+      "index": 1,
+      "sha": "834e65e7b43f6a20b595dd6a93c342f09df2590f",
+      "subject": "Derive deserialization for project source entries (#22880)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": ["crates/uv-workspace/src/pyproject.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 19,
+      "pr_can_save": false
+    },
+    {
+      "index": 2,
+      "sha": "28ab1fa4d1fffbe6f62296fd8eeebd030a1c4dec",
+      "subject": "Derive deserialization for workspace references (#22883)",
+      "date": "2026-10-23T16:03:35-04:00",
+      "changed_files": ["crates/uv-workspace/src/pyproject.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 20,
+      "pr_can_save": false
+    },
+    {
+      "index": 3,
+      "sha": "f7a4df41ee3fdf3b80746ecb6b5473f26b560d7b",
+      "subject": "Derive deserialization for build backend module names (#22884)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": ["crates/uv-build-backend/src/settings.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 21,
+      "pr_can_save": false
+    },
+    {
+      "index": 4,
+      "sha": "c559c3bd8a3d92e03e022dd56ec29eb7a5131bce",
+      "subject": "Derive deserialization for tool receipt requirements (#22885)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-tool/Cargo.toml",
+        "crates/uv-tool/src/tool.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 22,
+      "pr_can_save": true
+    },
+    {
+      "index": 5,
+      "sha": "ef5b724387cd61466d825b3fdda18ed318489ff6",
+      "subject": "Derive deserialization for exclude-newer values (#22887)",
+      "date": "2026-10-23T16:03:36-04:00",
+      "changed_files": [
+        "crates/uv-distribution-types/src/exclude_newer.rs",
+        "crates/uv/tests/lock_scenarios/lock_exclude_newer_relative.rs"
+      ],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 23,
+      "pr_can_save": false
+    },
+    {
+      "index": 6,
+      "sha": "c5fed68440e161dfd18b2c2b2dd5a8744ef824a5",
+      "subject": "Document when to use DeserializeUntagged (#22889)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": ["AGENTS.md"],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": false,
+      "original_history_index": 24,
+      "pr_can_save": false
+    },
+    {
+      "index": 7,
+      "sha": "f158ef25a3cf2fb9bc089ca38cc06f659066f566",
+      "subject": "Emit DeserializeUntagged scalar callbacks directly (#22890)",
+      "date": "2026-10-23T16:03:37-04:00",
+      "changed_files": ["crates/uv-macros/src/deserialize_untagged.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 25,
+      "pr_can_save": false
+    },
+    {
+      "index": 8,
+      "sha": "e46bedbacb91322b32e76b797f8828910b1b0dea",
+      "subject": "Skip the Azure APT mirror in ARMv7 CI (#22895)",
+      "date": "2026-10-23T21:22:51+00:00",
+      "changed_files": [".github/workflows/build-dev-binaries.yml"],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 26,
+      "pr_can_save": true
+    },
+    {
+      "index": 9,
+      "sha": "f912bc5d57c126cdf1e333518c5c4f2ca21cb29a",
+      "subject": "Remove the unused `Deserialize` derive from `WheelWireSource` (#22891)",
+      "date": "2026-10-23T18:02:04-04:00",
+      "changed_files": ["crates/uv-lock/src/lock/mod.rs"],
+      "categories": ["rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 27,
+      "pr_can_save": false
+    },
+    {
+      "index": 10,
+      "sha": "15689c8dd573ad32e009d0fdb50ec3fb70315f01",
+      "subject": "Skip the Azure APT mirror for Wine, deadsnakes, and musl (#22896)",
+      "date": "2026-10-23T18:02:27-04:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test-integration.yml"
+      ],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 28,
+      "pr_can_save": true
+    },
+    {
+      "index": 11,
+      "sha": "1cd8cf12bd622f2815406f29e3168d7f052bf1b3",
+      "subject": "Use `DeserializeUntagged` for Packse artifact settings (#22892)",
+      "date": "2026-10-23T22:21:25+00:00",
+      "changed_files": [
+        "Cargo.lock",
+        "crates/uv-test/Cargo.toml",
+        "crates/uv-test/src/packse/scenario.rs"
+      ],
+      "categories": ["cargo-dependencies", "rust-source"],
+      "pr_eligible": true,
+      "original_history_index": 29,
+      "pr_can_save": true
+    },
+    {
+      "index": 12,
+      "sha": "6fe4f0f5cfa8322e97af4479cbfb3d53a3ce9596",
+      "subject": "Restore build-script input timestamps in Linux CI (#22904)",
+      "date": "2026-10-24T04:00:52+00:00",
+      "changed_files": [
+        ".github/workflows/build-dev-binaries.yml",
+        ".github/workflows/test.yml"
+      ],
+      "categories": ["docs-or-ci-only"],
+      "pr_eligible": true,
+      "original_history_index": 30,
+      "pr_can_save": true
+    }
+  ],
+  "prefix_base": "uv-cache-refresh-20261027-v1",
+  "replicas": 3,
+  "measure_all_producers": true,
+  "require_producer_saves": true,
+  "refresh_comparison": true,
+  "apt_first_cache_comparison": true,
+  "bootstrap_block_length": 3,
+  "bootstrap_sensitivity_lengths": [1, 2, 4],
+  "bootstrap_resamples": 50000,
+  "comparison": "Dependency-only, immutable workspace, and source-refreshing workspace caches on identical source commits and job commands. Existing caches start at the last recorded key-changing producer; refreshed caches start at the immediately preceding source commit. The chronological window is the last twelve commits of the previous fixed thirty-commit replay, selected before timing runs.",
+  "strategy": "Three read-only PR-like replicas precede cache production at each eligible source commit. A writable producer runs for every commit, including docs-only changes skipped by the PR planner. For uv commits whose PR policy enables writes, this producer represents the first PR writer and is followed by a separate exact-hit main-like replay, since Depot shares caches across branches. Otherwise the producer represents main. All runs use workflow_dispatch on one experiment branch, isolated by experimental cache prefixes. Initial seeds are excluded from timing. Execution includes post-save steps and excludes queues.",
+  "head": "25b866a6840f0c642d078a033094ba41ee6ed1f2",
+  "initial_source_history_indices": {
+    "before": 18,
+    "after": 18,
+    "refresh": 18
+  },
+  "bootstrap_seed": 20261025,
+  "cache_backend": "Depot Cache",
+  "branch_cache_isolation": false,
+  "cache_backend_reference": "https://depot.dev/docs/cache/integrations/github-actions",
+  "main_after_pr_save": true
+}

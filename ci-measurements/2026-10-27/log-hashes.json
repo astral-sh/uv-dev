@@ -1,0 +1,941 @@
+[
+  {
+    "job_id": 121953493767,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40432555585/job/121953493767",
+    "sha256": "80cf48c3430a0ca176d7ae31564525a00a2d9a215e3ca356666bc07fae0b0dfd",
+    "bytes": 841580
+  },
+  {
+    "job_id": 121953493903,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40432555585/job/121953493903",
+    "sha256": "dcf0275554a2c949c987136bf277f96add08cab5bbf801f6cfc7d7a651ef4973",
+    "bytes": 857698
+  },
+  {
+    "job_id": 121953493587,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40432555585/job/121953493587",
+    "sha256": "1df567f8d66998d8d03453084d296a768318c6b669d3a6b2afecaa1f7248366e",
+    "bytes": 831652
+  },
+  {
+    "job_id": 121955429014,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433146377/job/121955429014",
+    "sha256": "3d58a899e5fb8102e5a0642ae1001dd5a5724ee8f43acad6472e7b9bc820fc9b",
+    "bytes": 761986
+  },
+  {
+    "job_id": 121955429348,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433146377/job/121955429348",
+    "sha256": "2d190c4228d84b45a3a60e9e408eb215e012506f4e3d49e835bd6339766c1732",
+    "bytes": 766881
+  },
+  {
+    "job_id": 121955429419,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433146377/job/121955429419",
+    "sha256": "35355170f8daf58ba3545d7d4ff8d83cce9b42b2854ed5a881896a7fd48a0396",
+    "bytes": 762147
+  },
+  {
+    "job_id": 121955440775,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433150123/job/121955440775",
+    "sha256": "c9f35b792e7ae9cba0159ceeac86fc0babfbf78d539f02b78b02cc1997100396",
+    "bytes": 762207
+  },
+  {
+    "job_id": 121955440977,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433150123/job/121955440977",
+    "sha256": "1c15634329b354d2da83b38e7946d869930d09bdae04ed954fe60424fc5d2f2e",
+    "bytes": 762409
+  },
+  {
+    "job_id": 121955441054,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433150123/job/121955441054",
+    "sha256": "00446d0c964ba518bb731a007ebb726d9b5c4676c2e9553b1280a99594921d58",
+    "bytes": 767136
+  },
+  {
+    "job_id": 121955455435,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433154442/job/121955455435",
+    "sha256": "ada2ab747afb6a6ba1dc704156455132a08b3b5c75006e49ab0aa8fbb1b6bc70",
+    "bytes": 762000
+  },
+  {
+    "job_id": 121955455645,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433154442/job/121955455645",
+    "sha256": "c746db6e99dab34bc3f4e7dde0c145754126949c2fe59641795445676085783a",
+    "bytes": 761741
+  },
+  {
+    "job_id": 121955455717,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433154442/job/121955455717",
+    "sha256": "2f98f01403cb7ba757182fffc3f5b146505422c3b2800a39fea27a6b11681594",
+    "bytes": 767021
+  },
+  {
+    "job_id": 121956968507,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433619982/job/121956968507",
+    "sha256": "01e19c6473e0ae3e611885b4f2db978ba90de2ef4de41642546ea2f8aa314e4a",
+    "bytes": 761432
+  },
+  {
+    "job_id": 121956968795,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433619982/job/121956968795",
+    "sha256": "df4039c6ba54c23648354282d018f73c39960804a2c06df85e4996fb424e6e82",
+    "bytes": 762259
+  },
+  {
+    "job_id": 121956968983,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40433619982/job/121956968983",
+    "sha256": "cead18e7dae0a2c303609951070047aec1a7f3dafa75cd51d258386d464a2fee",
+    "bytes": 766550
+  },
+  {
+    "job_id": 121958457168,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434074485/job/121958457168",
+    "sha256": "86c224e104520a17f3da955f5b9f4a8885391240ad396609beddcfe4e494033d",
+    "bytes": 762008
+  },
+  {
+    "job_id": 121958457444,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434074485/job/121958457444",
+    "sha256": "0c65b861384220ded0826f826f6ea692de0166d036a1c7a8f5ef39d3a160a95c",
+    "bytes": 768330
+  },
+  {
+    "job_id": 121958457557,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434074485/job/121958457557",
+    "sha256": "41d0376caeafeaa2a916cce40dcd1d5025d9513e1e806a1ae142bacf654ba56d",
+    "bytes": 762286
+  },
+  {
+    "job_id": 121958467769,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434078046/job/121958467769",
+    "sha256": "c4e36a9363114fb8787e083d648eb2495f35db6c229d9691fed2b8a410f13c66",
+    "bytes": 767041
+  },
+  {
+    "job_id": 121958467996,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434078046/job/121958467996",
+    "sha256": "609f3e0fb6e742e267743b3624ca5ba812aca80b97ffd7819b90cd6d8f5b779f",
+    "bytes": 761955
+  },
+  {
+    "job_id": 121958468065,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434078046/job/121958468065",
+    "sha256": "6ea19346e8107c4e7a52d4cc444112655212adf86f98c91b7c7be79d99cddaf1",
+    "bytes": 762251
+  },
+  {
+    "job_id": 121960236939,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434628236/job/121960236939",
+    "sha256": "cfbeb7884733d637fa5c0b77c1781284fda64ba55ab1c0ef7e4cc431c421bdf9",
+    "bytes": 762159
+  },
+  {
+    "job_id": 121960237342,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434628236/job/121960237342",
+    "sha256": "2c2fbf05065b04af299a5cb7f9edf4db8884d99ae7ba8536ca9890d1f10b14fd",
+    "bytes": 761942
+  },
+  {
+    "job_id": 121960237409,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434628236/job/121960237409",
+    "sha256": "5257c006ba410a38198c313172bcb5788c703c8a6a71fd29b93b88c437fec381",
+    "bytes": 766590
+  },
+  {
+    "job_id": 121961679838,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435067947/job/121961679838",
+    "sha256": "004bd087e1c4e119041fb0ae2edf9796e35a5343934246f315fc82c1d8d06bbf",
+    "bytes": 761360
+  },
+  {
+    "job_id": 121961680139,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435067947/job/121961680139",
+    "sha256": "71b4e2452f4b90fe41b2424ba0ebcb30a89ad06dd5ddd995f3aff7d9329bce3c",
+    "bytes": 766490
+  },
+  {
+    "job_id": 121961680141,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435067947/job/121961680141",
+    "sha256": "c1094298f96e3d763e5051400bed8260697c7d586516cbafecababb16a3d4520",
+    "bytes": 762692
+  },
+  {
+    "job_id": 121963130305,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435514822/job/121963130305",
+    "sha256": "5f7f4c53dd657ecc6a3c60731d5f4fdf27001aaa47d0bf89fcddbb095564d0fd",
+    "bytes": 763153
+  },
+  {
+    "job_id": 121963130543,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435514822/job/121963130543",
+    "sha256": "0600bfffd64474247018ed94c3a6f0c0e330015c7cf6830d49e83ad61c4d15d0",
+    "bytes": 766596
+  },
+  {
+    "job_id": 121963130551,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435514822/job/121963130551",
+    "sha256": "e51d0083503889cdc3e198d8617de70a11b18d6622f1b63dc4b2e6fe13a6a50b",
+    "bytes": 762388
+  },
+  {
+    "job_id": 121963142507,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435518106/job/121963142507",
+    "sha256": "7459782a53d80d300cfbfd4aa4c0c5862c4473ddabbb110d2e51a466a1cec497",
+    "bytes": 766867
+  },
+  {
+    "job_id": 121963142691,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435518106/job/121963142691",
+    "sha256": "a9453bc394246404015dd473fa1823370a76c785346640f23aec898e1b028064",
+    "bytes": 762409
+  },
+  {
+    "job_id": 121963142746,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435518106/job/121963142746",
+    "sha256": "d8b6e9cb6db05b028aec5f796911118933ebb83b18663e6f11b0176ad52c0945",
+    "bytes": 762211
+  },
+  {
+    "job_id": 121963153991,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435521806/job/121963153991",
+    "sha256": "83be904801abadc6004d5e45fd8b452c0875bdbc5d83e8af58dbde0ff5c2a9e9",
+    "bytes": 768137
+  },
+  {
+    "job_id": 121963154179,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435521806/job/121963154179",
+    "sha256": "64774304665443fa97e9f3972e392fc9bc459db0a3cbd1231f806b070acf2cca",
+    "bytes": 763553
+  },
+  {
+    "job_id": 121963154253,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435521806/job/121963154253",
+    "sha256": "bdb75fea929b67b81c298a1318d33052838fce18eee23a60278568f4436df468",
+    "bytes": 762825
+  },
+  {
+    "job_id": 121964651536,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435987289/job/121964651536",
+    "sha256": "720c89e19f8253e560999165bab2d7ede0d75a86662ad3780172df77ecb980a4",
+    "bytes": 762103
+  },
+  {
+    "job_id": 121964651828,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435987289/job/121964651828",
+    "sha256": "5fe7acbdcd36f74931ec6a416355fd644848356edd7d7070b09b2121fe9a7af5",
+    "bytes": 766279
+  },
+  {
+    "job_id": 121964651843,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40435987289/job/121964651843",
+    "sha256": "9ab00872027d01363925e6552db39e6cf40eb6fd300845d596f026fcec34fea5",
+    "bytes": 762768
+  },
+  {
+    "job_id": 121966148427,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436454927/job/121966148427",
+    "sha256": "9ed411715b54deed1d819bc447d3598df2e233e091276c62232b2bafc08b36d8",
+    "bytes": 767111
+  },
+  {
+    "job_id": 121966148688,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436454927/job/121966148688",
+    "sha256": "694c1fd1fe3b6a2986ac8199111a3fd92c1cb61866eb8e56a11cd2e9eac2cb0e",
+    "bytes": 762168
+  },
+  {
+    "job_id": 121966148698,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436454927/job/121966148698",
+    "sha256": "ae4c4d458a37ba3eb497085bde49e5ee52aeb3e13a02253df04cf4a718c6ce74",
+    "bytes": 758434
+  },
+  {
+    "job_id": 121966158828,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436458137/job/121966158828",
+    "sha256": "ab3067037b35f0aeea7f33393a3a747487e427ffa0c12acea4d62bd8d3843582",
+    "bytes": 759975
+  },
+  {
+    "job_id": 121966159117,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436458137/job/121966159117",
+    "sha256": "e4bea440e3386233432503855c84829e2905caa6a68b9a4bfc18f93a76d15499",
+    "bytes": 762464
+  },
+  {
+    "job_id": 121966159296,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436458137/job/121966159296",
+    "sha256": "e7e19051514c18431fcf5e53e56afc76bddbf0375c1ce5ae1dfced378fb34b51",
+    "bytes": 767670
+  },
+  {
+    "job_id": 121966170382,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436461628/job/121966170382",
+    "sha256": "612c6640789f554e0a0583d69ae033594dd3cb535ec6dabbcedc34beb2de809a",
+    "bytes": 761975
+  },
+  {
+    "job_id": 121966170590,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436461628/job/121966170590",
+    "sha256": "9bc7de70ae98df112e01b151495c90b8fc9dce034dbdd8ed67931ab693f6a3cc",
+    "bytes": 758904
+  },
+  {
+    "job_id": 121966170676,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436461628/job/121966170676",
+    "sha256": "6069c7bf9bbc3564ffa03e9ee92fa1d1757f3a7c25b79c8dbcd2a4e7381af27f",
+    "bytes": 767134
+  },
+  {
+    "job_id": 121967692103,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436919351/job/121967692103",
+    "sha256": "976430fbf6c85a4460eef375dcaedef2a6c4519b452eee59dd84fefa894e0d22",
+    "bytes": 759514
+  },
+  {
+    "job_id": 121967692327,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436919351/job/121967692327",
+    "sha256": "14608069dff343a2a0b76e1a31f35f0a87171495bca6eea02846c1cb6c900442",
+    "bytes": 767166
+  },
+  {
+    "job_id": 121967692426,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40436919351/job/121967692426",
+    "sha256": "45046bc62c0feff12425a5f8f0e826b462d9a85e93d47b32414be901a368ded4",
+    "bytes": 762685
+  },
+  {
+    "job_id": 121969189283,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437378323/job/121969189283",
+    "sha256": "7d9161dd07f1b1af173316bb19b28aa467819b7d06e9af6a797c6aa9048d8436",
+    "bytes": 757989
+  },
+  {
+    "job_id": 121969189373,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437378323/job/121969189373",
+    "sha256": "575589a83f064273de00e42ce55bb444dabd885fa63b31aa7387b3fe153aaeea",
+    "bytes": 757563
+  },
+  {
+    "job_id": 121969189490,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437378323/job/121969189490",
+    "sha256": "bcec2a6d22a075a4b8ce73b5c628b19729923142b18029cf55ebce3d1845fe02",
+    "bytes": 767397
+  },
+  {
+    "job_id": 121970665355,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437819730/job/121970665355",
+    "sha256": "aea78a65193045542eedd46cdf3548741b0ccd9cf5fa4ee0ca6f6c0e5b2c77de",
+    "bytes": 762971
+  },
+  {
+    "job_id": 121970665588,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437819730/job/121970665588",
+    "sha256": "354c957526ee5d6b9170612a8e34d772f1740136376e04bce0f01d87f4e8422c",
+    "bytes": 763293
+  },
+  {
+    "job_id": 121970665664,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437819730/job/121970665664",
+    "sha256": "6e4a256a4549fbf3a101c6038e38beb6701f497b0662995ba38374a2f5886bac",
+    "bytes": 766807
+  },
+  {
+    "job_id": 121970677832,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437823517/job/121970677832",
+    "sha256": "42c963dfc4228d3d004fe26ccc9e98f4d6735e81f5a549025bd832f09b366bb5",
+    "bytes": 767753
+  },
+  {
+    "job_id": 121970677991,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437823517/job/121970677991",
+    "sha256": "8113c77080180b19f46fe1acdfa46c8726ec5ebd6070257c36e5f9cda0c3a534",
+    "bytes": 763814
+  },
+  {
+    "job_id": 121970678048,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437823517/job/121970678048",
+    "sha256": "0772c99be98a6318ce63fff0b61a888cb03cd40b1d644db06283cd1734cafd6d",
+    "bytes": 763442
+  },
+  {
+    "job_id": 121970689299,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437827366/job/121970689299",
+    "sha256": "8275dffa79b0d1d5376bb81589066dc1c1746940f5cee6ed8b6ec7c14f7ebd7d",
+    "bytes": 764253
+  },
+  {
+    "job_id": 121970689765,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437827366/job/121970689765",
+    "sha256": "49a5905c660542f964ffd1b377afaddfcaac15f1b52af57bc6f760323e202cf4",
+    "bytes": 763542
+  },
+  {
+    "job_id": 121970689827,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40437827366/job/121970689827",
+    "sha256": "e16fd5ff3fe47b8a382229fd7df91c03c65bc4f686c38eaaedc145468dfa8c83",
+    "bytes": 766811
+  },
+  {
+    "job_id": 121972344380,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438330478/job/121972344380",
+    "sha256": "3ad0805d83eec838413b3af42219dde4b52648253c36fd0b77264924f91537d9",
+    "bytes": 766494
+  },
+  {
+    "job_id": 121972344498,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438330478/job/121972344498",
+    "sha256": "6f4016ca024d32dd09253f7ccfc919fc01093c9439b8cfaa7f8ff08b2bd8706c",
+    "bytes": 764728
+  },
+  {
+    "job_id": 121972344504,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438330478/job/121972344504",
+    "sha256": "3117cfdd16c070c36d2078d6e88614c925056306d64cb14fa674969644e81dc0",
+    "bytes": 763101
+  },
+  {
+    "job_id": 121973827452,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438783066/job/121973827452",
+    "sha256": "d7280a303b47b6d4ee90a2bde68f008db1495d551c7bab348e2fbbe5667e7c68",
+    "bytes": 766266
+  },
+  {
+    "job_id": 121973827618,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438783066/job/121973827618",
+    "sha256": "2a7daed5baafaae59e3230a6c918cc2b9e73b32937fdb75043fc5be49908b7ab",
+    "bytes": 762961
+  },
+  {
+    "job_id": 121973827741,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40438783066/job/121973827741",
+    "sha256": "fbf15dcc0717c88fe38b1f86d58dc1f5e273edb6bbdac1196eb3c393aacf4d55",
+    "bytes": 758493
+  },
+  {
+    "job_id": 121975314222,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439246307/job/121975314222",
+    "sha256": "f3e982fbd262d06e96ddab3cc9236b57f329216c6138edc12e8147e67ccf4702",
+    "bytes": 766802
+  },
+  {
+    "job_id": 121975314492,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439246307/job/121975314492",
+    "sha256": "5c1b3acdc06fe3aad003f04253dbb6b576b23b71b71c1fdf23f3bb99d5e97ec7",
+    "bytes": 766669
+  },
+  {
+    "job_id": 121975314549,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439246307/job/121975314549",
+    "sha256": "1b5ee4b97b7d276ad30e674508cb501457434a8d0bc3f3d895c318c3bec6a86b",
+    "bytes": 766113
+  },
+  {
+    "job_id": 121975323469,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439249366/job/121975323469",
+    "sha256": "568c8315e529e5cb8f4262be41613823b664148bc121b878cfd07597de668851",
+    "bytes": 766780
+  },
+  {
+    "job_id": 121975323616,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439249366/job/121975323616",
+    "sha256": "fda13b66d7bc7faa8891e6b48ebf3d719370d6ecd993804c9104f90bd2180388",
+    "bytes": 766429
+  },
+  {
+    "job_id": 121975323627,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439249366/job/121975323627",
+    "sha256": "785434e6f76bcfb35ccf7035f072699b9f3455861ea7b4d3af7eb932070e8dae",
+    "bytes": 767064
+  },
+  {
+    "job_id": 121975334839,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439252252/job/121975334839",
+    "sha256": "c1aa34d868da786704812b20ef8ed9478d88066d60985eae9c8ed5272765fa5f",
+    "bytes": 766929
+  },
+  {
+    "job_id": 121975335088,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439252252/job/121975335088",
+    "sha256": "07cfb294cc1278d1145db7c8328d8740fe975edb64ac5577a2ec47c72f6e71a1",
+    "bytes": 766986
+  },
+  {
+    "job_id": 121975335136,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439252252/job/121975335136",
+    "sha256": "8a5229ed38fb0e5cf877ec654d7d68de7dd728c53368b2879cd18bb838e59c05",
+    "bytes": 766585
+  },
+  {
+    "job_id": 121976829571,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439700238/job/121976829571",
+    "sha256": "689cf3ed0fd3e974e19c63bf8f44199de1973108cc7b59b8362ab5a0755bd7cc",
+    "bytes": 768396
+  },
+  {
+    "job_id": 121976829717,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439700238/job/121976829717",
+    "sha256": "bb792285efcda9ee30fea6fa25f7482fd52fea244493a5dad88ec440812e72c8",
+    "bytes": 767454
+  },
+  {
+    "job_id": 121976829869,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40439700238/job/121976829869",
+    "sha256": "328d2b9221f29152cf9e24a4eff92036ed1dbdf54ba85949d34e447e67a2f902",
+    "bytes": 765795
+  },
+  {
+    "job_id": 121978309862,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440154215/job/121978309862",
+    "sha256": "e4ddfef9878035de55b4d2082d78ed09e684920d7cbe3af6403146b97b53dcb8",
+    "bytes": 757966
+  },
+  {
+    "job_id": 121978309977,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440154215/job/121978309977",
+    "sha256": "bfadbe2d224363aa463335cb3f25ab2485ef43b53827cb79537de75a351fc05a",
+    "bytes": 766801
+  },
+  {
+    "job_id": 121978309986,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440154215/job/121978309986",
+    "sha256": "b5ce256f6ce9cdb988b1ad2069fb0c74e225ce29c90289a73766be688a022bf2",
+    "bytes": 766678
+  },
+  {
+    "job_id": 121978319909,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440157475/job/121978319909",
+    "sha256": "8a54f6515019b481dfe6681aac24e2557be8f2cb99e025c8c69cc362e84eeeab",
+    "bytes": 766916
+  },
+  {
+    "job_id": 121978320156,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440157475/job/121978320156",
+    "sha256": "fe03ad5c2b4945b35a0f5cb2868126009554c560dff20221bc384c0aa85bb2b8",
+    "bytes": 767017
+  },
+  {
+    "job_id": 121978320220,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440157475/job/121978320220",
+    "sha256": "ffab4404220b68beb5c25f1a4ba21ee61c9901435a1011bf50cd3bf7b578fbc9",
+    "bytes": 757966
+  },
+  {
+    "job_id": 121978329909,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440160834/job/121978329909",
+    "sha256": "5ecc0c59e949c4eca58d574c3c5b741d6cb2b572a11c7fe50df1a88edd145e06",
+    "bytes": 767491
+  },
+  {
+    "job_id": 121978330062,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440160834/job/121978330062",
+    "sha256": "b10bb84af970a82efaf6650562712621f10361a7d00d03f3b5f30da57545c943",
+    "bytes": 766813
+  },
+  {
+    "job_id": 121978330141,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440160834/job/121978330141",
+    "sha256": "f9ea6661517342c126218196b5e8a3eeca79d4c31d9a588084b124a49dcdbe9d",
+    "bytes": 757966
+  },
+  {
+    "job_id": 121979798469,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440609550/job/121979798469",
+    "sha256": "fac5a16f9fdac0c22a5ef32a9cecb48431857fc69d39f2313cda26af02aae162",
+    "bytes": 766826
+  },
+  {
+    "job_id": 121979798597,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440609550/job/121979798597",
+    "sha256": "c69e4a986511e7557cc44098e824d3a18a98fac94fa53980bbc8ebcc819f3319",
+    "bytes": 766880
+  },
+  {
+    "job_id": 121979798598,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40440609550/job/121979798598",
+    "sha256": "788b28eb67f873632ca916fe79f8cb04ca556327d6a09b49e5233f1f008abf27",
+    "bytes": 758488
+  },
+  {
+    "job_id": 121981228897,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441051491/job/121981228897",
+    "sha256": "a6a83345a024cba09a215449b8c0b5064ded9e2aae1c69170a53a21ebb4b25c9",
+    "bytes": 765783
+  },
+  {
+    "job_id": 121981229100,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441051491/job/121981229100",
+    "sha256": "b06ed44c231f32c2e809507abb1d76077b562fecda447ca48d4780740ab53a06",
+    "bytes": 758116
+  },
+  {
+    "job_id": 121981229124,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441051491/job/121981229124",
+    "sha256": "7b9e7ffb077b87d699f0db642d87d3b752a4826faaac98cbf140d38ba25424ca",
+    "bytes": 766758
+  },
+  {
+    "job_id": 121982676576,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441496427/job/121982676576",
+    "sha256": "5b8b73efe094ed92ae325f1eb58bed4c3487bbab0705424bf495e133cfc16c42",
+    "bytes": 767535
+  },
+  {
+    "job_id": 121982676729,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441496427/job/121982676729",
+    "sha256": "37de0f2fdab055a71be690cca7f5558f2f68d7d55cfa432b5ea09c141c1b798d",
+    "bytes": 759646
+  },
+  {
+    "job_id": 121982677155,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441496427/job/121982677155",
+    "sha256": "6c494e627fbd033900ea1510e9d5319d1a8db50380c5e7c21378ed55d904ade3",
+    "bytes": 766125
+  },
+  {
+    "job_id": 121982689059,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441500273/job/121982689059",
+    "sha256": "779ff7dea8406fb3c5737a53ff1ff09f47c0b0a191fd6cd66e62de64d99bcae1",
+    "bytes": 760045
+  },
+  {
+    "job_id": 121982689084,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441500273/job/121982689084",
+    "sha256": "451dc32afc7d86a46330a8145961f6fdefed24bfeed1419e43b6e5a67dbbd224",
+    "bytes": 766470
+  },
+  {
+    "job_id": 121982689293,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441500273/job/121982689293",
+    "sha256": "3905ba491a1c2a929e8b4b7d7f2db92d89fc6ad24ba9f529893cd7c216cce41d",
+    "bytes": 767390
+  },
+  {
+    "job_id": 121982700950,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441503635/job/121982700950",
+    "sha256": "df4a8c9825357c504292e32f54eef91e18af6cf46dc98bfe081dbdc2c7cd0bae",
+    "bytes": 767449
+  },
+  {
+    "job_id": 121982701163,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441503635/job/121982701163",
+    "sha256": "361756d4b6508c510aff1d3eafeccf06e3d03283550abe0ebdaca12f51497d53",
+    "bytes": 759632
+  },
+  {
+    "job_id": 121982701182,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441503635/job/121982701182",
+    "sha256": "0306162ffd1cd4204b90783e33d0f7d2b52cfbf1be5c8b6f9a1d3e64bf78de13",
+    "bytes": 766707
+  },
+  {
+    "job_id": 121984168661,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441964125/job/121984168661",
+    "sha256": "1f2af87be64c0d1a68e8508383182cfc6ba7eba1739e66370f0f1677289ecc42",
+    "bytes": 766816
+  },
+  {
+    "job_id": 121984168833,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441964125/job/121984168833",
+    "sha256": "9eafc11ac36b024395b336d4ece0ae987c083e840f24790d8a6ffb702db9e679",
+    "bytes": 760224
+  },
+  {
+    "job_id": 121984168950,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40441964125/job/121984168950",
+    "sha256": "f882a5c3e264fd125c9a435986264a2598401ae755fcce4e2dc32c63c1554efc",
+    "bytes": 766952
+  },
+  {
+    "job_id": 121985771818,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442465217/job/121985771818",
+    "sha256": "3c7a00f194babcde6a03ba428d027c137ea8f636cf26f479f170d3e98272de24",
+    "bytes": 766876
+  },
+  {
+    "job_id": 121985771919,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442465217/job/121985771919",
+    "sha256": "75766f54aa23c814765c7ca51db70f75cf142ac9780ffc7dee685835d71cc4b5",
+    "bytes": 767468
+  },
+  {
+    "job_id": 121985772131,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442465217/job/121985772131",
+    "sha256": "24ba3bfef4c683cf31e320c281ce72adc3910bbce8d45d1d67f38a89a4d799b7",
+    "bytes": 758484
+  },
+  {
+    "job_id": 121985783574,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442469045/job/121985783574",
+    "sha256": "84f4a37c11e75861e8403cb018f4c34cba1470225790d6b87b0e0217db6be5d5",
+    "bytes": 766858
+  },
+  {
+    "job_id": 121985783839,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442469045/job/121985783839",
+    "sha256": "4de930e6345cdba5ecb5dcb5bcf874918b983dbcbe1e188c1e94df9d0170760f",
+    "bytes": 766694
+  },
+  {
+    "job_id": 121985783842,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442469045/job/121985783842",
+    "sha256": "82073e6cfafaf7b6295e10246cdce56fe196e591def80b2eeaf24f0ce8b1a12e",
+    "bytes": 758529
+  },
+  {
+    "job_id": 121985798059,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442473181/job/121985798059",
+    "sha256": "42eccf93ebd60ff4a664539261fb43894081971f44cdfd9c2fd980a6519dff3d",
+    "bytes": 767178
+  },
+  {
+    "job_id": 121985798252,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442473181/job/121985798252",
+    "sha256": "f8d35685797d281382b816aee1e4b634772aa8d6d04a170b1615bb7bff6b4b28",
+    "bytes": 759657
+  },
+  {
+    "job_id": 121985798267,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442473181/job/121985798267",
+    "sha256": "6650b1ec670d52536e3c01e8fe3baae12e0d2c309775449557389a5a563766a0",
+    "bytes": 766585
+  },
+  {
+    "job_id": 121987247154,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442915677/job/121987247154",
+    "sha256": "6c012852d27469ab4ec90e171ffbd137386a535b9276b9e2c5134648879b5f0a",
+    "bytes": 766282
+  },
+  {
+    "job_id": 121987247488,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442915677/job/121987247488",
+    "sha256": "74216243bb436058a61376d2720d536f1d35b5e24ca5f68f3c3a6a7ccf21d131",
+    "bytes": 758510
+  },
+  {
+    "job_id": 121987247950,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40442915677/job/121987247950",
+    "sha256": "b3d56c5ef76253378707df1ddb9ca4d6208e1e0f9021bf05bcebcc41dbdf676f",
+    "bytes": 766632
+  },
+  {
+    "job_id": 121988686221,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443359825/job/121988686221",
+    "sha256": "d1887fd4d29eea2d5f6db6a6d854b891c83d67b7c856441418e24006aabf4636",
+    "bytes": 757676
+  },
+  {
+    "job_id": 121988686391,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443359825/job/121988686391",
+    "sha256": "a351bf4263c737df9cc74b46009cd53ade34c1bef2acad9521038312e2286fb0",
+    "bytes": 766591
+  },
+  {
+    "job_id": 121988686488,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443359825/job/121988686488",
+    "sha256": "c973b8d2864440cb68f25a93da0ce688f08db677b89847273161e3ee3838fc87",
+    "bytes": 766286
+  },
+  {
+    "job_id": 121990105542,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443793333/job/121990105542",
+    "sha256": "c514d65dfe14ac9346d20abb0f019c8b08fdaedf465a13e57dabd66f01e3a233",
+    "bytes": 768043
+  },
+  {
+    "job_id": 121990105661,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443793333/job/121990105661",
+    "sha256": "573ebceb9f70f640e5558dc145489548d6607a686d9fcfe91f2e8a94036322c9",
+    "bytes": 758293
+  },
+  {
+    "job_id": 121990105683,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443793333/job/121990105683",
+    "sha256": "382a2098b541f7cccb7cf854979db378ddecf8ffd1889c635506dfd2ad91a569",
+    "bytes": 766832
+  },
+  {
+    "job_id": 121990118595,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443797525/job/121990118595",
+    "sha256": "d7f78936b77c5870ca9b0d04eb5f7cafda5c2bdd4a2e751141c812becf799341",
+    "bytes": 766611
+  },
+  {
+    "job_id": 121990118668,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443797525/job/121990118668",
+    "sha256": "557b9ce5c6b73734505d7040866c98bb7313ca25912a7cff8cf3dc7c4682e5da",
+    "bytes": 766365
+  },
+  {
+    "job_id": 121990118699,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443797525/job/121990118699",
+    "sha256": "448533b6e4cfda5654355516e55af87214a67a9ee1540838f3ff2133d0d4781b",
+    "bytes": 758580
+  },
+  {
+    "job_id": 121990132434,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443801325/job/121990132434",
+    "sha256": "bdb718312e455b4f218de4bd0343d3312c721835c4963ee5dd99840c75e55c1b",
+    "bytes": 766131
+  },
+  {
+    "job_id": 121990132782,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443801325/job/121990132782",
+    "sha256": "6990ea386290628943062066927ea3f8724e0d9fa91ad44131911a69221ab7a7",
+    "bytes": 766611
+  },
+  {
+    "job_id": 121990132853,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40443801325/job/121990132853",
+    "sha256": "87d6f4936a7bd92a58a5c798969cc39dab8cb38f49f68fa9f4607f79546f1b88",
+    "bytes": 759095
+  },
+  {
+    "job_id": 121991549188,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444233632/job/121991549188",
+    "sha256": "290a02ee2041fa9106129d370bcfa4b1f69a6eec098eea73fa1b0e76b3c4f0ef",
+    "bytes": 766904
+  },
+  {
+    "job_id": 121991549384,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444233632/job/121991549384",
+    "sha256": "bad2c4631b4812424ab264e96c2f3c651fac37474da5ef221a79c2d3d11902a2",
+    "bytes": 766838
+  },
+  {
+    "job_id": 121991549451,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444233632/job/121991549451",
+    "sha256": "10e94a64b6efb3755a003abbfec0627e06301dd3eda3ae7ad944dbc74399e13c",
+    "bytes": 758815
+  },
+  {
+    "job_id": 121992983940,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444669237/job/121992983940",
+    "sha256": "d6fa8518b7bf160525ab7d79b78d5d106b7c49a817771315c509bbdbe231f6f5",
+    "bytes": 766280
+  },
+  {
+    "job_id": 121992984006,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444669237/job/121992984006",
+    "sha256": "afd88b94b4691ac4d3a96a09473a32c973c4b5df7a9ac2ae4fad45e0083c88fc",
+    "bytes": 757343
+  },
+  {
+    "job_id": 121992984034,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40444669237/job/121992984034",
+    "sha256": "048ba1e8248e34d2e86e9eb3fccd5ad1d2dccbff1e0b0440e1420fe372499ed5",
+    "bytes": 758301
+  },
+  {
+    "job_id": 121994403632,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445107929/job/121994403632",
+    "sha256": "4ad315ce0aee0d57df482e8e6efbdab61d47dabe6b5ea077fd5eb8d0a14f477c",
+    "bytes": 757657
+  },
+  {
+    "job_id": 121994403755,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445107929/job/121994403755",
+    "sha256": "f51cd34d2acccbedb9e98fe0e95b6fbbe09c97c1f5aac222e92db9285fa37aa8",
+    "bytes": 758872
+  },
+  {
+    "job_id": 121994403789,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445107929/job/121994403789",
+    "sha256": "d30084146858575ea65cfa12f2cbe5c72741c48a08c42458c13b0931a4c88313",
+    "bytes": 766592
+  },
+  {
+    "job_id": 121994413462,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445110902/job/121994413462",
+    "sha256": "e86b389bcf99b878e20a5808488ee46813f80e25a1ddd6a699d921797a00032f",
+    "bytes": 757657
+  },
+  {
+    "job_id": 121994413671,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445110902/job/121994413671",
+    "sha256": "6429599cd02e049160bae85450fca9e8fe0995d404ae27297510930d01592bf3",
+    "bytes": 757978
+  },
+  {
+    "job_id": 121994413740,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445110902/job/121994413740",
+    "sha256": "a5d4ed6c47ae904bb7aeb9774480ca2e4db858b2cfbb2668f79ee81754cc9d2f",
+    "bytes": 766592
+  },
+  {
+    "job_id": 121994423974,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445113896/job/121994423974",
+    "sha256": "566154aca213e4747927d042e97f9fb91fb3c9315f79b734ecbe4cd104b150a3",
+    "bytes": 758579
+  },
+  {
+    "job_id": 121994424074,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445113896/job/121994424074",
+    "sha256": "7509481c5be851aeecebe4c1425b768be730384a146bb523f16c575741d6390e",
+    "bytes": 758198
+  },
+  {
+    "job_id": 121994424154,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445113896/job/121994424154",
+    "sha256": "dfa466bd5f9f634b62d6a8da2afd8e16fa2f9e194bc2959056706b35a53e7cae",
+    "bytes": 766592
+  },
+  {
+    "job_id": 121995835339,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445544467/job/121995835339",
+    "sha256": "b9f3788d75a964dd9a65b8e5a31f378f987df1bb63eeb40db6b37b68c2943ac1",
+    "bytes": 758752
+  },
+  {
+    "job_id": 121995835349,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445544467/job/121995835349",
+    "sha256": "dbcd98c4558593517601560ea26b40963d31f228c717473f6defb37c570edb8f",
+    "bytes": 766275
+  },
+  {
+    "job_id": 121995835431,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445544467/job/121995835431",
+    "sha256": "0542f94e7874e4576eeb883c050d75e03d6de289f364827899ff3cdc3d7588ed",
+    "bytes": 757339
+  },
+  {
+    "job_id": 121997097750,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445932158/job/121997097750",
+    "sha256": "79bc48f9899208fe4778fd0d27bc2b31253f9ec45defacdcebd1b385c0864e14",
+    "bytes": 757809
+  },
+  {
+    "job_id": 121997097841,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445932158/job/121997097841",
+    "sha256": "9b8794f8b7b5ff3aa3a80c5ded6048725f11acf8675b264f112ce0c67c87c64c",
+    "bytes": 757668
+  },
+  {
+    "job_id": 121997097928,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40445932158/job/121997097928",
+    "sha256": "c0a2bb37e77144d1fe963e5c465c40e1609e174acdb6a5fedf9ede962ebbf438",
+    "bytes": 766275
+  },
+  {
+    "job_id": 121958446305,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434070917/job/121958446305",
+    "sha256": "3c72947e188437b76f71e4a71012a79fdbfd7386c112b115fb260b1564b462a8",
+    "bytes": 799163,
+    "excluded": true
+  },
+  {
+    "job_id": 121958446473,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434070917/job/121958446473",
+    "sha256": "e569870941fa0443ed40780df5cc7ddb02d73f1240b5c07c410d41e8bcba76ff",
+    "bytes": 762794,
+    "excluded": true
+  },
+  {
+    "job_id": 121958446560,
+    "url": "https://github.com/astral-sh/uv-dev/actions/runs/40434070917/job/121958446560",
+    "sha256": "2b2ed9e9a08e6d97bee568a808c3300e8623ce9be2007b0663f80b72146d0383",
+    "bytes": 761413,
+    "excluded": true
+  }
+]
