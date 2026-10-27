@@ -14,7 +14,7 @@ The reporter has now supplied a synthetic, network-independent integration-test 
 
 No existing issue or pull request tracks this exact failure. The closest history is astral-sh/uv#13017, which added broad signal forwarding to fix the opposite failure reported in astral-sh/uv#12830, where externally delivered signals terminated uv without reaching its child. astral-sh/uv#11886 is adjacent because it explains the observed status 141: uv currently converts a signal-terminated child into a normal-looking 128+signal exit code, but that issue does not cover why the child received SIGPIPE.
 
-A repository member identified two possible implementation directions: stop forwarding SIGPIPE, or replace uv with the Python process via `exec` in cases that do not require uv to retain a child process. These are proposals rather than a settled maintainer decision.
+Maintainers have not settled on a fix. In the October 27 update, repository member EliteTK stated that ignoring SIGPIPE is probably not the right approach and that maintainers are not seeking external contributions to fix this for the time being. The earlier proposals to stop forwarding SIGPIPE or use `exec` remain unapproved design possibilities.
 
 ## Reproduction
 
@@ -36,11 +36,11 @@ astral-sh/uv#12830 and astral-sh/uv#13017 are historical context rather than can
 
 ## Maintainer direction
 
-A repository member proposed that uv could stop forwarding SIGPIPE. The stated compatibility cost is that an explicitly targeted `kill -PIPE <uv PID>` would no longer reach the child. Ordinary shell pipelines such as `uv run ... | consumer` would still deliver SIGPIPE directly to the writing child when the reader closes the pipe. The same comment cautions that correlating an asynchronously received SIGPIPE with a particular `EPIPE` is not reliable, so selectively suppressing only signals attributed to uv's own failed write is not considered a practical approach.
+As of October 27, EliteTK says maintainers remain uncertain how to handle this, consider ignoring SIGPIPE probably the wrong route, and are not looking for external contributions to fix it for now. This sets the current contribution policy without selecting an alternative implementation or announcing a fix.
+
+An earlier proposal was to stop forwarding SIGPIPE. The stated compatibility cost is that an explicitly targeted `kill -PIPE <uv PID>` would no longer reach the child. Ordinary shell pipelines such as `uv run ... | consumer` would still deliver SIGPIPE directly to the writing child when the reader closes the pipe. The same comment cautions that correlating an asynchronously received SIGPIPE with a particular `EPIPE` is not reliable, so selectively suppressing only signals attributed to uv's own failed write is not considered a practical approach. This proposal should be read in light of the maintainers' current reservations about ignoring SIGPIPE.
 
 The reporter confirms that removing the `sigpipe_handle.recv` select arm makes the proposed synthetic regression test pass. This demonstrates the effect of that change but does not resolve the compatibility decision about explicitly forwarding SIGPIPE.
-
-Varshith-Kali has volunteered to implement removal of SIGPIPE forwarding in `crates/uv-command-support/src/child.rs` and add a regression test based on the reporter's sketch. This is a contributor's stated plan; the supplied discussion includes no linked implementation, new test results, or maintainer approval of that plan.
 
 The alternative proposal is to use `exec` for eligible Python invocations so uv is no longer a signal-forwarding parent. The member noted that uv must retain the forked-process model for cases such as `--isolated`; the scope and implementation cost of using `exec` elsewhere are still unknown. A separate cleanup-holder process was mentioned but considered difficult to implement correctly. No fix has been selected.
 
