@@ -10,6 +10,8 @@ Reproduced the reported installation failure on Linux x86_64 with Python 3.11.17
 
 This is a v7 archive compatibility regression associated with the default-backend change in astral-sh/uv#22094. The hard-link and full-length user/group-name fixes in astral-sh/uv#22516 and astral-sh/uv#22522 address different inputs and do not resolve this failure. A maintainer identifies the archive as nonconforming to the current sdist specification and raises security concerns about adding v7 support; restoring compatibility is not an agreed implementation plan.
 
+A second user reports that this breaks a CI pipeline installing Odoo 17 requirements that pin `pypdf2==1.26.0`. Their version comparison places the failure boundary between tested uv 0.12.24 and 0.13.0, and their verified local-archive installation also fails. These additional results are user-reported, as detailed below.
+
 ## Classification
 
 Bug: a demonstrated compatibility regression relative to uv 0.12.0 and the legacy tar backend. The published PyPDF2 1.26.0 sdist has an all-zero first-header identity, which the pinned tar-framing 0.0.15 rejects before checksum validation and extraction policy. GNU tar and Python's `tarfile` both successfully list the archive. The runtime failure, version comparison, archive inspection, and decoder implementation agree on the rejected input.
@@ -76,9 +78,17 @@ UV_LEGACY_TAR_BACKEND=1 uv pip install --no-cache pypdf2==1.26.0
 | 0.13.6 | Default | Exit 1; exact invalid-identity error above |
 | 0.13.6 | Legacy override | Exit 0; builds and installs `pypdf2==1.26.0` |
 
-Version comparisons used the same `venv --python ...` and `pip install --no-cache pypdf2==1.26.0` commands, with explicit `--python .venv-0.12.0/bin/python` or `--python .venv-0.13.6/bin/python` for the separate environments. `importlib.metadata.version("PyPDF2")` returned `1.26.0` after every successful installation. Versions 0.13.0 through 0.13.4 were not individually executed; their failure remains a reporter claim, consistent with the documented backend transition.
+Version comparisons used the same `venv --python ...` and `pip install --no-cache pypdf2==1.26.0` commands, with explicit `--python .venv-0.12.0/bin/python` or `--python .venv-0.13.6/bin/python` for the separate environments. `importlib.metadata.version("PyPDF2")` returned `1.26.0` after every successful installation. Versions 0.13.0 through 0.13.4 were not individually executed in the independent reproduction; their failure is reported by both the original reporter and the additional CI version comparison below, consistent with the documented backend transition.
 
 The temporary directory contains `reproduce.py`, per-command JSON records including stdout/stderr and exit codes, the inspected sdist, and metadata for the downloaded binaries.
+
+### Additional reported CI impact and version comparison
+
+Dahep reports in astral-sh/uv#22955 (comment ID 6449776904) that a CI pipeline installing Odoo 17's requirements fails because those requirements pin `pypdf2==1.26.0`. This adds a concrete downstream use of the legacy release. The Odoo requirement pin and this runner's results have not been independently verified; the comment does not specify the runner's platform or Python version.
+
+- Using `uvx --from uv==<X> uv pip install --no-deps --target <dir> pypdf2==1.26.0`, the commenter reports successful sdist extraction with uv 0.12.4, 0.12.8, 0.12.12, 0.12.16, 0.12.20, 0.12.22, and 0.12.24, and the same identity rejection with every version from 0.13.0 through 0.13.6. These are additional reported comparisons, not additions to the independently executed results table.
+- The commenter reports that the downloaded archive on the affected runner matches PyPI's published SHA-256 and that installation from this verified local copy still fails on 0.13.x. This supports the existing decoder diagnosis over a transport-corruption explanation for that runner; no additional local-file reproduction was executed for this update.
+- Their interim workaround was to pin the CI gate's uv to the last 0.12.x release. They suggest the legacy-backend environment variable as an alternative but do not report testing it themselves. The independent reproduction above already confirms `UV_LEGACY_TAR_BACKEND=1` works with uv 0.13.5 and 0.13.6.
 
 ### Archive validation
 
