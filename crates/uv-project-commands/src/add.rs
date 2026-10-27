@@ -1161,11 +1161,13 @@ async fn lock_and_sync(
             };
             match minimum_version.entry(name) {
                 Entry::Vacant(entry) => {
-                    entry.insert(version);
+                    entry.insert((version, true));
                 }
                 Entry::Occupied(mut entry) => {
-                    if version < *entry.get() {
-                        entry.insert(version);
+                    let (minimum, unique) = entry.get_mut();
+                    if version != *minimum {
+                        *unique = false;
+                        *minimum = version.min(*minimum);
                     }
                 }
             }
@@ -1208,20 +1210,20 @@ async fn lock_and_sync(
             }
 
             // Set the minimum version.
-            let Some(minimum) = minimum_version.get(&edit.requirement.name) else {
+            let Some(&(minimum, unique)) = minimum_version.get(&edit.requirement.name) else {
                 continue;
             };
 
-            // Drop the local version identifier, which isn't permitted in `>=` constraints.
-            // For example, convert `1.2.3+local` to `1.2.3`.
-            let minimum = (*minimum).clone().without_local();
+            // Ordered bounds forbid local labels. Retain the label for an exact pin only when
+            // all resolved versions agree; otherwise use the minimum public version.
+            let bound_kind = bound_kind.unwrap_or_default();
+            let minimum = if bound_kind == AddBoundsKind::Exact && unique {
+                minimum.clone()
+            } else {
+                minimum.clone().without_local()
+            };
 
-            toml.set_dependency_bound(
-                &edit.dependency_type,
-                *index,
-                minimum,
-                bound_kind.unwrap_or_default(),
-            )?;
+            toml.set_dependency_bound(&edit.dependency_type, *index, minimum, bound_kind)?;
 
             modified = true;
         }

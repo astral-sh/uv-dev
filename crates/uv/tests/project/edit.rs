@@ -5002,6 +5002,113 @@ fn add_lower_bound_optional() -> Result<()> {
     Ok(())
 }
 
+/// Exact pins retain a local label when the same version is selected for every environment.
+#[test]
+fn add_exact_bound_local() -> Result<()> {
+    let server = uv_test::packse::PackseServer::new("local/local-simple.toml");
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("a").arg("--bounds").arg("exact").arg("--index").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.2.3+foo
+    ");
+
+    let pyproject_toml = context.read("pyproject.toml");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            pyproject_toml, @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "a==1.2.3+foo",
+        ]
+
+        [[tool.uv.index]]
+        url = "http://[LOCALHOST]/simple/"
+        "#
+        );
+    });
+
+    Ok(())
+}
+
+/// An exact public pin permits different local builds in distinct environments.
+#[test]
+fn add_exact_bound_local_forks() -> Result<()> {
+    let server = uv_test::packse::PackseServer::new("local/local-simple.toml");
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        environments = ["sys_platform == 'darwin'", "sys_platform != 'darwin'"]
+        constraint-dependencies = [
+            "a==1.2.3+bar; sys_platform == 'darwin'",
+            "a==1.2.3+foo; sys_platform != 'darwin'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("a").arg("--bounds").arg("exact").arg("--no-sync").arg("--index").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    let pyproject_toml = context.read("pyproject.toml");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            pyproject_toml, @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "a==1.2.3",
+        ]
+
+        [tool.uv]
+        environments = ["sys_platform == 'darwin'", "sys_platform != 'darwin'"]
+        constraint-dependencies = [
+            "a==1.2.3+bar; sys_platform == 'darwin'",
+            "a==1.2.3+foo; sys_platform != 'darwin'",
+        ]
+
+        [[tool.uv.index]]
+        url = "http://[LOCALHOST]/simple/"
+        "#
+        );
+    });
+
+    Ok(())
+}
+
 /// Omit the local segment when adding dependencies (since `>=1.2.3+local` is invalid).
 #[test]
 fn add_lower_bound_local() -> Result<()> {
