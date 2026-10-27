@@ -400,8 +400,8 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Atomically write the lockfile so readers cannot observe a partial lock.
-    pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
-        let encoded = lock.to_toml()?;
+    pub(crate) async fn commit(self, lock: &Lock, crlf: bool) -> Result<(), LockError> {
+        let encoded = encode_lock(lock, crlf)?;
         uv_fs::write_atomic_preserve(self.lock_path(), encoded).await?;
         Ok(())
     }
@@ -544,11 +544,37 @@ enum Bracket {
     Array { multiline: bool },
 }
 
+/// Use CRLF only if all existing line endings are CRLF.
+pub(crate) fn uses_crlf(source: &str) -> bool {
+    source.split_once('\n').is_some_and(|(first, rest)| {
+        first.ends_with('\r')
+            && rest
+                .split_inclusive('\n')
+                .all(|line| !line.ends_with('\n') || line.ends_with("\r\n"))
+    })
+}
+
+pub(crate) fn encode_lock(lock: &Lock, crlf: bool) -> Result<String, LockError> {
+    let encoded = lock.to_toml()?;
+    if crlf {
+        Ok(encoded.replace('\n', "\r\n"))
+    } else {
+        Ok(encoded)
+    }
+}
+
 /// Return the first line that does not match the whitespace emitted by the lock writer.
 ///
 /// This only checks the serialization shape. TOML validity and lockfile semantics are checked by
 /// the regular lockfile deserializer.
 pub(crate) fn find_lock_format_error(source: &str) -> Option<usize> {
+    let normalized;
+    let source = if uses_crlf(source) {
+        normalized = source.replace("\r\n", "\n");
+        &normalized
+    } else {
+        source
+    };
     let bytes = source.as_bytes();
     let mut brackets = Vec::with_capacity(4);
     let mut previous = None;
@@ -699,6 +725,10 @@ requires-dist = [{ name = "sniffio" }]
     #[test]
     fn accepts_lock_format() {
         assert_eq!(find_lock_format_error(FORMATTED), None);
+        assert_eq!(
+            find_lock_format_error(&FORMATTED.replace('\n', "\r\n")),
+            None
+        );
     }
 
     #[test]

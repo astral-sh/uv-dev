@@ -179,6 +179,48 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
 /// Equivalent dependency declarations should reuse metadata already stored in a lockfile.
 #[cfg(feature = "test-universal")]
 #[test]
+fn lock_preserves_crlf_on_rewrite() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    let original = context.read("uv.lock");
+    assert!(!original.contains('\r'));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&original.replace('\n', "\r\n"))?;
+
+    let project = context.read("pyproject.toml").replace("1.0", "2.0");
+    pyproject.write_str(&project)?;
+    context.lock().arg("--offline").assert().success();
+    let rewritten = context.read("uv.lock");
+    assert!(rewritten.contains("version = \"2.0\""));
+    assert!(rewritten.contains("\r\n"));
+    assert!(!rewritten.replace("\r\n", "").contains('\n'));
+    context
+        .lock()
+        .args([
+            "--no-index",
+            "--check",
+            "--refresh",
+            "--preview-features",
+            "lockfile-format-check",
+        ])
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
 fn lock_equivalent_requirements() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let links = context.workspace_root.join("test/links");
