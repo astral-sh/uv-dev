@@ -20,8 +20,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: astral-sh/github-actions/rust-workspace-cache@09a77e55b9cacee25c4170194cb529300c015991
         with:
+          # Cargo verifies each package from an extracted archive, so cache dependencies only.
+          cache-workspace-crates: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "cargo publish dry-run"
         run: cargo publish --locked --workspace --dry-run

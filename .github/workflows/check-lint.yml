@@ -125,7 +125,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      - uses: astral-sh/github-actions/rust-workspace-cache@09a77e55b9cacee25c4170194cb529300c015991
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
       - name: "Clippy"
@@ -157,7 +157,7 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup component add clippy
 
-      - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      - uses: astral-sh/github-actions/rust-workspace-cache@09a77e55b9cacee25c4170194cb529300c015991
         with:
           workspace: ${{ env.UV_WORKSPACE }}
           save-if: ${{ inputs.save-rust-cache == 'true' }}
@@ -198,17 +198,20 @@ jobs:
     timeout-minutes: 15
     if: ${{ inputs.code-changed == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: ". -> target/hawk"
-          cache-workspace-crates: "false"
-          save-if: ${{ inputs.save-rust-cache == 'true' }}
       - name: "Install Rust toolchain"
         run: rustup toolchain install 1.99.0
+      - uses: astral-sh/github-actions/rust-workspace-cache@09a77e55b9cacee25c4170194cb529300c015991
+        with:
+          target-directory: target/hawk
+          # Cache dependencies without enabling unstable Cargo freshness for Hawk.
+          cache-workspace-crates: "false"
+          save-if: ${{ inputs.save-rust-cache == 'true' }}
       - name: "Install Hawk"
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf \
