@@ -403,8 +403,8 @@ async fn create_venv_project_environment_lock() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: foo
     WARN Failed to acquire project environment lock: Timeout ([TIME]) when waiting for lock on `[TEMP_DIR]/` at `[PROJECT_ENVIRONMENT_LOCK]/`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    Creating virtual environment at: foo
     Activate with: source foo/[BIN]/activate
     ");
     drop(lock);
@@ -455,8 +455,8 @@ async fn create_venv_project_environment_lock_symlink() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: project-link/foo
     WARN Failed to acquire project environment lock: Timeout ([TIME]) when waiting for lock on `[TEMP_DIR]/project-link` at `[PROJECT_ENVIRONMENT_LOCK]/`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    Creating virtual environment at: project-link/foo
     Activate with: source project-link/foo/[BIN]/activate
     ");
     drop(lock);
@@ -1327,6 +1327,47 @@ fn create_venv_explicit_request_takes_priority_over_python_version_file() {
     );
 
     context.venv.assert(predicates::path::is_dir());
+}
+
+/// A seed resolution failure does not create the requested environment.
+#[test]
+fn seed_resolution_failure_does_not_create_environment() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let destination = context.temp_dir.child("fresh");
+    uv_snapshot!(context.filters(), context.venv().arg("fresh").args(["--seed", "--no-index", "--python", "3.12"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Failed to resolve seed packages
+      cause: No solution found when resolving: `pip`
+      cause: Because pip was not found in the provided package locations and you require pip, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+    destination.assert(predicates::path::missing());
+}
+
+/// A seed resolution failure does not clear an existing environment.
+#[test]
+fn seed_resolution_failure_does_not_clear_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let destination = context.temp_dir.child("existing");
+    context
+        .venv()
+        .arg("existing")
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    let sentinel = destination.child("keep.txt");
+    sentinel.write_str("keep")?;
+    context
+        .venv()
+        .arg("existing")
+        .args(["--clear", "--seed", "--no-index", "--python", "3.12"])
+        .assert()
+        .failure();
+    sentinel.assert("keep");
+    Ok(())
 }
 
 #[test]

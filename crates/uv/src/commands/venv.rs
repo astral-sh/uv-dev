@@ -55,6 +55,9 @@ enum VenvError {
     #[error("Failed to create virtual environment")]
     Creation(#[source] uv_virtualenv::Error),
 
+    #[error("Failed to resolve seed packages")]
+    SeedResolution(#[source] AnyErrorBuild),
+
     #[error("Failed to install seed packages into virtual environment")]
     Seed(#[source] AnyErrorBuild),
 
@@ -209,27 +212,6 @@ pub(crate) async fn venv(
         warn_user!("{err}");
     }
 
-    let with_seed = match seed {
-        Seed::Enabled => " with seed packages",
-        Seed::Disabled => "",
-    };
-    if centralized_workspace.is_some() {
-        writeln!(
-            printer.stderr(),
-            "Creating virtual environment `{}`{with_seed}",
-            path.file_name()
-                .unwrap_or(path.as_os_str())
-                .to_string_lossy()
-                .cyan(),
-        )?;
-    } else {
-        writeln!(
-            printer.stderr(),
-            "Creating virtual environment{with_seed} at: {}",
-            path.user_display().cyan()
-        )?;
-    }
-
     // Lock the project environment to avoid synchronization issues.
     let _lock = if let Some((workspace, _)) = project_environment.as_ref() {
         lock_project_environment(ProjectEnvironmentTarget::from(*workspace))
@@ -242,48 +224,67 @@ pub(crate) async fn venv(
         None
     };
 
-    let on_existing = match on_existing {
-        OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
-            // Centralized environments are managed by uv, so replace them without prompting.
-            OnExisting::Remove(RemovalReason::ManagedEnvironment)
+    let create_venv = |interpreter| -> Result<_> {
+        let with_seed = match seed {
+            Seed::Enabled => " with seed packages",
+            Seed::Disabled => "",
+        };
+        if centralized_workspace.is_some() {
+            writeln!(
+                printer.stderr(),
+                "Creating virtual environment `{}`{with_seed}",
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .cyan(),
+            )?;
+        } else {
+            writeln!(
+                printer.stderr(),
+                "Creating virtual environment{with_seed} at: {}",
+                path.user_display().cyan()
+            )?;
         }
-        OnExisting::Prompt | OnExisting::Remove(_)
-            if is_centralized_environment_reference(&path, cache) =>
-        {
-            // Remove `.venv` without following it into the cache.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
-        }
-        OnExisting::Allow
-            if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
-                && is_centralized_environment_reference(&path, cache) =>
-        {
-            // TODO(tk): Revisit after PEP 832.
-            // Ignore uv-owned path files when creating a local environment.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
-        }
-        _ => on_existing,
+
+        let on_existing = match on_existing {
+            OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
+                // Centralized environments are managed by uv, so replace them without prompting.
+                OnExisting::Remove(RemovalReason::ManagedEnvironment)
+            }
+            OnExisting::Prompt | OnExisting::Remove(_)
+                if is_centralized_environment_reference(&path, cache) =>
+            {
+                // Remove `.venv` without following it into the cache.
+                uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
+                on_existing
+            }
+            OnExisting::Allow
+                if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
+                    && is_centralized_environment_reference(&path, cache) =>
+            {
+                // TODO(tk): Revisit after PEP 832.
+                // Ignore uv-owned path files when creating a local environment.
+                uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
+                on_existing
+            }
+            _ => on_existing,
+        };
+
+        // Create the virtual environment.
+        Ok(uv_virtualenv::create_venv(
+            &path,
+            interpreter,
+            prompt,
+            system_site_packages,
+            on_existing,
+            relocatable,
+            seed,
+            upgrade_policy,
+        )
+        .map_err(VenvError::Creation)?)
     };
 
-    // Create the virtual environment.
-    let venv = uv_virtualenv::create_venv(
-        &path,
-        interpreter,
-        prompt,
-        system_site_packages,
-        on_existing,
-        relocatable,
-        seed,
-        upgrade_policy,
-    )
-    .map_err(VenvError::Creation)?;
-
-    // Install seed packages.
-    if let Seed::Enabled = seed {
-        // Extract the interpreter.
-        let interpreter = venv.interpreter();
-
+    let venv = if let Seed::Enabled = seed {
         // Instantiate a client.
         let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
             .index_locations(index_locations.clone())
@@ -317,7 +318,7 @@ pub(crate) async fn venv(
             &client,
             cache,
             &build_constraints,
-            interpreter,
+            &interpreter,
             index_locations,
             &flat_index,
             &dependency_metadata,
@@ -362,7 +363,9 @@ pub(crate) async fn venv(
         let requirements = build_dispatch
             .resolve(&requirements, None, &build_stack)
             .await
-            .map_err(|err| VenvError::Seed(err.into()))?;
+            .map_err(|err| VenvError::SeedResolution(err.into()))?;
+        // Resolve the seeds before creating or replacing the destination environment.
+        let venv = create_venv(interpreter.clone())?;
         let installed = build_dispatch
             .install(&requirements, &venv, &build_stack)
             .await
@@ -370,7 +373,10 @@ pub(crate) async fn venv(
 
         let changelog = Changelog::from_installed(installed);
         DefaultInstallLogger.on_complete(&changelog, printer, DryRun::Disabled)?;
-    }
+        venv
+    } else {
+        create_venv(interpreter)?
+    };
 
     // Determine the appropriate environment path.
     let scripts = if let Some(workspace) = centralized_workspace
