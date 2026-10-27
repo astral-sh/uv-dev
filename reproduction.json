@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with Python 3.11.17, `uv venv --python 3.11` followed by `uv pip install --no-cache pypdf2==1.26.0` reproduces the byte-0 error `invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]` with installed uv 0.13.5 and downloaded uv 0.13.6. The same installation succeeds with uv 0.12.0 and with UV_LEGACY_TAR_BACKEND=1 on both affected versions. All runs used temporary environments and caches. Updated $RUNNER_TEMP/issue-context/README.md with commands, comparisons, archive validation, and test-coverage findings; no checkout or GitHub changes were made."
+}
