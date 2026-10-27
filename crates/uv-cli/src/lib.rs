@@ -4856,7 +4856,6 @@ pub struct CheckArgs {
         conflicts_with = "no_default_groups",
         conflicts_with = "only_group",
         conflicts_with = "all_groups",
-        conflicts_with = "no_project",
         conflicts_with = "all_packages",
         conflicts_with = "package",
         value_hint = ValueHint::FilePath,
@@ -4971,6 +4970,14 @@ pub struct CheckArgs {
     /// By default, the exact version resolved in `uv.lock` will be used when `ty` is a project
     /// dependency or a dependency in the project's `dev` group. Otherwise, a constrained version
     /// range of ty will be used (e.g., `>=0.0,<0.1`).
+    ///
+    /// For scripts, a direct `ty` dependency in the script takes precedence. Otherwise, the
+    /// enclosing workspace's existing lockfile can supply `ty` from the root's `dev` group,
+    /// production dependencies, or a single other dependency group, unless `--no-project` is set.
+    /// When neither `dev` nor production declares `ty`, multiple other groups declaring it require
+    /// an explicit `TY` or `--ty-version` setting. The selected declaration must apply to the
+    /// workspace interpreter.
+    /// The workspace checker is installed separately from the script's dependencies.
     #[arg(long, value_hint = ValueHint::Other)]
     pub ty_version: Option<String>,
 
@@ -4986,6 +4993,7 @@ pub struct CheckArgs {
     ///
     /// Instead of running checks in the context of the current project, run them in the context of
     /// the current directory. This is useful when the current directory is not a project.
+    /// With `--script`, this disables the workspace lockfile fallback for selecting `ty`.
     #[arg(
         long,
         env = EnvVars::UV_NO_PROJECT,
