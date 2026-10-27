@@ -96,6 +96,11 @@ Existing action:
 Refreshing action:
 [`7a1c709a`](https://github.com/astral-sh/github-actions/tree/7a1c709a167933c8e64f25b527696f043d5ba885/rust-workspace-cache).
 
+The replay uses action `7a1c709a`. The downstream drafts pin
+[`09a77e55`](https://github.com/astral-sh/github-actions/commit/09a77e55b9cacee25c4170194cb529300c015991),
+which also handles tracked paths replaced by directories when a checkout is copied; the recorded
+Linux checkouts do not exercise that case.
+
 ## Cache costs
 
 | Arm                       | New uploads | Uploaded (GiB) | Writer post steps (s total) | Mean read archive (MiB) |
