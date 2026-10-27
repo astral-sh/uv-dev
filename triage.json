@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18437,
+        "title": "Allow configuring preview features in `uv.toml` and `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/pull/18437",
+        "state": "merged",
+        "reason": "Introduced preview-features while retaining preview for compatibility. Maintainer discussion explicitly says the old setting is hidden, not replaced; uv 0.13.1 source resolves both boolean settings identically. This explains the accepted fields, rather than fixing an obsolete setting being silently ignored."
+      },
+      {
+        "kind": "issue",
+        "number": 15767,
+        "title": "Individually specify enabled preview features in configuration",
+        "url": "https://github.com/astral-sh/uv/issues/15767",
+        "state": "closed",
+        "reason": "The original request for selecting individual preview features in configuration, implemented by astral-sh/uv#18437. It explains why preview-features was added alongside the existing all-features toggle; it did not request removing preview."
+      },
+      {
+        "kind": "issue",
+        "number": 19825,
+        "title": "Warn when we load a configuration file containing preview settings which were already consulted",
+        "url": "https://github.com/astral-sh/uv/issues/19825",
+        "state": "open",
+        "reason": "Tracks missing warnings when preview configuration arrives too late to affect features used during workspace discovery. This is a meaningful adjacent explanation for ineffective configuration, but the reporter identifies no affected feature, so the same underlying problem is not established."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues with literal preview, preview-features, unknown field, and settings-discovery diagnostics; conceptual searches covered ignored/silent/no-effect settings, renaming/deprecation, configuration, schema validation, and early loading. Searched open, closed, and merged PRs for preview/configuration/fix/rename; keyword PR searches returned no matches, so supplemented them with the all-state PR listing and issue/PR reference chains. Inspected comments, reviews, and uv 0.13.1 source/tests. No matching regression found. Ruled out astral-sh/uv#18922 (invalid exclude-newer values), astral-sh/uv#20547 (external schema-validator regression), and astral-sh/uv#22878 (deserialization refactor). astral-sh/uv#19824 concerns early configuration loading, which is not established here."
+  },
+  "type": "question",
+  "type_reason": "The premise that preview no longer exists is contradicted by uv 0.13.1 source and maintainer discussion: it remains supported, intentionally appears in the schema, and resolves like preview-features = true. The report does not identify the feature or observable behavior behind 'silently doing nothing', and no separate correctness defect or regression is established. The related early-loading issues cannot be treated as duplicates without that information.",
+  "summary": "astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of both settings. astral-sh/uv#19825 tracks a narrower case of ineffective preview configuration, but no duplicate is established.",
+  "draft_response": "`preview = true` is still supported in uv 0.13.1 and resolves the same way as `preview-features = true`. astral-sh/uv#18437 added the newer setting while retaining the old one for compatibility, so both names in the parser's expected-field list are intentional.\n\nCould you share which preview feature you expected to enable, along with a minimal configuration, command, and expected versus actual output? Some features take effect before configuration files are loaded; missing warnings for that case are tracked in astral-sh/uv#19825. A concrete example will let us determine whether that applies here."
+}
