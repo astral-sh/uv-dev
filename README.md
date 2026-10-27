@@ -31,7 +31,7 @@ runtime.
 
 astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of both settings. astral-sh/uv#19825 tracks a narrower case of ineffective preview configuration, but no duplicate is established.
 
-## Maintainer position
+## Maintainer position and diagnostic policy
 
 In astral-sh/uv#22950, maintainer zanieb confirms that the behavior is
 intentional, explaining that compatibility allows settings to be removed
@@ -41,6 +41,18 @@ question classification. The comment does not establish that `preview` itself
 has been removed or is a no-op: the release-specific source and runtime
 findings below show continued support. It adds no affected feature or
 reproduction details for the reporter's no-effect observation.
+
+The reporter questions why a diagnostic would break compatibility when
+invalid configuration currently produces only a warning, and points to
+astral-sh/uv#22951. That open issue requests fatal `pyproject.toml` parse
+errors, or an option to make them fatal, using the same `asdf` diagnostic.
+This clarifies a separate question about warning versus error policy; it
+does not supply an affected preview feature or establish that the supported
+legacy setting should be treated as invalid. The existing Linux reproduction
+confirms that the invalid-field example warns and exits 0. The linked issue
+also reports that parse failures discard other uv settings, but the recorded
+reproduction does not test that broader claim. The supplied discussion has
+no maintainer response to this warning-versus-error objection.
 
 ## Draft response
 
@@ -181,6 +193,8 @@ Validation used the installed executable directly.
 - astral-sh/uv#15767 — Individually specify enabled preview features in configuration (issue, closed). The original request for selecting individual preview features in configuration, implemented by astral-sh/uv#18437. It explains why preview-features was added alongside the existing all-features toggle; it did not request removing preview.
 - astral-sh/uv#19825 — Warn when we load a configuration file containing preview settings which were already consulted (issue, open). Tracks missing warnings when preview configuration arrives too late to affect features used during workspace discovery. This is a meaningful adjacent explanation for ineffective configuration, but the reporter identifies no affected feature, so the same underlying problem is not established.
 
+- astral-sh/uv#22951 — `pyproject.toml` parse warnings should be an error instead (issue, open). Linked by the reporter to challenge the compatibility rationale: it requests a nonzero exit for invalid configuration, optionally behind a setting, and uses the same `asdf` warning. It concerns handling genuinely invalid configuration; astral-sh/uv#22950 concerns acceptance of a still-supported preview setting. This is relevant diagnostic-policy context, not an established duplicate or proof that `preview` has no effect.
+
 ## Supporting evidence
 
 - The [uv 0.13.1 settings definition](https://github.com/astral-sh/uv/blob/0.13.1/crates/uv-settings/src/settings.rs#L3146)
@@ -254,12 +268,17 @@ listing supplied additional candidates.
 
 ## Maintainer next step
 
-The maintainer has already explained the compatibility rationale on the
-issue. The existing draft above predates that clarification and is retained
-as context, not as a recommendation to repeat it. Further investigation of
-the separate no-effect claim depends on the reporter identifying the preview
-feature and supplying minimal configuration, the exact command, and expected
-versus actual behavior. Compare any such example with astral-sh/uv#19825
-before assigning a duplicate or bug classification. The new comment supplies
-no evidence requiring a change to the current classification or reproduction
-findings.
+The maintainer has explained the compatibility rationale, but the reporter's
+objection about nonfatal warnings remains unanswered in the supplied
+discussion. Consider diagnostic severity for genuinely invalid configuration
+with astral-sh/uv#22951; keep that policy question separate from whether the
+legacy preview setting remains supported. The existing draft above predates
+these clarifications and is retained as context, not as a recommendation to
+repeat it.
+
+Further investigation of the no-effect claim depends on the reporter
+identifying the preview feature and supplying minimal configuration, the exact
+command, and expected versus actual behavior. Compare any such example with
+astral-sh/uv#19825 before assigning a duplicate or bug classification. The
+follow-up does not change the current question classification or the recorded
+reproduction findings.
