@@ -287,6 +287,10 @@ Git backend, run `uv sync --preview-features gitoxide`. SSH, credential helpers,
 and some local fetches still use external programs. See [preview features](../preview.md) for
 configuration options.
 
+`uv sync --preview-features git-partial-fetches` uses gitoxide for Git dependencies. For eligible
+sources on servers that support filtering, uv fetches the commit history and only the trees and
+files needed for the selected revision. uv stores these repositories in a separate cache.
+
 Git fetches and native Git LFS downloads honor `http.proxy` and URL-specific `http.<url>.proxy`
 settings. The preview supports Basic credentials in the proxy URL. Use the default Git backend for
 proxy credential helpers or proxies that require Digest, Negotiate, or NTLM authentication.

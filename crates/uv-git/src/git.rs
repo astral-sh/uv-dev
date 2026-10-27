@@ -10,6 +10,7 @@ use cargo_util::{ProcessBuilder, ProcessError, paths};
 use owo_colors::OwoColorize;
 use tracing::{debug, instrument, warn};
 
+use crate::GitHttpSettings;
 use crate::gitoxide::Backend;
 use uv_fs::Simplified;
 use uv_git_types::{GitOid, GitReference};
@@ -81,6 +82,7 @@ pub(crate) struct GitRemote {
     backend: Backend,
     pub(super) offline: bool,
     pub(super) disable_ssl: bool,
+    pub(super) filter: Option<gix::remote::fetch::Filter>,
 }
 
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
@@ -201,6 +203,10 @@ impl GitRepository {
             return false;
         };
 
+        if Backend::from_preview() == Backend::Gitoxide {
+            cmd.env("GIT_NO_LAZY_FETCH", "1")
+                .env(EnvVars::GIT_ALLOW_PROTOCOL, "file");
+        }
         // Requires Git LFS 3.x (2021 release)
         let result = cmd
             .arg("fsck")
@@ -231,13 +237,14 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(url: SafeUrl, disable_ssl: bool, offline: bool) -> Self {
+    pub(crate) fn new(url: SafeUrl, settings: GitHttpSettings) -> Self {
         let backend = Backend::from_preview();
         Self {
+            filter: backend.fetch_filter(&url, settings),
             url,
             backend,
-            offline,
-            disable_ssl,
+            offline: settings.offline,
+            disable_ssl: settings.disable_ssl,
         }
     }
 

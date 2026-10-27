@@ -12,6 +12,7 @@ use uv_git_types::GitOid;
 use uv_redacted::SafeUrl;
 
 use super::materialize_tree;
+use crate::GitHttpSettings;
 use crate::git::{GitError, GitRemote};
 
 struct Entry {
@@ -197,7 +198,12 @@ pub(super) fn checkout_submodules(repo: &gix::Repository, parent: &GitRemote) ->
             SafeUrl::parse(url.to_bstring().to_str()?)?
         };
         let insecure = parent.disable_ssl && same_origin(parent.url(), &url);
-        let remote = GitRemote::new(url, insecure, parent.offline);
+        let remote = GitRemote::new(
+            url,
+            GitHttpSettings::default()
+                .with_disabled_ssl(insecure)
+                .with_offline(parent.offline),
+        );
         if fetch_objects(&child, commit, &remote, None)? {
             checkout(&child, &child, commit, &remote)?;
         } else {

@@ -238,6 +238,20 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `git-partial-fetches` {#git-partial-fetches}
+
+        When the server supports filtering, uv uses gitoxide to fetch the commit history, then the
+        files needed for the requested revision. This can save bandwidth when the history contains
+        files that the checkout no longer needs. On small repositories, the extra requests can slow
+        down a checkout. When Git LFS is enabled, uv retrieves LFS objects separately.
+
+        Build tools that read files from other revisions may need another download. With `--offline`,
+        a build can fail if those files are missing from the cache.
+
+        Partial fetches use a separate cache, so switching modes can require a fresh download.
+        uv uses full fetches for source URLs with credentials or query parameters and whenever
+        `--allow-insecure-host` is set.
+
         ### `gitoxide` {#gitoxide}
 
         Use gitoxide for Git dependencies, `uv init`, and Git-based build cache keys. SSH and checkout

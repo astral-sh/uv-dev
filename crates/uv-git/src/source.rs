@@ -13,6 +13,7 @@ use uv_cache_key::cache_digest;
 use uv_git_types::{GitOid, GitUrl};
 use uv_redacted::SafeUrl;
 
+use crate::GitHttpSettings;
 use crate::credentials::GIT_STORE;
 use crate::git::{GitDatabase, GitRemote};
 
@@ -20,10 +21,8 @@ use crate::git::{GitDatabase, GitRemote};
 pub(crate) struct GitSource {
     /// The Git reference from the manifest file.
     git: GitUrl,
-    /// Whether to disable SSL verification.
-    disable_ssl: bool,
-    /// Whether to operate without network connectivity.
-    offline: bool,
+    /// Transport settings for the repository.
+    settings: GitHttpSettings,
     /// The path to the Git source database.
     cache: PathBuf,
     /// The reporter to use for this source.
@@ -31,23 +30,13 @@ pub(crate) struct GitSource {
 }
 
 impl GitSource {
-    /// Initialize a [`GitSource`] with the given Git URL, HTTP client, and cache path.
-    pub(crate) fn new(git: GitUrl, cache: impl Into<PathBuf>, offline: bool) -> Self {
+    /// Initialize a [`GitSource`] with the given Git URL, cache path, and transport settings.
+    pub(crate) fn new(git: GitUrl, cache: impl Into<PathBuf>, settings: GitHttpSettings) -> Self {
         Self {
             git,
-            disable_ssl: false,
-            offline,
+            settings,
             cache: cache.into(),
             reporter: None,
-        }
-    }
-
-    /// Disable SSL verification for this [`GitSource`].
-    #[must_use]
-    pub(crate) fn dangerous(self) -> Self {
-        Self {
-            disable_ssl: true,
-            ..self
         }
     }
 
@@ -67,7 +56,6 @@ impl GitSource {
 
         // The path to the repo, within the Git database.
         let ident = cache_digest(self.git.repository());
-        let db_path = self.cache.join("db").join(&ident);
 
         // Authenticate the URL, if necessary.
         let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
@@ -76,11 +64,18 @@ impl GitSource {
             Cow::Borrowed(self.git.url())
         };
 
+        let git_remote = GitRemote::new(remote.clone().into_owned(), self.settings);
+        // The default Git backend expects a complete repository in the original Git cache.
+        let cache = if git_remote.filter.is_some() {
+            self.cache.join("partial")
+        } else {
+            self.cache
+        };
+        let db_path = cache.join("db").join(&ident);
+
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote =
-                GitRemote::new(remote.clone().into_owned(), self.disable_ssl, self.offline);
             let maybe_db = git_remote.db_at(&db_path).ok();
 
             // If we have a locked revision, and we have a pre-existing database which has that
@@ -136,11 +131,7 @@ impl GitSource {
         } else {
             ident
         };
-        let checkout_path = self
-            .cache
-            .join("checkouts")
-            .join(&ident)
-            .join(short_id.as_str());
+        let checkout_path = cache.join("checkouts").join(&ident).join(short_id.as_str());
 
         // Check out `actual_rev` from the database to a scoped location on the
         // filesystem. This will use hard links and such to ideally make the

@@ -4,22 +4,17 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use gix::progress::Discard;
-use gix::remote::Direction;
+use gix::remote::{Direction, fetch::Filter};
 use uv_preview::PreviewFeature;
 use uv_redacted::SafeUrl;
 
+use crate::GitHttpSettings;
 use crate::git::{GitError, GitRemote, remote_url_root};
 
 pub(crate) mod lfs;
 
-pub(crate) type ObjectFetcher = gix::remote::fetch::ObjectFetcher<
-    Box<dyn gix::protocol::transport::client::blocking_io::Transport + Send>,
->;
-
-// Request small blobs, including LFS pointers, in the first filtered pack.
-// Larger blobs can be omitted until needed for a checkout.
-const FETCH_FILTER: gix::remote::fetch::Filter =
-    gix::remote::fetch::Filter::BlobLimit(gix_lfs::Pointer::SIZE_CUTOFF as u64);
+type Transport = Box<dyn gix::protocol::transport::client::blocking_io::Transport + Send>;
+pub(crate) type ObjectFetcher = gix::remote::fetch::ObjectFetcher<Transport>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
@@ -29,12 +24,38 @@ pub(crate) enum Backend {
 
 impl Backend {
     pub(crate) fn from_preview() -> Self {
-        if uv_preview::is_enabled(PreviewFeature::Gitoxide) {
+        if uv_preview::is_enabled(PreviewFeature::Gitoxide)
+            || uv_preview::is_enabled(PreviewFeature::GitPartialFetches)
+        {
             Self::Gitoxide
         } else {
             Self::Cli
         }
     }
+
+    pub(super) fn fetch_filter(self, url: &SafeUrl, settings: GitHttpSettings) -> Option<Filter> {
+        // A build tool's lazy fetch cannot reuse uv's transient credentials or TLS exceptions.
+        if self == Self::Cli
+            || !settings.partial_fetches
+            || settings.disable_ssl
+            || !can_persist_promisor(url)
+        {
+            return None;
+        }
+        if uv_preview::is_enabled(PreviewFeature::GitPartialFetches) {
+            Some(Filter::TreeDepth(0))
+        } else {
+            // The gitoxide preview includes small blobs such as LFS pointers in its initial pack.
+            (url.scheme() != "file")
+                .then_some(Filter::BlobLimit(gix_lfs::Pointer::SIZE_CUTOFF as u64))
+        }
+    }
+}
+
+fn can_persist_promisor(url: &SafeUrl) -> bool {
+    url.without_credentials().as_str() == url.as_str()
+        && !url.as_str().contains('?')
+        && url.fragment().is_none()
 }
 
 impl GitRemote {
@@ -50,14 +71,29 @@ impl GitRemote {
                 .chain(["gitoxide.credentials.terminalPrompt=false".to_owned()]),
         )
     }
-}
-// A promisor remote stays in the checkout after uv exits. Queries may contain credentials
-// and a non-default SSH username is needed to reconnect.
-fn can_persist_promisor(url: &SafeUrl) -> bool {
-    !url.as_str().contains('?')
-        && url.fragment().is_none()
-        && (url.scheme() != "ssh"
-            || (url.password().is_none() && matches!(url.username(), "" | "git")))
+
+    fn connect<'remote, 'repo>(
+        &self,
+        remote: &'remote gix::Remote<'repo>,
+    ) -> Result<gix::remote::Connection<'remote, 'static, 'repo, Transport>> {
+        if self.offline
+            && remote
+                .url(Direction::Fetch)
+                .is_none_or(|url| url.scheme != gix::url::Scheme::File)
+        {
+            return Err(GitError::TransportNotAllowed.into());
+        }
+        let mut connection = remote.connect(Direction::Fetch)?;
+        if self.offline {
+            // A local upload-pack may itself need to fetch missing objects from a promisor.
+            connection = connection.with_transport_options(Box::new(
+                gix::protocol::transport::client::blocking_io::file::Options {
+                    allow_protocols: "file".to_owned(),
+                },
+            ));
+        }
+        Ok(connection)
+    }
 }
 
 pub(super) fn options() -> gix::open::Options {
@@ -95,33 +131,19 @@ pub(crate) fn fetch(
     if all_tags {
         remote = remote.with_fetch_tags(gix::remote::fetch::Tags::All);
     }
-    let local = remote
-        .url(Direction::Fetch)
-        .is_some_and(|url| url.scheme == gix::url::Scheme::File);
     let interrupt = AtomicBool::new(false);
-    if local && remote.try_fetch_local(&interrupt)?.is_some() {
+    if remote.try_fetch_local(&interrupt)?.is_some() {
         return Ok(None);
     }
-    if source.offline && !local {
-        return Err(GitError::TransportNotAllowed.into());
-    }
-    let mut connection = remote.connect(Direction::Fetch)?;
-    if source.offline {
-        // A partial local source may try to fetch missing objects from its own remote.
-        connection = connection.with_transport_options(Box::new(
-            gix::protocol::transport::client::blocking_io::file::Options {
-                allow_protocols: "file".to_owned(),
-            },
-        ));
-    }
+    let connection = source.connect(&remote)?;
     let fetch = connection.prepare_fetch(Discard, gix::remote::ref_map::Options::default())?;
-    let (outcome, objects) = if local || !can_persist_promisor(url) {
-        (fetch.receive(Discard, &interrupt)?, None)
-    } else {
-        fetch
-            .with_filter(FETCH_FILTER)
-            .receive_with_object_fetcher(Discard, &interrupt)?
+    let Some(filter) = source.filter else {
+        fetch.receive(Discard, &interrupt)?;
+        return Ok(None);
     };
+    let (outcome, objects) = fetch
+        .with_filter(filter)
+        .receive_with_object_fetcher(Discard, &interrupt)?;
     if let gix::remote::fetch::Status::Change {
         write_pack_bundle, ..
     } = outcome.status
@@ -129,19 +151,16 @@ pub(crate) fn fetch(
             .data_path
             .is_some_and(|pack| pack.with_extension("promisor").is_file())
     {
-        set_promisor(&mut repo, url)?;
+        set_promisor(&mut repo, url, filter)?;
     }
     Ok(objects)
 }
 
-fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl) -> Result<()> {
+fn set_promisor(repo: &mut gix::Repository, url: &SafeUrl, filter: Filter) -> Result<()> {
     let mut config = repo.config_edit()?;
     config.set_raw_value("remote.uv-promisor.url", url.without_credentials().as_str())?;
     config.set_raw_value("remote.uv-promisor.promisor", "true")?;
-    config.set_raw_value(
-        "remote.uv-promisor.partialclonefilter",
-        FETCH_FILTER.to_string(),
-    )?;
+    config.set_raw_value("remote.uv-promisor.partialclonefilter", filter.to_string())?;
     config.commit()?;
     Ok(())
 }
@@ -181,16 +200,13 @@ fn materialize_tree(
         if missing.is_empty() {
             return Ok(());
         }
-        if remote.offline {
-            return Err(GitError::TransportNotAllowed.into());
-        }
         let interrupt = AtomicBool::new(false);
         if let Some(fetcher) = fetcher.as_deref_mut() {
             fetcher.fetch(repo, &missing, Discard, &interrupt)?;
         } else {
             let repo = gix::open_opts(repo.git_dir(), remote.network_options([]))?;
-            repo.remote_at(remote.url.as_str())?
-                .connect(Direction::Fetch)?
+            remote
+                .connect(&repo.remote_at(remote.url.as_str())?)?
                 .fetch_objects(&missing, Discard, &interrupt)?;
         }
     }
@@ -215,8 +231,8 @@ pub(crate) fn checkout(
     }
     let mut repo = init(destination)?;
     copy_cached_objects(&source, &repo)?;
-    if partial && can_persist_promisor(remote.url()) {
-        set_promisor(&mut repo, remote.url())?;
+    if partial && let Some(filter) = remote.filter {
+        set_promisor(&mut repo, remote.url(), filter)?;
     }
     repo.committer_or_set_generic_fallback()?;
     let mut config = repo.config_edit()?;
@@ -366,7 +382,10 @@ mod tests {
     fn promisor_urls_can_be_stored_without_credentials() -> Result<()> {
         for (raw, persistent) in [
             ("https://forge.example/pkg", true),
+            ("https://user@forge.example/pkg", false),
+            ("https://user:secret@forge.example/pkg", false),
             ("https://forge.example/cgi?repo=pkg", false),
+            ("https://forge.example/pkg#revision", false),
             ("ssh://git@forge.example:2222/pkg", true),
             ("ssh://user@forge.example/pkg", false),
             ("ssh://git:secret@forge.example/pkg", false),
