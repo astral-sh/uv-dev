@@ -78,7 +78,7 @@ The public `PyPDF2-1.26.0.tar.gz` artifact has SHA-256 `e28f902f2f0a1603ea95ebe2
 
 ### Existing test coverage
 
-Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for PyPDF2, v7/pre-POSIX headers, invalid tar identity, backend selection, and related archive regressions. No direct v7/all-zero-identity regression test was found.
+Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for PyPDF2, v7/pre-POSIX headers, invalid tar identity, backend selection, and related archive regressions. The initial search found no direct v7/all-zero-identity regression test. The checkout now includes `build_sdist_with_v7_tar` in `crates/uv/tests/build/build_backend.rs`, added by astral-sh/uv-dev#3000. It constructs a minimal v7 sdist, snapshots the default backend rejection, and verifies that the legacy backend installs it successfully.
 
 Read the setup and assertions of these nearby tests in `crates/uv/tests/build/build_backend.rs`:
 
@@ -86,9 +86,11 @@ Read the setup and assertions of these nearby tests in `crates/uv/tests/build/bu
 - `build_sdist_with_full_group_name`: creates a PAX archive with a 32-byte group name, explicitly selects the default backend, and snapshots a successful offline installation.
 - `build_sdist_with_long_group_name`: creates a PAX archive with a 40-byte group name and overriding PAX metadata, explicitly selects the default backend, and snapshots a successful offline installation.
 
-These cover the two previous fixes, not v7 identities. The module is gated by `test-python` in `crates/uv/tests/build/main.rs`. Tests were inspected, not run or modified; the targeted reproductions used published uv executables.
+These cover the two previous fixes, not v7 identities. The module is gated by `test-python` in `crates/uv/tests/build/main.rs`. The initial reproduction used published uv executables. The subsequent fix investigation and parent-test validation are recorded below.
 
 ## Related
+
+- astral-sh/uv-dev#3000 — Parent regression pull request: adds `build_sdist_with_v7_tar`, asserting the default-backend failure and legacy-backend success.
 
 - astral-sh/uv#22094 — Pull request, merged: Use tar-codec by default. Switched archive extraction to tar-codec in uv 0.13.0 and introduced UV_LEGACY_TAR_BACKEND. Establishes the backend transition matching this regression's timing; it does not track a v7 compatibility fix.
 - astral-sh/uv#22510 — Issue, closed: 0.13.0: `uv build` rejects sdists whose group name is ≥32 characters ("invalid ustar gname field: missing NUL terminator"). Another 0.13.0 tar-decoder compatibility regression with the same legacy-backend workaround. Its confirmed trigger is a full-length ustar uname/gname without a NUL terminator, rather than a v7 header lacking ustar/GNU identity. Maintainer comments point to astral-sh/uv#22522.
@@ -113,4 +115,25 @@ The PEP 625 roadmap's non-pax restriction remains an unchecked future task; it d
 
 ## Recommended follow-up
 
-Evaluate v7 header decoding in tar-framing/tar-codec, integrate the resulting dependency update into uv, and add a focused regression test for a minimal v7 sdist. The confirmed workaround is `UV_LEGACY_TAR_BACKEND=1`. The existing hard-link and full-length group-name tests provide nearby integration-test patterns but do not exercise this failure.
+Implement v7 header decoding in tar-framing/tar-codec, integrate the resulting dependency update into uv, and change the parent v7 regression to assert successful installation. Cover the independently demonstrated publishing metadata reader as well. The confirmed workaround is `UV_LEGACY_TAR_BACKEND=1`. The existing hard-link and full-length group-name tests provide nearby integration-test patterns but do not exercise this failure.
+
+## Fix
+
+**Outcome: not fixed within the permitted change scope.**
+
+The confirmed rejection is in the external `tar-framing` 0.0.15 dependency: `ParsedHeader::try_from_framed` accepts only ustar and GNU identities. `tar-codec` 0.0.15 wraps that reader and exposes no v7 compatibility setting in `DecodePolicy` or its framing policy. uv's extraction policy is reached only after this identity check. Supporting v7 in the decoder requires changes in astral-codec and a dependency update, outside the permitted source/test paths and the prohibition on manifest/lockfile changes.
+
+Automatically selecting the legacy backend based on archive headers would introduce a new backend-selection and validation policy. Rewriting archive headers would duplicate framing logic inside uv. Neither is a small correction to the existing decoder, so no such workaround was introduced.
+
+The review also covered `uv-publish`'s independent `source_dist_pkg_info_tar_codec` reader, uv-build-backend's GNU/PAX writers, and neighboring hard-link, full/long group-name, long-path, and publishing dry-run tests. The GNU/PAX fixtures do not encode an assumption that contradicts v7 support. No producer failure was demonstrated.
+
+A separate metadata-consumer failure was demonstrated with the installed uv 0.13.5: a temporary `foo-1.0.0.tar.gz` containing a valid v7 `foo-1.0.0/PKG-INFO` member fails `uv publish --dry-run --publish-url http://127.0.0.1:9/upload /tmp/uv-v7-fix-96i20yhr/foo-1.0.0.tar.gz` with the same byte-0 all-zero-identity error (exit 1). Setting `UV_LEGACY_TAR_BACKEND=1` makes that command succeed (exit 0). No upload was performed. The initial attempt with `--offline` was rejected because publishing does not support offline mode; it did not exercise archive decoding. The fixture and output records remain in that temporary directory.
+
+### Focused validation and final state
+
+- `cargo test -p uv --test build build_backend::build_sdist_with_v7_tar -- --exact` passed in the debug/test profile: one test passed, 230 filtered out. This verifies that the original parent test asserts the undesirable default-backend failure and the successful legacy fallback.
+- Temporarily changing only the default-backend snapshot to expect successful installation, then running `INSTA_UPDATE=no cargo test -p uv --test build build_backend::build_sdist_with_v7_tar -- --exact`, failed as expected: actual exit 1 with `at byte 0: invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]`, rather than expected exit 0. No production changes preceded this check.
+- The temporary test edit was restored byte-for-byte. No production fix or test changes are retained, and the checkout is unchanged. No broader suite or release build was run.
+- `cargo fmt --all` was attempted but could not run because rustfmt is absent from the Rust 1.99.0 toolchain. There are no retained Rust changes requiring formatting.
+
+The successful baseline and expected failing success assertion confirm the regression, not a fix. Native v7 decoder support and its dependency integration remain necessary before the parent test can permanently assert the desired behavior.

@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "The pinned tar-framing dependency rejects v7 headers and exposes no compatibility option. Native support requires external decoder changes and a dependency update, outside the permitted paths; automatic legacy fallback would require a design decision. The parent regression passed, and temporarily expecting success failed with the reported error. Restored the checkout unchanged and documented the findings in the README.",
+  "validation": [],
+  "pull_request": null
+}
