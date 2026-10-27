@@ -24,6 +24,8 @@ In the October 27, 2026 discussion on astral-sh/uv#22955 (comment ID 6447485795)
 
 The maintainer explains that tar-codec also accepts GNU-format archives because Python's `tarfile` historically defaulted to that format. They qualify their understanding that v7 was never Python's default. They describe v7 as defined by the original UNIX implementation rather than a specification and raise the difficulty of implementing it securely while avoiding differing interpretations across archive readers. These are the maintainer's compatibility and security assessments; the reproduction does not independently establish the historical claim or demonstrate an exploit.
 
+Maintainer woodruffw also points to pypi/warehouse#20829 as the planned PyPI upload restriction. At review, that PR is open with approving reviews and no merge timestamp; deployment is not established. Its proposed upload validator accepts ustar/pax identities, continues accepting GNU identities while recording an internal metric, and rejects other identities, including the all-zero v7 identity. A unit test constructs a checksummed header with bytes 257–264 cleared and expects upload rejection. The PR describes future GNU warnings and rejection, but does not implement those steps. This is evidence of a proposed upstream upload policy, not a fix for installing existing PyPDF2 artifacts or a final uv support decision; it does not establish removal of previously published files.
+
 The existing bug classification records the demonstrated loss of compatibility. The comment does not announce a final support decision, a fix, or a commitment to implement v7. The next decision is whether uv should support this legacy input despite its nonconformance and, if so, what precisely bounded decoding behavior is acceptable.
 
 ## Reproduction
@@ -108,6 +110,7 @@ These cover the two previous fixes, not v7 identities. The module is gated by `t
 
 ## Related
 
+- pypi/warehouse#20829 — Pull request, open at review: Reject V7-style tarballs as sdists. Linked by the maintainer as planned PyPI behavior. The proposed upload check rejects the same all-zero header identity, with an explicit regression test, while retaining GNU-format acceptance with metrics. Relevant to format-policy alignment; it neither changes uv extraction nor resolves installation of already-published legacy archives.
 - astral-sh/uv-dev#3000 — Parent regression pull request: adds `build_sdist_with_v7_tar`, asserting the default-backend failure and legacy-backend success.
 
 - astral-sh/uv#22094 — Pull request, merged: Use tar-codec by default. Switched archive extraction to tar-codec in uv 0.13.0 and introduced UV_LEGACY_TAR_BACKEND. Establishes the backend transition matching this regression's timing; it does not track a v7 compatibility fix.
