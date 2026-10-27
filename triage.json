@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1737,
+        "title": "Performance with large git repos",
+        "url": "https://github.com/astral-sh/uv/issues/1737",
+        "state": "open",
+        "reason": "Canonical discussion of slow Git dependency installation from large repositories, including a roughly 4 GB download and proposals to reduce initial fetch size. Maintainers link astral-sh/uv#3950 and astral-sh/uv#8190 as implementation attempts. This matches the reporter's goal of avoiding lengthy downloads."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8190,
+        "title": "Load Git trees lazily on checkout",
+        "url": "https://github.com/astral-sh/uv/pull/8190",
+        "state": "open",
+        "reason": "Existing implementation attempt explicitly targeting astral-sh/uv#1737 and astral-sh/uv#3287. It proposes --filter=tree:0 to fetch trees and blobs on demand, retaining history for build tools such as setuptools-scm; it does not implement --depth=1. It remains unmerged."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3950,
+        "title": "Fetch git trees on demand",
+        "url": "https://github.com/astral-sh/uv/pull/3950",
+        "state": "closed",
+        "reason": "Earlier attempt to reduce transfers for large or old repositories using --filter=tree:0, referenced by the canonical issue and astral-sh/uv#8190. Closed without merging after test failures and hangs, so it is historical context, not a released fix."
+      }
+    ],
+    "search_scope": "Separated shallow-fetch support (--depth=1) from slow downloads for large Git dependencies. Searched open and closed issues using shadow fetch, shallow, depth=1, git slow, git large, large git, large repo, partial clone, blobless, and git history. Searched open, closed, and merged PRs for shallow, depth=1, clone, git fetch, partial clone, Git trees, and tree, including an explicit merged-Git search; PR searches returned no hits, so implementation candidates were followed from issue comments and inspected directly. Checked uv 0.13.5 and checkout fetch code plus source configuration. Inspected but ruled out as canonical matches astral-sh/uv#3287 (selective metadata retrieval during resolution), astral-sh/uv#1620 (sparse paths), and astral-sh/uv#10130 (submodule controls, with shallow cloning mentioned secondarily). No released shallow-fetch fix or regression was established."
+  },
+  "type": "duplicate",
+  "type_reason": "Although phrased as a support question, the requested reduction in large Git dependency downloads is already tracked by open astral-sh/uv#1737 and its pre-existing implementation attempt astral-sh/uv#8190. uv 0.13.5 fetches without --depth or partial-clone filtering; the proposed optimization remains unmerged. No previously fixed behavior or regression is reported.",
+  "summary": "astral-sh/uv#1737 tracks the same large-repository download concern. astral-sh/uv#8190 proposes lazy tree fetching and remains open; astral-sh/uv#3950 was an earlier unmerged attempt. uv 0.13.5 does not support configurable shallow Git dependency fetches.",
+  "draft_response": "uv 0.13.5 does not support a `--depth=1` option for Git dependencies. Reducing downloads for large repositories is tracked in astral-sh/uv#1737. The proposed implementation in astral-sh/uv#8190 fetches trees and blobs lazily while retaining Git history needed by build tools such as setuptools-scm; it is still open. Please follow astral-sh/uv#1737 and add any repository-specific performance details there."
+}
