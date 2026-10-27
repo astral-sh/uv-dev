@@ -31,6 +31,17 @@ runtime.
 
 astral-sh/uv#18437 and astral-sh/uv#15767 explain the intentional coexistence of both settings. astral-sh/uv#19825 tracks a narrower case of ineffective preview configuration, but no duplicate is established.
 
+## Maintainer position
+
+In astral-sh/uv#22950, maintainer zanieb confirms that the behavior is
+intentional, explaining that compatibility allows settings to be removed
+without breaking users (October 27, 2026, comment ID 6432609229).
+This directly addresses the request for an error and supports retaining the
+question classification. The comment does not establish that `preview` itself
+has been removed or is a no-op: the release-specific source and runtime
+findings below show continued support. It adds no affected feature or
+reproduction details for the reporter's no-effect observation.
+
 ## Draft response
 
 `preview = true` is still supported in uv 0.13.1 and resolves the same way as `preview-features = true`. astral-sh/uv#18437 added the newer setting while retaining the old one for compatibility, so both names in the parser's expected-field list are intentional. In a minimal project tested with uv 0.13.5 on Linux, `uv sync` accepted the legacy setting and `--show-settings` showed the same enabled preview flags for both spellings.
@@ -243,8 +254,12 @@ listing supplied additional candidates.
 
 ## Maintainer next step
 
-Use the draft response to clarify that the legacy option is accepted
-intentionally and request the specific feature, minimal configuration,
-command, and expected versus actual behavior. Compare that example with
-astral-sh/uv#19825 before assigning a duplicate or bug classification.
-This is a proposed response only; nothing has been posted to GitHub.
+The maintainer has already explained the compatibility rationale on the
+issue. The existing draft above predates that clarification and is retained
+as context, not as a recommendation to repeat it. Further investigation of
+the separate no-effect claim depends on the reporter identifying the preview
+feature and supplying minimal configuration, the exact command, and expected
+versus actual behavior. Compare any such example with astral-sh/uv#19825
+before assigning a duplicate or bug classification. The new comment supplies
+no evidence requiring a change to the current classification or reproduction
+findings.
