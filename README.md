@@ -10,7 +10,7 @@ The reporter shows `uv sync` warning about an unknown `asdf = true` setting in `
 
 astral-sh/uv#18922 and its open draft astral-sh/uv#18923 are the closest matches. astral-sh/uv#17609 and astral-sh/uv#18977 document the narrower, already-fixed required-version case; astral-sh/uv#9911 covers duplicate parse diagnostics.
 
-Current source confirms that settings discovery skips a `pyproject.toml` when settings deserialization fails. This can discard valid settings alongside the invalid one. It does not mean all configuration sources stop loading: discovery can continue to parent directories, and user/system configuration is loaded separately. The version-skew explanation is the reporter's hypothesis, not an established rationale for the general policy.
+Current source confirms that settings discovery skips a `pyproject.toml` when settings deserialization fails. This can discard valid settings alongside the invalid one. It does not mean all configuration sources stop loading: discovery can continue to parent directories, and user/system configuration is loaded separately. Maintainer woodruffw now offers version compatibility as a tentative rationale for the warning-only policy and supports an opt-in strict mode; this is not yet a final policy decision.
 
 ## Draft response
 
@@ -18,9 +18,15 @@ You're right that a settings parse failure can discard otherwise-valid settings 
 
 ## Classification
 
-astral-sh/uv#18922 already tracks the underlying correctness problem: settings parse failures become warnings, configuration is discarded, and execution continues. The unknown-field example and request for broader or opt-in fatal validation can be discussed there, with the existing draft astral-sh/uv#18923. Duplicate classification takes precedence. The merged astral-sh/uv#18977 only fixed required-version enforcement, so this is not evidence that a general parse-error fix regressed.
+astral-sh/uv#18922 already tracks the underlying configuration-discarding behavior: settings parse failures become warnings, configuration is discarded, and execution continues. The unknown-field example and request for broader or opt-in fatal validation can be discussed there, with the existing draft astral-sh/uv#18923. Duplicate classification takes precedence. The merged astral-sh/uv#18977 only fixed required-version enforcement, so this is not evidence that a general parse-error fix regressed.
 
-The existing enhancement label on the new issue does not change this recommendation. The correctness concern is supported by source and by the maintainer's response on astral-sh/uv#18922; an open discussion already covers it. The broader unknown-field example does not require a separate canonical thread. Neither of the historical merged fixes inspected made arbitrary settings errors fatal.
+The existing enhancement label on the new issue does not change this recommendation. Source confirms the configuration loss, and the maintainer's response on astral-sh/uv#18922 identifies the invalid exclude-newer case as unintended. Woodruffw's comment on astral-sh/uv#22951 distinguishes that concern from a general compatibility rationale for tolerating unfamiliar settings; it does not establish that every parse warning is a bug. The duplicate recommendation remains based on the shared behavior and overlapping validation request. The broader unknown-field example does not require a separate canonical thread. Neither of the historical merged fixes inspected made arbitrary settings errors fatal.
+
+## Maintainer guidance
+
+In astral-sh/uv#22951, maintainer woodruffw's October 27, 2026 comment (comment ID 6456032637) explains their understanding that warning-only handling is currently intentional: configuration options can be added in both breaking and non-breaking releases, and older uv versions are generally expected to tolerate configuration written for newer versions. They cite organization-managed or global configuration and removed preview features as examples where developers may not control the settings that affect their workflow.
+
+Woodruffw supports an opt-in strict mode that promotes configuration parse warnings to errors. They explicitly invite correction from zanieb, so this is tentative design guidance rather than consensus, an approved implementation, or a commitment to change the default. The comment supplies no new reproduction, affected version, or implemented workaround. Its global-configuration example describes the compatibility concern; it does not override the source finding that uv.toml parse errors take a fatal path.
 
 ## Related
 
@@ -61,4 +67,4 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged PRs us
 
 ## Maintainer next step
 
-Centralize the unknown-field example and strict-validation request in astral-sh/uv#18922. The existing draft astral-sh/uv#18923 documents the narrower proposal and unresolved compatibility decision. Avoid presenting that draft or the required-version fix as a shipped solution to arbitrary invalid settings.
+Centralize the shared configuration-loss concern with astral-sh/uv#18922 while retaining woodruffw's support for broader opt-in strict validation from astral-sh/uv#22951. The next design question is whether strict mode can provide fatal validation without changing the compatibility behavior for developers using configuration they do not control. Maintainer consensus and the scope of strict mode remain unresolved; the new comment does not approve changing the default. The existing draft astral-sh/uv#18923 documents the narrower proposal and unresolved compatibility decision. Avoid presenting that draft, strict mode, or the required-version fix as a shipped solution to arbitrary invalid settings.
