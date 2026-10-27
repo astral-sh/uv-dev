@@ -1453,6 +1453,80 @@ async fn install_remote_requirements_txt() -> Result<()> {
     Ok(())
 }
 
+/// A redirected remote lock resolves artifact paths beside the final document.
+#[tokio::test]
+async fn pep_751_remote_relative_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
+    let server = MockServer::start().await;
+    let (filename, bytes) = WheelBuilder::new(&"leaf".parse()?, &"1.0".parse()?).build();
+    let hash = hex::encode(Sha256::digest(&bytes));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "fixture"
+        [[packages]]
+        name = "leaf"
+        version = "1.0"
+        [[packages.wheels]]
+        path = "../wheels/{filename}"
+        hashes = {{ sha256 = "{hash}" }}
+    "#};
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "/releases/current/pylock.toml"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/releases/current/pylock.toml"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(lock))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/releases/wheels/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.pip_install().arg("--preview-features").arg("pylock")
+        .arg("--no-index").arg("-r").arg(format!("{}/pylock.toml", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + leaf==1.0
+    ");
+    Ok(())
+}
+
+/// Reject network-path references in a remote lock's artifact path.
+#[tokio::test]
+async fn pep_751_remote_cross_host_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("false");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            lock-version = "1.0"
+            created-by = "fixture"
+            [[packages]]
+            name = "leaf"
+            version = "1.0"
+            [[packages.wheels]]
+            path = "//elsewhere.invalid/artifacts/leaf-1.0-py3-none-any.whl"
+            hashes = { sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+        "#}))
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.pip_install().arg("--preview-features").arg("pylock")
+        .arg("--no-index").arg("-r").arg(format!("{}/pylock.toml", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Expected a relative artifact path in remote `pylock.toml`, found: //elsewhere.invalid/artifacts/leaf-1.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 /// Install a package from a relative include in a remote `requirements.txt`.
 #[tokio::test]
 async fn install_remote_requirements_txt_with_relative_include() -> Result<()> {
