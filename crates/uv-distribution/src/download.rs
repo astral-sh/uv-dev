@@ -2,8 +2,11 @@ use std::path::Path;
 
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::WheelFilename;
-use uv_distribution_types::{BuildInfo, BuiltDist, CachedDist, Dist, Hashed};
-use uv_metadata::{find_flat_dist_info, read_flat_wheel_metadata, read_wheel_variant};
+use uv_distribution_types::{BuildInfo, BuiltDist, CachedDist, Dist, Hashed, RegistryBuiltWheel};
+use uv_extract::hash::Hasher;
+use uv_metadata::{
+    find_flat_dist_info, read_dist_info_metadata, read_flat_wheel_metadata, read_wheel_variant,
+};
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{HashDigest, HashDigests, ResolutionMetadata};
 
@@ -44,6 +47,37 @@ pub(crate) fn check_wheel_variant_compatibility(
             label: label.clone(),
             properties,
         });
+    }
+    Ok(())
+}
+
+/// Check the embedded `METADATA` against any hashes advertised for the registry sidecar.
+pub(crate) fn check_registry_wheel_metadata(
+    wheel: &RegistryBuiltWheel,
+    archive: &Path,
+) -> Result<(), Error> {
+    let Some(hashes) = wheel
+        .file
+        .dist_info_metadata
+        .as_ref()
+        .filter(|hashes| !hashes.is_empty())
+    else {
+        return Ok(());
+    };
+    let metadata = find_flat_dist_info(&wheel.filename, archive)
+        .and_then(|stem| read_dist_info_metadata(&stem, archive))
+        .map_err(|err| Error::WheelMetadata(archive.to_path_buf(), Box::new(err)))?;
+    for expected in hashes.iter() {
+        let mut hasher = Hasher::from(expected.algorithm());
+        hasher.update(&metadata);
+        let actual = HashDigest::from(hasher);
+        if &actual != expected {
+            return Err(Error::WheelSidecarMismatch {
+                filename: Box::new(wheel.filename.clone()),
+                expected: expected.clone(),
+                actual,
+            });
+        }
     }
     Ok(())
 }

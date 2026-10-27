@@ -15,9 +15,11 @@ use uv_distribution_types::{
 use uv_fs::{directories, files};
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
+use uv_pypi_types::HashDigests;
 use uv_types::HashStrategy;
 
-use crate::download::check_wheel_variant_compatibility;
+use crate::Error;
+use crate::download::{check_registry_wheel_metadata, check_wheel_variant_compatibility};
 use crate::index::cached_wheel::{CachedWheel, ResolvedWheel};
 use crate::source::{HTTP_REVISION, HttpRevisionPointer, LOCAL_REVISION, LocalRevisionPointer};
 
@@ -118,11 +120,11 @@ impl<'a> RegistryWheelIndex<'a> {
         wheel: &'a RegistryBuiltDist,
         no_build: bool,
         no_binary: bool,
-    ) -> Option<&CachedRegistryDist> {
+    ) -> Result<Option<&CachedRegistryDist>, Error> {
         let wheel = wheel.best_wheel();
-        self.get(&wheel.filename.name).find_map(|entry| {
+        let Some(entry) = self.get(&wheel.filename.name).find(|entry| {
             if !entry.matches_wheel(&wheel.index, &wheel.filename, no_build, no_binary) {
-                return None;
+                return false;
             }
             if wheel.size_is_authoritative
                 && let Some(expected) = wheel.file.size
@@ -132,10 +134,15 @@ impl<'a> RegistryWheelIndex<'a> {
                     "Skipping cached wheel `{}`: expected wheel archive size {expected}, cached archive size {:?} (built from source: {})",
                     entry.dist.filename, entry.size, entry.built,
                 );
-                return None;
+                return false;
             }
-            Some(&entry.dist)
-        })
+            // A wheel built from source is a different artifact; this sidecar cannot validate it.
+            !entry.built || wheel.file.dist_info_metadata.as_ref().is_none_or(HashDigests::is_empty)
+        }) else {
+            return Ok(None);
+        };
+        check_registry_wheel_metadata(wheel, &entry.dist.path)?;
+        Ok(Some(&entry.dist))
     }
 
     /// Return a cached wheel that satisfies a registry source distribution requirement.

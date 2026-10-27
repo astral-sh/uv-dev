@@ -43,7 +43,7 @@ use uv_threads::initialize_rayon_once;
 use uv_types::{BuildContext, BuildStack};
 
 use crate::archive::Archive;
-use crate::download::check_wheel_variant_compatibility;
+use crate::download::{check_registry_wheel_metadata, check_wheel_variant_compatibility};
 use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
@@ -227,6 +227,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Dist::Built(built) => {
                 check_supported_wheel_variant(built)?;
                 let wheel = self.get_wheel(built, hashes).await?;
+                if let BuiltDist::Registry(registry) = built {
+                    check_registry_wheel_metadata(registry.best_wheel(), &wheel.archive)?;
+                }
                 check_wheel_variant_compatibility(&wheel.filename, &wheel.archive)?;
                 Ok(wheel)
             }

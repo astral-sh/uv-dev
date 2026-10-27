@@ -219,7 +219,7 @@ pub fn find_flat_dist_info(
 }
 
 /// Read the wheel `METADATA` metadata from a `.dist-info` directory.
-fn read_dist_info_metadata(
+pub fn read_dist_info_metadata(
     dist_info_stem: &DistInfoStem<'_>,
     wheel: impl AsRef<Path>,
 ) -> Result<Vec<u8>, Error> {
