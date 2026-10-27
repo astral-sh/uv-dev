@@ -10,6 +10,8 @@ astral-sh/uv#19768 is the originating discussion and explicitly delegates checke
 
 The reporter requests a way for `uv check` to use a type checker other than ty. The report contains no reproduction, error, platform, or version constraint; this is a request for a new capability. Source inspection confirms that checker selection is currently specific to ty.
 
+The maintainer has outlined the integration contract that alternative checkers would need: workspace target selection, configuration discovery, import environments, Python-version selection, script handling, and fixes. These remain design questions; no interface or implementation has been approved in the discussion.
+
 ## Draft response
 
 The customization you're requesting isn't supported yet: `uv check` currently invokes ty, and `--ty-version` only selects its version. This issue tracks checker selection separately from the additional checks discussed in astral-sh/uv#19768. The next step is to define how projects select a checker and how uv passes the environment and supported options. For now, you can add your preferred checker as a development dependency and invoke it through `uv run`, for example `uv run mypy .`.
@@ -34,6 +36,25 @@ The alternative-checker comment in astral-sh/uv#19768 is the closest match, but 
 - astral-sh/uv#19791 originates from astral-sh/ty-pre-commit#7, where users need separate ty configuration files for fast local checks and slower manual/CI checks. Maintainer comments confirm the distinction between invoking ty directly and forwarding options through `uv check`.
 - facebook/pyrefly#3176 links back to the alternative-checker proposal from its PEP 723 script-support discussion. That narrower motivation does not replace this issue as the uv discussion for checker selection.
 
+## Checker integration contract
+
+Maintainer zsol's October 27, 2026 comment in astral-sh/uv#22941 identifies the following open design questions. It establishes the scope to investigate, not an accepted API or a commitment to an adapter implementation.
+
+- **Checker selection:** How should users specify the Python package providing the checker?
+- **Workspace targets:** How should `--package foo` and `--all-packages` map to checker arguments, and is an adapter script needed? Unselected nested members may still supply imports without becoming diagnostic targets. Explicit selection and automatic discovery must be distinguished, including their interaction with the checker's include/exclude settings.
+- **Python version and environment:** How should the selected Python version, including a `--python` override, reach the checker? The import-resolution environment and the Python version being checked may legitimately differ. The behavior of `--no-sync`, especially with `--python`, also needs definition.
+- **Scripts and multiple environments:** How should a checker learn that `--script` was requested? Future support for checking multiple scripts could involve conflicting environments or different pinned Python versions; this is a future design consideration, not a reported current failure.
+- **Fixes:** How should `--fix` be supported by alternative checkers?
+
+### Metadata and diagnostic consistency
+
+The maintainer describes ty's current integration as calling `uv workspace metadata` for two inputs:
+
+- `workspace_root` locates workspace-wide configuration. This allows a selected member outside the workspace directory to inherit workspace rules without separate per-member configuration.
+- `environment.root`, when present, identifies the environment to search for installed packages and stubs. For projects, ty requests metadata with `--active`; for PEP 723 scripts, it requests `--sync --script <file>` and uses the script's environment for imports.
+
+The stated rationale is to give `uv check`, direct `ty check`, and the IDE the same settings and diagnostics. How other checkers can provide that consistency remains unresolved. These details are attributed to the maintainer's explanation; ty's metadata calls and cross-entry-point diagnostic equivalence were not independently verified in this investigation.
+
 ## Search scope and exclusions
 
 The report was decomposed before searching:
@@ -56,7 +77,7 @@ Additional inspected candidates were excluded from the Related list because thei
 
 ## Maintainer next step
 
-Use astral-sh/uv#22941 for design discussion about checker selection, environment handoff, and supported options. The existing prototype offer in astral-sh/uv#19768 may inform that discussion, but no accepted interface or delivery date was established. Users can invoke a checker installed as a project development dependency through `uv run` meanwhile.
+Use astral-sh/uv#22941 to define the checker integration contract above. Evaluate the prototype offered in astral-sh/uv#19768 against workspace selection and exclusions, separate import environments and Python versions, script handling, and configuration consistency across CLI and IDE entry points. Decide whether an adapter is needed and how unsupported options such as fixes should behave. No accepted interface or delivery date was established. Users can invoke a checker installed as a project development dependency through `uv run` meanwhile; that invocation alone does not establish parity with the proposed integration contract.
 
 ## Validation
 
