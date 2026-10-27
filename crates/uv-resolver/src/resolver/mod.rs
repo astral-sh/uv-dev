@@ -14,7 +14,9 @@ use either::Either;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
-use pubgrub::{ConflictId, Id, IncompatibilityArena, Ranges, State, Term};
+use pubgrub::{
+    ConflictId, DerivationTree, External, Id, IncompatibilityArena, Ranges, State, Term, VersionSet,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::oneshot;
@@ -45,7 +47,7 @@ use uv_warnings::warn_user_once;
 
 use crate::candidate_selector::{Candidate, CandidateDist, CandidateSelector};
 use crate::dependency_provider::UvDependencyProvider;
-use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
+use crate::error::{ErrorTree, NoSolutionError, ResolveError, derivation_tree_packages};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
 use crate::manifest::Manifest;
@@ -344,6 +346,85 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
     }
 }
 
+/// Split a failed fork when conflicting ranges on a package apply in disjoint environments.
+fn split_conflict(
+    proof: &ErrorTree,
+    env: &ResolverEnvironment,
+    root: &PubGrubPackage,
+) -> Option<(ResolverEnvironment, ResolverEnvironment)> {
+    let current = env.fork_markers()?;
+    let mut edges = FxHashMap::<_, Vec<_>>::default();
+    let mut has_markers = false;
+    let mut stack = vec![proof];
+    let mut shared = FxHashSet::default();
+    while let Some(tree) = stack.pop() {
+        match tree {
+            DerivationTree::External(External::FromDependencyOf(parent, _, child, range)) => {
+                has_markers |= !child.marker().is_true();
+                edges.entry(parent).or_default().push((child, range));
+            }
+            DerivationTree::External(_) => {}
+            DerivationTree::Derived(derived) => {
+                if derived.shared_id.is_none_or(|id| shared.insert(id)) {
+                    stack.extend([derived.cause1.as_ref(), derived.cause2.as_ref()]);
+                }
+            }
+        }
+    }
+
+    if !has_markers {
+        return None;
+    }
+
+    // Propagate the union of paths in the proof to each parent: an unconditional alternative path
+    // can make two requirements overlap even if one path carries a disjoint marker.
+    let mut reach = FxHashMap::default();
+    reach.insert(root, current);
+    let mut pending = VecDeque::from([root]);
+    while let Some(parent) = pending.pop_front() {
+        let parent_marker = reach[parent];
+        if let Some(children) = edges.get(parent) {
+            for &(child, _) in children {
+                let old = reach.get(child).copied().unwrap_or(MarkerTree::FALSE);
+                let new = old.or(parent_marker.and(child.marker()));
+                if new != old {
+                    reach.insert(child, new);
+                    pending.push_back(child);
+                }
+            }
+        }
+    }
+
+    let mut requirements = BTreeMap::<_, Vec<_>>::new();
+    for (parent, children) in edges {
+        let Some(parent_marker) = reach.get(parent) else {
+            continue;
+        };
+        for (child, range) in children {
+            let Some(name) = child.name_no_root() else {
+                continue;
+            };
+            let scope = parent_marker.and(child.marker());
+            if !scope.is_false() && scope != current {
+                requirements.entry(name).or_default().push((scope, range));
+            }
+        }
+    }
+    for clauses in requirements.values_mut() {
+        // Prefer the same split regardless of the order in which PubGrub derived the proof.
+        clauses.sort_by_key(|(scope, _)| *scope);
+        for (i, &(scope, range)) in clauses.iter().enumerate() {
+            if clauses[i + 1..].iter().any(|&(other_scope, other_range)| {
+                scope.is_disjoint(other_scope) && range.is_disjoint(other_range)
+            }) {
+                // The complement also covers environments in which neither constraint applies.
+                return fork_version_by_marker(env, scope);
+            }
+        }
+    }
+    None
+}
+
 impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackages> {
     #[instrument(skip_all)]
     fn solve(self: Arc<Self>, requests: &MetadataRequests) -> Result<ResolverOutput, ResolveError> {
@@ -404,7 +485,28 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             &self.git,
         );
 
-        'FORK: while let Some(fork) = forked_states.pop() {
+        let mut retry_environments = Vec::new();
+        'FORK: loop {
+            let fork = if let Some(fork) = forked_states.pop() {
+                fork
+            } else if let Some(env) = retry_environments.pop() {
+                // A retry starts at the root: the failed fork's assignments may depend on markers
+                // that are now false. Only replace the arena after all its checkpoints are done.
+                let mut state = ForkState::new(
+                    State::init(root.clone(), MIN_VERSION.clone()),
+                    self.env.clone(),
+                    self.python_requirement.clone(),
+                    BatchPrefetcher::new(self.capabilities.clone(), requests.clone()),
+                )
+                .with_env(env);
+                incompatibility_arena = state.pubgrub.take_incompatibility_arena();
+                PendingFork {
+                    state: Rc::new(state),
+                    action: ForkAction::Initial,
+                }
+            } else {
+                break;
+            };
             let mut state = self.materialize_fork(fork, incompatibility_arena, requests)?;
             if let Some(split) = state.env.end_user_fork_display() {
                 let requires_python = state.python_requirement.target();
@@ -421,7 +523,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let result = state.pubgrub.unit_propagation(state.next);
                         match result {
                             Err(err) => {
-                                // If unit propagation failed, there is no solution.
+                                if let Some((with, without)) =
+                                    split_conflict(&err, &state.env, &root)
+                                {
+                                    debug!(
+                                        "Retrying a dependency conflict in disjoint marker environments"
+                                    );
+                                    retry_environments.extend([without, with]);
+                                    incompatibility_arena =
+                                        state.pubgrub.take_incompatibility_arena();
+                                    continue 'FORK;
+                                }
                                 return Err(self.convert_no_solution_err(
                                     err,
                                     state.fork_urls,
@@ -3741,10 +3853,8 @@ impl ForkedDependencies {
             // that gives up correctness in some cases in exchange for
             // more limited forking. More limited forking results in
             // simpler-and-easier-to-understand lock files and faster
-            // resolving. The correctness we give up manifests when
-            // two transitive non-sibling dependencies conflict. In
-            // that case, we don't detect the fork ahead of time (at
-            // present).
+            // resolving. If constraints from different parents later
+            // conflict, the solver can retry disjoint marker regions.
             if let [dep] = deps.as_slice() {
                 // There's one exception: if the requirement increases the minimum-supported Python
                 // version, we also fork in order to respect that minimum in the subsequent

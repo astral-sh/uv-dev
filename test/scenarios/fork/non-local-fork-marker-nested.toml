@@ -1,0 +1,40 @@
+name = "fork-non-local-fork-marker-nested"
+description = """
+Disjoint parent constraints on `c` and `f` require independent platform and
+architecture splits. Windows must still include `g`, where neither constraint
+on `c` applies.
+"""
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = true
+
+[root]
+requires = [
+  "a ; sys_platform == 'linux'",
+  "b ; sys_platform == 'darwin'",
+  "d ; platform_machine == 'x86_64'",
+  "e ; platform_machine != 'x86_64'",
+  "g ; sys_platform == 'win32'",
+]
+
+[packages.a.versions."1.0.0"]
+requires = ["c==1"]
+
+[packages.b.versions."1.0.0"]
+requires = ["c==2"]
+
+[packages.c.versions."1.0.0"]
+[packages.c.versions."2.0.0"]
+
+[packages.d.versions."1.0.0"]
+requires = ["f==1"]
+
+[packages.e.versions."1.0.0"]
+requires = ["f==2"]
+
+[packages.f.versions."1.0.0"]
+[packages.f.versions."2.0.0"]
+[packages.g.versions."1.0.0"]
