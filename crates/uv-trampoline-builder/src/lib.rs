@@ -748,6 +748,53 @@ if __name__ == "__main__":
         Ok(())
     }
 
+    /// Forward an inherited pipe alongside a stale descriptor in the parent's CRT table.
+    #[test]
+    fn console_python_launcher_crt_fds() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let python = which("python")?;
+        let launcher = temp_dir.child("launcher.exe");
+        File::create(launcher.path())?
+            .write_all(&windows_python_launcher(&python, WindowMode::Console)?)?;
+
+        Command::new(python)
+            .current_dir(temp_dir.path())
+            .args([
+                "-c",
+                r"
+import os, subprocess
+
+read, write = os.pipe()
+os.dup2(write, 64)
+os.dup2(write, 65)
+# The CRT still lists fd 65 when only the Windows handle's inherit flag is cleared.
+os.set_inheritable(65, False)
+
+child = '''
+import errno, msvcrt, os
+try:
+    msvcrt.get_osfhandle(65)
+except OSError as error:
+    assert error.errno == errno.EBADF
+else:
+    raise AssertionError('stale CRT fd 65 was forwarded')
+os.write(64, b'ok')
+raise SystemExit(37)
+'''
+args = ['launcher.exe', '-c', subprocess.list2cmdline([child])]
+assert os.spawnv(os.P_WAIT, 'launcher.exe', args) == 37
+os.close(64)
+os.close(65)
+os.close(write)
+assert os.read(read, 2) == b'ok'
+",
+            ])
+            .assert()
+            .success()
+            .stderr("");
+        Ok(())
+    }
+
     #[test]
     fn console_python_launcher() -> Result<()> {
         // Create Temp Dirs
