@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Windows auto-selection prefers cu129 and accepts torchvision 0.2.0 because its metadata permits the selected torch version. The parent regression passes and confirms this behavior. Correcting it requires choosing a backend-priority, minimum-version, or resolver policy; no uniquely justified fix was established. The checkout remains unchanged, and the README records the findings.",
+  "validation": [],
+  "pull_request": null
+}
