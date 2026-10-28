@@ -1383,7 +1383,7 @@ impl RegistryClient {
                     .map_err(|err| self.handle_response_errors(err))
                     .into_async_read();
 
-                read_metadata_async_stream(filename, url.as_str(), reader)
+                read_metadata_async_stream(filename, url, reader)
                     .await
                     .map_err(|err| ErrorKind::Metadata(url.to_string(), err))
             }

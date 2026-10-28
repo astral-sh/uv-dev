@@ -3,6 +3,7 @@
 //! This module reads all fields exhaustively. The fields are defined in the [Core metadata
 //! specification](https://packaging.python.org/en/latest/specifications/core-metadata/).
 
+use std::fmt::Display;
 use std::io;
 use std::path::Path;
 
@@ -232,7 +233,7 @@ fn read_dist_info_metadata(
 /// Read `METADATA` and, for a variant wheel, validate `variant.json` in the same pass.
 pub async fn read_metadata_async_stream<R: futures::AsyncRead + Unpin>(
     filename: &WheelFilename,
-    debug_path: &str,
+    debug_path: impl Display,
     reader: R,
 ) -> Result<ResolutionMetadata, Error> {
     let reader = futures::io::BufReader::with_capacity(128 * 1024, reader);

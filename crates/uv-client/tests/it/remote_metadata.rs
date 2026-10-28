@@ -9,7 +9,7 @@ use async_zip::{Compression, ZipEntryBuilder};
 use reqwest::header::{
     ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderName, LOCATION, RANGE,
 };
-use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path};
+use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path, query_param};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::Cache;
@@ -96,6 +96,63 @@ async fn remote_metadata_requires_range_requests() -> Result<()> {
         @"Wheel metadata range requests are required, but not supported for: [HOST]/ok-1.0.0-py3-none-any.whl"
     );
 
+    Ok(())
+}
+
+/// The server receives the credentials, but the metadata error includes only the redacted URL.
+#[tokio::test]
+async fn remote_metadata_stream_redacts_artifact_url() -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-1.0.0.dist-info/METADATA".into(), Compression::Stored),
+            b"Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\nRequires-Python: >=invalid\n",
+        )
+        .await?;
+    let wheel = writer.close().await?;
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(basic_auth("source-user", "source-password"))
+        .and(query_param("X-Amz-Signature", "test-signature"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let url = authenticated_url(
+        &server.uri(),
+        "/artifact?X-Amz-Signature=test-signature",
+        "source-user",
+        "source-password",
+    )?;
+    let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
+        filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
+        location: Box::new(SafeUrl::parse(&url)?),
+        url: VerbatimUrl::from_str(&url)?,
+        size: None,
+    });
+    let client =
+        RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?.init().await?)
+            .build()?;
+    let error = client
+        .wheel_metadata(
+            &dist,
+            &GitResolver::default(),
+            &IndexCapabilities::default(),
+            None,
+        )
+        .await
+        .expect_err("the wheel contains invalid metadata");
+    let diagnostic = anyhow::Error::new(error)
+        .root_cause()
+        .to_string()
+        .replace(&server.address().to_string(), "[HOST]");
+    insta::assert_snapshot!(diagnostic, @"The metadata at `http://source-user:****@[HOST]/artifact?X-Amz-Signature=****` is invalid");
     Ok(())
 }
 
