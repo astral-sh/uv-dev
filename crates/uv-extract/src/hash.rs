@@ -78,7 +78,8 @@ where
 
     /// Exhaust the underlying reader.
     pub async fn finish(&mut self) -> Result<(), std::io::Error> {
-        while self.read(&mut vec![0; 8192]).await? > 0 {}
+        let mut buffer = vec![0; 8192];
+        while self.read(&mut buffer).await? > 0 {}
 
         Ok(())
     }
@@ -106,5 +107,26 @@ where
             }
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HashReader, Hasher};
+    use uv_pypi_types::{HashAlgorithm, HashDigest};
+
+    #[tokio::test]
+    async fn finish_hashes_only_the_bytes_in_the_last_read() -> std::io::Result<()> {
+        let input = [0xa5; 8193];
+        let mut hashers = [Hasher::from(HashAlgorithm::Sha256)];
+        let mut reader = HashReader::new(input.as_slice(), &mut hashers);
+        reader.finish().await?;
+        assert_eq!(reader.bytes_read(), 8193);
+
+        let [hasher] = hashers;
+        let mut expected = Hasher::from(HashAlgorithm::Sha256);
+        expected.update(&input);
+        assert_eq!(HashDigest::from(hasher), HashDigest::from(expected));
+        Ok(())
     }
 }
