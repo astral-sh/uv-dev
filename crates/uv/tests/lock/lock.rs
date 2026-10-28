@@ -33743,6 +33743,41 @@ fn lock_group_includes_requires_python_contradiction() -> Result<()> {
     Ok(())
 }
 
+/// Deeply nested group includes must not overflow the process stack.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_group_include_deep() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let groups = (0..1_000)
+        .map(|index| {
+            format!(
+                "group-{index:04} = [{{ include-group = \"group-{:04}\" }}]\n",
+                index + 1
+            )
+        })
+        .collect::<String>();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            {groups}group-1000 = []
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include_cycle() -> Result<()> {
