@@ -55,6 +55,17 @@ The maintainer describes ty's current integration as calling `uv workspace metad
 
 The stated rationale is to give `uv check`, direct `ty check`, and the IDE the same settings and diagnostics. How other checkers can provide that consistency remains unresolved. These details are attributed to the maintainer's explanation; ty's metadata calls and cross-entry-point diagnostic equivalence were not independently verified in this investigation.
 
+### Pyrefly integration proposal
+
+In astral-sh/uv#22941, Pyrefly contributor kinto0 proposes using `uv workspace metadata` through Pyrefly's build-system integration, which they report already supports querying custom build systems for metadata. Their October 28, 2026 comment adds concrete implementation considerations:
+
+- **Selection and fixes:** Possible interfaces are `uv check --type-checker pyrefly` or a `tool.uv` setting in `pyproject.toml`. They suggest omitting `--fix` from an initial integration because Pyrefly's reported autofixes are limited to suppressing errors and removing unused ignores. Neither interface nor the reduced scope has been accepted.
+- **Environment propagation:** They propose that uv set `UV_NO_SYNC` and `UV_PYTHON` in the checker subprocess environment, allowing the checker's metadata query to inherit them and obtain the selected target Python version. This is a proposed extension of the pattern they describe for frozen/locked settings, not verified behavior for these options.
+- **Script discovery:** They suggest that the checker detect PEP 723 metadata and query `uv workspace metadata --script <file>` for each script without a separate script-mode signal. Their expectation that this also returns the correct environment for an isolated script invocation remains unverified.
+- **Source-selection constraint:** They report that Pyrefly's build systems currently require all checked files upfront as a source database. Supporting uv-driven selection would require changes. They sketch a `pyrefly check --use-uv` invocation with project exclusions and a root target, and suggest a force-ignore mechanism analogous to ty's exclusion handling. These are proposed integration options, not established supported flags or a working reproduction.
+
+The contributor offers a mock-up, but the supplied discussion contains no linked implementation or validation results for this proposal. Workspace selection versus import visibility, exclusion precedence, distinct target Python versions and import environments, and CLI/IDE consistency remain open requirements.
+
 ## Search scope and exclusions
 
 The report was decomposed before searching:
@@ -77,7 +88,7 @@ Additional inspected candidates were excluded from the Related list because thei
 
 ## Maintainer next step
 
-Use astral-sh/uv#22941 to define the checker integration contract above. Evaluate the prototype offered in astral-sh/uv#19768 against workspace selection and exclusions, separate import environments and Python versions, script handling, and configuration consistency across CLI and IDE entry points. Decide whether an adapter is needed and how unsupported options such as fixes should behave. No accepted interface or delivery date was established. Users can invoke a checker installed as a project development dependency through `uv run` meanwhile; that invocation alone does not establish parity with the proposed integration contract.
+Use astral-sh/uv#22941 to define the checker integration contract above. Evaluate the prototype offered in astral-sh/uv#19768 against workspace selection and exclusions, separate import environments and Python versions, script handling, and configuration consistency across CLI and IDE entry points. Use the Pyrefly proposal to investigate its source-database requirements and validate environment-variable propagation, particularly `--no-sync` with `--python` and metadata queries for isolated scripts. Decide whether an adapter is needed and how unsupported options such as fixes should behave; omitting fixes is a contributor suggestion, not a maintainer decision. No accepted interface or delivery date was established. Users can invoke a checker installed as a project development dependency through `uv run` meanwhile; that invocation alone does not establish parity with the proposed integration contract.
 
 ## Validation
 
