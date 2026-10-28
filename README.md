@@ -10,6 +10,8 @@ Reproduction outcome: **needs_more_information**. The report supplies a usable W
 
 The closest history is astral-sh/uv#6699 and astral-sh/uv#6866, with merged cleanup fixes astral-sh/uv#6792 and astral-sh/uv#6955. Those fixes concern pointer decoding, descriptor layout, and warnings; they do not establish that this handle-collision case was previously fixed.
 
+Repository member EliteTK proposes removing the `lpReserved2`-based cleanup rather than repairing its handle filtering. The parent-provided buffer is not guaranteed to use the MSVC descriptor-table layout, and stale values can coincide with trampoline-owned handles. This is a proposed implementation direction, not a merged fix or new runtime confirmation.
+
 ## Classification
 
 Bug report concerning Windows trampoline process lifetime and inherited-handle cleanup; runtime confirmation remains pending. The reported behavior would violate the expected waiting and exit-status behavior of the launcher. The source closes non-sentinel CRT-table values after allocating child-process and kill-on-close job handles, making the proposed explanation plausible. No handle collision or particular closed handle was observed during this investigation.
@@ -88,10 +90,21 @@ The builder's test module is gated by `cfg(all(test, windows))`. The venv module
 - The historical diffs for astral-sh/uv#6792 and astral-sh/uv#6955 correct pointer interpretation, array layout, standard-descriptor skipping, and sentinel handling. They do not record which handle values were inherited.
 - pypa/pip#10444 explains the rationale for cleaning up handles after child creation so that the child can inherit them. It does not confirm the reported collision in distlib, which the reporter explicitly did not test.
 
-This ordering is consistent with the proposed explanation. It does not independently establish a collision, its frequency, the silently successful exit, or a confirmed root cause. The proposed approach of recording inherited handles before allocating new handles, then closing them after spawning, still needs validation; checking validity only after spawning would not establish ownership.
+This ordering is consistent with the proposed explanation. It does not independently establish a collision, its frequency, the silently successful exit, or a confirmed root cause. The reporter's approach of recording inherited handles before allocating new handles, then closing them after spawning, remains an unvalidated alternative; checking validity only after spawning would not establish ownership. The maintainer proposal below also questions whether the buffer should be interpreted as a CRT descriptor table at all.
+
+## Maintainer guidance and implementation direction
+
+In the October 28, 2026 discussion of astral-sh/uv#22966, repository member EliteTK points out that `lpReserved2` comes from the parent, which need not be Python or use the MSVC layout. A readable buffer of a known size does not establish that its contents are a valid CRT descriptor table. EliteTK also identifies stale values overlapping with live, non-inherited handles as a concern and proposes dropping the `lpReserved2` cleanup for now, retaining the separately justified handle cleanup.
+
+The historical patch in astral-sh/uv#1092 confirms that the vendored Posy trampoline introduced the descriptor-table parsing and closure loop alongside separate standard-input/output cleanup. The PR describes the Posy implementation as based on distlib. EliteTK characterizes the extra cleanup as speculative; that assessment is maintainer guidance, not evidence that removing it has already passed compatibility testing.
+
+The next implementation investigation should evaluate removing only the `lpReserved2` parsing and closure loop, while retaining the existing standard-handle cleanup and child inheritance behavior. Validate that approach against the native Windows fixture and control launchers described above, checking child completion and exit status as well as redirected-pipe behavior. Early handle validation would address the reporter's proposed collision scenario only if the descriptor-table interpretation were itself valid, so it does not resolve the broader format concern.
+
+The supplied discussion contains no patch, test results, release target, or confirmation that this proposal has been implemented. The reproduction outcome remains `needs_more_information` because native Windows execution is still pending.
 
 ## Related
 
+- astral-sh/uv#1092 (pull request, merged January 26, 2024): Windows launchers using Posy trampolines. Its `crates/puffin-trampoline/src/bounce.rs` patch introduced the `lpReserved2` parsing and handle-closing loop as well as separate standard-input/output cleanup. EliteTK cites this origin when proposing removal of the extra cleanup. This establishes implementation history, not a fix or duplicate report.
 - astral-sh/uv#6699 (issue, closed): Windows stubs exited abnormally when launched through BusyBox's Microsoft CRT `spawnve`. The confirmed failures concerned access violations and pointer-layout problems, fixed in 2024. This is close historical context, not a confirmed duplicate of live child/job handle closure.
 - astral-sh/uv#6792 (pull request, merged August 30, 2024): Fixed astral-sh/uv#6699 by treating table entries as HANDLE values instead of dereferencing them as pointers, and skipping invalid sentinels. It did not establish handle inheritance before new handle allocation.
 - astral-sh/uv#6955 (pull request, merged; released in uv 0.4.5): Corrected CRT-table byte offsets, skipped the first three descriptors, and excluded the -2 sentinel. It addressed warnings in astral-sh/uv#6699 and astral-sh/uv#6866. Those corrections remain in the current source.
