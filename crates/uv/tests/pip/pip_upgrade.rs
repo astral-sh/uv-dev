@@ -757,7 +757,7 @@ fn editable_directory_with_git_suffix() -> Result<()> {
 fn git_structured_subdirectory() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
-    let repository = context.temp_dir.child("repository");
+    let repository = context.temp_dir.child("project@team.git");
     repository
         .child("packages/a&b/pyproject.toml")
         .write_str(indoc! {r#"
@@ -824,13 +824,19 @@ fn git_structured_subdirectory() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/a&b)
+     ~ example==0.1.0 (from git+file://[TEMP_DIR]/project@team.git@[COMMIT]#subdirectory=packages/a&b)
     ");
     uv_snapshot!(context.filters(), context.python_command()
         .args(["-c", "import example; print(example.value)"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     installed
+    ");
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
     ");
     Ok(())
 }
@@ -841,7 +847,7 @@ fn git_structured_subdirectory() -> Result<()> {
 fn git_structured_archive_path() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
-    let repository = context.temp_dir.child("repository");
+    let repository = context.temp_dir.child("project@team.git");
     let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"0.1.0".parse()?).build();
     repository
         .child(format!("a&b/{filename}"))
@@ -899,7 +905,13 @@ fn git_structured_archive_path() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#path=a&b/example-0.1.0-py3-none-any.whl)
+     ~ example==0.1.0 (from git+file://[TEMP_DIR]/project@team.git@[COMMIT]#path=a&b/example-0.1.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
     ");
     Ok(())
 }

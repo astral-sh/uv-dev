@@ -17,7 +17,6 @@ use uv_configuration::{
 };
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_filename::DistExtension;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
     InstalledDistKind, Name, NameRequirementSpecification, Origin, PackageConfigSettings,
@@ -30,10 +29,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{
-    Conflicts, DirectUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl,
-    ParsedUrlError, VerbatimParsedUrl,
-};
+use uv_pypi_types::{Conflicts, ParsedDirectoryUrl, ParsedUrl, VerbatimParsedUrl};
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
 use uv_python_interpreter::PythonEnvironment;
@@ -102,87 +98,26 @@ fn installed_requirements(
         .iter()
         .sorted_by(|left, right| left.name().cmp(right.name()))
         .map(|dist| {
-            let source = match &dist.kind {
+            let version_or_url = match &dist.kind {
                 InstalledDistKind::Registry(_)
                 | InstalledDistKind::EggInfoFile(_)
                 | InstalledDistKind::EggInfoDirectory(_) => None,
-                InstalledDistKind::Url(dist) => {
-                    let directory_editable = match dist.direct_url.as_ref() {
-                        DirectUrl::LocalDirectory { .. } => Some(dist.editable),
-                        DirectUrl::ArchiveUrl { .. } | DirectUrl::VcsUrl { .. } => None,
-                    };
-                    Some((dist.url.clone(), directory_editable))
-                }
+                InstalledDistKind::Url(dist) => Some(VersionOrUrl::Url(VerbatimParsedUrl {
+                    parsed_url: ParsedUrl::try_from(dist.direct_url.as_ref())?,
+                    verbatim: VerbatimUrl::from_url(dist.url.clone()),
+                })),
                 InstalledDistKind::LegacyEditable(dist) => {
-                    Some((dist.target_url.clone(), Some(true)))
+                    let verbatim = VerbatimUrl::from_url(dist.target_url.clone());
+                    Some(VersionOrUrl::Url(VerbatimParsedUrl {
+                        parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
+                            install_path: verbatim.as_path()?.into_boxed_path(),
+                            url: dist.target_url.clone(),
+                            editable: Some(true),
+                            r#virtual: None,
+                        }),
+                        verbatim,
+                    }))
                 }
-            };
-
-            let version_or_url = if let Some((url, directory_editable)) = source {
-                let verbatim = VerbatimUrl::from_url(url.clone());
-                // Directory metadata identifies the source even when its path ends in `.git`.
-                let parsed_url = if let Some(editable) = directory_editable {
-                    ParsedUrl::Directory(ParsedDirectoryUrl {
-                        install_path: verbatim.as_path()?.into_boxed_path(),
-                        url,
-                        editable: Some(editable),
-                        r#virtual: None,
-                    })
-                } else {
-                    let mut url = url;
-                    if let InstalledDistKind::Url(dist) = &dist.kind
-                        && let DirectUrl::VcsUrl { .. } = dist.direct_url.as_ref()
-                    {
-                        // Restore structured paths below; parsing their fragment representation
-                        // would split directory names containing `&`.
-                        url.set_fragment(None);
-                    }
-                    ParsedUrl::try_from(url)?
-                };
-                let mut url = VerbatimParsedUrl {
-                    parsed_url,
-                    verbatim,
-                };
-                if let InstalledDistKind::Url(dist) = &dist.kind {
-                    match dist.direct_url.as_ref() {
-                        DirectUrl::LocalDirectory { .. } => {}
-                        DirectUrl::ArchiveUrl { subdirectory, .. } => {
-                            if let ParsedUrl::Archive(archive) = &mut url.parsed_url {
-                                archive.subdirectory.clone_from(subdirectory);
-                            }
-                        }
-                        DirectUrl::VcsUrl {
-                            url: vcs,
-                            subdirectory,
-                            path,
-                        } => {
-                            // LFS mode belongs to the installed source, independent of the current
-                            // `UV_GIT_LFS` setting used when parsing new requirements.
-                            if let ParsedUrl::GitDirectory(git) = &url.parsed_url {
-                                let lfs = vcs.vcs_info().git_lfs.unwrap_or_default().into();
-                                let git = git.url.clone().with_lfs(lfs);
-                                url.parsed_url = if let Some(path) = path {
-                                    let ext = DistExtension::from_path(path).map_err(|err| {
-                                        ParsedUrlError::MissingExtensionPath(path.clone(), err)
-                                    })?;
-                                    ParsedUrl::GitPath(ParsedGitPathUrl::from_source(
-                                        git,
-                                        path.clone(),
-                                        ext,
-                                    ))
-                                } else {
-                                    ParsedUrl::GitDirectory(ParsedGitDirectoryUrl::from_source(
-                                        git,
-                                        subdirectory.clone(),
-                                    ))
-                                };
-                            }
-                        }
-                    }
-                }
-                Some(VersionOrUrl::Url(url))
-            } else {
-                None
             };
 
             Ok(Requirement::from(Pep508Requirement {
