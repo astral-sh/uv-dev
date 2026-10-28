@@ -1,12 +1,21 @@
+#[cfg(feature = "test-git")]
+use std::process::Command;
+
 use anyhow::Result;
+#[cfg(feature = "test-git")]
+use anyhow::anyhow;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
 use uv_fs::copy_dir_all;
+#[cfg(feature = "test-git")]
+use uv_redacted::SafeUrl;
 #[cfg(feature = "test-git-lfs")]
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
+#[cfg(feature = "test-git")]
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -738,6 +747,159 @@ fn editable_directory_with_git_suffix() -> Result<()> {
     ----- stdout -----
     a==2.0.0
     -e file://[TEMP_DIR]/project.git
+    ");
+    Ok(())
+}
+
+/// Structured subdirectories may contain characters that delimit URL fragments.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_structured_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository
+        .child("packages/a&b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("packages/a&b/src/example/__init__.py")
+        .write_str("value = 'installed'\n")?;
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"
+        [project]
+        name = "requirements"
+        version = "0.1.0"
+        dependencies = ["example"]
+        [tool.uv.sources]
+        example = {{ git = "{repository_url}", subdirectory = "packages/a&b" }}
+    "#
+        ))?;
+    context
+        .pip_install()
+        .args(["-r", "pyproject.toml", "--no-index"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .args(["--all", "--reinstall", "--no-cache", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/a&b)
+    ");
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed
+    ");
+    Ok(())
+}
+
+/// Archive paths inside Git repositories also retain their structured spelling.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_structured_archive_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"0.1.0".parse()?).build();
+    repository
+        .child(format!("a&b/{filename}"))
+        .write_binary(&wheel)?;
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"
+        [project]
+        name = "requirements"
+        version = "0.1.0"
+        dependencies = ["example"]
+        [tool.uv.sources]
+        example = {{ git = "{repository_url}", path = "a&b/{filename}" }}
+    "#
+        ))?;
+    context
+        .pip_install()
+        .args(["-r", "pyproject.toml", "--no-index"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .args(["--all", "--reinstall", "--no-cache", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#path=a&b/example-0.1.0-py3-none-any.whl)
     ");
     Ok(())
 }
