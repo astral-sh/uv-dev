@@ -36050,6 +36050,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     Ok(())
 }
 
+/// A project version bump forces a new resolution even when the lockfile has a newer revision.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_bump_static_version() -> Result<()> {
@@ -36066,7 +36067,7 @@ fn lock_bump_static_version() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -36094,6 +36095,18 @@ fn lock_bump_static_version() -> Result<()> {
         );
     });
 
+    // Model a lockfile written by a newer uv; a no-op lock keeps its revision intact.
+    let future_lock = context
+        .read("uv.lock")
+        .replace("revision = 5", "revision = 6");
+    context.temp_dir.child("uv.lock").write_str(&future_lock)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), future_lock);
+
     // Bump the version.
     pyproject_toml.write_str(
         r#"
@@ -36106,7 +36119,7 @@ fn lock_bump_static_version() -> Result<()> {
     )?;
 
     // Rerunning with `--locked` should fail.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -36115,7 +36128,11 @@ fn lock_bump_static_version() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    assert_eq!(context.read("uv.lock"), future_lock);
+
+    // Silently downgrading a newer revision can break consumers that require its metadata.
+    // See astral-sh/uv#22911.
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -36143,6 +36160,15 @@ fn lock_bump_static_version() -> Result<()> {
         "#
         );
     });
+
+    // Revision 5 still supports syncing without the project manifest.
+    fs_err::remove_file(&pyproject_toml)?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--offline", "--preview-features", "frozen-lockfile"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
 
     Ok(())
 }
