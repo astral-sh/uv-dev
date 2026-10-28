@@ -3697,13 +3697,13 @@ fn compile_universal_local_variant_wheel() -> Result<()> {
         "variants": { "gpu": { "nvidia": { "cuda_version_lower_bound": ["12"] } } }
     })
     .to_string();
-    let (_, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
+    let (variant_filename, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
         .requires(&["leaf==1; sys_platform == 'win32'".parse()?])
-        .files(&[("ok-1.0.0.dist-info/variant.json", &variant)])
+        .variant(&"gpu".parse()?, &variant)
         .build();
     context
         .temp_dir
-        .child("ok-1.0.0-py3-none-any-gpu.whl")
+        .child(&variant_filename)
         .write_binary(&wheel)?;
     let (filename, wheel) = WheelBuilder::new(&"leaf".parse()?, &"1".parse()?).build();
     context
@@ -3714,7 +3714,7 @@ fn compile_universal_local_variant_wheel() -> Result<()> {
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("ok @ file:ok-1.0.0-py3-none-any-gpu.whl")?;
+        .write_str(&format!("ok @ file:{variant_filename}"))?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")

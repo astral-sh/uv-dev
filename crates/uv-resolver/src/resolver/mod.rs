@@ -22,17 +22,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
 use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
-use uv_distribution::{
-    ArchiveMetadata, DistributionDatabase, Error as DistributionError,
-    check_archive_wheel_variant_compatibility,
-};
+use uv_distribution::{ArchiveMetadata, DistributionDatabase, validate_archive_wheel_variant};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
     IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
     ResolutionRecorder, ResolvedDist, SourceDist, VariantsJsonContent, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
-use uv_metadata::read_archive_wheel_variant;
 use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{
@@ -1321,19 +1317,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     )),
                 )));
             }
-            if let BuiltDist::Path(wheel) = dist
-                && let Some(label) = filename.variant()
-            {
-                let archive = &wheel.install_path;
-                if env.marker_environment().is_some() {
-                    check_archive_wheel_variant_compatibility(filename, archive)?;
-                } else {
-                    // Dependency metadata can be supplied externally, so validate the archive
-                    // even when the resolver did not need to read its METADATA.
-                    read_archive_wheel_variant(filename, archive, label).map_err(|err| {
-                        DistributionError::WheelMetadata(archive.to_path_buf(), Box::new(err))
-                    })?;
-                }
+            if let BuiltDist::Path(wheel) = dist {
+                validate_archive_wheel_variant(
+                    filename,
+                    &wheel.install_path,
+                    env.marker_environment().is_some(),
+                )?;
             }
         }
 
