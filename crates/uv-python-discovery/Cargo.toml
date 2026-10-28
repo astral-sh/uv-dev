@@ -43,7 +43,7 @@ indicatif = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
 rayon = { workspace = true }
-regex = { workspace = true, features = ["perf", "unicode"] }
+regex = { workspace = true, features = ["perf"] }
 reqwest-retry = { workspace = true }
 rustc-hash = { workspace = true }
 same-file = { workspace = true }

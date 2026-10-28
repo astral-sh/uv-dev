@@ -39,7 +39,7 @@ fs-err = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
 pathdiff = { workspace = true }
-regex = { workspace = true, features = ["perf", "unicode"] }
+regex = { workspace = true, features = ["perf"] }
 regex-automata = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

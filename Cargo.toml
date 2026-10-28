@@ -232,8 +232,8 @@ rand = { version = "0.10.2", default-features = false, features = ["thread_rng"]
 rayon = { version = "1.10.0", default-features = false }
 ref-cast = { version = "1.0.24", default-features = false }
 reflink-copy = { version = "0.1.19", default-features = false }
-# Keep the regex features used by uv-build in the base set. Other consumers opt into the full
-# `perf` and `unicode` feature sets.
+# The CLI uses Perl classes, general categories, and Unicode case folding.
+# Keep the full performance engines optional for uv-build.
 regex = { version = "1.13.0", default-features = false, features = [
   "perf-backtrack",
   "perf-cache",
