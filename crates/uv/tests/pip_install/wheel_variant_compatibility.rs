@@ -85,6 +85,16 @@ fn backtrack_from_incompatible_installed_local_variant_wheel() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "12")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("ok"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
         .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
         .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
         .arg("--no-index")

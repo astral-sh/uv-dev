@@ -68,7 +68,7 @@ pub fn check_installed_local_wheel_variant_compatibility(
     else {
         return Ok(());
     };
-    let Some(label) = enabled_variant_label(&filename)? else {
+    let Some(label) = filename.variant() else {
         return Ok(());
     };
     check_variant_file(label, &installed.path.join("variant.json"))

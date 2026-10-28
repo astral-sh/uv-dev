@@ -1293,7 +1293,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             }
 
             let supports_variant_resolution = match dist {
-                BuiltDist::Path(_) => env.marker_environment().is_some() && self.tags.is_some(),
+                BuiltDist::Path(_) => {
+                    env.marker_environment().is_some()
+                        && self.tags.is_some()
+                        && uv_preview::is_enabled(PreviewFeature::WheelVariants)
+                }
                 BuiltDist::Registry(_) | BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => false,
             };
             let incompatible_tag = if filename.variant().is_some() && !supports_variant_resolution {
