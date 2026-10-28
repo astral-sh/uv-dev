@@ -1,0 +1,68 @@
+name: "Save issue context"
+description: "Publish an issue report when its source revision is still current."
+
+inputs:
+  issue-number:
+    description: "The upstream issue whose report should be updated."
+    required: true
+  repository:
+    description: "The repository containing the upstream issue."
+    default: ${{ github.repository }}
+    required: false
+  expected-revision:
+    description: "The source revision returned when the report was loaded."
+    required: true
+  readme:
+    description: "The updated Markdown report."
+    required: true
+  issue-file:
+    description: "Updated verified issue JSON, required when creating the first report."
+    required: false
+  result-name:
+    description: "The structured result to update: triage, reproduction, or fix."
+    required: false
+  result-file:
+    description: "A JSON file containing the structured result."
+    required: false
+
+outputs:
+  current:
+    description: "Whether the update used the current report revision."
+    value: ${{ steps.save.outputs.current }}
+  changed:
+    description: "Whether an artifact was created or updated."
+    value: ${{ steps.save.outputs.changed }}
+  url:
+    description: "The published issue artifact URL."
+    value: ${{ steps.save.outputs.url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Publish issue context"
+      id: save
+      shell: bash
+      env:
+        EXPECTED_REVISION: ${{ inputs.expected-revision }}
+        GH_TOKEN: ${{ github.token }}
+        ISSUE_FILE: ${{ inputs.issue-file }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        README: ${{ inputs.readme }}
+        REPOSITORY: ${{ inputs.repository }}
+        RESULT_FILE: ${{ inputs.result-file }}
+        RESULT_NAME: ${{ inputs.result-name }}
+      run: |
+        arguments=(
+          save
+          --repository "$REPOSITORY"
+          --issue-number "$ISSUE_NUMBER"
+          --expected-revision "$EXPECTED_REVISION"
+          --readme "$README"
+        )
+        if [ -n "$ISSUE_FILE" ]; then
+          arguments+=(--issue-file "$ISSUE_FILE")
+        fi
+        if [ -n "$RESULT_FILE" ]; then
+          arguments+=(--result-name "$RESULT_NAME" --result-file "$RESULT_FILE")
+        fi
+        python3 "$GITHUB_ACTION_PATH/../load-issue-context/issue_context.py" "${arguments[@]}"
