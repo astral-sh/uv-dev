@@ -204,15 +204,21 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
-        // If the Requires-Python bound has changed, we have to perform a clean resolution, since
-        // the set of `resolution-markers` may no longer cover the entire supported Python range.
-        if lock.requires_python().range() != requires_python.range() {
+        // Interior exclusions are part of the Python requirement even when its outer bounds
+        // stay the same. Compare the full accepted set without invalidating equivalent spellings.
+        if !lock
+            .requires_python()
+            .has_same_release_versions(requires_python)
+        {
             debug!(
                 "Resolving despite existing lockfile due to change in Python requirement: `{}` vs. `{}`",
                 lock.requires_python(),
                 requires_python,
             );
-            return if lock.fork_markers().is_empty() {
+            // Existing forks can guide resolution when the Python bounds remain unchanged.
+            return if lock.fork_markers().is_empty()
+                || lock.requires_python().range() == requires_python.range()
+            {
                 Ok(Self::Preferable(lock))
             } else {
                 Ok(Self::Versions(lock))
