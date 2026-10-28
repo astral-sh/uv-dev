@@ -147,12 +147,14 @@ $ uv pip upgrade --all
 ```
 
 All installed packages, including dependencies, are resolved together. uv selects compatible
-versions using the configured indexes and resolution settings. An upgrade can require downgrading
+versions using the configured indexes and resolution settings. If the latest versions conflict, the
+normal resolver priorities determine which packages are upgraded. An upgrade can require downgrading
 another package to satisfy its dependencies. Packages that are no longer needed are retained.
 
 Packages installed from URLs or local directories retain their sources, including recorded Git
 commits and editable installations. Version constraints and extras from the original installation
-are not recorded in the environment and cannot be recovered. Use `--constraint` to apply version
+are not recorded in the environment and cannot be recovered. Dependencies required only by an extra
+can therefore be upgraded beyond that extra's version bounds. Use `--constraint` to apply version
 bounds to the upgrade.
 
 To preview the changes without modifying the environment:

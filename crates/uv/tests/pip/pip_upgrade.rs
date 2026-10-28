@@ -3,6 +3,7 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_fs::copy_dir_all;
 #[cfg(feature = "test-git-lfs")]
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
@@ -194,6 +195,147 @@ fn compatible_downgrade() -> Result<()> {
     ----- stdout -----
     a==2.0.0
     b==1.0.0
+    ");
+    Ok(())
+}
+
+/// Competing upgrades use the normal resolver with roots in normalized package-name order.
+#[test]
+fn competing_upgrades() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "competing-upgrades"
+        [root]
+        requires = ["a", "b"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        [packages.a.versions."2.0.0"]
+        requires = ["b<2"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+        requires = ["a<2"]
+    "#})?);
+
+    context
+        .pip_install()
+        .args(["b==1.0.0", "a==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    ");
+    Ok(())
+}
+
+/// An obsolete dependency remains a root when its former parent switches dependencies.
+#[test]
+fn retains_unused_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "retains-unused-dependencies"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["b"]
+        [packages.a.versions."2.0.0"]
+        requires = ["c"]
+        [packages.b.versions."1.0.0"]
+        [packages.c.versions."1.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+     + c==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    c==1.0.0
+    ");
+    Ok(())
+}
+
+/// Installed dependencies do not identify which extras the user originally requested.
+#[test]
+fn unrecorded_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "unrecorded-extras"
+        [root]
+        requires = ["a[z]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        z = ["b<2"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .args(["a[z]", "--no-installer-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - b==1.0.0
+     + b==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==2.0.0
     ");
     Ok(())
 }
@@ -440,6 +582,88 @@ fn direct_url() {
     ");
 }
 
+/// A registry duplicate must not discard the direct URL recorded for the same package.
+#[test]
+fn duplicate_registry_and_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let duplicate = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    duplicate
+        .pip_install()
+        .arg(server.file_url("a-2.0.0-py3-none-any.whl"))
+        .assert()
+        .success();
+    copy_dir_all(
+        duplicate.site_packages().join("a-2.0.0.dist-info"),
+        context.site_packages().join("a-2.0.0.dist-info"),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0
+     ~ a==2.0.0 (from http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
+/// Conflicting installed URLs must fail instead of arbitrarily selecting one source.
+#[test]
+fn duplicate_urls() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let duplicate = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg(server.file_url("a-1.0.0-py3-none-any.whl"))
+        .assert()
+        .success();
+    duplicate
+        .pip_install()
+        .arg(server.file_url("a-2.0.0-py3-none-any.whl"))
+        .assert()
+        .success();
+    copy_dir_all(
+        duplicate.site_packages().join("a-2.0.0.dist-info"),
+        context.site_packages().join("a-2.0.0.dist-info"),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requirements contain conflicting URLs for package `a`:
+    - http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
+    - http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
+    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 /// The recorded LFS mode is part of a Git source, independent of the current environment setting.
 #[test]
 #[cfg(feature = "test-git-lfs")]
@@ -468,12 +692,12 @@ fn git_lfs() {
 }
 
 #[test]
-fn editable() -> Result<()> {
+fn editable_directory_with_git_suffix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/single-package.toml");
     context
         .temp_dir
-        .child("pyproject.toml")
+        .child("project.git/pyproject.toml")
         .write_str(indoc! {r#"
         [project]
         name = "editable"
@@ -485,12 +709,12 @@ fn editable() -> Result<()> {
     "#})?;
     context
         .temp_dir
-        .child("src/editable/__init__.py")
+        .child("project.git/src/editable/__init__.py")
         .write_str("")?;
 
     context
         .pip_install()
-        .args(["-e", ".", "a==1.0.0"])
+        .args(["-e", "./project.git", "a==1.0.0"])
         .arg("--index-url")
         .arg(server.index_url())
         .assert()
@@ -513,7 +737,7 @@ fn editable() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     a==2.0.0
-    -e file://[TEMP_DIR]/
+    -e file://[TEMP_DIR]/project.git
     ");
     Ok(())
 }

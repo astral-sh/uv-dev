@@ -29,7 +29,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{Conflicts, DirectUrl, ParsedUrl, VerbatimParsedUrl};
+use uv_pypi_types::{Conflicts, DirectUrl, ParsedDirectoryUrl, ParsedUrl, VerbatimParsedUrl};
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
 use uv_python_interpreter::PythonEnvironment;
@@ -97,20 +97,39 @@ fn installed_requirements(
     site_packages
         .iter()
         .sorted_by(|left, right| left.name().cmp(right.name()))
-        .unique_by(|dist| dist.name())
         .map(|dist| {
             let source = match &dist.kind {
                 InstalledDistKind::Registry(_)
                 | InstalledDistKind::EggInfoFile(_)
                 | InstalledDistKind::EggInfoDirectory(_) => None,
-                InstalledDistKind::Url(dist) => Some((dist.url.clone(), dist.editable)),
-                InstalledDistKind::LegacyEditable(dist) => Some((dist.target_url.clone(), true)),
+                InstalledDistKind::Url(dist) => {
+                    let directory_editable = match dist.direct_url.as_ref() {
+                        DirectUrl::LocalDirectory { .. } => Some(dist.editable),
+                        DirectUrl::ArchiveUrl { .. } | DirectUrl::VcsUrl { .. } => None,
+                    };
+                    Some((dist.url.clone(), directory_editable))
+                }
+                InstalledDistKind::LegacyEditable(dist) => {
+                    Some((dist.target_url.clone(), Some(true)))
+                }
             };
 
-            let version_or_url = if let Some((url, editable)) = source {
+            let version_or_url = if let Some((url, directory_editable)) = source {
+                let verbatim = VerbatimUrl::from_url(url.clone());
+                // Directory metadata identifies the source even when its path ends in `.git`.
+                let parsed_url = if let Some(editable) = directory_editable {
+                    ParsedUrl::Directory(ParsedDirectoryUrl {
+                        install_path: verbatim.as_path()?.into_boxed_path(),
+                        url,
+                        editable: Some(editable),
+                        r#virtual: None,
+                    })
+                } else {
+                    ParsedUrl::try_from(url)?
+                };
                 let mut url = VerbatimParsedUrl {
-                    parsed_url: ParsedUrl::try_from(url.clone())?,
-                    verbatim: VerbatimUrl::from_url(url),
+                    parsed_url,
+                    verbatim,
                 };
                 // The recorded LFS mode is part of the installed source, independent of the
                 // current `UV_GIT_LFS` setting used when parsing new requirements.
@@ -127,9 +146,6 @@ fn installed_requirements(
                         }
                         ParsedUrl::Path(_) | ParsedUrl::Directory(_) | ParsedUrl::Archive(_) => {}
                     }
-                }
-                if editable {
-                    url.make_editable()?;
                 }
                 Some(VersionOrUrl::Url(url))
             } else {
