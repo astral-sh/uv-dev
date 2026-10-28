@@ -1,6 +1,8 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+use indoc::formatdoc;
 use insta::allow_duplicates;
 use uv_static::EnvVars;
 
@@ -1322,6 +1324,67 @@ async fn auth_disabled_provider_uses_text_store() {
     heron
     "
     );
+}
+
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[tokio::test]
+async fn auth_disabled_provider_prefers_stored_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+
+    // Login with disabled provider should use text store
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("heron")
+        .arg("--keyring-provider")
+        .arg("disabled"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for public@http://[LOCALHOST]/basic-auth
+    "
+    );
+
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "other"
+        url = "{}"
+        explicit = true
+
+        [[index]]
+        name = "private"
+        url = "{}"
+        default = true
+        authenticate = "always"
+    "#,
+            proxy.authenticated_url("other-user", "other-password", "/other/simple"),
+            proxy.url("/basic-auth/simple"),
+        })?;
+
+    // The other index's configured credentials must not bypass this index's stored login.
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--keyring-provider").arg("disabled")
+        .arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    Ok(())
 }
 
 #[test]
