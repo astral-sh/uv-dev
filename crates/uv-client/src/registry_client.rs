@@ -1286,12 +1286,15 @@ impl RegistryClient {
                                 err => ErrorKind::Metadata(url.to_string(), err),
                             })?;
                         ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                            ErrorKind::MetadataParseError(filename, url.to_string(), Box::new(err))
+                            Error::from(ErrorKind::MetadataParseError(
+                                filename,
+                                url.to_string(),
+                                Box::new(err),
+                            ))
                         })
                     })
                     .await
-                    .map_err(|err| Error::from(ErrorKind::Io(err.into())))?
-                    .map_err(Error::from)?;
+                    .map_err(|err| Error::from(ErrorKind::Io(err.into())))??;
                     Ok(metadata)
                 },
             )
