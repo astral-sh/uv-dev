@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6699,
+        "title": "Stubs on Windows exit abnormally, includes succinct repro with busybox, related to some wider issue",
+        "url": "https://github.com/astral-sh/uv/issues/6699",
+        "state": "closed",
+        "reason": "Closest historical report: BusyBox used the Microsoft C runtime's spawnve, and trampoline cleanup encountered invalid lpReserved2 entries and descriptor-close warnings. The confirmed failures were access violations and later pointer-layout problems, fixed in 2024; the thread does not establish the newly reported collision with live child or job handles."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6792,
+        "title": "fix: adjust trampoline close_handles invalid to be safer",
+        "url": "https://github.com/astral-sh/uv/pull/6792",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#6699 by treating table entries as HANDLE values instead of dereferencing them as pointers and skipping invalid sentinel values. Merged August 30, 2024. It did not establish whether handles were inherited before creating new handles, so it does not fix the reported collision."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6955,
+        "title": "fix: adjust close_handles pointer offsets to match distlib cleanup_fds",
+        "url": "https://github.com/astral-sh/uv/pull/6955",
+        "state": "merged",
+        "reason": "Follow-up cleanup fix, released in uv 0.4.5: corrected lpReserved2 byte offsets, skipped the first three descriptors, and excluded the -2 sentinel. It addressed warnings in astral-sh/uv#6699 and astral-sh/uv#6866. Those corrections remain in current source, but non-inherited, non-sentinel values are still closed after child and job creation."
+      },
+      {
+        "kind": "issue",
+        "number": 6866,
+        "title": "CMake stub crashes when executed by VS Code",
+        "url": "https://github.com/astral-sh/uv/issues/6866",
+        "state": "closed",
+        "reason": "Reported the same descriptor-close warning after an earlier trampoline crash was fixed. The reporter confirmed the remaining warning was fixed in uv 0.4.5 by the pointer-layout cleanup. This is historical evidence for the cleanup code, not a confirmed instance of the present C-runtime handle-collision problem."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered the exit-code error, 'os error 6', descriptor-close warning, os.spawnv, spawnve, lpReserved2, CloseHandle, GetExitCodeProcess, and close_handles. Separate conceptual searches covered trampoline child loss, early returns, termination, crashes, Windows stubs, job handles, and non-inheritable descriptors, without package or version restrictions; area:windows searches supplied additional context. PR keyword searches missed known fixes, so coverage was supplemented with paginated PR titles/bodies across all states, file commit history, changelogs, and direct inspection of candidate discussions and diffs. Followed astral-sh/uv#6699 through astral-sh/uv#6792 and astral-sh/uv#6955, including astral-sh/uv#6464 and astral-sh/uv#6866. Ruled out astral-sh/uv#20100 (GUI lifetime), astral-sh/uv#18170, astral-sh/uv#18171, and astral-sh/uv#18291 (job-assignment races), and astral-sh/uv#17374 (standard console handles). The reporter's pypa/pip#10444 link establishes post-spawn cleanup rationale, not this collision."
+  },
+  "type": "bug",
+  "type_reason": "The current source closes non-sentinel lpReserved2 values after allocating child-process and kill-on-close job handles, without establishing that those values were inherited. This leaves live trampoline-owned handles exposed to erroneous closure and supports a correctness bug. No existing discussion was found that tracks this specific problem. The historical pointer and standard-descriptor fixes remain present; there is no evidence that a previously fixed handle-collision bug regressed. The Windows reproduction was not run.",
+  "summary": "The closest history is astral-sh/uv#6699 and astral-sh/uv#6866, with merged cleanup fixes astral-sh/uv#6792 and astral-sh/uv#6955. They addressed pointer decoding and descriptor warnings, leaving the reported handle-collision case unaddressed.",
+  "draft_response": "The source confirms the ordering you describe: close_handles runs after creating the child and job handles, and it filters sentinel values without checking which handles were inherited. That leaves the cleanup vulnerable to the collision you describe. The earlier fixes in astral-sh/uv#6792 and astral-sh/uv#6955 address different problems in the same code.\n\nThe next step is to validate your reproduction on Windows and add regression coverage for both the invalid-handle error and silent child loss. A fix needs to distinguish inherited handles from newly allocated ones while retaining cleanup after the child inherits its descriptors."
+}
