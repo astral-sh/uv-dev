@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -9,12 +9,134 @@ use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::io;
 use std::path::Path;
+use uv_cache::Cache;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
+use uv_python_interpreter::{PyVenvConfiguration, PythonEnvironment};
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext, copy_dir_ignore, packse::PackseServer, site_packages_path, uv_snapshot,
+};
+
+#[test]
+fn run_with_uses_current_system_site_packages() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--system-site-packages")
+        .assert()
+        .success();
+
+    let script = indoc! {r"
+        import os, site, sys
+        normalize = lambda path: os.path.normcase(os.path.abspath(path))
+        prefixes = [sys.base_prefix, sys.base_exec_prefix]
+        # Windows also reports the installation root, which is needed for native modules.
+        system = {normalize(path) for path in site.getsitepackages(prefixes)} - {
+            normalize(prefix) for prefix in prefixes
+        }
+        assert system
+        print(any(normalize(path) in system for path in sys.path))
+    "};
+    let mut command = context.run();
+    command
+        .arg("--quiet")
+        .arg("--no-project")
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("--with")
+        .arg("iniconfig==2.0.0")
+        .arg("python")
+        .arg("-c")
+        .arg(script);
+
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    True
+    ");
+
+    let configuration = context.venv.join("pyvenv.cfg");
+    let contents = fs_err::read_to_string(&configuration)?;
+    fs_err::write(
+        &configuration,
+        PyVenvConfiguration::set(&contents, "include-system-site-packages", "false"),
+    )?;
+
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    False
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn run_recreated_virtualenv_uses_current_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+
+    // Windows venv launchers can have identical copied modification times across Python versions.
+    #[cfg(windows)]
+    let launcher_timestamp = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    #[cfg(windows)]
+    filetime::set_file_mtime(context.interpreter(), launcher_timestamp)?;
+
+    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    context
+        .venv()
+        .arg("--clear")
+        // Recreating the environment must leave the earlier interpreter metadata cached.
+        .arg("--no-cache")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    #[cfg(windows)]
+    filetime::set_file_mtime(context.interpreter(), launcher_timestamp)?;
+
+    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.13.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1892,13 +2014,80 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Switch to a relocatable virtual environment.
+    // Keep the base interpreter fixed when switching to a relocatable virtual environment.
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let base_python = PythonEnvironment::from_root(context.venv.path(), &cache)?
+        .interpreter()
+        .to_base_python()?;
     context
         .venv()
         .arg("--allow-existing")
         .arg("--relocatable")
+        .arg("--python")
+        .arg(&base_python)
         .assert()
         .success();
+
+    // Populate the recreated environment's entry before comparing cached and queried metadata.
+    let recreated = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert_eq!(recreated.interpreter().to_base_python()?, base_python);
+
+    // A startup marker distinguishes a cache hit from another interpreter query.
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    let startup_probe = site_packages.join("interpreter-started.pth");
+    fs_err::write(
+        &startup_probe,
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = context.venv.child("interpreter-started");
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    fs_err::remove_file(&startup_probe)?;
+    fs_err::remove_file(&startup_marker)?;
+    assert_eq!(cached.root(), queried.root());
+    assert_eq!(
+        cached.site_packages().collect::<Vec<_>>(),
+        queried.site_packages().collect::<Vec<_>>()
+    );
+    let cached = cached.interpreter();
+    let queried = queried.interpreter();
+    assert_eq!(cached.platform(), queried.platform());
+    assert_eq!(cached.markers(), queried.markers());
+    assert_eq!(cached.virtualenv().purelib, queried.virtualenv().purelib);
+    assert_eq!(cached.virtualenv().platlib, queried.virtualenv().platlib);
+    assert_eq!(cached.virtualenv().scripts, queried.virtualenv().scripts);
+    assert_eq!(cached.virtualenv().data, queried.virtualenv().data);
+    assert_eq!(cached.virtualenv().include, queried.virtualenv().include);
+    assert_eq!(cached.sys_base_prefix(), queried.sys_base_prefix());
+    assert_eq!(cached.sys_prefix(), queried.sys_prefix());
+    assert_eq!(cached.sys_executable(), queried.sys_executable());
+    assert_eq!(cached.real_executable(), queried.real_executable());
+    assert_eq!(
+        cached.runtime_site_packages(),
+        queried.runtime_site_packages()
+    );
+    assert_eq!(cached.stdlib(), queried.stdlib());
+    assert_eq!(cached.extension_suffixes(), queried.extension_suffixes());
+    assert_eq!(
+        cached.manylinux_compatible(),
+        queried.manylinux_compatible()
+    );
+    assert_eq!(
+        cached.pointer_size().is_64(),
+        queried.pointer_size().is_64()
+    );
+    assert_eq!(cached.gil_disabled(), queried.gil_disabled());
+    assert_eq!(cached.debug_enabled(), queried.debug_enabled());
+    #[cfg(unix)]
+    assert_eq!(cached.is_standalone(), queried.is_standalone());
 
     // Cleanup previous shutil
     fs_err::remove_file(context.temp_dir.child("main"))?;
