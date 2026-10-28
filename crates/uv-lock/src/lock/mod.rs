@@ -2471,7 +2471,8 @@ impl Lock {
     /// retain their incoming edges even if they resolve to no dependencies, and Git packages
     /// retain their declaration metadata for offline source discovery.
     ///
-    /// Returns an error if an artifact does not advertise its index's required algorithm.
+    /// Returns an error if an artifact does not advertise its index's required algorithm or a
+    /// selected wheel variant cannot be represented.
     pub fn from_resolution(
         resolution: &ResolverOutput,
         manifest: ResolverManifest,
@@ -2511,6 +2512,13 @@ impl Lock {
 
         // Lock all base packages.
         for (node_index, dist) in resolution.base_dists() {
+            if let ResolvedDist::Installable { dist: resolved, .. } = &dist.dist
+                && let Dist::Built(built) = &**resolved
+                && built.wheel_filename().variant().is_some()
+            {
+                return Err(LockErrorKind::WheelVariantUnsupported(dist.name().clone()).into());
+            }
+
             // If there are multiple distributions for the same package, include the markers of all
             // forks that included the current distribution.
             //
@@ -9842,6 +9850,9 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
+    /// A selected wheel variant cannot be represented in the lockfile.
+    #[error("Package `{0}` resolved to a wheel variant, which uv.lock does not support")]
+    WheelVariantUnsupported(PackageName),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

@@ -23,7 +23,8 @@ use tracing::{Level, debug, info, instrument, trace, warn};
 
 use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
 use uv_distribution::{
-    ArchiveMetadata, DistributionDatabase, check_archive_wheel_variant_compatibility,
+    ArchiveMetadata, DistributionDatabase, Error as DistributionError,
+    check_archive_wheel_variant_compatibility,
 };
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
@@ -31,6 +32,7 @@ use uv_distribution_types::{
     ResolutionRecorder, ResolvedDist, SourceDist, VariantsJsonContent, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
+use uv_metadata::read_archive_wheel_variant;
 use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{
@@ -1293,7 +1295,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             }
 
             let supports_variant_resolution = match dist {
-                BuiltDist::Path(_) => env.marker_environment().is_some() && self.tags.is_some(),
+                BuiltDist::Path(_) => match env.marker_environment() {
+                    Some(_) => self.tags.is_some(),
+                    None => uv_preview::is_enabled(PreviewFeature::WheelVariants),
+                },
                 BuiltDist::Registry(_) | BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => false,
             };
             let incompatible_tag = if filename.variant().is_some() && !supports_variant_resolution {
@@ -1316,8 +1321,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     )),
                 )));
             }
-            if let BuiltDist::Path(wheel) = dist {
-                check_archive_wheel_variant_compatibility(&wheel.filename, &wheel.install_path)?;
+            if let BuiltDist::Path(wheel) = dist
+                && let Some(label) = filename.variant()
+            {
+                let archive = &wheel.install_path;
+                if env.marker_environment().is_some() {
+                    check_archive_wheel_variant_compatibility(filename, archive)?;
+                } else {
+                    // Dependency metadata can be supplied externally, so validate the archive
+                    // even when the resolver did not need to read its METADATA.
+                    read_archive_wheel_variant(filename, archive, label).map_err(|err| {
+                        DistributionError::WheelMetadata(archive.to_path_buf(), Box::new(err))
+                    })?;
+                }
             }
         }
 
