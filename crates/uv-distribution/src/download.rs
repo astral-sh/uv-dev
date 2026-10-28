@@ -47,17 +47,22 @@ pub fn check_wheel_variant_compatibility(
     check_variant_properties(label, &metadata)
 }
 
-/// Check that a wheel archive's variant properties are supported by the target system.
-pub fn check_archive_wheel_variant_compatibility(
+/// Validate a wheel archive's variant metadata, optionally checking its properties against the
+/// target system.
+pub fn validate_archive_wheel_variant(
     filename: &WheelFilename,
     archive: &Path,
+    check_target_properties: bool,
 ) -> Result<(), Error> {
     let Some(label) = enabled_variant_label(filename)? else {
         return Ok(());
     };
     let metadata = read_archive_wheel_variant(filename, archive, label)
         .map_err(|err| Error::WheelMetadata(archive.to_path_buf(), Box::new(err)))?;
-    check_variant_properties(label, &metadata)
+    if check_target_properties {
+        check_variant_properties(label, &metadata)?;
+    }
+    Ok(())
 }
 
 fn enabled_variant_label(filename: &WheelFilename) -> Result<Option<&VariantLabel>, Error> {

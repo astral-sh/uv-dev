@@ -22,9 +22,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
 use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
-use uv_distribution::{
-    ArchiveMetadata, DistributionDatabase, check_archive_wheel_variant_compatibility,
-};
+use uv_distribution::{ArchiveMetadata, DistributionDatabase, validate_archive_wheel_variant};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
     IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
@@ -1293,7 +1291,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             }
 
             let supports_variant_resolution = match dist {
-                BuiltDist::Path(_) => env.marker_environment().is_some() && self.tags.is_some(),
+                BuiltDist::Path(_) => match env.marker_environment() {
+                    Some(_) => self.tags.is_some(),
+                    None => uv_preview::is_enabled(PreviewFeature::WheelVariants),
+                },
                 BuiltDist::Registry(_) | BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => false,
             };
             let incompatible_tag = if filename.variant().is_some() && !supports_variant_resolution {
@@ -1317,7 +1318,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 )));
             }
             if let BuiltDist::Path(wheel) = dist {
-                check_archive_wheel_variant_compatibility(&wheel.filename, &wheel.install_path)?;
+                validate_archive_wheel_variant(
+                    filename,
+                    &wheel.install_path,
+                    env.marker_environment().is_some(),
+                )?;
             }
         }
 
