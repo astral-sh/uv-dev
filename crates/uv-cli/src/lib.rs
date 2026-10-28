@@ -39,6 +39,7 @@ use uv_warnings::warn_user_once;
 
 pub mod comma;
 pub mod compat;
+mod deferred;
 pub mod options;
 pub mod settings;
 pub mod version;
@@ -647,7 +648,7 @@ impl TypedValueParser for VersionBumpSpecValueParser {
 
 #[derive(Args)]
 pub struct SelfNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: SelfCommand,
 }
 
@@ -683,7 +684,7 @@ pub struct SelfUpdateArgs {
 
 #[derive(Args)]
 pub struct CacheNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: CacheCommand,
 }
 
@@ -773,14 +774,23 @@ pub struct SizeArgs {
 }
 
 #[derive(Args)]
+// Clap omits inferred group members when an Args struct contains a flattened field.
+#[group(arg = "cert")]
 pub struct PipNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: PipCommand,
 
     /// Path to a PEM-encoded CA certificate bundle.
     ///
     /// If provided, this overrides the default certificate source.
-    #[arg(global = true, long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+    // The inherited certificate option has a fixed position in pip subcommand help.
+    #[arg(
+        global = true,
+        long,
+        value_name = "FILE",
+        value_hint = ValueHint::FilePath,
+        display_order = 10
+    )]
     pub cert: Option<PathBuf>,
 }
 
@@ -5194,7 +5204,7 @@ pub enum AuthCommand {
 
 #[derive(Args)]
 pub struct ToolNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: ToolCommand,
 }
 
@@ -5797,7 +5807,7 @@ pub struct ToolUpgradeArgs {
 
 #[derive(Args)]
 pub struct PythonNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: PythonCommand,
 }
 
@@ -7564,7 +7574,7 @@ pub struct PublishArgs {
 
 #[derive(Args)]
 pub struct WorkspaceNamespace {
-    #[command(subcommand)]
+    #[command(flatten)]
     pub command: WorkspaceCommand,
 }
 
@@ -7728,6 +7738,48 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{AuthCommand, Cli, Commands};
+
+    #[test]
+    fn pip_compile_local_and_inherited_options() {
+        let mut command = Cli::command();
+        command.build();
+        let pip = command
+            .find_subcommand("pip")
+            .expect("pip subcommand should exist");
+        let group = pip
+            .get_groups()
+            .find(|group| group.get_id() == "PipNamespace")
+            .expect("pip namespace group should exist");
+        assert!(group.get_args().map(clap::Id::as_str).eq(["cert"]));
+
+        let compile = pip
+            .find_subcommand("compile")
+            .expect("pip compile subcommand should exist");
+
+        // Completions use argument order, while help uses the certificate's display order.
+        let mut options = compile
+            .get_arguments()
+            .filter(|arg| matches!(arg.get_id().as_str(), "no_config" | "cert"));
+        let local = options.next().expect("expected the local no-config flag");
+        assert_eq!(
+            (local.get_id().as_str(), local.is_global_set()),
+            ("no_config", false)
+        );
+        let inherited = options
+            .next()
+            .expect("expected the inherited certificate option");
+        assert_eq!(
+            (inherited.get_id().as_str(), inherited.is_global_set()),
+            ("cert", true)
+        );
+        assert!(options.next().is_none());
+
+        let help = compile.clone().render_help().to_string();
+        let (_, after_group) = help
+            .split_once("--group <GROUP>")
+            .expect("pip compile help should include the group option");
+        assert!(after_group.contains("--cert <FILE>"));
+    }
 
     #[test]
     fn auth_keyring_provider_hidden_from_help() {

@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
-use clap::{CommandFactory, Error, Parser};
+use clap::{CommandFactory, Error, Parser, Subcommand};
 use futures::FutureExt;
 use owo_colors::OwoColorize;
 use tokio::task::spawn_blocking;
@@ -1523,9 +1523,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
             if let Some(shell) = args.generate_shell_completion {
                 // uvx: combine `uv tool uvx` with the top-level arguments
-                let mut uvx = Cli::command()
-                    .find_subcommand("tool")
-                    .unwrap()
+                let mut uvx = ToolCommand::augment_subcommands(clap::Command::new("tool"))
                     .find_subcommand("uvx")
                     .unwrap()
                     .clone()
