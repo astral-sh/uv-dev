@@ -6,10 +6,11 @@ use async_zip::base::read::mem::ZipFileReader;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
+use futures::AsyncWriteExt;
 use reqwest::header::{
     ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderName, LOCATION, RANGE,
 };
-use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path};
+use wiremock::matchers::{basic_auth, header, header_exists, header_regex, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::Cache;
@@ -57,78 +58,121 @@ async fn remote_metadata_with_and_without_cache() -> Result<()> {
     Ok(())
 }
 
+/// Stored entries with data descriptors require the ZIP central directory to find their sizes.
 #[tokio::test]
-async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
-    let wheel = wheel()?;
-    for (size, policy, use_ranges) in [
-        (
-            Some(wheel.len() as u64),
-            MetadataRangeRequest::Fallback,
-            false,
-        ),
-        (None, MetadataRangeRequest::Fallback, true),
-        (Some(16_385), MetadataRangeRequest::Fallback, true),
-        (
-            Some(wheel.len() as u64),
-            MetadataRangeRequest::Require,
-            true,
-        ),
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(method("HEAD"))
-            .and(path("/ok-1.0.0-py3-none-any.whl"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header(ACCEPT_RANGES, "bytes")
-                    .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
-            )
-            .expect(u64::from(use_ranges))
-            .mount(&server)
-            .await;
-        let ranged_wheel = wheel.clone();
-        Mock::given(method("GET"))
-            .and(path("/ok-1.0.0-py3-none-any.whl"))
-            .and(header_exists(RANGE.as_str()))
-            .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-            .expect(u64::from(use_ranges))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/ok-1.0.0-py3-none-any.whl"))
-            .and(header_missing(RANGE))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(wheel.clone(), "application/octet-stream")
-                    .insert_header("Cache-Control", "public, max-age=3600"),
-            )
-            .expect(u64::from(!use_ranges))
-            .mount(&server)
-            .await;
-        let cache = Cache::temp()?.init().await?;
-        let client = RegistryClientBuilder::new(
-            BaseClientBuilder::default().metadata_range_request(policy),
-            cache,
+async fn remote_metadata_small_wheel_with_data_descriptor() -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let mut entry = writer
+        .write_entry_stream(ZipEntryBuilder::new(
+            "ok-1.0.0.dist-info/METADATA".into(),
+            Compression::Stored,
+        ))
+        .await?;
+    entry
+        .write_all(b"Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n")
+        .await?;
+    entry.close().await?;
+    let wheel = writer.close().await?;
+    let size = wheel.len() as u64;
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_missing(RANGE))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert_wheel_metadata_readable_with_size(&server, Some(size)).await
+}
+
+/// The central directory must identify exactly one METADATA file even when the first entry parses.
+#[tokio::test]
+async fn remote_metadata_small_wheel_rejects_multiple_metadata_entries() -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = b"Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n";
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-1.0.0.dist-info/METADATA".into(), Compression::Stored),
+            metadata,
         )
-        .build()?;
-        let url = format!("{}/ok-1.0.0-py3-none-any.whl", server.uri());
-        let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
-            filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
-            location: Box::new(SafeUrl::parse(&url)?),
-            url: VerbatimUrl::from_str(&url)?,
-            size,
-        });
-        let metadata = client
-            .wheel_metadata(
-                &dist,
-                &GitResolver::default(),
-                &IndexCapabilities::default(),
-                None,
-            )
-            .await?;
-        assert_eq!(metadata.version.to_string(), "1.0.0");
-        server.verify().await;
-    }
+        .await?;
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-2.0.0.dist-info/METADATA".into(), Compression::Stored),
+            metadata,
+        )
+        .await?;
+    let wheel = writer.close().await?;
+    let size = wheel.len() as u64;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_missing(RANGE))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = assert_wheel_metadata_readable_with_size(&server, Some(size))
+        .await
+        .expect_err("both METADATA entries should be detected");
+    insta::assert_snapshot!(error.root_cause().to_string(), @"Multiple .dist-info directories found: ok-1.0.0, ok-2.0.0");
     Ok(())
+}
+
+/// The index understates the size and the initial GET has no Content-Length. Only a tail
+/// range is needed to read the real wheel's central directory and metadata.
+#[tokio::test]
+async fn remote_metadata_understated_size_falls_back_to_ranges() -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("padding".into(), Compression::Stored),
+            &[0; 32_768],
+        )
+        .await?;
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-1.0.0.dist-info/METADATA".into(), Compression::Stored),
+            b"Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n",
+        )
+        .await?;
+    let wheel = writer.close().await?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_missing(RANGE))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("transfer-encoding", "chunked")
+                .set_body_bytes(wheel.clone()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path("/artifact"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(ACCEPT_RANGES, "bytes")
+                .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tail = format!("bytes={}-{}", wheel.len() - 16_384, wheel.len() - 1);
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header(RANGE.as_str(), tail.as_str()))
+        .respond_with(move |request: &Request| wheel_range_response(request, &wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert_wheel_metadata_readable_with_size(&server, Some(100)).await
 }
 
 #[tokio::test]
@@ -137,6 +181,7 @@ async fn remote_metadata_requires_range_requests() -> Result<()> {
     let wheel = fs_err::read(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/links/ok-1.0.0-py3-none-any.whl"),
     )?;
+    let size = wheel.len() as u64;
     Mock::given(method("GET"))
         .and(path("/ok-1.0.0-py3-none-any.whl"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
@@ -156,7 +201,7 @@ async fn remote_metadata_requires_range_requests() -> Result<()> {
         filename,
         location: Box::new(SafeUrl::parse(&url)?),
         url: VerbatimUrl::from_str(&url)?,
-        size: None,
+        size: Some(size),
     });
     let resolver = GitResolver::default();
     let capabilities = IndexCapabilities::default();
@@ -454,7 +499,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .mount(&target_server)
         .await;
 
-    assert_wheel_metadata_readable(&source_server).await?;
+    assert_wheel_metadata_readable_with_size(&source_server, Some(wheel_len as u64)).await?;
 
     Ok(())
 }
@@ -671,6 +716,13 @@ fn wheel() -> Result<Vec<u8>> {
 
 /// Reads wheel metadata through the authenticated source URL shared by each redirect scenario.
 async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()> {
+    assert_wheel_metadata_readable_with_size(source_server, None).await
+}
+
+async fn assert_wheel_metadata_readable_with_size(
+    source_server: &MockServer,
+    size: Option<u64>,
+) -> Result<()> {
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
     let url = authenticated_url(
@@ -683,7 +735,7 @@ async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()
         filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
         location: Box::new(SafeUrl::parse(&url)?),
         url: VerbatimUrl::from_str(&url)?,
-        size: None,
+        size,
     });
     let metadata = client
         .wheel_metadata(
