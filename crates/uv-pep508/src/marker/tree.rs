@@ -2105,6 +2105,13 @@ mod test {
     }
 
     #[test]
+    fn parse_deeply_parenthesized_marker() {
+        let marker = "sys_platform == 'never'";
+        let nested = format!("{}{marker}{}", "(".repeat(8_192), ")".repeat(8_192));
+        assert_eq!(m(&nested), m(marker));
+    }
+
+    #[test]
     fn parse_constant_boolean_chain_trailing_error() {
         assert_snapshot!(parse_err("(extra == 'a' or extra != 'a') or (python_version < invalid)"), @"
         Expected a quoted string or a valid marker name, found `invalid`
