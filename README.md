@@ -16,7 +16,7 @@ The existing command is `uv export --no-default-groups`, without explicit group 
 
 On 2026-10-14, maintainer charliermarsh stated that astral-sh/uv#22353 was being closed with the guidance to use `uv export --no-default-groups`, while offering to reopen if the request had been misunderstood. This refers to the maintainer's earlier recommendation of that command.
 
-The supplied discussion contains no reporter confirmation that the command meets their needs and no additional configuration or reproduction. The closure comment does not explicitly classify the issue as a duplicate; the duplicate classification above remains the triage assessment.
+On 2026-10-28, reporter ckutlu confirmed that the recommended `uv export --no-default-groups` command meets their needs and agreed that the issue should remain closed. This is reporter-confirmed resolution with existing functionality; no additional configuration or reproduction was supplied. The closure comment does not explicitly classify the issue as a duplicate; the duplicate classification above remains the triage assessment.
 
 ## Classification
 
@@ -54,4 +54,4 @@ The documentation chain also includes open astral-sh/uv#20520 and closed, unmerg
 
 ## Maintainer next step
 
-No further implementation or reply is indicated by the current discussion. If the reporter explains why `uv export --no-default-groups` does not meet the request, reassess the scope and the maintainer's offer to reopen. Useful details would include the exact command, relevant project/group configuration, uv version, and expected versus actual export contents. The broader package-only selection discussion remains in astral-sh/uv#12366.
+No further investigation, implementation, or reply is needed for the reported use case: the reporter confirmed the existing command resolves it and accepted closure. The broader package-only selection discussion remains in astral-sh/uv#12366.
