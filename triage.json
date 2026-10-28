@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14894,
+        "title": "Problems with git installs in CI via Github Actions",
+        "url": "https://github.com/astral-sh/uv/issues/14894",
+        "state": "open",
+        "reason": "Also reports intermittent Ubuntu CI failures installing commit-pinned subdirectory packages from one repository. Its error is an unknown revision from git rev-parse, however, with no observed initialization/removal overlap or confirmed cold-cache dependency; maintainers requested a smaller reproduction. A related symptom, not an established duplicate."
+      },
+      {
+        "kind": "issue",
+        "number": 5645,
+        "title": "Intermitent installation errors when install from a git ref",
+        "url": "https://github.com/astral-sh/uv/issues/5645",
+        "state": "open",
+        "reason": "Reports intermittent missing Git checkout directories and index.lock files during installation. This is adjacent cache-integrity evidence, but concerns git-v0/checkouts on uv 0.2.x, without a confirmed mechanism or the new report's git-v1/db initialization race."
+      },
+      {
+        "kind": "issue",
+        "number": 22829,
+        "title": "Git dependency checkout can race with detached `git maintenance` started by uv's own fetch (Git 2.54+)",
+        "url": "https://github.com/astral-sh/uv/issues/22829",
+        "state": "open",
+        "reason": "The reporter's cited comparison concerns detached repacking overlapping a local clone, producing missing packfiles or multi-pack-index.lock. Here maintenance is reportedly disabled and the failure occurs while initializing/removing the database. These are distinct reported triggers and failure stages."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22868,
+        "title": "Keep Git maintenance in the foreground during dependency fetches",
+        "url": "https://github.com/astral-sh/uv/pull/22868",
+        "state": "open",
+        "reason": "Proposes fixing astral-sh/uv#22829 by keeping automatic maintenance in the foreground before cloning. Maintainer discussion confirms the repository lock is acquired before the cache check. The PR remains unmerged and does not establish a fix for concurrent database initialization with maintenance disabled."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Split searches into removal errors (\"failed to remove directory\", \"Directory not empty\", \"git-v1/db\", legacy \"git-v0/db\", \"not a repository\"), same-repository/subdirectory installs, cold-cache and frozen-sync failures, and possible concurrency/locking causes (race, concurrent, initialization, GitResolver, flock, area:cache). Removed package, platform, and version details for broader matches. Read candidate bodies/comments and followed timeline references. PR search/list queries returned no matches even for the independently verified maintenance PR, so coverage was supplemented with linked PRs and release notes. Inspected merged astral-sh/uv#6790 (runtime deadlock fix) and astral-sh/uv#22387 (cache-clean lock deletion fix); neither establishes a fix or regression of this failure. Ruled out astral-sh/uv#11949 (repeated update messages), astral-sh/uv#12036 and astral-sh/uv#18073 (NFS-specific behavior), and astral-sh/uv#13054 (unresolved Git-hook failure). Reviewed 0.12.24 source and 0.13.0–0.13.6 release notes; no confirmed matching fix found."
+  },
+  "type": "bug",
+  "type_reason": "Intermittent failure to sync valid Git dependencies from an empty cache is incorrect behavior. The source confirms the database validation and deletion/reinitialization path, but also places it under a per-repository lock; the reported overlap's cause remains unconfirmed. No existing discussion establishes the same initialization race, and no previously fixed instance of this bug was identified.",
+  "summary": "No confirmed duplicate found. astral-sh/uv#14894 and astral-sh/uv#5645 describe adjacent intermittent Git failures; astral-sh/uv#22829 and its open fix astral-sh/uv#22868 concern a different maintenance-versus-clone race.",
+  "draft_response": "In uv 0.12.24, the database check (`git rev-parse`) and initialization both run under the per-repository lock. The repeated “Fetching source distribution” messages occur before acquiring that lock, so they alone do not demonstrate concurrent access. The overlap in your trace still needs investigation.\n\nThis appears distinct from astral-sh/uv#22829 and astral-sh/uv#22868, which concern background maintenance racing with checkout cloning. Please try the same cold-cache case on uv 0.13.6 and share a minimal runnable repository with its lockfile, plus sanitized failing Git Trace2 and `RUST_LOG=uv_git=trace,uv_fs=trace` output with process IDs retained. Please also confirm whether another uv process or cache cleanup can access that cache during the run."
+}
