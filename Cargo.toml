@@ -490,6 +490,10 @@ lto = "fat"
 # This will still show a panic message, we only skip the unwind.
 panic = "abort"
 
+[profile.release.package.uv]
+opt-level = "s"
+strip = true
+
 [profile.release.package.uv-cli]
 opt-level = "z"
 
@@ -535,6 +539,10 @@ codegen-units = 1
 strip = false
 debug = "full"
 lto = false
+
+# Keep symbols in the profiling build.
+[profile.profiling.package.uv]
+strip = false
 
 # Profile for fast test execution: Skip debug info generation, and
 # apply basic optimization, which speed up build and running tests.
