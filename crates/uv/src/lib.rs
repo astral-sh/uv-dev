@@ -46,6 +46,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
+use uv_pip_commands::install::PipInstallMode;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
@@ -927,166 +928,42 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PipCommand::Install(args),
             ..
         }) => {
-            args.compat_args.validate()?;
+            args.options.compat_args.validate()?;
 
-            // Resolve the settings from the command-line arguments and workspace configuration.
-            let mut args = PipInstallSettings::resolve(args, filesystem, environment)?;
+            let args = PipInstallSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
-            let mut requirements = Vec::with_capacity(
-                args.package.len() + args.editables.len() + args.requirements.len(),
-            );
-            for package in args.package {
-                requirements.push(RequirementsSource::from_package_argument(&package)?);
-            }
-            for package in args.editables {
-                requirements.push(RequirementsSource::from_editable(&package)?);
-            }
-            requirements.extend(
-                args.requirements
-                    .into_iter()
-                    .map(RequirementsSource::from_requirements_file)
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-            let constraints = args
-                .constraints
-                .into_iter()
-                .map(RequirementsSource::from_constraints_txt)
-                .collect::<Result<Vec<_>, _>>()?;
-            let overrides = args
-                .overrides
-                .into_iter()
-                .map(RequirementsSource::from_overrides_txt)
-                .collect::<Result<Vec<_>, _>>()?;
-            let excludes = args
-                .excludes
-                .into_iter()
-                .map(RequirementsSource::from_requirements_txt)
-                .collect::<Result<Vec<_>, _>>()?;
-            let build_constraints = args
-                .build_constraints
-                .into_iter()
-                .map(RequirementsSource::from_overrides_txt)
-                .collect::<Result<Vec<_>, _>>()?;
-            let groups = GroupsSpecification {
-                root: project_dir.to_path_buf(),
-                groups: args.settings.groups,
-            };
-
-            // Special-case: any source trees specified on the command-line are automatically
-            // reinstalled. This matches user expectations: `uv pip install .` should always
-            // re-build and re-install the package in the current working directory.
-            for requirement in &requirements {
-                let requirement = match requirement {
-                    RequirementsSource::Package(requirement) => requirement,
-                    RequirementsSource::Editable(requirement) => requirement,
-                    _ => continue,
-                };
-                match requirement {
-                    RequirementsTxtRequirement::Named(requirement) => {
-                        if let Some(VersionOrUrl::Url(url)) = requirement.version_or_url.as_ref() {
-                            if let ParsedUrl::Directory(ParsedDirectoryUrl {
-                                install_path, ..
-                            }) = &url.parsed_url
-                            {
-                                debug!(
-                                    "Marking explicit source tree for reinstall: {}",
-                                    install_path.display()
-                                );
-                                args.settings.reinstall = args
-                                    .settings
-                                    .reinstall
-                                    .with_package(requirement.name.clone());
-                            }
-                        }
-                    }
-                    RequirementsTxtRequirement::Unnamed(requirement) => {
-                        if let ParsedUrl::Directory(ParsedDirectoryUrl { install_path, .. }) =
-                            &requirement.url.parsed_url
-                        {
-                            debug!(
-                                "Marking explicit source tree for reinstall: {}",
-                                install_path.display()
-                            );
-                            args.settings.reinstall =
-                                args.settings.reinstall.with_path(install_path.clone());
-                        }
-                    }
-                }
-            }
-
-            // Check for conflicts between offline and refresh.
-            globals
-                .network_settings
-                .check_refresh_conflict(&args.refresh)?;
-
-            // Initialize the cache.
-            let cache = cache.init().await?.with_refresh(
-                args.refresh
-                    .combine(Refresh::from(args.settings.reinstall.clone()))
-                    .combine(Refresh::from(args.settings.upgrade.clone())),
-            );
-
-            Box::pin(commands::pip_install(
-                &requirements,
-                &constraints,
-                &overrides,
-                &excludes,
-                &build_constraints,
-                args.constraints_from_workspace,
-                args.overrides_from_workspace,
-                args.excludes_from_workspace,
-                args.build_constraints_from_workspace,
-                args.editable,
-                &args.settings.extras,
-                &groups,
-                args.settings.resolution,
-                args.settings.prerelease,
-                args.settings.dependency_mode,
-                args.settings.upgrade,
-                args.settings.index_locations,
-                args.settings.index_strategy,
-                args.settings.torch_backend,
-                args.settings.cuda_driver_version,
-                args.settings.amd_gpu_architecture,
-                args.settings.dependency_metadata,
-                args.settings.keyring_provider,
-                &client_builder.subcommand(vec!["pip".to_owned(), "install".to_owned()]),
-                args.settings.reinstall,
-                args.settings.link_mode,
-                args.settings.compile_bytecode,
-                args.settings.hash_checking,
-                args.build_hash_checking,
-                globals.installer_metadata,
-                &args.settings.config_setting,
-                &args.settings.config_settings_package,
-                args.settings.build_isolation.clone(),
-                &args.settings.extra_build_dependencies,
-                &args.settings.extra_build_variables,
-                args.settings.build_options,
-                args.modifications,
-                args.settings.python_version,
-                args.settings.python_platform,
-                globals.python_downloads,
-                args.settings.install_mirrors,
-                args.settings.strict,
-                args.settings.exclude_newer,
-                args.settings.sources,
-                args.settings.python,
-                args.settings.system,
-                args.settings.break_system_packages,
-                args.settings.target,
-                args.settings.prefix,
-                globals.python_preference,
-                globals.python_arch,
-                globals.concurrency,
+            run_pip_install(
+                args,
+                PipInstallMode::Install,
+                &project_dir,
+                globals,
+                client_builder,
                 cache,
                 workspace_cache,
-                args.dry_run,
-                args.output_format,
                 printer,
-                globals.preview,
-            ))
+            )
+            .await
+        }
+        Commands::Pip(PipNamespace {
+            command: PipCommand::Upgrade(args),
+            ..
+        }) => {
+            args.options.compat_args.validate()?;
+
+            let args = PipInstallSettings::resolve_upgrade(args, filesystem, environment)?;
+            show_settings!(args);
+
+            run_pip_install(
+                args,
+                PipInstallMode::UpgradeAll,
+                &project_dir,
+                globals,
+                client_builder,
+                cache,
+                workspace_cache,
+                printer,
+            )
             .await
         }
         Commands::Pip(PipNamespace {
@@ -2202,6 +2079,180 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         .await
         .expect("tokio threadpool exited unexpectedly"),
     }
+}
+
+/// Install or upgrade packages using the shared pip settings.
+async fn run_pip_install(
+    mut args: PipInstallSettings,
+    mode: PipInstallMode,
+    project_dir: &Path,
+    globals: GlobalSettings,
+    client_builder: BaseClientBuilder<'_>,
+    cache: Cache,
+    workspace_cache: WorkspaceCache,
+    printer: Printer,
+) -> Result<ExitStatus> {
+    let mut requirements =
+        Vec::with_capacity(args.package.len() + args.editables.len() + args.requirements.len());
+    for package in args.package {
+        requirements.push(RequirementsSource::from_package_argument(&package)?);
+    }
+    for package in args.editables {
+        requirements.push(RequirementsSource::from_editable(&package)?);
+    }
+    requirements.extend(
+        args.requirements
+            .into_iter()
+            .map(RequirementsSource::from_requirements_file)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let constraints = args
+        .constraints
+        .into_iter()
+        .map(RequirementsSource::from_constraints_txt)
+        .collect::<Result<Vec<_>, _>>()?;
+    let overrides = args
+        .overrides
+        .into_iter()
+        .map(RequirementsSource::from_overrides_txt)
+        .collect::<Result<Vec<_>, _>>()?;
+    let excludes = args
+        .excludes
+        .into_iter()
+        .map(RequirementsSource::from_requirements_txt)
+        .collect::<Result<Vec<_>, _>>()?;
+    let build_constraints = args
+        .build_constraints
+        .into_iter()
+        .map(RequirementsSource::from_overrides_txt)
+        .collect::<Result<Vec<_>, _>>()?;
+    let groups = GroupsSpecification {
+        root: project_dir.to_path_buf(),
+        groups: args.settings.groups,
+    };
+
+    // Special-case: any source trees specified on the command-line are automatically
+    // reinstalled. This matches user expectations: `uv pip install .` should always
+    // re-build and re-install the package in the current working directory.
+    for requirement in &requirements {
+        let requirement = match requirement {
+            RequirementsSource::Package(requirement) => requirement,
+            RequirementsSource::Editable(requirement) => requirement,
+            _ => continue,
+        };
+        match requirement {
+            RequirementsTxtRequirement::Named(requirement) => {
+                if let Some(VersionOrUrl::Url(url)) = requirement.version_or_url.as_ref() {
+                    if let ParsedUrl::Directory(ParsedDirectoryUrl { install_path, .. }) =
+                        &url.parsed_url
+                    {
+                        debug!(
+                            "Marking explicit source tree for reinstall: {}",
+                            install_path.display()
+                        );
+                        args.settings.reinstall = args
+                            .settings
+                            .reinstall
+                            .with_package(requirement.name.clone());
+                    }
+                }
+            }
+            RequirementsTxtRequirement::Unnamed(requirement) => {
+                if let ParsedUrl::Directory(ParsedDirectoryUrl { install_path, .. }) =
+                    &requirement.url.parsed_url
+                {
+                    debug!(
+                        "Marking explicit source tree for reinstall: {}",
+                        install_path.display()
+                    );
+                    args.settings.reinstall =
+                        args.settings.reinstall.with_path(install_path.clone());
+                }
+            }
+        }
+    }
+
+    // Check for conflicts between offline and refresh.
+    globals
+        .network_settings
+        .check_refresh_conflict(&args.refresh)?;
+
+    // Initialize the cache.
+    let cache = cache.init().await?.with_refresh(
+        args.refresh
+            .combine(Refresh::from(args.settings.reinstall.clone()))
+            .combine(Refresh::from(args.settings.upgrade.clone())),
+    );
+
+    Box::pin(commands::pip_install(
+        mode,
+        &requirements,
+        &constraints,
+        &overrides,
+        &excludes,
+        &build_constraints,
+        args.constraints_from_workspace,
+        args.overrides_from_workspace,
+        args.excludes_from_workspace,
+        args.build_constraints_from_workspace,
+        args.editable,
+        &args.settings.extras,
+        &groups,
+        args.settings.resolution,
+        args.settings.prerelease,
+        args.settings.dependency_mode,
+        args.settings.upgrade,
+        args.settings.index_locations,
+        args.settings.index_strategy,
+        args.settings.torch_backend,
+        args.settings.cuda_driver_version,
+        args.settings.amd_gpu_architecture,
+        args.settings.dependency_metadata,
+        args.settings.keyring_provider,
+        &client_builder.subcommand(vec![
+            "pip".to_owned(),
+            match mode {
+                PipInstallMode::Install => "install",
+                PipInstallMode::UpgradeAll => "upgrade",
+            }
+            .to_owned(),
+        ]),
+        args.settings.reinstall,
+        args.settings.link_mode,
+        args.settings.compile_bytecode,
+        args.settings.hash_checking,
+        args.build_hash_checking,
+        globals.installer_metadata,
+        &args.settings.config_setting,
+        &args.settings.config_settings_package,
+        args.settings.build_isolation.clone(),
+        &args.settings.extra_build_dependencies,
+        &args.settings.extra_build_variables,
+        args.settings.build_options,
+        args.modifications,
+        args.settings.python_version,
+        args.settings.python_platform,
+        globals.python_downloads,
+        args.settings.install_mirrors,
+        args.settings.strict,
+        args.settings.exclude_newer,
+        args.settings.sources,
+        args.settings.python,
+        args.settings.system,
+        args.settings.break_system_packages,
+        args.settings.target,
+        args.settings.prefix,
+        globals.python_preference,
+        globals.python_arch,
+        globals.concurrency,
+        cache,
+        workspace_cache,
+        args.dry_run,
+        args.output_format,
+        printer,
+        globals.preview,
+    ))
+    .await
 }
 
 fn map_settings_error(err: uv_settings::Error) -> anyhow::Error {

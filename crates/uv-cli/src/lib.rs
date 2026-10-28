@@ -813,6 +813,16 @@ pub enum PipCommand {
         after_long_help = ""
     )]
     Install(PipInstallArgs),
+    /// Upgrade packages installed in an environment.
+    ///
+    /// Use `--all` to resolve all installed packages together, including their dependencies.
+    /// Packages installed from URLs or local directories retain their sources and editable status.
+    /// Version constraints from the original installation are not retained.
+    #[command(
+        after_help = "Use `uv help pip upgrade` for more details.",
+        after_long_help = ""
+    )]
+    Upgrade(PipUpgradeArgs),
     /// Uninstall packages from an environment.
     #[command(
         after_help = "Use `uv help pip uninstall` for more details.",
@@ -2036,17 +2046,6 @@ pub struct PipInstallArgs {
     #[arg(long, short, group = "sources")]
     pub editable: Vec<String>,
 
-    /// Install any editable dependencies as non-editable [env: UV_NO_EDITABLE=]
-    #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
-    pub no_editable: bool,
-
-    /// Install the specified editable packages as non-editable.
-    #[arg(long, value_delimiter = ' ', value_hint = ValueHint::Other)]
-    pub no_editable_package: Vec<PackageName>,
-
-    #[command(flatten)]
-    pub constraints: DependencyConstraintsArgs,
-
     /// Include optional dependencies from the specified extra name; may be provided more than once.
     ///
     /// Only applies to `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
@@ -2070,6 +2069,35 @@ pub struct PipInstallArgs {
     /// May be provided multiple times.
     #[arg(long, group = "sources")]
     pub group: Vec<PipGroupName>,
+
+    #[command(flatten)]
+    pub options: PipInstallOptions,
+}
+
+#[derive(Args)]
+#[command(mut_arg("no_upgrade", |arg| arg.conflicts_with("all")))]
+pub struct PipUpgradeArgs {
+    /// Upgrade all packages installed in the environment.
+    #[arg(long, required = true)]
+    pub all: bool,
+
+    #[command(flatten)]
+    pub options: PipInstallOptions,
+}
+
+/// Options shared by installing and upgrading packages in an environment.
+#[derive(Args)]
+pub struct PipInstallOptions {
+    /// Install any editable dependencies as non-editable [env: UV_NO_EDITABLE=]
+    #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+    pub no_editable: bool,
+
+    /// Install the specified editable packages as non-editable.
+    #[arg(long, value_delimiter = ' ', value_hint = ValueHint::Other)]
+    pub no_editable_package: Vec<PackageName>,
+
+    #[command(flatten)]
+    pub constraints: DependencyConstraintsArgs,
 
     #[command(flatten)]
     pub installer: ResolverInstallerArgs,

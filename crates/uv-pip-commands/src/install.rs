@@ -18,16 +18,18 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
-    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
+    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
+    InstalledDistKind, Name, NameRequirementSpecification, Origin, PackageConfigSettings,
+    Requirement, Resolution, UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
+use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::Conflicts;
+use uv_pypi_types::{Conflicts, ParsedUrl, VerbatimParsedUrl};
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
 use uv_python_interpreter::PythonEnvironment;
@@ -79,9 +81,61 @@ impl Hinted for ExternallyManagedError {
     }
 }
 
+/// The packages to install into an environment.
+#[derive(Debug, Clone, Copy)]
+pub enum PipInstallMode {
+    /// Install the supplied requirements.
+    Install,
+    /// Upgrade all installed distributions, retaining their sources.
+    UpgradeAll,
+}
+
+/// Use every installed distribution as a root requirement without its installed version pin.
+fn installed_requirements(
+    site_packages: &SitePackages,
+) -> anyhow::Result<Vec<UnresolvedRequirementSpecification>> {
+    site_packages
+        .iter()
+        .sorted_by(|left, right| left.name().cmp(right.name()))
+        .unique_by(|dist| dist.name())
+        .map(|dist| {
+            let source = match &dist.kind {
+                InstalledDistKind::Registry(_)
+                | InstalledDistKind::EggInfoFile(_)
+                | InstalledDistKind::EggInfoDirectory(_) => None,
+                InstalledDistKind::Url(dist) => Some((dist.url.clone(), dist.editable)),
+                InstalledDistKind::LegacyEditable(dist) => Some((dist.target_url.clone(), true)),
+            };
+
+            let version_or_url = if let Some((url, editable)) = source {
+                let mut url = VerbatimParsedUrl {
+                    parsed_url: ParsedUrl::try_from(url.clone())?,
+                    verbatim: VerbatimUrl::from_url(url),
+                };
+                if editable {
+                    url.make_editable()?;
+                }
+                Some(VersionOrUrl::Url(url))
+            } else {
+                None
+            };
+
+            Ok(Requirement::from(Pep508Requirement {
+                name: dist.name().clone(),
+                extras: Box::new([]),
+                version_or_url,
+                marker: MarkerTree::TRUE,
+                origin: None,
+            })
+            .into())
+        })
+        .collect()
+}
+
 /// Install packages into the current environment.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn pip_install(
+    mode: PipInstallMode,
     requirements: &[RequirementsSource],
     constraints: &[RequirementsSource],
     overrides: &[RequirementsSource],
@@ -325,10 +379,25 @@ pub async fn pip_install(
     let defer_site_packages = matches!(modifications, Modifications::Sufficient)
         && (pylock.is_some() || matches!(&reinstall, Reinstall::All));
 
-    let site_packages = if defer_site_packages {
-        None
-    } else {
-        Some(SitePackages::from_environment(&environment)?)
+    let (requirements, site_packages) = match mode {
+        PipInstallMode::Install => {
+            let site_packages = if defer_site_packages {
+                None
+            } else {
+                Some(SitePackages::from_environment(&environment)?)
+            };
+            (requirements, site_packages)
+        }
+        PipInstallMode::UpgradeAll => {
+            let site_packages = SitePackages::from_environment(&environment)?;
+            let requirements = installed_requirements(&site_packages)?;
+            if requirements.is_empty() {
+                DefaultInstallLogger.on_check(0, start, printer, dry_run)?;
+                write_install_report(&Changelog::default(), dry_run, output_format, printer)?;
+                return Ok(ExitStatus::Success);
+            }
+            (requirements, Some(site_packages))
+        }
     };
 
     // Check if the current environment satisfies the requirements.

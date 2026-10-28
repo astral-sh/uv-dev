@@ -59,12 +59,12 @@ use crate::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
     AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, ExternalCommand, GlobalArgs, InitArgs,
     ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs,
-    PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
-    PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
-    PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
-    RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs,
-    ToolListArgs, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs,
-    VersionArgs, VersionBumpSpec, VersionFormat,
+    PipInstallArgs, PipInstallFormat, PipInstallOptions, PipListArgs, PipShowArgs, PipSyncArgs,
+    PipTreeArgs, PipUninstallArgs, PipUpgradeArgs, ProjectDependencyGroupsArgs, PythonFindArgs,
+    PythonInstallArgs, PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs,
+    PythonUpgradeArgs, RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs,
+    ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat,
+    UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use crate::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
@@ -3725,6 +3725,35 @@ pub struct PipInstallSettings {
 }
 
 impl PipInstallSettings {
+    /// Resolve the settings for upgrading all installed packages.
+    pub fn resolve_upgrade(
+        args: PipUpgradeArgs,
+        filesystem: Option<FilesystemOptions>,
+        environment: EnvironmentOptions,
+    ) -> anyhow::Result<Self> {
+        let PipUpgradeArgs {
+            all: _,
+            mut options,
+        } = args;
+        options.installer.upgrade = true;
+        options.installer.no_upgrade = false;
+
+        Self::resolve(
+            PipInstallArgs {
+                package: Vec::new(),
+                requirements: Vec::new(),
+                editable: Vec::new(),
+                extra: Some(Vec::new()),
+                all_extras: false,
+                no_all_extras: true,
+                group: Vec::new(),
+                options,
+            },
+            filesystem,
+            environment,
+        )
+    }
+
     /// Resolve the [`PipInstallSettings`] from the CLI and filesystem configuration.
     pub fn resolve(
         args: PipInstallArgs,
@@ -3735,6 +3764,13 @@ impl PipInstallSettings {
             package,
             requirements,
             editable,
+            extra,
+            all_extras,
+            no_all_extras,
+            group,
+            options,
+        } = args;
+        let PipInstallOptions {
             no_editable,
             no_editable_package,
             constraints:
@@ -3746,14 +3782,10 @@ impl PipInstallSettings {
                 },
             require_build_hashes,
             no_require_build_hashes,
-            extra,
-            all_extras,
-            no_all_extras,
             installer,
             refresh,
             no_deps,
             deps,
-            group,
             hash_checking:
                 HashCheckingArgs {
                     require_hashes,
@@ -3783,7 +3815,7 @@ impl PipInstallSettings {
             torch_backend,
             compat_args: _,
             check,
-        } = args;
+        } = options;
 
         let constraints_from_workspace = if let Some(configuration) = &filesystem {
             configuration
