@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11065,
+        "title": "Automatically install and use a matching uv version to satisfy `requires-version`.",
+        "url": "https://github.com/astral-sh/uv/issues/11065",
+        "state": "open",
+        "reason": "Same version-mismatch error and manual uv tool run workaround. Requests automatically running a compatible uv version, whereas this report requests running the installed, incompatible version while retaining configuration. Labeled enhancement and wish; the maintainer said it was not a priority."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11869,
+        "title": "Auto-exec compatible uv version when required-version doesn't match",
+        "url": "https://github.com/astral-sh/uv/pull/11869",
+        "state": "closed",
+        "reason": "Attempted to implement astral-sh/uv#11065 by delegating to uv tool run. Closed as stale on 2025-05-27 without merging. It would satisfy the version requirement, not provide the requested opt-out."
+      },
+      {
+        "kind": "issue",
+        "number": 10355,
+        "title": "`uv self update` is blocked by `required-version`",
+        "url": "https://github.com/astral-sh/uv/issues/10355",
+        "state": "closed",
+        "reason": "Historical command-blocking bug caused by the same version check. Fixed specifically for uv self commands; it did not request a general override for uv run, uv sync, or uv help."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10374,
+        "title": "Avoid enforcing project-level required version for `uv self`",
+        "url": "https://github.com/astral-sh/uv/pull/10374",
+        "state": "merged",
+        "reason": "Merged on 2025-01-07 to fix astral-sh/uv#10355 by excluding local configuration from uv self commands. That exception remains in the checkout and does not implement selectively bypassing required-version while retaining project settings."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv with authenticated gh across open and closed issues and open, closed, and merged pull requests. Separated selective version-check bypass, configuration retention, help-command blocking, and pinned-version/package-manager workflows. Literal searches covered required-version, the Required uv version / does not match error, proposed flag and environment names, uv help, no-config, Homebrew, and version-file. Conceptual searches covered ignoring/overriding/bypassing version checks, version constraints, automatic matching-version execution, self-update, and wrappers, informed by configuration/CLI labels and maintainer comments. Followed comments and reference chains, including astral-sh/uv#12787 to astral-sh/uv#11065 and historical fixes. Ruled out astral-sh/uv#10547 and astral-sh/uv#16014 as duplicates because they request changing the installed version; astral-sh/uv#6662 requests bootstrapping via a wrapper. Also ruled out astral-sh/uv#13785 (a dependency-installed uv shadowing the CI installation) and astral-sh/uv#17609 / astral-sh/uv#18977 (configuration parsing masking version errors). No existing selective-override request was found. Some supplemental queries were rate-limited; PR keyword searches returned no results, so relevant PRs were inspected directly through issue references."
+  },
+  "type": "enhancement",
+  "type_reason": "Requests a new flag/environment override that skips only uv's version constraint while preserving other configuration. Rejecting an exact-pin mismatch is the implemented purpose of required-version. Existing automatic-version-selection discussions require using a compatible executable and do not cover deliberately testing the currently installed newer version. The historical uv self exception remains present, so this report does not establish a regression of that fix.",
+  "summary": "The closest discussion is astral-sh/uv#11065 and its unmerged, closed implementation astral-sh/uv#11869; both concern automatic version switching. astral-sh/uv#10355 and astral-sh/uv#10374 cover a narrower, already-fixed uv self exception. No existing selective-override request was found.",
+  "draft_response": "Your requested override would be a separate enhancement: `required-version` currently rejects mismatches, and `--no-config` disables configuration discovery broadly. astral-sh/uv#11065 would instead run a compatible uv version; astral-sh/uv#11869 was closed without merging.\n\nThe next step is a design decision on allowing this opt-out and its warning behavior before implementation. For now, `uvx uv@0.13.5 ...` runs the pinned version with the project configuration. For help alone, `uv --help` is handled before the version check."
+}
