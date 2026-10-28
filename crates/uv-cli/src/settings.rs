@@ -3738,20 +3738,26 @@ impl PipInstallSettings {
         options.installer.upgrade = true;
         options.installer.no_upgrade = false;
 
-        Self::resolve(
+        let mut settings = Self::resolve(
             PipInstallArgs {
                 package: Vec::new(),
                 requirements: Vec::new(),
                 editable: Vec::new(),
-                extra: Some(Vec::new()),
+                extra: None,
                 all_extras: false,
-                no_all_extras: true,
+                no_all_extras: false,
                 group: Vec::new(),
                 options,
             },
             filesystem,
             environment,
-        )
+        )?;
+
+        // Upgrades use installed distributions as requirements, so configured source selections
+        // must not add project extras or dependency groups.
+        settings.settings.extras = ExtrasSpecification::default();
+        settings.settings.groups.clear();
+        Ok(settings)
     }
 
     /// Resolve the [`PipInstallSettings`] from the CLI and filesystem configuration.

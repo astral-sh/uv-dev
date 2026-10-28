@@ -29,7 +29,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{Conflicts, ParsedUrl, VerbatimParsedUrl};
+use uv_pypi_types::{Conflicts, DirectUrl, ParsedUrl, VerbatimParsedUrl};
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
 use uv_python_interpreter::PythonEnvironment;
@@ -112,6 +112,22 @@ fn installed_requirements(
                     parsed_url: ParsedUrl::try_from(url.clone())?,
                     verbatim: VerbatimUrl::from_url(url),
                 };
+                // The recorded LFS mode is part of the installed source, independent of the
+                // current `UV_GIT_LFS` setting used when parsing new requirements.
+                if let InstalledDistKind::Url(dist) = &dist.kind
+                    && let DirectUrl::VcsUrl { url: vcs, .. } = dist.direct_url.as_ref()
+                {
+                    let lfs = vcs.vcs_info().git_lfs.unwrap_or_default().into();
+                    match &mut url.parsed_url {
+                        ParsedUrl::GitDirectory(git) => {
+                            git.url = git.url.clone().with_lfs(lfs);
+                        }
+                        ParsedUrl::GitPath(git) => {
+                            git.url = git.url.clone().with_lfs(lfs);
+                        }
+                        ParsedUrl::Path(_) | ParsedUrl::Directory(_) | ParsedUrl::Archive(_) => {}
+                    }
+                }
                 if editable {
                     url.make_editable()?;
                 }

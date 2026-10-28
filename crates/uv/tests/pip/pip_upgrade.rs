@@ -3,6 +3,8 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+#[cfg(feature = "test-git-lfs")]
+use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -146,6 +148,56 @@ fn dry_run() {
     ");
 }
 
+/// Joint upgrades can downgrade an installed dependency to select a newer compatible package.
+#[test]
+fn compatible_downgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "upgrade-downgrade"
+        [root]
+        requires = ["a", "b"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["b==2.0.0"]
+        [packages.a.versions."2.0.0"]
+        requires = ["b==1.0.0"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+     - b==2.0.0
+     + b==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    ");
+    Ok(())
+}
+
 #[test]
 fn constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -195,6 +247,43 @@ fn configured_no_upgrade() -> Result<()> {
         .arg(server.index_url())
         .assert()
         .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+    ");
+    Ok(())
+}
+
+/// Configured project sources must not add requirements to the installed package set.
+#[test]
+fn configured_source_selections() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        [pip]
+        extra = ["dev"]
+        no-extra = ["docs"]
+        all-extras = true
+        group = ["dev"]
+    "#})?;
 
     uv_snapshot!(context.filters(), context.pip_upgrade()
         .arg("--all")
@@ -349,6 +438,33 @@ fn direct_url() {
     ----- stdout -----
     a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
     ");
+}
+
+/// The recorded LFS mode is part of a Git source, independent of the current environment setting.
+#[test]
+#[cfg(feature = "test-git-lfs")]
+fn git_lfs() {
+    let context = uv_test::test_context!("3.13").with_git_lfs_config();
+
+    context
+        .pip_install()
+        .arg("git+https://github.com/astral-sh/test-lfs-repo.git@261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        .env(EnvVars::UV_GIT_LFS, "true")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .env(EnvVars::UV_GIT_LFS, "false"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg("import test_lfs_repo.lfs_module"), @"exit_code: 0 (success)");
 }
 
 #[test]
