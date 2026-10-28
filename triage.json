@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15700,
+        "title": "Changing python package source files in venv changes cached uv files too",
+        "url": "https://github.com/astral-sh/uv/issues/15700",
+        "state": "closed",
+        "reason": "Same mechanism and outcome: editing an installed dependency changes the cached files and subsequently created environments. Maintainers confirmed the hardlink side effect and recommended copy mode, editable installs, or targeted cache cleaning; closure did not represent a fix."
+      },
+      {
+        "kind": "issue",
+        "number": 10896,
+        "title": "Accidental edits in .venv carry over to other projects using the same dependency",
+        "url": "https://github.com/astral-sh/uv/issues/10896",
+        "state": "closed",
+        "reason": "Reproduces accidental editor changes propagating through hardlinks to another project and the cache. Maintainers declined making installed files read-only over compatibility concerns and discussed copy-on-write; the issue was closed without eliminating hardlink mutation."
+      },
+      {
+        "kind": "issue",
+        "number": 888,
+        "title": "Support hash checking against `RECORD`",
+        "url": "https://github.com/astral-sh/uv/issues/888",
+        "state": "closed",
+        "reason": "Covers the requested per-file RECORD verification, with maintainer discussion of checking during cache extraction or later venv validation. Closed as not planned in August 2026 in favor of whole-archive verification and attestations; it did not implement detection or repair of later local edits."
+      },
+      {
+        "kind": "issue",
+        "number": 21968,
+        "title": "uv sync leaves an environment with missing NCCL library unchanged",
+        "url": "https://github.com/astral-sh/uv/issues/21968",
+        "state": "open",
+        "reason": "Adjacent installed-file validation gap: sync accepts an environment whose RECORD lists a missing library, and targeted reinstallation restores it. Unlike this report, files are missing rather than modified through hardlinks, and cache corruption is not established."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues using literal hardlink/edit/modify/corrupt, RECORD/hash/verify, cache check/verify/repair, and link-mode documentation queries; conceptual searches included cache poisoning, integrity, checksums, read-only protection, and installed-file validation. Searches omitted incidental packages and platforms. Searched pull requests across all states, including closed and merged filters, for hardlink, clone, RECORD, cache integrity/verification, repair, and documentation. No matching integrity-repair PR was identified. Inspected candidate comments and followed astral-sh/uv#20907 to astral-sh/uv#15357 and merged astral-sh/uv#13437: those concern collisions between distributions, not later edits to hardlinked files. Ruled out astral-sh/uv#11723 because its apparent hash mismatch was an encoding misunderstanding; astral-sh/uv#5611 concerns multi-user cache permissions. Some broad searches were capped at 100 results, and GitHub rate-limited later follow-up queries, limiting completeness."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#15700 and astral-sh/uv#10896 already document the same hardlink-induced cache and cross-environment mutation; astral-sh/uv#888 covers the proposed RECORD verification. Source inspection confirms shared-file installation and metadata-based reuse without per-file validation. These discussions were closed without fixing this behavior, so this is not evidence of a regression. The additional automatic-repair and documentation proposals can be discussed with those existing reports; duplicate classification takes precedence.",
+  "summary": "astral-sh/uv#15700 and astral-sh/uv#10896 match the hardlink mutation report; astral-sh/uv#888 covers RECORD verification, declined as not planned. astral-sh/uv#21968 is an adjacent open installed-file validation report.",
+  "draft_response": "An in-place edit to a hardlinked file changes the cache and every environment sharing that file. This behavior is already discussed in astral-sh/uv#15700 and astral-sh/uv#10896. Please keep follow-up on the hardlink behavior and recovery documentation in astral-sh/uv#15700. RECORD-based verification was considered in astral-sh/uv#888 and closed as not planned; uv currently has no automatic check-and-repair workflow for these edits.\n\nYou can recover by running `uv cache clean <pkg>`, then `uv sync --reinstall-package <pkg>` in each affected project. Cleaning the cache alone does not repair existing environments. If you intend to edit installed files, add `--link-mode copy` when reinstalling, or use an editable checkout of the dependency. Changing link mode alone does not replace existing hardlinks."
+}
