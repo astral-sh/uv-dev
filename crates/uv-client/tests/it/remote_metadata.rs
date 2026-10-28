@@ -124,6 +124,65 @@ async fn remote_metadata_small_wheel_rejects_multiple_metadata_entries() -> Resu
     Ok(())
 }
 
+/// A corrupt variant manifest makes this wheel unavailable and lets resolution try another version.
+#[tokio::test]
+async fn remote_metadata_small_wheel_rejects_corrupt_variant() -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-1.0.0.dist-info/METADATA".into(), Compression::Stored),
+            b"Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n",
+        )
+        .await?;
+    let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+        "$schema": uv_distribution_types::PEP_825_SCHEMA,
+        "default-priorities": {"namespace": ["x86_64"]},
+        "variants": {"null": {}},
+    }))?;
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new(
+                "ok-1.0.0.dist-info/variant.json".into(),
+                Compression::Stored,
+            ),
+            &manifest,
+        )
+        .await?;
+    let mut wheel = writer.close().await?;
+    let start = wheel
+        .windows(manifest.len())
+        .position(|entry| entry == manifest)
+        .unwrap();
+    // Change whitespace so the only invalid property of the manifest is its CRC.
+    wheel[start + 1] = b' ';
+
+    let size = wheel.len() as u64;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_missing(RANGE))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let filename = WheelFilename::from_str("ok-1.0.0-py3-none-any-null.whl")?;
+    let error = read_wheel_metadata(&server, filename, Some(size))
+        .await
+        .expect_err("variant.json should fail its CRC check")
+        .downcast::<uv_client::Error>()?;
+    assert!(
+        matches!(
+            error.kind(),
+            uv_client::ErrorKind::Metadata(
+                _,
+                uv_metadata::Error::AsyncZip(ZipError::CRC32CheckError)
+            )
+        ),
+        "{error:?}"
+    );
+    Ok(())
+}
+
 /// The index understates the size and the initial GET has no Content-Length. Only a tail
 /// range is needed to read the real wheel's central directory and metadata.
 #[tokio::test]
@@ -723,6 +782,17 @@ async fn assert_wheel_metadata_readable_with_size(
     source_server: &MockServer,
     size: Option<u64>,
 ) -> Result<()> {
+    let filename = WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?;
+    let metadata = read_wheel_metadata(source_server, filename, size).await?;
+    assert_eq!(metadata.version.to_string(), "1.0.0");
+    Ok(())
+}
+
+async fn read_wheel_metadata(
+    source_server: &MockServer,
+    filename: WheelFilename,
+    size: Option<u64>,
+) -> Result<uv_pypi_types::ResolutionMetadata> {
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
     let url = authenticated_url(
@@ -732,7 +802,7 @@ async fn assert_wheel_metadata_readable_with_size(
         "source-password",
     )?;
     let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
-        filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
+        filename,
         location: Box::new(SafeUrl::parse(&url)?),
         url: VerbatimUrl::from_str(&url)?,
         size,
@@ -745,8 +815,7 @@ async fn assert_wheel_metadata_readable_with_size(
             None,
         )
         .await?;
-    assert_eq!(metadata.version.to_string(), "1.0.0");
-    Ok(())
+    Ok(metadata)
 }
 
 /// Adds Basic authentication credentials to a Wiremock server URL.

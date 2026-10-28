@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
-use std::io::{BufReader, Cursor};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -43,7 +43,9 @@ use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, R
 use crate::cached_client::{CacheControl, CachedClientError};
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
-use crate::remote_metadata::{CENTRAL_DIRECTORY_SIZE, wheel_metadata_from_remote_zip};
+use crate::remote_metadata::{
+    CENTRAL_DIRECTORY_SIZE, wheel_metadata_from_bytes, wheel_metadata_from_remote_zip,
+};
 use crate::rkyvutil::OwnedArchive;
 use crate::{
     BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
@@ -1275,27 +1277,7 @@ impl RegistryClient {
                         bytes.extend_from_slice(&chunk);
                     }
 
-                    let filename = filename.clone();
-                    let url = url.clone();
-                    let metadata = tokio::task::spawn_blocking(move || {
-                        let contents = read_archive_metadata(&filename, Cursor::new(bytes))
-                            .map_err(|err| match err {
-                                uv_metadata::Error::AsyncZip(err) => {
-                                    ErrorKind::Zip(filename.clone(), err)
-                                }
-                                err => ErrorKind::Metadata(url.to_string(), err),
-                            })?;
-                        ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                            Error::from(ErrorKind::MetadataParseError(
-                                filename,
-                                url.to_string(),
-                                Box::new(err),
-                            ))
-                        })
-                    })
-                    .await
-                    .map_err(|err| Error::from(ErrorKind::Io(err.into())))??;
-                    Ok(metadata)
+                    Ok(wheel_metadata_from_bytes(filename, url, bytes).await?)
                 },
             )
             .await;
@@ -1404,14 +1386,7 @@ impl RegistryClient {
                     .await
                     .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
                     trace!("Getting metadata for `{filename}` by range request");
-                    let text = wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
-                    ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
-                        Error::from(ErrorKind::MetadataParseError(
-                            filename.clone(),
-                            url.to_string(),
-                            Box::new(err),
-                        ))
-                    })
+                    wheel_metadata_from_remote_zip(filename, url, &mut reader).await
                 }
                 .boxed_local()
                 .instrument(info_span!("read_metadata_range_request", wheel = %filename))
