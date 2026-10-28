@@ -8,28 +8,46 @@ Classification: duplicate
 
 On Windows 11, interpreter discovery warns that the Python 3.8.20 shim cannot initialize its standard library, then continues listing installations.
 
-Closest match: astral-sh/uv#19199, shipped in uv 0.11.9. The failing Python 3.8 shim predates that fix; no current regression is established.
+Closest match: astral-sh/uv#19199, shipped in uv 0.11.9. The failing Python 3.8 shim predates that fix. Contributor ahmedbektic reports that an older launcher fails under `-I`, a current launcher works, and `uv python install 3.8 --force` replaces the old launcher and clears the warning. This supports the retained-old-launcher explanation; no current regression is established.
 
-## Draft response
+## Reported reproduction and workaround
 
-This appears to match the older Windows launcher failure addressed in astral-sh/uv#19199, shipped in uv 0.11.9. Your failing `python3.8.exe` is dated January 15, before that fix; updating uv does not automatically recreate existing Python launchers.
+In the October 28, 2026 comment on astral-sh/uv#22352 (comment ID 6476696469),
+contributor ahmedbektic reports the following results from investigating the failure:
 
-Please run `uv python install 3.8.20 --reinstall` with the same `UV_PYTHON_INSTALL_DIR` and `UV_PYTHON_BIN_DIR` settings used for these custom directories, then retry `uv python list --only-installed`. If it still fails, please share the output with `-vv` and whether running both the shim and the underlying installation's `python.exe` with `-I -c "import encodings; print(encodings.__file__)"` succeeds. That will help determine whether a current launcher regression remains.
+- An older launcher fails with Python 3.8 under `-I`; the current launcher works.
+- `uv python install 3.8` retains the older launcher.
+- `uv python install 3.8 --force` replaces it and clears the warning.
+
+This is a contributor-reported comparison, consistent with the source-backed
+launcher replacement behavior below. The comment does not supply the exact old
+and current launcher builds, uv version, test platform, full setup, or command
+output. The original reporter has not confirmed the workaround on their installation.
+For the original custom directory layout, replacement must target the same
+`UV_PYTHON_INSTALL_DIR` and `UV_PYTHON_BIN_DIR` settings. `--reinstall` remains
+another replacement path supported by the inspected source; this comment reports
+success specifically with `--force`.
+
+The contributor asks whether uv should automatically refresh outdated managed
+launchers or whether manual `--force` is sufficient, and suggests a separate
+issue for automatic refreshing if desired. No maintainer decision or new issue
+reference is present in the supplied discussion. This is a possible separate
+improvement, not evidence of a regression in the current launcher.
 
 ## Classification
 
-The Windows/Python <=3.10 launcher startup failure is already covered by astral-sh/uv#19199. The failing shim predates that fix, and installation code retains an existing same-target launcher unless replacement is requested. Running a newer uv therefore does not establish a regression. The old-launcher explanation needs confirmation by regeneration; a failure with a newly generated launcher should be investigated as a bug.
+The Windows/Python <=3.10 launcher startup failure is already covered by astral-sh/uv#19199. The failing shim predates that fix, and installation code retains an existing same-target launcher unless replacement is requested. Running a newer uv therefore does not establish a regression. The contributor reports that regenerating the launcher with `--force` resolves the warning, strengthening this classification. Confirmation on the original reporter's installation is still outstanding; a failure with a newly generated launcher should be investigated as a bug.
 
 ## Related
 
-- astral-sh/uv#19199 (merged pull request): trampolines: Don't set PYTHONHOME, set __PYVENV_LAUNCHER__ only in venvs. Documents and fixes Windows startup failures on Python 3.10 and older when a launcher outside a virtual environment sets __PYVENV_LAUNCHER__. Merged April 29, 2026 and shipped in uv 0.11.9. The reported failing shim is dated January 15, before the fix; its sys.executable points to the shim while standard-library lookup fails. This closely matches the historical launcher failure, although regeneration is needed to confirm the local cause.
+- astral-sh/uv#19199 (merged pull request): trampolines: Don't set PYTHONHOME, set __PYVENV_LAUNCHER__ only in venvs. Documents and fixes Windows startup failures on Python 3.10 and older when a launcher outside a virtual environment sets __PYVENV_LAUNCHER__. Merged April 29, 2026 and shipped in uv 0.11.9. The reported failing shim is dated January 15, before the fix; its sys.executable points to the shim while standard-library lookup fails. This closely matches the historical launcher failure. The contributor's reported successful replacement with `--force` adds supporting evidence, though the original reporter's local cause remains unconfirmed.
 
 ## Report and triggering conditions
 
 The report was opened on October 8, 2026, for Windows 11 x86_64, uv 0.12.23
 (46b84fd0b, October 3), and CPython 3.8.20. It reports one failure: interpreter
 discovery through the custom `.uv/shims/python3.8.exe` launcher exits with code 1.
-There is no separate request about duplicate list entries or Python version management.
+The original report contains no separate request about duplicate list entries or Python version management. A contributor subsequently raised automatic refresh of outdated launchers as a possible separate improvement.
 
 - Command: `uv python list --only-installed`.
 - Discovery emits `Failed to inspect Python interpreter from search path` and
@@ -103,17 +121,29 @@ environment and fails to initialize the standard library.
 
 ## Verification limits and follow-up
 
-No Windows reproduction or inspection of the reporter's executable has been
-performed. An old launcher is the strongest explanation from the supplied paths,
-timestamps, historical fix, and replacement logic; it is not independently confirmed.
-No evidence shows this worked with a post-fix launcher and then regressed.
+The earlier reproduction investigation recorded in `reproduction.json` used Linux
+x86_64 with uv 0.12.13 and temporary installation/cache directories. Installing
+Python 3.8.20 and listing installed interpreters succeeded without warnings;
+invoking the Python shim with `-I` successfully imported `encodings`. A deliberately
+failing executable confirmed warning-and-continue behavior, also covered by
+`crates/uv/tests/python/python_list.rs::python_list_warns_on_noncritical_explicit_path_errors`.
+These checks did not reproduce the Windows encoding failure, and no Windows runtime
+was available for that investigation.
 
-Regenerate Python 3.8.20 using the same custom installation and executable-directory
-settings, then retry discovery. If it persists, compare isolated `encodings` imports
-through the regenerated shim and the direct installation, collect verbose discovery
-output, and check whether a `pyvenv.cfg` exists in the shim's grandparent directory.
-A failure with a freshly generated launcher should be handled as a possible current
-bug rather than closed solely against the historical fix.
+The contributor's old-versus-current launcher comparison now provides reported
+reproduction evidence and a successful `--force` workaround. It has not been
+independently reproduced in the investigation, and the reporter's executable has
+not been inspected. The exact launcher builds and test setup remain unspecified.
+No evidence shows a post-fix launcher worked and subsequently regressed.
+
+The next useful confirmation is whether replacing the launcher in the original
+reporter's custom directories also clears the warning. If it persists, compare
+isolated `encodings` imports through the regenerated shim and the direct
+installation, collect verbose discovery output and exact launcher provenance,
+and check for a `pyvenv.cfg` in the shim's grandparent directory. A failure with a
+freshly generated launcher should be investigated as a possible current bug.
+The separate question of automatically refreshing old launchers awaits a
+maintainer decision.
 
 ## Search coverage
 
