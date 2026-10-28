@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 15416,
+        "title": "add cuda 129 backend",
+        "url": "https://github.com/astral-sh/uv/pull/15416",
+        "state": "merged",
+        "reason": "Added cu129 ahead of cu128 and cu126 for Windows drivers >=528.33 on 2025-08-21. Its diff directly establishes the backend ordering involved here; it did not address incomplete Windows torch/torchvision release pairs."
+      },
+      {
+        "kind": "issue",
+        "number": 12357,
+        "title": "Does auto option in ``torch-backend`` preview only select the highest supported CUDA version?",
+        "url": "https://github.com/astral-sh/uv/issues/12357",
+        "state": "closed",
+        "reason": "Earlier Windows auto-selection failure when the first CUDA index lacked wheels satisfying the Python and torch constraints. A maintainer confirmed that compatible indexes should be tried sequentially. Unlike this report, resolution failed instead of succeeding with legacy torchvision."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12385,
+        "title": "Check all compatible torch indexes when `--torch-backend` is enabled",
+        "url": "https://github.com/astral-sh/uv/pull/12385",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#12357 on 2025-03-22 by fetching across compatible PyTorch indexes using UnsafeFirstMatch. That override remains in the checkout, so this report does not demonstrate loss of the earlier fallback fix: an old candidate can satisfy metadata constraints in the preferred index."
+      },
+      {
+        "kind": "issue",
+        "number": 17649,
+        "title": "Resolver pins direct dependency instead of backtracking, causing Python-incompatible resolution",
+        "url": "https://github.com/astral-sh/uv/issues/17649",
+        "state": "open",
+        "reason": "Closest open resolver analogue: retaining a recent direct dependency sends another package back to old releases with permissive metadata; maintainers recommend meaningful lower bounds. Its reproduction concerns numpy/numba, uv sync, and build-time Python incompatibility, rather than automatic CUDA index ordering and successful installation of legacy torchvision."
+      },
+      {
+        "kind": "issue",
+        "number": 8157,
+        "title": "Tracking issue: uv backtracks on the wrong package",
+        "url": "https://github.com/astral-sh/uv/issues/8157",
+        "state": "closed",
+        "reason": "Canonical historical discussion of selecting a recent package A and backtracking package B until an old release drops the conflicting constraint. This closely explains the legacy-wheel symptom, but the tracker predates cu129 support and does not establish that this Windows backend case previously worked."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9843,
+        "title": "Change backtracking when packages conflict too much",
+        "url": "https://github.com/astral-sh/uv/pull/9843",
+        "state": "merged",
+        "reason": "Closed astral-sh/uv#8157 on 2024-12-16 with conflict-count-based reprioritization. The PR explicitly describes old permissive dependencies yielding undesirable but metadata-valid resolutions. It is a heuristic improvement, not a guarantee against every legacy selection; no regression of its covered cases was established."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues with literal terms torch-backend, cu129, Windows, torchvision 0.2.0/0.1.6, InterpolationMode, and efficientnet_b0; separately searched outdated/latest selection, downgrades, old or ancient releases, minimum bounds, backtracking, and compatible-index fallback, including platform/package-independent queries and closed-fix searches. Supplemented PR search queries with a paginated all-state PR title inventory covering open, closed, and merged PRs, then inspected relevant bodies, comments, reviews, diffs, and issue timelines. Followed astral-sh/uv#12357 to astral-sh/uv#12385 and astral-sh/uv#1575 to astral-sh/uv#8157, astral-sh/uv#9843, and astral-sh/uv#17649. Ruled out astral-sh/uv#14742 (GPU compute capability), astral-sh/uv#16386 (CPU wheel local-version suffixes), astral-sh/uv#15298 (same-version platform fallback during universal resolution), and astral-sh/uv#2562 (historical local-version handling) as duplicates. Also inspected astral-sh/uv#6141 (warnings for Python-driven old-version fallback), astral-sh/uv#16522 (general wheel variants), and astral-sh/uv#13179 (CUDA consistency). Checked current source and public PyTorch wheel listings/metadata; did not run an end-to-end reproduction."
+  },
+  "type": "bug",
+  "type_reason": "Automatic backend selection reportedly succeeds with a severely obsolete torchvision despite newer matched Windows pairs on other driver-compatible indexes. The cu129-first ordering and relevant wheel metadata are independently confirmed. The existing open resolver analogue does not cover automatic backend ordering, and the historical fallback and backtracking fixes do not establish that this specific case previously worked. Classify as a distinct bug, without claiming a confirmed regression or a dependency-constraint violation.",
+  "summary": "astral-sh/uv#15416 introduced the relevant cu129 priority. astral-sh/uv#12357 and astral-sh/uv#12385 cover earlier fallback behavior; astral-sh/uv#17649, astral-sh/uv#8157, and astral-sh/uv#9843 cover pathological backtracking to permissive old releases. No exact duplicate or confirmed regression was found.",
+  "draft_response": "The Windows backend table does prefer cu129 for this driver range. Its Windows wheels include torch 2.9.0, while torchvision 0.23.0 requires torch 2.8.0; the legacy torchvision 0.2.0 wheel has no torch version bound.\n\nOne distinction from astral-sh/uv#12357: astral-sh/uv#12385 already enabled consideration of later compatible indexes. That code is still present, but resolution can accept an old candidate from the preferred index. This needs a focused test of backend ordering and legacy-wheel selection before choosing a fix.\n\nFor now, use your explicit --torch-backend=cu128 workaround and set a torchvision lower bound appropriate for the APIs your application uses. The reported torchvision>=0.3 workaround excludes these legacy wheels, but does not guarantee support for every modern API."
+}
