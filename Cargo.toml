@@ -490,11 +490,23 @@ lto = "fat"
 # This will still show a panic message, we only skip the unwind.
 panic = "abort"
 
+[profile.release.package.secret-service]
+opt-level = "z"
+
 [profile.release.package.uv]
 opt-level = "s"
 strip = true
 
 [profile.release.package.uv-cli]
+opt-level = "z"
+
+[profile.release.package.uv-keyring]
+opt-level = "z"
+
+[profile.release.package.zbus]
+opt-level = "z"
+
+[profile.release.package.zvariant]
 opt-level = "z"
 
 # This profile is meant to mimic the `release` profile as closely as
