@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
 use serde_json::{Map, Value, json};
 use uv_distribution_types::PEP_850_SCHEMA;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
@@ -19,10 +20,20 @@ fn null_variant() -> Value {
     })
 }
 
-/// Platform-specific resolution checks a local wheel's variant properties.
+/// Reject an installed local variant after host properties change, then backtrack to an older
+/// parent that does not require it.
 #[test]
-fn install_local_variant_wheel() -> Result<()> {
+fn backtrack_from_incompatible_installed_local_variant_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, wheel) = WheelBuilder::new(&"parent".parse()?, &"1.0.0".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"parent".parse()?, &"2.0.0".parse()?)
+        .requires(&["ok".parse()?])
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+
     let variant = json!({
         "$schema": PEP_850_SCHEMA,
         "default-priorities": { "namespace": ["nvidia"] },
@@ -35,8 +46,7 @@ fn install_local_variant_wheel() -> Result<()> {
         "variants": {
             "gpu": {
                 "nvidia": {
-                    "cuda_version_lower_bound": ["12"],
-                    "sm_arch": ["89_real"]
+                    "cuda_version_lower_bound": ["12"]
                 }
             }
         }
@@ -47,41 +57,74 @@ fn install_local_variant_wheel() -> Result<()> {
         .build();
     let wheel_path = context.temp_dir.child("ok-1.0.0-py3-none-any-gpu.whl");
     wheel_path.write_binary(&wheel)?;
+    let wheel_url =
+        SafeUrl::from_file_path(wheel_path.path()).map_err(|()| anyhow!("invalid wheel path"))?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str(&format!("ok @ {wheel_url}"))?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "12")
         .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("--constraint")
+        .arg("constraints.txt")
         .arg("--preview-features")
         .arg("wheel-variants")
-        .arg(wheel_path.path()), @"
+        .arg("parent"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0-py3-none-any-gpu.whl)
+     + parent==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("ok"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because ok was not found in the provided package locations and you require ok, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("--constraint")
+        .arg("constraints.txt")
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("parent"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0-py3-none-any-gpu.whl)
-    ");
-
-    context
-        .temp_dir
-        .child("requirements.in")
-        .write_str(&wheel_path.path().display().to_string())?;
-    uv_snapshot!(context.filters(), context.pip_compile()
-        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
-        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.8")
-        .arg("--preview-features")
-        .arg("wheel-variants")
-        .arg("requirements.in"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Wheel variant `gpu` requires unsupported properties: `nvidia :: cuda_version_lower_bound :: 12` and `nvidia :: sm_arch :: 89_real`
+     - parent==2.0.0
+     + parent==1.0.0
     ");
     Ok(())
 }
 
-/// A refreshed local variant wheel must have compatible platform tags.
+/// Resolving a local variant wheel requires compatible platform tags.
 #[test]
-fn refresh_incompatible_variant_wheel() -> Result<()> {
+fn resolve_incompatible_local_variant_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let variant = null_variant().to_string();
     let (_, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
@@ -98,7 +141,6 @@ fn refresh_incompatible_variant_wheel() -> Result<()> {
         .arg("wheel-variants")
         .arg("--python-platform")
         .arg("linux")
-        .arg("--refresh")
         .arg(wheel_path.path()), @"
     exit_code: 1 (failure)
     ----- stderr -----

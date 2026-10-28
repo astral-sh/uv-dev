@@ -1,7 +1,8 @@
 pub use diagnostics::dist_hints;
 pub use distribution_database::{DistributionDatabase, HttpArchivePointer, PathArchivePointer};
 pub use download::{
-    LocalWheel, check_archive_wheel_variant_compatibility, check_supported_wheel_variant,
+    LocalWheel, check_archive_wheel_variant_compatibility,
+    check_installed_local_wheel_variant_compatibility, check_supported_wheel_variant,
     check_wheel_variant_compatibility,
 };
 pub use error::Error;

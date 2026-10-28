@@ -1316,8 +1316,22 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     )),
                 )));
             }
-            if let BuiltDist::Path(wheel) = dist {
-                check_archive_wheel_variant_compatibility(&wheel.filename, &wheel.install_path)?;
+            if let BuiltDist::Path(wheel) = dist
+                && let Err(error) =
+                    check_archive_wheel_variant_compatibility(&wheel.filename, &wheel.install_path)
+            {
+                return match error {
+                    uv_distribution::Error::IncompatibleWheelVariant { label, properties } => {
+                        Ok(Some(ResolverVersion::Unavailable(
+                            version.clone(),
+                            UnavailableVersion::IncompatibleWheelVariant {
+                                label,
+                                properties: Arc::new(properties),
+                            },
+                        )))
+                    }
+                    error => Err(error.into()),
+                };
             }
         }
 
