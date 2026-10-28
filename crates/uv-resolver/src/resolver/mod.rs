@@ -22,7 +22,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
 use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
-use uv_distribution::{ArchiveMetadata, DistributionDatabase};
+use uv_distribution::{
+    ArchiveMetadata, DistributionDatabase, check_archive_wheel_variant_compatibility,
+};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
     IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
@@ -34,7 +36,7 @@ use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_r
 use uv_pep508::{
     MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString,
 };
-use uv_platform_tags::{IncompatibleTag, Tags};
+use uv_platform_tags::{IncompatibleTag, TagCompatibility, Tags};
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKindRef, Conflicts, VerbatimParsedUrl};
 use uv_resolver_types::{PackageNodeKind, VariantsJsonMetadataError};
@@ -1290,11 +1292,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 }
             }
 
-            let incompatible_tag = if filename.variant().is_some() {
-                // Selecting a wheel variant requires variant metadata from the index.
+            let supports_variant_resolution = match dist {
+                BuiltDist::Path(_) => env.marker_environment().is_some() && self.tags.is_some(),
+                BuiltDist::Registry(_) | BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => false,
+            };
+            let incompatible_tag = if filename.variant().is_some() && !supports_variant_resolution {
                 Some(IncompatibleTag::Variant)
             } else if !python_requirement.target().matches_wheel_tag(filename) {
                 Some(IncompatibleTag::AbiPythonVersion)
+            } else if filename.variant().is_some()
+                && let Some(tags) = &self.tags
+                && let TagCompatibility::Incompatible(tag) = filename.tag_compatibility(tags)
+            {
+                Some(tag)
             } else {
                 None
             };
@@ -1305,6 +1315,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         IncompatibleWheel::Tag(tag),
                     )),
                 )));
+            }
+            if let BuiltDist::Path(wheel) = dist {
+                check_archive_wheel_variant_compatibility(&wheel.filename, &wheel.install_path)?;
             }
         }
 
