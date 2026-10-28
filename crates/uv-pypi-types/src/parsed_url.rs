@@ -588,11 +588,29 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
                 subdirectory,
                 archive_info: _,
             } => {
-                let mut parsed = Self::try_from(url.as_url().clone())?;
-                if let Self::Archive(archive) = &mut parsed {
-                    archive.subdirectory.clone_from(subdirectory);
+                let mut url = url.as_url().clone();
+                url.set_fragment(None);
+                if url.scheme().eq_ignore_ascii_case("file") {
+                    let install_path = url
+                        .to_file_path()
+                        .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?;
+                    let ext = DistExtension::from_path(&install_path).map_err(|err| {
+                        ParsedUrlError::MissingExtensionPath(install_path.clone(), err)
+                    })?;
+                    Ok(Self::Path(ParsedPathUrl::from_source(
+                        install_path.into_boxed_path(),
+                        ext,
+                        url,
+                    )))
+                } else {
+                    let ext = DistExtension::from_path(url.path())
+                        .map_err(|err| ParsedUrlError::MissingExtensionUrl(url.to_string(), err))?;
+                    Ok(Self::Archive(ParsedArchiveUrl::from_source(
+                        url,
+                        subdirectory.clone(),
+                        ext,
+                    )))
                 }
-                Ok(parsed)
             }
             DirectUrl::VcsUrl {
                 url,
@@ -803,7 +821,7 @@ impl From<ParsedGitDirectoryUrl> for SafeUrl {
 mod tests {
     use anyhow::Result;
 
-    use crate::{DirectUrl, ParsedGitDirectoryUrl, parsed_url::ParsedUrl};
+    use crate::{DirectUrl, ParsedGitDirectoryUrl, parsed_url::ParsedUrl, read_direct_url_json};
     use uv_git_types::{GitLfs, GitReference, GitUrl};
     use uv_redacted::SafeUrl;
 
@@ -841,6 +859,16 @@ mod tests {
         let actual = SafeUrl::from(ParsedUrl::try_from(expected.clone())?);
         assert_ne!(expected, actual);
 
+        Ok(())
+    }
+
+    /// Archive metadata must not be reclassified as a Git source based on the URL's spelling.
+    #[test]
+    fn direct_url_archive_with_git_suffix() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            r#"{"url":"https://example.com/archive.git","archive_info":{}}"#.as_bytes(),
+        )?;
+        assert!(ParsedUrl::try_from(&metadata).is_err());
         Ok(())
     }
 

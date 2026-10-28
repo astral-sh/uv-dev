@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use thiserror::Error;
@@ -99,8 +101,21 @@ fn installed_requirements(
         .sorted_by(|left, right| left.name().cmp(right.name()))
         .map(|dist| {
             let version_or_url = match &dist.kind {
-                InstalledDistKind::Registry(_)
-                | InstalledDistKind::EggInfoFile(_)
+                InstalledDistKind::Registry(dist) => {
+                    // The installed-package index tolerates invalid source URLs. Their presence
+                    // must not be interpreted as a registry origin when upgrading automatically.
+                    let metadata = dist.path.join("direct_url.json");
+                    match fs_err::symlink_metadata(&metadata) {
+                        Ok(_) => bail!(
+                            "Cannot upgrade `{}`: the recorded source URL in `{}` could not be parsed",
+                            dist.name,
+                            metadata.user_display()
+                        ),
+                        Err(err) if err.kind() == ErrorKind::NotFound => None,
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                InstalledDistKind::EggInfoFile(_)
                 | InstalledDistKind::EggInfoDirectory(_) => None,
                 InstalledDistKind::Url(dist) => Some(VersionOrUrl::Url(VerbatimParsedUrl {
                     parsed_url: ParsedUrl::try_from(dist.direct_url.as_ref())?,

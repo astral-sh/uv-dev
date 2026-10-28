@@ -591,6 +591,39 @@ fn direct_url() {
     ");
 }
 
+/// Unusable source metadata must not turn a direct-source installation into an index request.
+#[test]
+fn invalid_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    fs_err::write(
+        context
+            .site_packages()
+            .join("a-1.0.0.dist-info/direct_url.json"),
+        r#"{"url":"not-a-url","archive_info":{}}"#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot upgrade `a`: the recorded source URL in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json` could not be parsed
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    ");
+    Ok(())
+}
+
 /// A registry duplicate must not discard the direct URL recorded for the same package.
 #[test]
 fn duplicate_registry_and_url() -> Result<()> {
