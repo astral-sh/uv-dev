@@ -490,6 +490,9 @@ lto = "fat"
 # This will still show a panic message, we only skip the unwind.
 panic = "abort"
 
+[profile.release.package.uv-cli]
+opt-level = "z"
+
 # This profile is meant to mimic the `release` profile as closely as
 # possible, but using settings that are more beneficial for iterative
 # development. That is, the `release` profile is intended for actually
