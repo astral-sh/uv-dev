@@ -74,6 +74,24 @@ configuration was changed during this investigation.
 
 Source: muellert’s 2026-10-27 comment on astral-sh/uv#22277 (comment ID 6440854793).
 
+## Proposed behavior and open design questions
+
+The reporter proposes treating the SSH username as part of each repository URL: retain an
+explicit username, normalize the URL to include it, and use that username for SSH operations.
+They additionally propose defaulting to `git` when no username is supplied. Their rationale
+is that a Git hosting service can use a shared SSH account while identifying individual users
+and applying access roles through SSH keys. This makes the requested behavior specific to
+each repository, unlike the global SSH override described above.
+
+This is a reporter proposal, not an accepted design or an implemented fix. In particular,
+the claim that defaulting missing usernames to `git` would be backward compatible has not
+been established. The maintainer has expressed uncertainty about how to expose configuration;
+no configuration interface has been selected in the supplied discussion. The reporter declines
+to disclose the actual account name, so `mygituser` remains a placeholder and no additional
+server configuration or runtime reproduction is available.
+
+Source: muellert’s 2026-10-28 comment on astral-sh/uv#22277 (comment ID 6473982795).
+
 ## Validation and next step
 
 Recommend centralizing the shared-account SSH reproduction in astral-sh/uv#15034. The draft offers the documented `--raw` workaround and makes its different project-file representation explicit. It does not promise a fix or claim the historical export change supported arbitrary usernames.
