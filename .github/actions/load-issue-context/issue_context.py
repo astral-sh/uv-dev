@@ -67,14 +67,14 @@ def git(*arguments, directory=None, check=True):
         cwd=directory,
         env=os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         check=check,
     )
 
 
 @dataclass
 class Context:
-    readme: str
+    readme: str | None
     data: dict
     revision: str
     artifact_number: int | None = None
@@ -167,7 +167,7 @@ def read_legacy(repository, issue_number):
         check=False,
     )
     if reference.returncode == 2:
-        return Context("", {}, digest(["missing"]))
+        return Context(None, {}, digest(["missing"]))
     reference.check_returncode()
     revision = reference.stdout.split()[0]
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -201,8 +201,8 @@ def read_legacy(repository, issue_number):
             if mode not in {"100644", "100755"} or kind != "blob":
                 raise ValueError(f"The legacy {name} is not a regular file.")
             files[name] = git("show", f"{revision}:{name}", directory=directory).stdout
-    if not {"README.md", "issue.json"} <= files.keys():
-        raise ValueError("The legacy issue-context branch is not initialized.")
+    if "issue.json" not in files:
+        raise ValueError("The legacy issue-context branch has no issue metadata.")
     data = {"repository": repository}
     data.update(
         (name.removesuffix(".json"), json.loads(content))
@@ -210,7 +210,7 @@ def read_legacy(repository, issue_number):
         if name.endswith(".json")
     )
     validate_data(data, repository, issue_number)
-    return Context(files["README.md"], data, digest(["legacy", revision]))
+    return Context(files.get("README.md"), data, digest(["legacy", revision]))
 
 
 def read_context(repository, issue_number):
@@ -248,13 +248,13 @@ def load(args):
     if directory.exists():
         raise ValueError("The issue-context destination already exists.")
     context = read_context(args.repository, args.issue_number)
-    if not context.data:
+    if context.readme is None:
         if args.template and args.issue_file:
             context.readme = read_file(args.template)
-            context.data = {
-                "repository": args.repository,
-                "issue": json.loads(read_file(args.issue_file)),
-            }
+            context.data.update(
+                repository=args.repository,
+                issue=json.loads(read_file(args.issue_file)),
+            )
             validate_data(context.data, args.repository, args.issue_number)
         elif args.allow_missing:
             output(exists="false")

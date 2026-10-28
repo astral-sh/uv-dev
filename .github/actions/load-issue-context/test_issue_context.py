@@ -185,6 +185,68 @@ class IssueContextTests(unittest.TestCase):
         self.assertEqual(updated.data["reproduction"], {"reproduction": "reproducible"})
         self.assertEqual([method for method, _, _ in self.writes], ["PATCH"])
 
+    def test_legacy_report_without_readme_can_be_initialized_and_migrated(self):
+        """The first context writer stored JSON results without a Markdown report."""
+        (self.legacy_repository / "issue.json").write_text(json.dumps(ISSUE))
+        (self.legacy_repository / "triage.json").write_text('{"type": "question"}')
+        issue_context.git("add", ".", directory=self.legacy_repository)
+        issue_context.git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--quiet",
+            "--message",
+            "Existing JSON context",
+            directory=self.legacy_repository,
+        )
+        legacy = issue_context.read_context(REPOSITORY, ISSUE_NUMBER)
+        updated_issue = {**ISSUE, "title": "Updated issue title"}
+        self.issue_file.write_text(json.dumps(updated_issue))
+        args = self.load_args()
+        args.template = str(self.readme)
+        args.issue_file = str(self.issue_file)
+        issue_context.load(args)
+        context = Path(args.path)
+        self.assertEqual((context / "README.md").read_text(), self.readme.read_text())
+        self.assertEqual(
+            json.loads((context / "issue.json").read_text()), updated_issue
+        )
+        self.assertEqual(
+            json.loads((context / "triage.json").read_text()), {"type": "question"}
+        )
+        issue_context.save(self.save_args(legacy.revision))
+        migrated = issue_context.read_context(REPOSITORY, ISSUE_NUMBER)
+        self.assertEqual(migrated.readme, self.readme.read_text())
+        self.assertEqual(migrated.data["triage"], {"type": "question"})
+        self.assertEqual(migrated.data["issue"], updated_issue)
+
+    def test_comment_updates_skip_legacy_reports_without_readme(self):
+        (self.legacy_repository / "issue.json").write_text(json.dumps(ISSUE))
+        issue_context.git("add", ".", directory=self.legacy_repository)
+        issue_context.git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--quiet",
+            "--message",
+            "Existing JSON context",
+            directory=self.legacy_repository,
+        )
+        args = self.load_args()
+        args.allow_missing = True
+        issue_context.load(args)
+        self.assertFalse(Path(args.path).exists())
+        self.assertEqual(self.outputs.read_text(), "exists=false\n")
+        self.assertEqual(self.writes, [])
+
     def test_stale_analysis_cannot_overwrite_a_newer_version(self):
         data = {"repository": REPOSITORY, "issue": ISSUE}
         self.add_artifact(issue_context.encode("# Original\n", data))
