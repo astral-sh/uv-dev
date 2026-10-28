@@ -19865,3 +19865,2195 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
         .assert(predicate::path::missing());
     Ok(())
 }
+
+#[tokio::test]
+async fn index_precedence_legacy_cli_default_over_modern_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+        default = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_legacy_cli_extra_over_modern_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_default_over_legacy_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        index-url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_extra_over_legacy_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        extra-index-url = [{fallback_url:?}]
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_legacy_cli_default_over_modern_env() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()])
+        .env(EnvVars::UV_DEFAULT_INDEX, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()])
+        .env(EnvVars::UV_DEFAULT_INDEX, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_default_over_legacy_env() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()])
+        .env(EnvVars::UV_INDEX_URL, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()])
+        .env(EnvVars::UV_INDEX_URL, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_legacy_cli_extra_over_modern_env() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()])
+        .env(EnvVars::UV_INDEX, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()])
+        .env(EnvVars::UV_INDEX, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_extra_over_legacy_env() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index", preferred_url.as_str()])
+        .env(EnvVars::UV_EXTRA_INDEX_URL, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index", preferred_url.as_str()])
+        .env(EnvVars::UV_EXTRA_INDEX_URL, fallback_url.as_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_default_over_legacy_cli() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()])
+        .args(["--default-index", fallback_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()])
+        .args(["--default-index", fallback_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==2.0.0
+    ");
+
+    context.assert_installed("ok", "2.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("2.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(fallback_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_modern_cli_extra_over_legacy_cli() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()])
+        .args(["--index", fallback_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--extra-index-url", preferred_url.as_str()])
+        .args(["--index", fallback_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==2.0.0
+    ");
+
+    context.assert_installed("ok", "2.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("2.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(fallback_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_configured_extra_over_modern_cli_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--default-index", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==2.0.0
+    ");
+
+    context.assert_installed("ok", "2.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("2.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(fallback_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn index_precedence_configured_extra_over_legacy_cli_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .args(["--index-url", preferred_url.as_str()]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==2.0.0
+    ");
+
+    context.assert_installed("ok", "2.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("2.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(fallback_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_project_default_over_modern_user_uv_toml() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        index-url = {preferred_url:?}
+    "})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+        default = true
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_project_default_over_legacy_user_uv_toml() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {preferred_url:?}
+        default = true
+    "})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        index-url = {fallback_url:?}
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_project_extra_over_modern_user_uv_toml() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        extra-index-url = [{preferred_url:?}]
+    "})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_project_extra_over_legacy_user_uv_toml() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    context.temp_dir.child("uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {preferred_url:?}
+    "})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        extra-index-url = [{fallback_url:?}]
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_project_default_over_modern_user_pyproject() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv]
+        index-url = {preferred_url:?}
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+        default = true
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_project_default_over_legacy_user_pyproject() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv]
+        [[tool.uv.index]]
+        url = {preferred_url:?}
+        default = true
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        index-url = {fallback_url:?}
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_project_extra_over_modern_user_pyproject() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv]
+        extra-index-url = [{preferred_url:?}]
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_project_extra_over_legacy_user_pyproject() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv]
+        [[tool.uv.index]]
+        url = {preferred_url:?}
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        extra-index-url = [{fallback_url:?}]
+    "})?;
+    system_dir.child("uv/uv.toml").write_str("")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_user_default_over_modern_system() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        index-url = {preferred_url:?}
+    "})?;
+    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+        default = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_user_default_over_legacy_system() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {preferred_url:?}
+        default = true
+    "})?;
+    system_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        index-url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+    assert_eq!(package["version"].as_str(), Some("1.0.0"));
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(preferred_url.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_legacy_script_default_over_modern_user() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["ok"]
+        #
+        # [tool.uv]
+        # index-url = {preferred_url:?}
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        [[index]]
+        url = {fallback_url:?}
+        default = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .args(["--script", "main.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_modern_script_default_over_legacy_user() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &context.read_bytes(
+                context
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            ),
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["ok"]
+        #
+        # [[tool.uv.index]]
+        # url = {preferred_url:?}
+        # default = true
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+    "#})?;
+    let user_dir = context.temp_dir.child("user");
+    user_dir.child("uv/uv.toml").write_str(&formatdoc! {r"
+        index-url = {fallback_url:?}
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::UV_INDEX)
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env_remove(EnvVars::UV_EXTRA_INDEX_URL)
+        .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+        .args(["--script", "main.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    Ok(())
+}
