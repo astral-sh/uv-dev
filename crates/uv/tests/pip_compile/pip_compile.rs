@@ -15974,6 +15974,88 @@ fn symlink() -> Result<()> {
     Ok(())
 }
 
+/// A dangling output link creates its final target without replacing the link.
+#[test]
+#[cfg(not(windows))]
+fn dangling_relative_output_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example==1.0.0")?;
+    context
+        .temp_dir
+        .child("generated.txt")
+        .write_str("# cwd sentinel\n")?;
+    context.temp_dir.child("out").create_dir_all()?;
+    let output = context.temp_dir.child("out/result.txt");
+    output.symlink_to_file("generated.txt")?;
+    assert!(!context.temp_dir.child("out/generated.txt").path().exists());
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links", "wheels", "--no-header", "--no-annotate", "--output-file", "out/result.txt"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    assert_eq!(context.read("out/generated.txt"), "example==1.0.0\n");
+    assert_eq!(context.read("generated.txt"), "# cwd sentinel\n");
+    assert_link_target(output, "generated.txt");
+    Ok(())
+}
+
+/// A cyclic output path must fail without replacing either link or a same-named cwd file.
+#[test]
+#[cfg(not(windows))]
+fn cyclic_output_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example==1.0.0")?;
+    context
+        .temp_dir
+        .child("next.txt")
+        .write_str("# cwd sentinel\n")?;
+    context.temp_dir.child("out").create_dir_all()?;
+    let output = context.temp_dir.child("out/result.txt");
+    let next = context.temp_dir.child("out/next.txt");
+    output.symlink_to_file("next.txt")?;
+    next.symlink_to_file("result.txt")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links", "wheels", "--no-header", "--no-annotate", "--output-file", "out/result.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Too many symbolic links in output path `out/result.txt`
+    ");
+
+    assert_eq!(context.read("next.txt"), "# cwd sentinel\n");
+    assert_link_target(output, "next.txt");
+    assert_link_target(next, "result.txt");
+    Ok(())
+}
+
 /// Resolve with `--universal`, applying user-provided constraints to the space of supported
 /// environments.
 #[cfg(feature = "test-universal")]

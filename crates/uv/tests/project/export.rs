@@ -16,6 +16,8 @@ use std::thread;
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+#[cfg(not(windows))]
+use uv_test::assert_link_target;
 #[cfg(feature = "test-universal")]
 use uv_test::copy_dir_ignore;
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
@@ -3814,6 +3816,78 @@ fn requirements_txt_no_hashes() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+/// A piped descriptor is an output stream even when its procfs link has no filesystem target.
+#[test]
+#[cfg(target_os = "linux")]
+fn requirements_txt_output_stdout_pipe() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--no-header", "--no-annotate", "--no-hashes", "--quiet", "--output-file", "/dev/stdout"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e .
+    ");
+
+    Ok(())
+}
+
+/// Export follows each output link while quiet mode still writes the final target.
+#[test]
+#[cfg(not(windows))]
+fn requirements_txt_mixed_output_symlink_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("out").create_dir_all()?;
+    context.temp_dir.child("links").create_dir_all()?;
+    context
+        .temp_dir
+        .child("data/requirements.txt")
+        .write_str("# target sentinel\n")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("# cwd sentinel\n")?;
+    let output = context.temp_dir.child("out/result.txt");
+    let next = context.temp_dir.child("links/next.txt");
+    output.symlink_to_file(next.path())?;
+    next.symlink_to_file("../data/requirements.txt")?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--no-header", "--no-annotate", "--no-hashes", "--quiet", "--output-file", "out/result.txt"]), @"exit_code: 0 (success)");
+
+    assert_eq!(context.read("data/requirements.txt"), "-e .\n");
+    assert_eq!(context.read("requirements.txt"), "# cwd sentinel\n");
+    assert_link_target(output, next.path());
+    assert_link_target(next, "../data/requirements.txt");
     Ok(())
 }
 
