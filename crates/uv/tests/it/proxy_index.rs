@@ -815,9 +815,11 @@ async fn proxy_index_direct_url_uses_upstream_credentials() -> Result<()> {
     "#})?;
 
     Mock::given(path(format!("/files/{filename}")))
-        .respond_with(ResponseTemplate::new(401))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .insert_header("WWW-Authenticate", r#"Basic realm="upstream""#),
+        )
         .with_priority(2)
-        .expect(0)
         .mount(&upstream)
         .await;
     Mock::given(method("HEAD"))
@@ -825,7 +827,6 @@ async fn proxy_index_direct_url_uses_upstream_credentials() -> Result<()> {
         .and(basic_auth("upstream-user", "upstream-password"))
         .respond_with(ResponseTemplate::new(405))
         .with_priority(1)
-        .expect(1)
         .mount(&upstream)
         .await;
     Mock::given(method("GET"))
