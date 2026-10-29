@@ -501,10 +501,10 @@ impl<'lock> PylockToml {
                 .as_ref()
                 .filter(|_| !matches!(&**dist, Dist::Source(SourceDist::Directory(..))));
 
+            // A package has one index for all its files. When any artifact is proxied, retain
+            // only the selected source's files, as in uv.lock, so every retained URL uses that route.
+            let source_index = Self::proxy_source_index(dist, index_locations);
             // Retain the canonical index so a later install can find its configured proxy.
-            // `packages.index` applies to every file for this version. If a proxy and `--find-links`
-            // both supply files, selecting a proxied file can make uv reject a `--find-links` URL;
-            // selecting a `--find-links` file can make uv download a proxied file directly.
             let index = dist
                 .index()
                 .filter(|index| index_locations.proxy_route_for(index).is_some())
@@ -566,6 +566,7 @@ impl<'lock> PylockToml {
                         &requires_python,
                         node_index,
                         &dist.wheels,
+                        source_index,
                         build_options.no_binary_package(dist.name()),
                         index_locations,
                     )?;
@@ -574,7 +575,11 @@ impl<'lock> PylockToml {
                     let no_build = build_options.no_build_package(dist.name());
 
                     if !no_build {
-                        if let Some(sdist) = dist.sdist.as_ref() {
+                        if let Some(sdist) = dist
+                            .sdist
+                            .as_ref()
+                            .filter(|sdist| source_index.is_none_or(|index| *index == sdist.index))
+                        {
                             Self::validate_proxy_artifact(
                                 index_locations,
                                 &sdist.index,
@@ -672,6 +677,7 @@ impl<'lock> PylockToml {
                         &requires_python,
                         node_index,
                         &dist.wheels,
+                        source_index,
                         build_options.no_binary_package(&dist.name),
                         index_locations,
                     )?;
@@ -732,6 +738,31 @@ impl<'lock> PylockToml {
         })
     }
 
+    /// Restrict a package to its selected source when mixing artifacts would lose proxy routing.
+    fn proxy_source_index<'a>(dist: &'a Dist, indexes: &IndexLocations) -> Option<&'a IndexUrl> {
+        let is_proxy = |index: &IndexUrl| indexes.proxy_route_for(index).is_some();
+        let has_proxy = match dist {
+            Dist::Built(BuiltDist::Registry(dist)) => dist
+                .wheels
+                .iter()
+                .map(|wheel| &wheel.index)
+                .chain(dist.sdist.iter().map(|sdist| &sdist.index))
+                .any(is_proxy),
+            Dist::Source(SourceDist::Registry(dist)) => std::iter::once(&dist.index)
+                .chain(dist.wheels.iter().map(|wheel| &wheel.index))
+                .any(is_proxy),
+            Dist::Built(BuiltDist::DirectUrl(_) | BuiltDist::Path(_) | BuiltDist::GitPath(_))
+            | Dist::Source(
+                SourceDist::DirectUrl(_)
+                | SourceDist::Directory(_)
+                | SourceDist::GitDirectory(_)
+                | SourceDist::GitPath(_)
+                | SourceDist::Path(_),
+            ) => false,
+        };
+        if has_proxy { dist.index() } else { None }
+    }
+
     /// Filter wheels based on build options (--no-binary) and incompatible tags and return the
     /// rest.
     ///
@@ -742,6 +773,7 @@ impl<'lock> PylockToml {
         requires_python: &RequiresPython,
         node_index: NodeIndex,
         wheels: &[RegistryBuiltWheel],
+        source_index: Option<&IndexUrl>,
         no_binary: bool,
         index_locations: &IndexLocations,
     ) -> Result<Option<Vec<PylockTomlWheel>>, PylockTomlErrorKind> {
@@ -752,6 +784,7 @@ impl<'lock> PylockToml {
         // Filter wheels based on tag compatibility and requires-python.
         let wheels: Vec<_> = wheels
             .iter()
+            .filter(|wheel| source_index.is_none_or(|index| *index == wheel.index))
             .filter(|wheel| {
                 !is_wheel_unreachable(
                     &wheel.filename,
