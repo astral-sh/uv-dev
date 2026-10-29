@@ -192,19 +192,15 @@ pub(super) fn normalize_requirement(
         }
         RequirementSource::Path {
             install_path,
+            subdirectory,
             ext,
-            url: _,
+            ..
         } => {
-            let path = root.join(&install_path);
-            let install_path = normalize_path(path).into_owned().into_boxed_path();
-            let url = VerbatimUrl::from_normalized_path(&install_path)
-                .map_err(LockErrorKind::RequirementVerbatimUrl)?;
-
-            RequirementSource::Path {
-                install_path,
-                ext,
-                url,
-            }
+            let path = normalize_path(root.join(install_path))
+                .into_owned()
+                .into_boxed_path();
+            RequirementSource::from_absolute_archive_path(path, subdirectory, ext)
+                .map_err(LockErrorKind::RequirementVerbatimUrl)?
         }
         RequirementSource::Directory {
             install_path,

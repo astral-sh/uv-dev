@@ -3451,6 +3451,166 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
     Ok(())
 }
 
+/// Local archive metadata is available for lock validation even when the network is disabled.
+#[cfg(feature = "test-universal")]
+#[test]
+fn local_archive_subdirectory_lock_offline() -> Result<()> {
+    let name = "example".parse()?;
+    let original_archive = generate_source_archive(&name, &"1.0".parse()?, "nested", None)?;
+    let changed_archive = generate_source_archive(&name, &"2.0".parse()?, "nested", None)?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((
+            hex::encode(Sha256::digest(&original_archive)),
+            "[ORIGINAL_HASH]",
+        ))
+        .with_filter((
+            hex::encode(Sha256::digest(&changed_archive)),
+            "[CHANGED_HASH]",
+        ));
+    let archive = context.temp_dir.child("projects.tar.gz");
+    archive.write_binary(&original_archive)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example @ {url}#subdirectory=nested"]
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original = context.read("uv.lock");
+    archive.write_binary(&changed_archive)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to generate package metadata for `example==1.0 @ direct+file://[TEMP_DIR]/projects.tar.gz`
+      cause: Hash mismatch for `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+
+             Expected:
+               sha256:[ORIGINAL_HASH]
+
+             Computed:
+               sha256:[CHANGED_HASH]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    Ok(())
+}
+
+/// A selected project inside a relative archive must still install after moving the workspace.
+#[cfg(feature = "test-universal")]
+#[test]
+fn local_archive_subdirectory_relocated() -> Result<()> {
+    let archive = generate_source_archive(
+        &"example".parse()?,
+        &"1.0".parse()?,
+        "packages/example",
+        None,
+    )?;
+    let digest = hex::encode(Sha256::digest(&archive));
+    let context = uv_test::test_context!("3.12").with_filter((digest, "[ARCHIVE_HASH]"));
+    let original = context.temp_dir.child("original");
+    let moved = context.temp_dir.child("moved");
+    let original_url = SafeUrl::from_file_path(original.path()).expect("absolute project path");
+    let moved_url = SafeUrl::from_file_path(moved.path()).expect("absolute project path");
+    original.child("projects.tar.gz").write_binary(&archive)?;
+    original.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example @ ${PROJECT_ROOT}/projects.tar.gz#subdirectory=packages/example"]
+    "#})?;
+    context
+        .lock()
+        .current_dir(original.path())
+        .env("PROJECT_ROOT", original_url.as_str())
+        .arg("--offline")
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("original/uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "example"
+        version = "1.0"
+        source = { archive = "projects.tar.gz", subdirectory = "packages/example" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
+
+        [[package]]
+        name = "parent"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "example" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "example", archive = "projects.tar.gz", subdirectory = "packages/example" }]
+        "#);
+    });
+
+    fs_err::rename(original.path(), moved.path())?;
+    context
+        .lock()
+        .current_dir(moved.path())
+        .env("PROJECT_ROOT", moved_url.as_str())
+        .args(["--check", "--offline"])
+        .assert()
+        .success();
+    context
+        .sync()
+        .current_dir(moved.path())
+        .env("PROJECT_ROOT", moved_url.as_str())
+        .args(["--frozen", "--offline", "--no-cache"])
+        .assert()
+        .success();
+    let pylock = moved.child("pylock.toml");
+    context
+        .export()
+        .current_dir(moved.path())
+        .env("PROJECT_ROOT", moved_url.as_str())
+        .args([
+            "--frozen",
+            "--format",
+            "pylock.toml",
+            "--output-file",
+            "pylock.toml",
+        ])
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("moved/pylock.toml"), @r#"
+        # This file was autogenerated by uv via the following command:
+        #    uv export --cache-dir [CACHE_DIR] --frozen --format pylock.toml --output-file pylock.toml
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "example"
+        version = "1.0"
+        archive = { path = "projects.tar.gz", subdirectory = "packages/example", hashes = { sha256 = "[ARCHIVE_HASH]" } }
+        "#);
+    });
+    context
+        .pip_sync()
+        .args(["--offline", "--no-cache"])
+        .arg(pylock.path())
+        .assert()
+        .success();
+    context.assert_installed("example", "1.0");
+    Ok(())
+}
+
 /// Equivalent subdirectory spellings must retain the hash of an already-locked archive.
 #[cfg(feature = "test-universal")]
 #[tokio::test]

@@ -60,6 +60,7 @@ Ok(
                     ),
                     source: Path(
                         "file:///foo/bar",
+                        None,
                     ),
                 },
                 sdist: None,
@@ -118,6 +119,7 @@ Ok(
                 ),
                 source: Path(
                     "file:///foo/bar",
+                    None,
                 ),
             }: PackageIndex(
                 0,

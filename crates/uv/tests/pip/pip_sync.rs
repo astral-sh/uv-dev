@@ -6531,6 +6531,138 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     Ok(())
 }
 
+/// Changing a pylock archive selection must not reuse a wheel from another subdirectory.
+#[test]
+fn local_archive_subdirectory_pylock_cache() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use uv_test::archive::generate_source_archive;
+
+    let context = uv_test::test_context!("3.12");
+    let mut archive =
+        generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
+    // An unhashed installation may finish extracting the tarball without reading its padding.
+    archive.resize(archive.len() + 128 * 1024, 0);
+    let size = archive.len();
+    let path = context.temp_dir.child("projects.tar.gz");
+    path.write_binary(&archive)?;
+    let url = SafeUrl::from_file_path(path.path()).expect("absolute archive path");
+    let hash = hex::encode(Sha256::digest(&archive));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "example"
+        version = "1.0"
+        archive = {{ url = "{url}", subdirectory = "nested", size = {size}, hashes = {{ sha256 = "{hash}" }} }}
+    "#};
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(format!("example @ {url}#subdirectory=nested"))
+        .assert()
+        .success();
+    context.reset_venv();
+    let pylock = context.temp_dir.child("pylock.toml");
+    pylock.write_str(&lock)?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested)
+    ");
+    context.reset_venv();
+    pylock.write_str(&lock.replace("subdirectory = \"nested\"", "subdirectory = \"missing\""))?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=missing`
+      cause: The source distribution `file://[TEMP_DIR]/projects.tar.gz#subdirectory=missing` has no subdirectory `missing`
+    ");
+    Ok(())
+}
+
+/// A selected project in an archive path must build the version declared in the lockfile.
+#[test]
+fn local_archive_subdirectory_pylock_version() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use uv_test::archive::generate_source_archive;
+
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
+    let digest = hex::encode(Sha256::digest(&archive));
+    context
+        .temp_dir
+        .child("projects.tar.gz")
+        .write_binary(&archive)?;
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "example"
+        version = "2.0"
+        archive = {{ path = "projects.tar.gz", subdirectory = "nested", hashes = {{ sha256 = "{digest}" }} }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+      cause: Package metadata version `1.0` does not match given version `2.0`
+    ");
+    Ok(())
+}
+
+/// A correct hash cannot authorize a different size for a local archive, even from cache.
+#[test]
+fn local_archive_subdirectory_pylock_size() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use uv_test::archive::generate_source_archive;
+
+    let archive = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
+    let size = archive.len();
+    let context = uv_test::test_context!("3.12").with_filter((
+        format!("downloaded {size} bytes"),
+        "downloaded [SIZE] bytes",
+    ));
+    let path = context.temp_dir.child("projects.tar.gz");
+    path.write_binary(&archive)?;
+    let url = SafeUrl::from_file_path(path.path()).expect("absolute archive path");
+    let hash = hex::encode(Sha256::digest(&archive));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "example"
+        version = "1.0"
+        archive = {{ url = "{url}", subdirectory = "nested", size = {size}, hashes = {{ sha256 = "{hash}" }} }}
+    "#};
+    let wrong_size = lock.replace(&format!("size = {size}"), "size = 1");
+    let pylock = context.temp_dir.child("pylock.toml");
+    pylock.write_str(&wrong_size)?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+      cause: Size mismatch for `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`: expected 1 bytes, but downloaded [SIZE] bytes
+    ");
+
+    pylock.write_str(&lock)?;
+    context
+        .pip_sync()
+        .args(["--preview", "--offline", "pylock.toml"])
+        .assert()
+        .success();
+    context.reset_venv();
+    pylock.write_str(&wrong_size)?;
+    uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+      cause: Size mismatch for `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`: expected 1 bytes, but downloaded [SIZE] bytes
+    ");
+    Ok(())
+}
+
 /// Both newly built and cached wheels must match the version in an archive lock.
 #[test]
 fn pep_751_validates_url_sdist_version() -> Result<()> {

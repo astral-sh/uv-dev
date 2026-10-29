@@ -12556,6 +12556,55 @@ fn wheel_cannot_supply_disabled_installer_metadata() -> Result<()> {
     Ok(())
 }
 
+/// Building and caching a project selected inside a local archive must retain its origin.
+#[test]
+fn local_archive_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("collection-1.0.tar.gz");
+    archive.write_binary(&generate_source_archive(
+        &"example".parse()?,
+        &"1.0".parse()?,
+        "packages/example",
+        None,
+    )?)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute path");
+    let requirement = format!("{url}#subdirectory=packages/example");
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").arg(&requirement), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/example)
+    ");
+    let origin_path = context
+        .site_packages()
+        .join("example-1.0.dist-info/direct_url.json");
+    let origin: serde_json::Value = serde_json::from_str(&fs::read_to_string(&origin_path)?)?;
+    assert_eq!(origin["url"], url.as_str());
+    assert_eq!(origin["subdirectory"], "packages/example");
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").arg(&requirement), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/example)
+    ");
+    let cached_origin: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&origin_path)?)?;
+    assert_eq!(cached_origin, origin);
+    // A different selection must not reuse the wheel built from packages/example.
+    uv_snapshot!(context.filters(), context.pip_install().arg("--no-index")
+        .arg(format!("example @ {url}#subdirectory=packages/missing")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `example @ file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/missing`
+      cause: The source distribution `file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/missing` has no subdirectory `packages/missing`
+    ");
+    Ok(())
+}
+
 /// Ensure that `UV_NO_INSTALLER_METADATA` env var is respected.
 #[test]
 fn respect_no_installer_metadata_env_var() {

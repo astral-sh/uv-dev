@@ -417,7 +417,7 @@ pub struct DirectorySourceDist {
 impl Dist {
     /// A remote built distribution (`.whl`) or source distribution from a `http://` or `https://`
     /// URL.
-    pub fn from_http_url(
+    fn from_http_url(
         name: PackageName,
         url: VerbatimUrl,
         location: SafeUrl,
@@ -461,7 +461,7 @@ impl Dist {
     }
 
     /// A local built or source distribution from a `file://` URL.
-    pub fn from_file_url(
+    fn from_file_url(
         name: PackageName,
         url: VerbatimUrl,
         install_path: &Path,
@@ -526,7 +526,7 @@ impl Dist {
     }
 
     /// A local source tree from a `file://` URL.
-    pub fn from_directory_url(
+    fn from_directory_url(
         name: PackageName,
         url: VerbatimUrl,
         install_path: &Path,
@@ -556,7 +556,7 @@ impl Dist {
     }
 
     /// Create a [`Dist`] for a source tree within a Git repository (i.e., a `git+https://` or `git+ssh://` URL).
-    pub fn from_git_directory_url(
+    fn from_git_directory_url(
         name: PackageName,
         url: VerbatimUrl,
         git: GitUrl,
@@ -573,7 +573,7 @@ impl Dist {
     }
 
     /// Create a [`Dist`] for a source archive within a Git repository (i.e., a `git+https://` or `git+ssh://` URL).
-    pub fn from_git_path_url(
+    fn from_git_path_url(
         name: PackageName,
         url: VerbatimUrl,
         git: GitUrl,
@@ -841,7 +841,11 @@ impl SourceDist {
 
     /// Returns `true` if the distribution refers to a local file or directory.
     fn is_local(&self) -> bool {
-        matches!(self, Self::Directory(_) | Self::Path(_))
+        match self {
+            Self::Directory(_) | Self::Path(_) => true,
+            Self::DirectUrl(dist) => dist.location.scheme() == "file",
+            Self::Registry(_) | Self::GitDirectory(_) | Self::GitPath(_) => false,
+        }
     }
 
     /// Returns the path to the source distribution, if it's a local distribution.

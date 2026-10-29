@@ -327,6 +327,7 @@ impl RequirementSatisfaction {
             }
             RequirementSource::Path {
                 install_path: requested_path,
+                subdirectory: requested_subdirectory,
                 ext: _,
                 url: _,
             } => {
@@ -341,11 +342,14 @@ impl RequirementSatisfaction {
                 let DirectUrl::ArchiveUrl {
                     url: installed_url,
                     archive_info: _,
-                    subdirectory: None,
+                    subdirectory: installed_subdirectory,
                 } = direct_url.as_ref()
                 else {
                     return Self::Mismatch;
                 };
+                if installed_subdirectory != requested_subdirectory {
+                    return Self::Mismatch;
+                }
 
                 let Ok(installed_path) = installed_url.to_file_path() else {
                     return Self::Mismatch;

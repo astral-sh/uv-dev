@@ -93,6 +93,19 @@ impl<'dist> RequirementsTxtDist<'dist> {
                     }
                 };
                 if let Some(given) = given {
+                    // Pip treats a fragment on a bare path as part of the filename.
+                    let given = if let Some(fragment) = url.fragment() {
+                        let path = given
+                            .split_once('#')
+                            .map_or(given.as_ref(), |(path, _)| path);
+                        if Path::new(path).is_absolute() {
+                            Cow::Owned(url.to_string())
+                        } else {
+                            Cow::Owned(format!("file:{path}#{fragment}"))
+                        }
+                    } else {
+                        given
+                    };
                     return if let Some(markers) =
                         SimplifiedMarkerTree::new(requires_python, self.markers)
                             .try_to_string()

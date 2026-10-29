@@ -59,6 +59,30 @@ use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, copy_dir_ignore, download_to_disk, uv_snapshot,
 };
 
+/// A relative archive with a selected project needs a file URL so pip parses its fragment.
+#[test]
+fn local_archive_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
+    context
+        .temp_dir
+        .child("projects.tar.gz")
+        .write_binary(&archive)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example @ ./projects.tar.gz#subdirectory=nested\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./projects.tar.gz#subdirectory=nested
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 #[test]
 fn compile_requirements_in() -> Result<()> {
     let context = uv_test::test_context!("3.12");

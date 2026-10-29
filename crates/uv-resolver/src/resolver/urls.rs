@@ -4,7 +4,7 @@ use same_file::is_same_file;
 use tracing::debug;
 
 use uv_cache_key::CanonicalUrl;
-use uv_distribution_types::{RequirementSource, ResolutionRecorder};
+use uv_distribution_types::ResolutionRecorder;
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pep508::VerbatimUrl;
@@ -58,12 +58,10 @@ impl Urls {
                 manifest
                     .requirements_no_overrides(env, dependencies)
                     .filter(|requirement| {
-                        matches!(
-                            &requirement.source,
-                            RequirementSource::Path { url, .. }
-                                | RequirementSource::Directory { url, .. }
-                                if !url.force_relative()
-                        )
+                        requirement
+                            .source
+                            .local_url()
+                            .is_some_and(|url| !url.force_relative())
                     })
                     .map(|requirement| (requirement, false)),
             )
@@ -72,12 +70,7 @@ impl Urls {
                 // Registry requirement
                 continue;
             };
-            if force_relative
-                && matches!(
-                    &url.parsed_url,
-                    ParsedUrl::Path(_) | ParsedUrl::Directory(_)
-                )
-            {
+            if force_relative && requirement.source.local_url().is_some() {
                 // Force relative paths for the initial merge so replayed user-provided requirements
                 // determine the final path preference.
                 url.verbatim = url.verbatim.with_force_relative(true);

@@ -120,10 +120,12 @@ impl Requirement {
     ///
     /// When `false`, preserve the original input's path preference. Non-local sources are unchanged.
     pub fn set_force_relative(&mut self, force_relative: bool) {
-        if let RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } =
-            &mut self.source
-            && url.force_relative() != force_relative
-        {
+        let url = match &mut self.source {
+            RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } => url,
+            RequirementSource::Url { location, url, .. } if location.scheme() == "file" => url,
+            _ => return,
+        };
+        if url.force_relative() != force_relative {
             *url = url.clone().with_force_relative(force_relative);
         }
     }
@@ -310,14 +312,11 @@ impl From<Requirement> for uv_pep508::Requirement<VerbatimParsedUrl> {
                 })),
                 RequirementSource::Path {
                     install_path,
+                    subdirectory,
                     ext,
                     url,
                 } => Some(VersionOrUrl::Url(VerbatimParsedUrl {
-                    parsed_url: ParsedUrl::Path(ParsedPathUrl {
-                        url: url.to_url(),
-                        install_path,
-                        ext,
-                    }),
+                    parsed_url: parsed_path_url(install_path, subdirectory, ext, url.to_url()),
                     verbatim: url,
                 })),
                 RequirementSource::Directory {
@@ -541,11 +540,15 @@ impl CacheKey for Requirement {
             }
             RequirementSource::Path {
                 install_path,
+                subdirectory,
                 ext,
                 url,
             } => {
                 3u8.cache_key(state);
                 install_path.cache_key(state);
+                if let Some(subdirectory) = subdirectory {
+                    subdirectory.cache_key(state);
+                }
                 ext.name().cache_key(state);
                 url.cache_key(state);
             }
@@ -629,6 +632,8 @@ pub enum RequirementSource {
     /// be a binary distribution (a `.whl` file) or a source distribution archive (a `.zip` or
     /// `.tar.gz` file).
     Path {
+        /// The selected project inside a local source archive, if any.
+        subdirectory: Option<Box<Path>>,
         /// The absolute path to the distribution which we use for installing.
         install_path: Box<Path>,
         /// The file extension, e.g. `tar.gz`, `zip`, etc.
@@ -653,11 +658,64 @@ pub enum RequirementSource {
 }
 
 impl RequirementSource {
+    /// The URL whose original spelling determines how a local source is recorded in the lockfile.
+    pub fn local_url(&self) -> Option<&VerbatimUrl> {
+        match self {
+            Self::Path { url, .. } | Self::Directory { url, .. } => Some(url),
+            Self::Url { location, url, .. } if location.scheme() == "file" => Some(url),
+            _ => None,
+        }
+    }
+
+    fn from_stored_path(
+        path: PortablePathBuf,
+        subdirectory: Option<PortablePathBuf>,
+    ) -> Result<Self, RequirementError> {
+        let path = Box::<Path>::from(path);
+        let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&path)))?;
+        Ok(Self::Path {
+            ext: DistExtension::from_path(&path)
+                .map_err(|err| ParsedUrlError::MissingExtensionPath(path.to_path_buf(), err))?,
+            install_path: path,
+            subdirectory: subdirectory.map(Box::<Path>::from),
+            url,
+        })
+    }
+
+    /// Restore a local archive requirement against its workspace root. Selected projects use
+    /// the same archive identity as a direct URL parsed from the project declaration.
+    pub fn from_absolute_archive_path(
+        path: Box<Path>,
+        subdirectory: Option<Box<Path>>,
+        ext: DistExtension,
+    ) -> Result<Self, uv_pep508::VerbatimUrlError> {
+        let url = VerbatimUrl::from_normalized_path(&path)?;
+        if let Some(subdirectory) = subdirectory {
+            let location = url.to_url();
+            let archive =
+                ParsedArchiveUrl::from_source(location.clone(), Some(subdirectory.clone()), ext);
+            Ok(Self::Url {
+                location: location.with_policy(Raw),
+                subdirectory: Some(subdirectory),
+                ext,
+                url: VerbatimUrl::from_url(SafeUrl::from(archive)),
+            })
+        } else {
+            Ok(Self::Path {
+                install_path: path,
+                subdirectory: None,
+                ext,
+                url,
+            })
+        }
+    }
+
     /// Construct a [`RequirementSource`] for a URL source, given a URL parsed into components and
     /// the PEP 508 string (after the `@`) as [`VerbatimUrl`].
     pub(crate) fn from_parsed_url(parsed_url: ParsedUrl, url: VerbatimUrl) -> Self {
         match parsed_url {
             ParsedUrl::Path(local_file) => Self::Path {
+                subdirectory: None,
                 install_path: local_file.install_path.clone(),
                 ext: local_file.ext,
                 url,
@@ -707,14 +765,16 @@ impl RequirementSource {
             }),
             Self::Path {
                 install_path,
+                subdirectory,
                 ext,
                 url,
             } => Some(VerbatimParsedUrl {
-                parsed_url: ParsedUrl::Path(ParsedPathUrl::from_source(
+                parsed_url: parsed_path_url(
                     install_path.clone(),
+                    subdirectory.clone(),
                     *ext,
                     url.to_url(),
-                )),
+                ),
                 verbatim: url.clone(),
             }),
             Self::Directory {
@@ -785,17 +845,35 @@ impl RequirementSource {
     /// Convert the source to a [`RequirementSource`] relative to the given path.
     fn relative_to(self, path: &Path) -> Result<Self, io::Error> {
         match self {
+            Self::Url {
+                location,
+                subdirectory: Some(subdirectory),
+                ext,
+                url,
+            } if url.prefers_relative() && location.scheme() == "file" => {
+                let local = location.to_file_path().map_err(|()| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid file URL")
+                })?;
+                Ok(Self::Path {
+                    install_path: try_relative_to_if(&local, path, true)?.into_boxed_path(),
+                    subdirectory: Some(subdirectory),
+                    ext,
+                    url,
+                })
+            }
             Self::Registry { .. }
             | Self::Url { .. }
             | Self::GitPath { .. }
             | Self::GitDirectory { .. } => Ok(self),
             Self::Path {
                 install_path,
+                subdirectory,
                 ext,
                 url,
             } => Ok(Self::Path {
                 install_path: try_relative_to_if(&install_path, path, url.prefers_relative())?
                     .into_boxed_path(),
+                subdirectory,
                 ext,
                 url,
             }),
@@ -825,12 +903,26 @@ impl RequirementSource {
             | Self::GitDirectory { .. } => self,
             Self::Path {
                 install_path,
+                subdirectory: Some(subdirectory),
+                ext,
+                ..
+            } => {
+                let path = normalize_path(root.join(install_path))
+                    .into_owned()
+                    .into_boxed_path();
+                Self::from_absolute_archive_path(path, Some(subdirectory), ext)
+                    .expect("workspace root is absolute")
+            }
+            Self::Path {
+                install_path,
+                subdirectory,
                 ext,
                 url,
             } => Self::Path {
                 install_path: normalize_path(root.join(install_path))
                     .into_owned()
                     .into_boxed_path(),
+                subdirectory,
                 ext,
                 url,
             },
@@ -849,6 +941,21 @@ impl RequirementSource {
                 url,
             },
         }
+    }
+}
+
+/// A local archive is built from the selected project when one is specified.
+fn parsed_path_url(
+    path: Box<Path>,
+    subdirectory: Option<Box<Path>>,
+    ext: DistExtension,
+    mut url: SafeUrl,
+) -> ParsedUrl {
+    if let Some(subdirectory) = subdirectory {
+        url.set_fragment(None);
+        ParsedUrl::Archive(ParsedArchiveUrl::from_source(url, Some(subdirectory), ext))
+    } else {
+        ParsedUrl::Path(ParsedPathUrl::from_source(path, ext, url))
     }
 }
 
@@ -927,6 +1034,11 @@ enum RequirementSourceWire {
     },
     /// Ex) `source = { path = "/home/ferris/iniconfig-2.0.0-py3-none-any.whl" }`
     Path { path: PortablePathBuf },
+    /// A distinct key prevents older readers from installing a different project at the archive root.
+    Archive {
+        archive: PortablePathBuf,
+        subdirectory: PortablePathBuf,
+    },
     /// Ex) `source = { directory = "/home/ferris/iniconfig" }`
     Directory { directory: PortablePathBuf },
     /// Ex) `source = { editable = "/home/ferris/iniconfig" }`
@@ -1079,10 +1191,16 @@ impl From<RequirementSource> for RequirementSourceWire {
             }
             RequirementSource::Path {
                 install_path,
-                ext: _,
-                url: _,
-            } => Self::Path {
-                path: PortablePathBuf::from(install_path),
+                subdirectory,
+                ..
+            } => match subdirectory {
+                Some(subdirectory) => Self::Archive {
+                    archive: PortablePathBuf::from(install_path),
+                    subdirectory: PortablePathBuf::from(subdirectory),
+                },
+                None => Self::Path {
+                    path: PortablePathBuf::from(install_path),
+                },
             },
             RequirementSource::Directory {
                 install_path,
@@ -1216,17 +1334,11 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
             // to the workspace root, but we don't have access to it here. When comparing these
             // sources in the lockfile, we replace the URL anyway. Ideally, we'd either remove the
             // URL field or make it optional.
-            RequirementSourceWire::Path { path } => {
-                let path = Box::<Path>::from(path);
-                let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&path)))?;
-                Ok(Self::Path {
-                    ext: DistExtension::from_path(&path).map_err(|err| {
-                        ParsedUrlError::MissingExtensionPath(path.to_path_buf(), err)
-                    })?,
-                    install_path: path,
-                    url,
-                })
-            }
+            RequirementSourceWire::Path { path } => Self::from_stored_path(path, None),
+            RequirementSourceWire::Archive {
+                archive,
+                subdirectory,
+            } => Self::from_stored_path(archive, Some(subdirectory)),
             RequirementSourceWire::Directory { directory } => {
                 let directory = Box::<Path>::from(directory);
                 let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&directory)))?;

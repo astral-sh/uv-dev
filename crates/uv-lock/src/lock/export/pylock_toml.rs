@@ -36,7 +36,7 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
 use uv_platform_tags::{TagCompatibility, TagPriority, Tags};
-use uv_pypi_types::{HashDigests, Hashes, ParsedGitDirectoryUrl, VcsKind};
+use uv_pypi_types::{HashDigests, Hashes, ParsedArchiveUrl, ParsedGitDirectoryUrl, VcsKind};
 use uv_redacted::SafeUrl;
 use uv_redacted::policy::{Raw, Stripped};
 use uv_small_str::SmallString;
@@ -590,14 +590,13 @@ impl<'lock> PylockToml {
                     }
                 }
                 Dist::Source(SourceDist::DirectUrl(dist)) => {
-                    package.archive = Some(PylockTomlArchive {
-                        url: Some((*dist.location).clone().with_policy(Raw)),
-                        path: None,
-                        size: dist.size(),
-                        upload_time: None,
-                        subdirectory: dist.subdirectory.clone().map(PortablePathBuf::from),
-                        hashes: Hashes::from(node.hashes.clone()),
-                    });
+                    package.archive = Some(PylockTomlArchive::from_direct_source(
+                        dist,
+                        &dist.location,
+                        install_path,
+                        dist.size(),
+                        Hashes::from(node.hashes.clone()),
+                    ));
                 }
                 Dist::Source(SourceDist::Directory(dist)) => {
                     let path = try_relative_to_if(
@@ -937,14 +936,13 @@ impl<'lock> PylockToml {
             // Extract the `packages.archive` field, which can either be a direct URL or a local
             // path, pointing to either a source distribution or a wheel.
             let archive = match &sdist {
-                Some(SourceDist::DirectUrl(sdist)) => Some(PylockTomlArchive {
-                    url: Some(sdist.url.to_url().with_policy(Raw)),
-                    path: None,
+                Some(SourceDist::DirectUrl(sdist)) => Some(PylockTomlArchive::from_direct_source(
+                    sdist,
+                    sdist.url.raw(),
+                    output_dir,
                     size,
-                    upload_time: None,
-                    subdirectory: sdist.subdirectory.clone().map(PortablePathBuf::from),
-                    hashes: hash.cloned().map(Hashes::from).unwrap_or_default(),
-                }),
+                    hash.cloned().map(Hashes::from).unwrap_or_default(),
+                )),
                 Some(SourceDist::Path(sdist)) => Some(PylockTomlArchive {
                     url: None,
                     path: Some(PortablePathBuf::from(
@@ -963,7 +961,7 @@ impl<'lock> PylockToml {
                 }),
                 _ => match &package.id.source {
                     Source::Registry(..) => None,
-                    Source::Path(source) => package.wheels.first().map(|wheel| {
+                    Source::Path(source, _) => package.wheels.first().map(|wheel| {
                         let path = target.install_path().join(source);
                         let path = try_relative_to_if(&path, output_dir, source.is_relative())
                             .unwrap_or(path);
@@ -1885,6 +1883,59 @@ impl PylockTomlSdist {
 }
 
 impl PylockTomlArchive {
+    fn from_direct_source(
+        dist: &DirectUrlSourceDist,
+        url: &SafeUrl,
+        root: &Path,
+        size: Option<u64>,
+        hashes: Hashes,
+    ) -> Self {
+        let (url, path) = if dist.url.prefers_relative()
+            && let Ok(path) = dist.location.to_file_path()
+        {
+            let path = try_relative_to_if(&path, root, true).unwrap_or(path);
+            (None, Some(PortablePathBuf::from(path.into_boxed_path())))
+        } else {
+            (Some(url.clone().with_policy(Raw)), None)
+        };
+        Self {
+            url,
+            path,
+            size,
+            upload_time: None,
+            subdirectory: dist.subdirectory.clone().map(PortablePathBuf::from),
+            hashes,
+        }
+    }
+
+    fn to_direct_source(
+        &self,
+        name: &PackageName,
+        version: Option<&Version>,
+        location: SafeUrl,
+        ext: SourceDistExtension,
+    ) -> Dist {
+        let subdirectory = self.subdirectory.clone().map(Box::<Path>::from);
+        let archive = ParsedArchiveUrl::from_source(
+            location.clone(),
+            subdirectory.clone(),
+            DistExtension::Source(ext),
+        );
+        let mut url = VerbatimUrl::from_url(SafeUrl::from(archive));
+        if let Some(path) = &self.path {
+            url = url.with_given(path.to_string());
+        }
+        Dist::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
+            name: name.clone(),
+            version: version.cloned().map(Box::new),
+            location: Box::new(location),
+            subdirectory,
+            ext,
+            url,
+            size: self.size,
+        }))
+    }
+
     fn to_dist(
         &self,
         install_path: &Path,
@@ -1920,6 +1971,9 @@ impl PylockTomlArchive {
                     validate_path_size(&install_path, self.size)?;
                     let url = VerbatimUrl::from_absolute_path(&install_path)
                         .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
+                    if self.subdirectory.is_some() {
+                        return Ok(self.to_direct_source(name, version, url.to_url(), ext));
+                    }
                     Ok(Dist::Source(SourceDist::Path(PathSourceDist {
                         name: name.clone(),
                         version: version.cloned(),
@@ -1947,15 +2001,7 @@ impl PylockTomlArchive {
                     })))
                 }
                 DistExtension::Source(ext) => {
-                    Ok(Dist::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
-                        name: name.clone(),
-                        version: version.cloned().map(Box::new),
-                        location: Box::new(url.clone()),
-                        subdirectory: self.subdirectory.clone().map(Box::<Path>::from),
-                        ext,
-                        url: VerbatimUrl::from_url(url.clone()),
-                        size: self.size,
-                    })))
+                    Ok(self.to_direct_source(name, version, url.clone(), ext))
                 }
             }
         } else {
