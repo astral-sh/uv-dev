@@ -1402,6 +1402,62 @@ fn git_full_hex_branch_metadata() -> Result<()> {
     Ok(())
 }
 
+/// The installed root and a dependency may spell a numeric Git branch identically.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_hex_branch_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repo = context.temp_dir.child("repo");
+    repo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repo.child("src/example/__init__.py").touch()?;
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(repo.path())
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+            ])
+            .args(args)
+            .assert()
+            .success();
+    };
+    git(&["init", "--initial-branch", "20240222"]);
+    git(&["add", "."]);
+    git(&["commit", "-m", "initial"]);
+
+    let url = SafeUrl::from_file_path(repo.path()).expect("absolute repository path");
+    let requirement = format!("example @ git+{url}@20240222");
+    let requires = [requirement.parse()?];
+    let (filename, wheel) = WheelBuilder::new(&"dependent".parse()?, &"1.0".parse()?)
+        .requires(&requires)
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    context
+        .pip_install()
+        .arg(wheel_path.path())
+        .arg(&requirement)
+        .arg("--no-index")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// An annotated tag's object ID remains pinned to the commit it peels to.
 #[test]
 #[cfg(feature = "test-git")]
