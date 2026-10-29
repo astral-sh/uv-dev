@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use assert_fs::prelude::*;
@@ -468,6 +469,81 @@ async fn proxy_index_implicitly_routes_pypi_without_a_second_resolution_index() 
 
     assert_requested_once(&physical_index, "/simple/basic-package/").await?;
     assert_requested_once(&physical_artifacts, &format!("/files/{WHEEL_FILENAME}")).await?;
+    Ok(())
+}
+
+/// Prefetch can inspect a version before another dependency excludes it. Its mapping error must
+/// not prevent selection of a different version from the same index response.
+#[tokio::test]
+async fn proxy_index_ignores_mapping_errors_from_speculative_candidates() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0", "basic-package"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{server_url}/simple/"
+        artifact-base-url = "{server_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    mount_simple(
+        &server,
+        "parent",
+        vec![advertised_file(
+            "parent-1.0.0-py3-none-any.whl",
+            &format!("{server_url}/files/parent-1.0.0-py3-none-any.whl"),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )],
+        1,
+    )
+    .await;
+    mount_simple(
+        &server,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{server_url}/files/{WHEEL_FILENAME}"),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                "basic_package-0.2.0-py3-none-any.whl",
+                &format!("{server_url}/unmapped/basic_package-0.2.0-py3-none-any.whl"),
+                Some(WHEEL_HASH),
+            ),
+        ],
+        1,
+    )
+    .await;
+    // Let speculative selection inspect 0.2.0 before the parent constrains basic-package.
+    Mock::given(method("GET"))
+        .and(path("/files/parent-1.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string("Metadata-Version: 2.3\nName: parent\nVersion: 1.0.0\nRequires-Dist: basic-package==0.1.0\n")
+            .set_delay(Duration::from_secs(1)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_metadata(&server, WHEEL_FILENAME, WHEEL_METADATA, 1).await;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    server.verify().await;
     Ok(())
 }
 
