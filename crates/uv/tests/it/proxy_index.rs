@@ -407,6 +407,58 @@ async fn proxy_index_rejects_same_named_package_index_across_configuration_files
     Ok(())
 }
 
+/// A requirements file can disable indexes after a CLI override replaces implicit PyPI.
+#[tokio::test]
+async fn proxy_index_requirements_no_index_skips_unused_proxy() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let replacement = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    context
+        .temp_dir
+        .child("wheelhouse")
+        .child(WHEEL_FILENAME)
+        .write_binary(&fixture(&context, WHEEL_FILENAME)?)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(indoc::indoc! {"
+        --no-index
+        --find-links ./wheelhouse
+        basic-package==0.1.0
+    "})?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--default-index").arg(format!("{}/simple/", replacement.uri()))
+        .arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    assert_no_requests(&replacement, "replacement index").await?;
+    assert_no_requests(&proxy, "unused PyPI proxy").await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_implicitly_routes_pypi_without_a_second_resolution_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
