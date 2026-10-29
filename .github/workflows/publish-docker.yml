@@ -4,6 +4,10 @@ name: "Publish Docker images"
 on:
   workflow_call:
     inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       manifest:
         description: "Artifact ID for the saved Docker image manifest"
         required: true
@@ -22,7 +26,7 @@ permissions:
 jobs:
   plan:
     name: plan
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     timeout-minutes: 2
     outputs:
       base-image: ${{ steps.plan.outputs.base-image }}

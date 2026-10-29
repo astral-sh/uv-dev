@@ -7,6 +7,10 @@ name: "Publish to PyPI"
 on:
   workflow_call:
     inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       plan:
         required: true
         type: string
@@ -32,7 +36,7 @@ env:
 jobs:
   pypi-publish-uv:
     name: Upload uv to PyPI
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     environment:
       name: release
     permissions:
@@ -57,7 +61,7 @@ jobs:
 
   pypi-publish-uv-build:
     name: Upload uv-build to PyPI
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     environment:
       name: release
     permissions:

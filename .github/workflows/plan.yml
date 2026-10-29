@@ -3,6 +3,14 @@ name: plan
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       base-sha:
         description: "The base SHA used to determine changed files"
         required: false
@@ -12,6 +20,12 @@ on:
         required: false
         type: string
     outputs:
+      runners:
+        description: "Resolved runner roles"
+        value: ${{ jobs.plan.outputs.runners }}
+      free-runners:
+        description: "Whether only free runners were selected"
+        value: ${{ jobs.plan.outputs.free-runners }}
       test-code:
         description: "Whether code tests should run"
         value: ${{ jobs.plan.outputs.test-code }}
@@ -78,8 +92,10 @@ env:
 
 jobs:
   plan:
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2 }}
     outputs:
+      runners: ${{ inputs.runners }}
+      free-runners: ${{ inputs.free-runners }}
       test-code: ${{ steps.plan.outputs.test_code }}
       review-security: ${{ steps.plan.outputs.review_security }}
       check-schema: ${{ steps.plan.outputs.check_schema }}

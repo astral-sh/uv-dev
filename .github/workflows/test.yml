@@ -1,6 +1,14 @@
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       save-rust-cache:
         required: false
         type: string
@@ -23,13 +31,9 @@ env:
   UV_LOCKED: 1
 
 jobs:
-  # We use the large GitHub actions runners
-  # For Ubuntu and Windows, this requires Organization-level configuration
-  # See: https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners/about-larger-runners#about-ubuntu-and-windows-larger-runners
-
   cargo-test-linux:
-    timeout-minutes: 10
-    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-16 }}
     name: "cargo test on linux"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,7 +129,7 @@ jobs:
             -Z checksum-freshness \
             --features test-python-patch,test-universal,native-auth,secret-service \
             --workspace \
-            --profile ci-linux
+            --profile ${{ inputs.free-runners && 'ci-linux-free' || 'ci-linux' }}
 
       - name: "Upload pending snapshots"
         if: ${{ failure() }}
@@ -147,10 +151,10 @@ jobs:
           retention-days: 14
 
   cargo-test-macos:
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.free-runners && 40 || 20 }}
     # Only run macOS tests on main without opt-in
     if: ${{ inputs.test-macos == 'true' }}
-    runs-on: namespace-profile-macos-15
+    runs-on: ${{ fromJSON(inputs.runners).macos-aarch64-8 }}
     name: "cargo test on macos"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -221,7 +225,7 @@ jobs:
             --no-default-features \
             --features test-python,test-python-managed,test-pypi,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native \
             --workspace \
-            --profile ci-macos
+            --profile ${{ inputs.free-runners && 'ci-macos-free' || 'ci-macos' }}
 
       - name: "Upload pending snapshots"
         if: ${{ failure() }}
@@ -243,8 +247,8 @@ jobs:
           retention-days: 14
 
   cargo-test-windows:
-    timeout-minutes: 15
-    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    timeout-minutes: ${{ inputs.free-runners && 30 || 15 }}
+    runs-on: ${{ fromJSON(inputs.runners).windows-x86_64-16 }}
     name: "cargo test on windows ${{ matrix.partition }} of 3"
     strategy:
       fail-fast: false
@@ -320,7 +324,7 @@ jobs:
             --no-default-features \
             --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
             --workspace \
-            --profile ci-windows \
+            --profile ${{ inputs.free-runners && 'ci-windows-free' || 'ci-windows' }} \
             --partition hash:${{ matrix.partition }}/3
 
       - name: "Upload pending snapshots"

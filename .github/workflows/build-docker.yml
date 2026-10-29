@@ -15,6 +15,10 @@ name: "Build Docker images"
 on:
   workflow_call:
     inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       plan:
         required: false
         type: string
@@ -46,7 +50,7 @@ permissions:
 jobs:
   docker-plan:
     name: plan
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     timeout-minutes: 2
     outputs:
       depot-project-id: ${{ steps.plan.outputs.depot-project-id }}
@@ -155,7 +159,7 @@ jobs:
     needs: docker-plan
     env:
       DEPOT_PROJECT_ID: ${{ needs.docker-plan.outputs.depot-project-id }}
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -248,7 +252,7 @@ jobs:
 
   docker-build-extra:
     name: build ${{ matrix.image-mapping }}
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     timeout-minutes: 5
     needs:
       - docker-plan
@@ -397,7 +401,7 @@ jobs:
       - docker-build-base
       - docker-build-extra
     if: ${{ needs.docker-plan.outputs.save == 'true' }}
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     timeout-minutes: 2
     outputs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}

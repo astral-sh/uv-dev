@@ -1,6 +1,10 @@
 on:
   workflow_call:
     inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       trampoline-build:
         description: "Whether to check the committed trampoline binaries"
         required: false
@@ -22,7 +26,7 @@ jobs:
   # Verify windows crate version matches between workspaces
   windows-version-check:
     timeout-minutes: 5
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     name: "check windows crate version"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,7 +49,7 @@ jobs:
     # otherwise force a trampoline rebuild on every dependency update.
     if: ${{ inputs.trampoline-build == 'true' }}
     timeout-minutes: 30
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     name: "check binary"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
