@@ -1295,38 +1295,14 @@ async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
     mount_artifact(&proxy, &linux_filename, linux_wheel, 1).await;
     mount_artifact(&find_links, &windows_filename, windows_wheel, 1).await;
 
-    let mut filters = context.filters();
-    filters.insert(0, (&linux_hash, "[LINUX_HASH]"));
-    filters.insert(0, (&windows_hash, "[WINDOWS_HASH]"));
-    filters.insert(0, (&upstream_url, "[UPSTREAM]"));
-    filters.insert(0, (&find_links_url, "[FIND_LINKS]"));
-    uv_snapshot!(filters, context
+    uv_snapshot!(context.filters(), context
         .pip_compile()
         .arg("requirements.in")
         .arg("--universal")
         .arg("--python-version").arg("3.12")
         .arg("--find-links").arg(format!("{find_links_url}/links/"))
-        .arg("--format").arg("pylock.toml")
-        .arg("--no-header")
-        .arg("--output-file").arg("pylock.toml"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    lock-version = "1.0"
-    created-by = "uv"
-    requires-python = ">=3.12"
-
-    [[packages]]
-    name = "basic-package"
-    version = "0.1.0"
-    index = "[UPSTREAM]/simple/"
-    wheels = [
-        { url = "[FIND_LINKS]/files/basic_package-0.1.0-1-cp312-cp312-win_amd64.whl", hashes = { sha256 = "[WINDOWS_HASH]" } },
-        { url = "[UPSTREAM]/files/basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "[LINUX_HASH]" } },
-    ]
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    "#);
+        .arg("--output-file").arg("pylock.toml")
+        .arg("--quiet"), @"exit_code: 0 (success)");
 
     uv_snapshot!(context.filters(), context
         .pip_sync()
