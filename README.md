@@ -16,7 +16,9 @@ No duplicate found. astral-sh/uv#4345 and merged astral-sh/uv#5311 and astral-sh
 
 In astral-sh/uv#22986, zanieb (identified as a repository member in the supplied discussion) questions whether home-path scrubbing is worthwhile: verbose logs can contain other personal information and are not designed to be shared in a de-identified form. Source: the October 29, 2026 comment at 16:47:04 UTC, comment ID 6502813576.
 
-This establishes a concern about the value and privacy expectations of the proposed feature. It does not record a final acceptance or rejection. Home-prefix abbreviation would address the reporter's examples, but should not be presented as making verbose logs de-identified. The enhancement classification and existing source findings remain applicable.
+zanieb also questions whether less-specific paths improve the user experience, because removing personal information can obscure what is happening in diagnostic logs. They see potential value in a general mode that produces stripped logs for sharing, while describing that as a much larger project. Source: the October 29, 2026 comment at 18:36:32 UTC, comment ID 6505216618.
+
+The maintainer's concerns therefore include diagnostic clarity as well as the value and privacy expectations of the feature. A general stripped-log mode is a suggested direction, with no approved design or implementation commitment in the supplied discussion. There is no explicit final acceptance or rejection of this issue. Home-prefix abbreviation would address the reporter's examples, but should not be presented as making verbose logs de-identified. The enhancement classification and existing source findings remain applicable.
 
 ## Reporter impact and priority
 
@@ -67,7 +69,7 @@ The closest-looking excluded issues were inspected with their comments:
 
 ## Maintainer next step
 
-First determine whether the limited reduction in exposed personal information from home-prefix abbreviation justifies the feature, weighing the reporter's decision to withhold more verbose diagnostics against the maintainer's concern that logs contain other personal information and are not designed for de-identified sharing. Acceptance remains unresolved. Separately, consider whether the log-sharing guidance in astral-sh/uv#9452 should clarify those expectations; no documentation change has been agreed in the supplied discussion.
+Resolve the intended direction before implementation: whether to pursue home-prefix abbreviation in ordinary output or investigate the broader stripped-log mode suggested by the maintainer. Evaluate the reporter's barrier to sharing detailed logs alongside the maintainer's concern that removing path detail can obscure diagnostics. The general mode would require a broader scope than replacing home prefixes; no design, acceptance, or implementation commitment is established. Separately, consider whether the log-sharing guidance in astral-sh/uv#9452 should clarify expectations; no documentation change has been agreed in the supplied discussion.
 
 If maintainers agree to pursue it, settle which human-readable diagnostics should use abbreviation, whether path-valued command output needs separate treatment, how both the configured home path and its resolved target should be recognized, and whether users need an opt-out. Any implementation should account for both direct path formatting and existing shared display helpers; changing only `user_display()` would not affect the two reported logging sites.
 
