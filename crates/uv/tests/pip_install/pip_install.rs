@@ -12594,6 +12594,29 @@ fn local_archive_subdirectory() -> Result<()> {
     let cached_origin: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&origin_path)?)?;
     assert_eq!(cached_origin, origin);
+
+    // Metadata survives CI cache pruning, so compiling need not extract the source again.
+    let cached_backend = context
+        .cache_files(uv_cache::CacheBucket::SourceDistributions)?
+        .into_iter()
+        .find(|file| file.ends_with("packages/example/backend.py"))
+        .expect("the selected archive was extracted");
+    context.prune().arg("--ci").assert().success();
+    assert!(!cached_backend.exists());
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("example @ {requirement}"))?;
+    context
+        .pip_compile()
+        .args(["--no-index", "requirements.in"])
+        .assert()
+        .success();
+    assert!(
+        !cached_backend.exists(),
+        "cached metadata should not require extracting the source"
+    );
+
     // A different selection must not reuse the wheel built from packages/example.
     uv_snapshot!(context.filters(), context.pip_install().arg("--no-index")
         .arg(format!("example @ {url}#subdirectory=packages/missing")), @"

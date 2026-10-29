@@ -1272,11 +1272,53 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let cache_shard = cache_shard.shard(revision.id());
         let source_entry = cache_shard.entry(SOURCE);
 
-        let revision = if resource.subdirectory.is_some() && !source_entry.path().is_dir() {
+        // Dynamic metadata and wheels must use the same build settings.
+        let config_settings = self.config_settings_for(source.name());
+        let extra_build_deps = self.extra_build_dependencies_for(source.name());
+        let extra_build_variables = self.extra_build_variables_for(source.name());
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_variables.cloned(),
+        );
+        let cache_shard = build_info
+            .cache_shard()
+            .map(|digest| cache_shard.shard(digest))
+            .unwrap_or(cache_shard);
+
+        let metadata_entry = cache_shard.entry(METADATA);
+        let read_cached = async || {
+            match CachedMetadata::read(&metadata_entry).await {
+                Ok(Some(metadata)) => {
+                    if metadata.matches(source.name(), source.version()) {
+                        debug!("Using cached metadata for: {source}");
+                        return Some(Metadata::from_metadata23(metadata.into()));
+                    }
+                    debug!(
+                        "Cached metadata does not match expected name and version for: {source}"
+                    );
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    debug!("Failed to deserialize cached metadata for: {source} ({err})");
+                }
+            }
+            None
+        };
+
+        // CI cache pruning retains built metadata and wheels but removes the extracted source.
+        let has_source = source_entry.path().is_dir();
+        let revision = if has_source {
+            revision
+        } else {
+            if let Some(metadata) = read_cached().await {
+                return Ok(ArchiveMetadata {
+                    metadata,
+                    hashes: revision.into_hashes(),
+                });
+            }
             self.heal_archive_revision(source, resource, &source_entry, revision, hashes)
                 .await?
-        } else {
-            revision
         };
         validate_local_archive_subdirectory(resource, source_entry.path())?;
 
@@ -1293,46 +1335,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 StaticMetadata::None => false,
             };
 
-        // Dynamic metadata and wheels must use the same build settings.
-        let config_settings = self.config_settings_for(source.name());
-        let extra_build_deps = self.extra_build_dependencies_for(source.name());
-        let extra_build_variables = self.extra_build_variables_for(source.name());
-        let build_info = BuildInfo::from_settings(
-            config_settings.into_owned(),
-            extra_build_deps.to_vec(),
-            extra_build_variables.cloned(),
-        );
-        let cache_shard = build_info
-            .cache_shard()
-            .map(|digest| cache_shard.shard(digest))
-            .unwrap_or(cache_shard);
-
-        // If the cache contains compatible metadata, return it.
-        let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
-            Ok(Some(metadata)) => {
-                if metadata.matches(source.name(), source.version()) {
-                    debug!("Using cached metadata for: {source}");
-                    return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
-                        hashes: revision.into_hashes(),
-                    });
-                }
-                debug!("Cached metadata does not match expected name and version for: {source}");
-            }
-            Ok(None) => {}
-            Err(err) => {
-                debug!("Failed to deserialize cached metadata for: {source} ({err})");
-            }
+        if has_source && let Some(metadata) = read_cached().await {
+            return Ok(ArchiveMetadata {
+                metadata,
+                hashes: revision.into_hashes(),
+            });
         }
-
-        // Otherwise, we need a source distribution.
-        let revision = if source_entry.path().is_dir() {
-            revision
-        } else {
-            self.heal_archive_revision(source, resource, &source_entry, revision, hashes)
-                .await?
-        };
 
         // If the backend supports `prepare_metadata_for_build_wheel`, use it.
         if let Some(metadata) = self
