@@ -98,7 +98,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .unwrap_or(cache_shard);
 
         Ok(self
-            .find(&cache_shard, source_dist.version.as_ref())
+            .find(&cache_shard, source_dist.version.as_deref())
             .map(|wheel| {
                 CachedWheel::from_entry(
                     wheel,
@@ -151,11 +151,9 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        Ok(self
-            .find(&cache_shard, source_dist.version.as_ref())
-            .map(|wheel| {
-                CachedWheel::from_entry(wheel, revision.into_hashes(), cache_info, build_info)
-            }))
+        Ok(self.find(&cache_shard, None).map(|wheel| {
+            CachedWheel::from_entry(wheel, revision.into_hashes(), cache_info, build_info)
+        }))
     }
 
     /// Return the most compatible [`CachedWheel`] for a given source distribution built from a
@@ -331,7 +329,10 @@ impl<'a> BuiltWheelIndex<'a> {
             match ResolvedWheel::from_built_source(&wheel_dir, self.cache) {
                 None => {}
                 Some(dist_info) => {
-                    if version.is_some_and(|version| *version != dist_info.filename.version) {
+                    if let Some(version) = version
+                        && *version != dist_info.filename.version
+                        && *version != dist_info.filename.version.clone().without_local()
+                    {
                         continue;
                     }
 

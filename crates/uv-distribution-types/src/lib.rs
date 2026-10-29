@@ -338,7 +338,7 @@ pub struct DirectUrlSourceDist {
     /// like using e.g. `foo @ https://github.com/org/repo/archive/master.zip`
     pub name: PackageName,
     /// The version expected by a lockfile, if known.
-    pub version: Option<Version>,
+    pub version: Option<Box<Version>>,
     /// The URL without the subdirectory fragment.
     pub location: Box<SafeUrl>,
     /// The subdirectory within the archive in which the source distribution is located.
@@ -787,8 +787,11 @@ impl SourceDist {
     pub fn version(&self) -> Option<&Version> {
         match self {
             Self::Registry(source_dist) => Some(&source_dist.version),
-            Self::DirectUrl(dist) => dist.version.as_ref(),
-            Self::GitPath(_) | Self::GitDirectory(_) | Self::Path(_) | Self::Directory(_) => None,
+            Self::DirectUrl(_)
+            | Self::GitPath(_)
+            | Self::GitDirectory(_)
+            | Self::Path(_)
+            | Self::Directory(_) => None,
         }
     }
 
