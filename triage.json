@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1357,
+        "title": "Support Python versions with trailing `+`",
+        "url": "https://github.com/astral-sh/uv/issues/1357",
+        "state": "closed",
+        "reason": "Historical CPython development-build compatibility issue: versions such as 3.11.4+ failed during interpreter version parsing. Maintainer discussion led to stripping the bare trailing plus. The new report reaches tool spawning with a valid +dev local version; the source exposes a different pyvenv.cfg parsing and relocation path."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1771,
+        "title": "strip trailing `+` from version number of local Python builds",
+        "url": "https://github.com/astral-sh/uv/pull/1771",
+        "state": "merged",
+        "reason": "Merged on 2024-02-20 to fix astral-sh/uv#1357 by stripping a final + from python_full_version. That workaround remains in the checkout and deliberately leaves +dev intact. It does not fix rejection of local versions when reading pyvenv.cfg, so this report does not establish a regression of that fix."
+      },
+      {
+        "kind": "issue",
+        "number": 99968,
+        "title": "Python version ending with plus sign not compatible with PEP 508 `python_full_version` marker",
+        "url": "https://github.com/python/cpython/issues/99968",
+        "state": "closed",
+        "reason": "Verified upstream context for the trigger. CPython maintainers confirmed on 2026-05-27 that upcoming 3.15+ development builds would use +dev; a June comment shows 3.15.0b2+dev. This establishes that the suffix is intentional, but does not track uv's tool-launch failure."
+      },
+      {
+        "kind": "issue",
+        "number": 13992,
+        "title": "Improve error message on \"failed to spawn\" where the Python interpreter is missing",
+        "url": "https://github.com/astral-sh/uv/issues/13992",
+        "state": "open",
+        "reason": "Tracks the same misleading spawn/ENOENT symptom when an entry point exists but its shebang interpreter is missing. This is relevant to the stale interpreter path exposed by the source analysis, but requests better diagnostics rather than correcting +dev metadata parsing and tool-environment relocation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20849,
+        "title": "Diagnose dangling shebang interpreters in `uv run` / `uv tool run`",
+        "url": "https://github.com/astral-sh/uv/pull/20849",
+        "state": "open",
+        "reason": "Proposes diagnostics for astral-sh/uv#13992, including uv tool run. It explains how an existing script with a missing shebang interpreter yields ENOENT. The proposed change only adds a hint after spawning fails; it does not repair the +dev configuration parsing defect."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues for the exact spawn error, python.exe, +dev, 3.15/3.16, 3.16.0a1, and 99968; expanded to development/self-built CPython, prereleases, local versions, sysconfig, pyvenv.cfg/version_info, relocatable environments, and shebangs. Kept symptom searches separate from source-derived causes. PR search/list queries returned empty results even for a known merged fix, so additionally searched titles and bodies through the complete paginated REST pull-request listing with state=all, and inspected linked PRs, comments, reviews, and timelines. Some supplemental search queries were rate-limited. Ruled out astral-sh/uv#15967 and astral-sh/uv#15987, fixed by astral-sh/uv#15990 in 0.8.20, because they require disabled caching; astral-sh/uv#13233 and merged astral-sh/uv#13234 concern prerelease environment invalidation under uv run --no-sync; astral-sh/uv#15692 concerns system-site-package visibility, not interpreter suffixes. No existing tracker for the +dev metadata/relocation defect was found."
+  },
+  "type": "bug",
+  "type_reason": "Source inspection confirms that uv can write a valid +dev Python version to pyvenv.cfg and then reject it when reading the same file. The swallowed parse error disables relocatable entry-point generation, which can leave stale interpreter paths after a tool environment is moved into the cache. This is incorrect behavior. No matching duplicate or demonstrated recurrence of the historical trailing-plus fix was found; the reporter's exact generated entry point has not been inspected.",
+  "summary": "The closest history is astral-sh/uv#1357 and its fix astral-sh/uv#1771. python/cpython#99968 confirms the intentional suffix change. astral-sh/uv#13992 and astral-sh/uv#20849 cover adjacent spawn diagnostics. No existing tracker covers the source-confirmed +dev metadata defect.",
+  "draft_response": "The +dev suffix is intentional, as confirmed in python/cpython#99968. The source shows a bug in uv's environment metadata handling: it writes that version into pyvenv.cfg, but rejects the local-version suffix when reading it back. That parse failure makes the environment appear non-relocatable, which can leave tool scripts pointing at a temporary interpreter path after the environment moves into the cache.\n\nThis is distinct from the bare trailing-+ parsing fix in astral-sh/uv#1771. To confirm this explains your launch failure, could you share the output of `uvx -vv --python ./python.exe pycowsay hello` and the first few lines of the generated cached `pycowsay` script? The configuration round trip and relocatable entry-point handling need regression coverage."
+}
