@@ -1,4 +1,6 @@
 use std::fmt::Write;
+#[cfg(unix)]
+use std::io::ErrorKind;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -11619,6 +11621,80 @@ fn install_relocatable() -> Result<()> {
             .success()
             .stdout(predicate::str::contains("Hello world!"));
     }
+
+    Ok(())
+}
+
+/// A development version written by `uv venv` must not disable relocatable launchers on install.
+#[cfg(unix)]
+#[test]
+fn install_relocatable_dev_python() -> Result<()> {
+    let context = uv_test::test_context!("3.16").with_pyvenv_cfg_filters();
+
+    // Model the version string reported by CPython development builds without requiring one.
+    fs::write(
+        context.site_packages().join("sitecustomize.py"),
+        "import sys\nsys.version = '3.16.0a1+dev ' + sys.version.split(' ', 1)[1]\n",
+    )?;
+
+    let venv = context.temp_dir.child("relocatable");
+    context
+        .venv()
+        .arg(venv.as_os_str())
+        .arg("--python")
+        .arg(context.venv.child("bin/python").as_os_str())
+        .arg("--relocatable")
+        .assert()
+        .success();
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read(venv.child("pyvenv.cfg")), @"
+        home = [PYTHON_HOME]
+        implementation = CPython
+        uv = [UV_VERSION]
+        version_info = 3.16.[X]a1+dev
+        include-system-site-packages = false
+        relocatable = true
+        ");
+    });
+
+    let (filename, wheel) = WheelBuilder::new(&"simple-launcher".parse()?, &"1.0.0".parse()?)
+        .entry_points(&["simple-launcher".to_string()])
+        .build();
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--python")
+        .arg(venv.as_os_str())
+        .arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using Python 3.16.[X]a1 environment at: relocatable
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + simple-launcher==1.0.0 (from file://[TEMP_DIR]/simple_launcher-1.0.0-py3-none-any.whl)
+    ");
+
+    uv_snapshot!(context.external_command(venv.child("bin/simple-launcher")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from simple-launcher!
+    ");
+
+    let relocated = context.temp_dir.child("relocated");
+    fs::rename(&venv, &relocated)?;
+    relocated
+        .child("bin/simple-launcher")
+        .assert(predicate::path::is_file());
+
+    // Reading +dev fails and discards `relocatable = true`, so the launcher retains its old
+    // interpreter path and cannot run after relocation: astral-sh/uv#22989.
+    let error = context
+        .external_command(relocated.child("bin/simple-launcher"))
+        .output()
+        .expect_err("the launcher still points to the original environment");
+    assert_eq!(error.kind(), ErrorKind::NotFound);
 
     Ok(())
 }
