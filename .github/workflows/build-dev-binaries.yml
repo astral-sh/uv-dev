@@ -5,6 +5,10 @@ on:
         required: false
         type: string
         default: "true"
+    secrets:
+      CANARY_AWS_CREDENTIALS:
+        description: "Optional AWS canary bundle for the Linux libc build"
+        required: false
 
 permissions:
   contents: read
@@ -39,7 +43,30 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Build"
-        run: cargo build --locked --profile no-debug-nightly -Z checksum-freshness
+        env:
+          CANARY_AWS_CREDENTIALS: ${{ secrets.CANARY_AWS_CREDENTIALS }}
+        shell: bash
+        run: |
+          if [[ -n "$CANARY_AWS_CREDENTIALS" ]]; then
+            if ! fields=$(jq --slurp --exit-status --raw-output '
+              select(length == 1) | .[0] |
+              [.aws_access_key_id, .aws_secret_access_key] |
+              select(all(.[]; type == "string" and length > 0 and
+                (test("[[:space:][:cntrl:]]") | not))) |
+              join("\t")
+            ' <<< "$CANARY_AWS_CREDENTIALS" 2>/dev/null); then
+              echo "Invalid CI canary credential bundle" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r BUILD_CACHE_AWS_ACCESS_KEY_ID BUILD_CACHE_AWS_SECRET_ACCESS_KEY <<< "$fields"
+            # Percent signs introduce escapes in Actions workflow commands.
+            printf '::add-mask::%s\n' \
+              "${BUILD_CACHE_AWS_ACCESS_KEY_ID//%/%25}" "${BUILD_CACHE_AWS_SECRET_ACCESS_KEY//%/%25}"
+            # Build scripts can see these names without selecting the canary for ordinary AWS requests.
+            export BUILD_CACHE_AWS_ACCESS_KEY_ID BUILD_CACHE_AWS_SECRET_ACCESS_KEY
+          fi
+          unset CANARY_AWS_CREDENTIALS
+          cargo build --locked --profile no-debug-nightly -Z checksum-freshness
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

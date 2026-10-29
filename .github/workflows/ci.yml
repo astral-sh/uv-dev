@@ -206,6 +206,11 @@ jobs:
     uses: $/.github/workflows/build-dev-binaries.yml
     with:
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
+    secrets:
+      CANARY_AWS_CREDENTIALS: >-
+        ${{ github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          secrets.CANARY_AWS_CREDENTIALS || '' }}
 
   test-smoke:
     needs:
