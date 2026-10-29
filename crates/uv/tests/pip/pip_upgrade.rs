@@ -1508,6 +1508,12 @@ fn git_annotated_tag_object_metadata() -> Result<()> {
         ])
         .assert()
         .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args(["tag", "--force", "release", "HEAD"])
+        .assert()
+        .success();
+    let context = context.with_cache_dir("cold-cache");
     uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
     exit_code: 0 (success)
     ----- stderr -----

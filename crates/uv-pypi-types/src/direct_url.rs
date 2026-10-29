@@ -264,7 +264,13 @@ impl VcsInfo {
                 return GitReference::from_rev(commit.to_owned());
             }
             if hexadecimal {
-                return GitReference::BranchOrTagOrCommit(revision.to_owned());
+                return match commit.parse() {
+                    Ok(commit) => GitReference::BranchOrTagWithFallback {
+                        rev: revision.to_owned(),
+                        commit: Box::new(commit),
+                    },
+                    Err(_) => GitReference::BranchOrTagOrCommit(revision.to_owned()),
+                };
             }
             // These revision expressions cannot be fetched as branch or tag names.
             if revision.contains(['~', '^', ':'])

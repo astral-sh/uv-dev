@@ -154,6 +154,9 @@ impl GitRepository {
                 .rev_parse(&format!("origin/{reference}^0"))
                 .or_else(|_| self.rev_parse(&format!("refs/remotes/origin/tags/{reference}^0")))
                 .or_else(|_| self.rev_parse(&format!("{reference}^0"))),
+            GitReference::BranchOrTagWithFallback { rev, .. } => {
+                self.rev_parse(&format!("refs/uv/installed/{rev}^0"))
+            }
             GitReference::DefaultBranch => self.rev_parse("refs/remotes/origin/HEAD"),
             GitReference::NamedRef(reference) => self.rev_parse(&format!("{reference}^0")),
             GitReference::Commit(commit) => self.rev_parse(&format!("{commit}^0")),
@@ -654,6 +657,16 @@ fn fetch(
             refspec_strategy = RefspecStrategy::First;
         }
 
+        GitReference::BranchOrTagWithFallback { rev, commit } => {
+            // Resolve current names first. The recorded commit can still be fetched after an
+            // annotated tag moves and its original tag object is no longer advertised.
+            let destination = format!("refs/uv/installed/{rev}");
+            refspecs.push(format!("+refs/heads/{rev}:{destination}"));
+            refspecs.push(format!("+refs/tags/{rev}:{destination}"));
+            refspecs.push(format!("+{commit}:{destination}"));
+            refspec_strategy = RefspecStrategy::First;
+        }
+
         // Fetch all branches and tags so ambiguous references can resolve to either a named
         // reference or a short commit hash.
         GitReference::BranchOrTagOrCommit(_) => {
@@ -731,6 +744,7 @@ fn fetch(
         | GitReference::Tag(_)
         | GitReference::BranchOrTag(_)
         | GitReference::BranchOrTagOrCommit(_)
+        | GitReference::BranchOrTagWithFallback { .. }
         | GitReference::NamedRef(_) => result.with_context(|| {
             format!(
                 "failed to fetch {} `{}`",

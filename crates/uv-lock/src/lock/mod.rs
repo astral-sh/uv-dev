@@ -8824,7 +8824,8 @@ impl From<GitReference> for GitSourceKind {
             GitReference::Branch(branch) => Self::Branch(branch),
             GitReference::Tag(tag) => Self::Tag(tag),
             GitReference::BranchOrTag(rev) => Self::Rev(rev),
-            GitReference::BranchOrTagOrCommit(rev) => Self::Rev(rev),
+            GitReference::BranchOrTagOrCommit(rev)
+            | GitReference::BranchOrTagWithFallback { rev, .. } => Self::Rev(rev),
             GitReference::NamedRef(rev) => Self::Rev(rev),
             GitReference::DefaultBranch => Self::DefaultBranch,
         }
@@ -8890,6 +8891,7 @@ fn locked_git_url(git: &GitUrl, subdirectory: Option<&Path>, path: Option<&Path>
         }
         GitReference::BranchOrTag(rev)
         | GitReference::BranchOrTagOrCommit(rev)
+        | GitReference::BranchOrTagWithFallback { rev, .. }
         | GitReference::NamedRef(rev) => {
             url.query_pairs_mut().append_pair("rev", rev.as_str());
         }
