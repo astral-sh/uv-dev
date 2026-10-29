@@ -5,10 +5,13 @@ use std::vec::Vec;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::{
     Foundation::{
-        CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation, TRUE,
+        CloseHandle, GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        SetHandleInformation, TRUE,
     },
     Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType},
-    System::Console::{GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
+    System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    },
     System::Environment::GetCommandLineA,
     System::LibraryLoader::{FindResourceW, LoadResource, LockResource, SizeofResource},
     System::Threading::{
@@ -306,11 +309,54 @@ fn spawn_child(si: &STARTUPINFOA, child_cmdline: CString) -> HANDLE {
     child_process_info.hProcess
 }
 
-// Apparently, the Windows C runtime has a secret way to pass file descriptors into child
-// processes, by using the .lpReserved2 field. We want to close those file descriptors too.
-// The UCRT source code has details on the memory layout (see also initialize_inherited_file_handles_nolock):
-// https://github.com/huangqinjin/ucrt/blob/10.0.19041.0/lowio/ioinit.cpp#L190-L223
-fn close_handles(si: &STARTUPINFOA) {
+/// The CRT copies its descriptor table into `lpReserved2` based on its own flags. A pipe
+/// registered with `_open_osfhandle(handle, 0)` can appear there even when Windows did not
+/// inherit the handle. Filter the table before the trampoline can allocate those handle values.
+/// See <https://github.com/huangqinjin/ucrt/blob/10.0.19041.0/lowio/ioinit.cpp#L190-L223>.
+fn inherited_crt_fds(si: &STARTUPINFOA) -> Option<(Vec<u8>, Vec<HANDLE>)> {
+    if si.lpReserved2.is_null() || si.cbReserved2 == 0 {
+        return None;
+    }
+    // SAFETY: GetStartupInfoA supplies the process's startup data and its length in bytes.
+    let mut data =
+        unsafe { std::slice::from_raw_parts(si.lpReserved2, usize::from(si.cbReserved2)) }.to_vec();
+    let (count, entries) = data.split_first_chunk_mut::<4>()?;
+    let count = usize::try_from(i32::from_ne_bytes(*count)).ok()?;
+    let (flags, handles) = entries.split_at_mut_checked(count)?;
+    let handles = handles
+        .as_chunks_mut::<{ size_of::<isize>() }>()
+        .0
+        .get_mut(..count)?;
+
+    // Standard handles have their own cleanup rules, even if another fd aliases one of them.
+    let std_handles = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE].map(|id| {
+        // SAFETY: id is one of the three standard device identifiers.
+        unsafe { GetStdHandle(id) }.ok()
+    });
+    let mut inherited = Vec::new();
+    for (flags, value) in flags.iter_mut().zip(handles).skip(3) {
+        const FOPEN: u8 = 0x01;
+        let handle = HANDLE(isize::from_ne_bytes(*value) as _);
+        let mut handle_flags = 0;
+        // SAFETY: GetHandleInformation accepts possibly invalid handle values and writes to handle_flags.
+        if *flags & FOPEN != 0
+            && unsafe { GetHandleInformation(handle, &raw mut handle_flags) }.is_ok()
+            && handle_flags & HANDLE_FLAG_INHERIT.0 != 0
+        {
+            if !std_handles.contains(&Some(handle)) {
+                inherited.push(handle);
+            }
+        } else {
+            *flags = 0;
+            *value = (-1isize).to_ne_bytes();
+        }
+    }
+    inherited.sort_unstable_by_key(|handle| handle.0 as usize);
+    inherited.dedup();
+    Some((data, inherited))
+}
+
+fn close_handles(inherited: Vec<HANDLE>) {
     // See distlib/PC/launcher.c::cleanup_standard_io()
     // Unlike cleanup_standard_io(), we don't close STD_ERROR_HANDLE to retain warn!
     for std_handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE] {
@@ -327,26 +373,10 @@ fn close_handles(si: &STARTUPINFOA) {
         }
     }
 
-    // See distlib/PC/launcher.c::cleanup_fds()
-    if si.cbReserved2 == 0 || si.lpReserved2.is_null() {
-        return;
-    }
-
-    let crt_magic = si.lpReserved2 as *const u32;
-    let handle_count = unsafe { crt_magic.read_unaligned() } as isize;
-    let handle_start =
-        unsafe { (crt_magic.offset(1) as *const u8).offset(handle_count) as *const HANDLE };
-
-    // Close all fds inherited from the parent, except for the standard I/O fds (skip first 3).
-    for i in 3..handle_count {
-        let handle = unsafe { handle_start.offset(i).read_unaligned() };
-        // Ignore invalid handles, as that means this fd was not inherited.
-        // -2 is a special value (https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/get-osfhandle)
-        if handle.is_invalid() || handle.0 == -2 as _ {
-            continue;
-        }
+    for handle in inherited {
+        // SAFETY: Each handle was inherited at startup and is closed once after the child inherits its copy.
         unsafe { CloseHandle(handle) }.unwrap_or_else(|_| {
-            warn!("Failed to close child file descriptors at {}", i);
+            warn!("Failed to close inherited handle {}", handle.0 as usize);
         });
     }
 }
@@ -411,12 +441,18 @@ fn clear_app_starting_state(child_handle: HANDLE) {
 }
 
 pub fn bounce(is_gui: bool) -> ! {
-    let child_cmdline = make_child_cmdline();
-
     let mut si = STARTUPINFOA::default();
+    // SAFETY: si points to writable storage for the process's startup information.
     unsafe { GetStartupInfoA(&mut si) }
-
-    let child_handle = spawn_child(&si, child_cmdline);
+    let (mut crt_data, inherited) = inherited_crt_fds(&si).unwrap_or_default();
+    if crt_data.is_empty() {
+        si.cbReserved2 = 0;
+        si.lpReserved2 = std::ptr::null_mut();
+    } else {
+        si.lpReserved2 = crt_data.as_mut_ptr();
+    }
+    let child_handle = spawn_child(&si, make_child_cmdline());
+    drop(crt_data);
     let job = Job::new().unwrap_or_else(|e| {
         print_job_error_and_exit("uv trampoline failed to create job object", e);
     });
@@ -444,7 +480,7 @@ pub fn bounce(is_gui: bool) -> ! {
     }
 
     // (best effort) Close all the handles that we can
-    close_handles(&si);
+    close_handles(inherited);
 
     // (best effort) Switch to some innocuous directory, so we don't hold the original cwd open.
     // See distlib/PC/launcher.c::switch_working_directory
