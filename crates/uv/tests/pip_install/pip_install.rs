@@ -13259,27 +13259,50 @@ fn direct_url_json_archive_hash() -> Result<()> {
         .site_packages()
         .join("example-1.0.dist-info/direct_url.json");
     let frozen = format!("example @ {url}#sha256={digest}\n");
-    for _ in 0..2 {
-        context
-            .pip_install()
-            .arg("--no-index")
-            .arg("--require-hashes")
-            .arg("-r")
-            .arg(requirements.path())
-            .assert()
-            .success();
-        let metadata: serde_json::Value = serde_json::from_slice(&fs::read(&origin)?)?;
-        assert_eq!(
-            metadata,
-            json!({"url": url.as_str(), "archive_info": {"hashes": {"sha256": digest}}})
-        );
-        context
-            .pip_freeze()
-            .assert()
-            .success()
-            .stdout(frozen.clone());
-        context.reset_venv();
-    }
+    let install = || {
+        let mut command = context.pip_install();
+        command
+            .args(["--no-index", "--require-hashes", "-r"])
+            .arg(requirements.path());
+        command
+    };
+    uv_snapshot!(context.filters(), install(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
+    let metadata = serde_json::from_slice::<serde_json::Value>(&fs::read(&origin)?)?;
+    assert_eq!(
+        metadata,
+        json!({"url": url.as_str(), "archive_info": {"hashes": {"sha256": digest}}})
+    );
+    context
+        .pip_freeze()
+        .assert()
+        .success()
+        .stdout(frozen.clone());
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), install(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&origin)?)?,
+        metadata
+    );
+    context
+        .pip_freeze()
+        .assert()
+        .success()
+        .stdout(frozen.clone());
+    context.reset_venv();
 
     // The extracted project is unchanged, but its frozen archive digest no longer matches.
     content.extend_from_slice(b"changed archive");

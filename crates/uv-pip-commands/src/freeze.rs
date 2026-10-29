@@ -103,7 +103,11 @@ pub fn pip_freeze(
                 if dist.editable {
                     format!("-e {}", dist.url)
                 } else {
-                    format!("{} @ {}", dist.name().bold(), dist.url)
+                    format!(
+                        "{} @ {}",
+                        dist.name().bold(),
+                        dist.direct_url.to_requirement_url()
+                    )
                 }
             }
             InstalledDistKind::EggInfoFile(dist) => {
