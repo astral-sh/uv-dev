@@ -424,9 +424,7 @@ impl InstalledDist {
             InstalledDistKind::Registry(_)
             | InstalledDistKind::EggInfoFile(_)
             | InstalledDistKind::EggInfoDirectory(_) => None,
-            InstalledDistKind::Url(dist) => {
-                Some(VerbatimParsedUrl::for_upgrade(&dist.direct_url, &dist.url)?)
-            }
+            InstalledDistKind::Url(dist) => Some(VerbatimParsedUrl::for_upgrade(&dist.direct_url)?),
             InstalledDistKind::LegacyEditable(dist) => Some(VerbatimParsedUrl {
                 parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
                     install_path: dist.target.clone(),
