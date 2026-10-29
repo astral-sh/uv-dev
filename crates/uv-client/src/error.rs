@@ -15,7 +15,7 @@ use crate::middleware::OfflineError;
 use crate::{FlatIndexError, html};
 use uv_cache::Error as CacheError;
 use uv_distribution_filename::{WheelFilename, WheelFilenameError};
-use uv_distribution_types::{IndexUrl, ProxyIndexError};
+use uv_distribution_types::{IndexUrl, ProxyIndexError, RegistryArtifactRequestError};
 use uv_errors::{Hinted, Hints};
 use uv_git::GitError;
 use uv_macros::DebugNoInline;
@@ -794,6 +794,15 @@ impl std::error::Error for WrappedReqwestError {
         } else {
             // `Display` is showing the wrapped error, continue with its source
             self.error.source()
+        }
+    }
+}
+
+impl From<RegistryArtifactRequestError> for ErrorKind {
+    fn from(error: RegistryArtifactRequestError) -> Self {
+        match error {
+            RegistryArtifactRequestError::Proxy(error) => Self::ProxyIndex(error),
+            RegistryArtifactRequestError::InvalidUrl(error) => Self::InvalidUrl(error),
         }
     }
 }

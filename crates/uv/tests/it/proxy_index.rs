@@ -811,9 +811,9 @@ async fn proxy_index_variant_metadata_uses_advertised_url_and_proxy_cache_policy
     Ok(())
 }
 
-/// Without PEP 658, metadata caching uses the first definition of the effective index URL.
+/// Wheel metadata uses the proxy route policy even when another index shares its endpoint.
 #[tokio::test]
-async fn proxy_index_wheel_metadata_cache_policy_uses_endpoint_order() -> Result<()> {
+async fn proxy_index_wheel_metadata_cache_policy_uses_upstream_route() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
     let server_url = server.uri();
@@ -852,14 +852,14 @@ async fn proxy_index_wheel_metadata_cache_policy_uses_endpoint_order() -> Result
     Mock::given(method("HEAD"))
         .and(path(format!("/files/{WHEEL_FILENAME}")))
         .respond_with(ResponseTemplate::new(405))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
     mount_artifact(
         &server,
         WHEEL_FILENAME,
         fixture(&context, WHEEL_FILENAME)?,
-        2,
+        1,
     )
     .await;
 
@@ -869,7 +869,7 @@ async fn proxy_index_wheel_metadata_cache_policy_uses_endpoint_order() -> Result
     Resolved 2 packages in [TIME]
     ");
 
-    // The ordinary index's no-store policy requires another wheel request for the fresh resolution.
+    // The proxy's cache policy allows the wheel metadata to serve a fresh resolution.
     fs_err::remove_file(context.temp_dir.join("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
