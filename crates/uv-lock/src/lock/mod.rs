@@ -7067,6 +7067,7 @@ impl Package {
                 });
                 let direct_dist = DirectUrlSourceDist {
                     name: self.id.name.clone(),
+                    version: self.id.version.clone().map(Box::new),
                     location: Box::new(location),
                     subdirectory: direct.subdirectory.clone(),
                     ext,

@@ -337,6 +337,8 @@ pub struct DirectUrlSourceDist {
     /// Unlike [`DirectUrlBuiltDist`], we can't require a full filename with a version here, people
     /// like using e.g. `foo @ https://github.com/org/repo/archive/master.zip`
     pub name: PackageName,
+    /// The version expected by a lockfile, if known.
+    pub version: Option<Box<Version>>,
     /// The URL without the subdirectory fragment.
     pub location: Box<SafeUrl>,
     /// The subdirectory within the archive in which the source distribution is located.
@@ -447,6 +449,7 @@ impl Dist {
                 }
                 Ok(Self::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
                     name,
+                    version: None,
                     location: Box::new(location),
                     subdirectory,
                     ext,
@@ -789,6 +792,15 @@ impl SourceDist {
             | Self::GitDirectory(_)
             | Self::Path(_)
             | Self::Directory(_) => None,
+        }
+    }
+
+    /// The version to check against a built wheel, including archive filenames and lockfile pins.
+    pub fn expected_version(&self) -> Option<&Version> {
+        match self {
+            Self::DirectUrl(dist) => dist.version.as_deref(),
+            Self::Path(dist) => dist.version.as_ref(),
+            _ => self.version(),
         }
     }
 

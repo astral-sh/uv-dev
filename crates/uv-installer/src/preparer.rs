@@ -9,7 +9,7 @@ use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
     BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    RemoteSource, Resolution, matches_build_version,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -155,10 +155,12 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                         };
                         return Err(Error::from_dist(dist, err, resolution));
                     }
-                    if let Some(version) = dist.version() {
-                        if *version != cached.filename().version
-                            && *version != cached.filename().version.clone().without_local()
-                        {
+                    let expected_version = match &dist {
+                        Dist::Built(wheel) => Some(wheel.version()),
+                        Dist::Source(source) => source.expected_version(),
+                    };
+                    if let Some(version) = expected_version {
+                        if !matches_build_version(version, &cached.filename().version) {
                             let err = uv_distribution::Error::WheelMetadataVersionMismatch {
                                 given: version.clone(),
                                 metadata: cached.filename().version.clone(),

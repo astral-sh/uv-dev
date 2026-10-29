@@ -33,7 +33,7 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
     DirectorySourceUrl, ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, Hashed,
     IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist,
-    SourceUrl,
+    SourceUrl, matches_build_version,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
@@ -3459,7 +3459,7 @@ fn validate_metadata(
     }
 
     if let Some(version) = source.version() {
-        if *version != metadata.version && *version != metadata.version.clone().without_local() {
+        if !matches_build_version(version, &metadata.version) {
             return Err(Error::WheelMetadataVersionMismatch {
                 metadata: metadata.version.clone(),
                 given: version.clone(),
@@ -3669,7 +3669,7 @@ impl CachedMetadata {
     /// Returns `true` if the metadata matches the given package name and version.
     fn matches(&self, name: Option<&PackageName>, version: Option<&Version>) -> bool {
         name.is_none_or(|name| self.0.name == *name)
-            && version.is_none_or(|version| self.0.version == *version)
+            && version.is_none_or(|version| matches_build_version(version, &self.0.version))
     }
 }
 

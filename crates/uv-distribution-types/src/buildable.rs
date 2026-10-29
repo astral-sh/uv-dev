@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 
 use uv_distribution_filename::SourceDistExtension;
 use uv_git_types::GitUrl;
-use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::VerbatimUrl;
 
 use uv_normalize::PackageName;
@@ -16,6 +16,12 @@ use crate::{
     DirectorySourceDist, DistributionMetadata, GitDirectorySourceDist, GitPathSourceDist, Name,
     PathSourceDist, SourceDist,
 };
+
+/// Whether a built wheel satisfies a source's expected version. A public version such as
+/// `1.0` accepts `1.0+cpu`, while a pin to `1.0+cpu` requires that local version.
+pub fn matches_build_version(expected: &Version, built: &Version) -> bool {
+    VersionSpecifier::equals_version(expected.clone()).contains(built)
+}
 
 /// A reference to a source that can be built into a built distribution.
 ///
@@ -62,9 +68,7 @@ impl BuildableSource<'_> {
     /// Return the [`Version`] of the source, if available.
     pub fn version(&self) -> Option<&Version> {
         match self {
-            Self::Dist(SourceDist::Registry(dist)) => Some(&dist.version),
-            Self::Dist(SourceDist::Path(dist)) => dist.version.as_ref(),
-            Self::Dist(_) => None,
+            Self::Dist(dist) => dist.expected_version(),
             Self::Url(_) => None,
         }
     }

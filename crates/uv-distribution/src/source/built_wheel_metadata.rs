@@ -4,7 +4,7 @@ use std::str::FromStr;
 use uv_cache::CacheShard;
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::WheelFilename;
-use uv_distribution_types::{BuildInfo, Hashed};
+use uv_distribution_types::{BuildInfo, Hashed, matches_build_version};
 use uv_fs::files;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -95,6 +95,6 @@ impl BuiltWheelFile {
     /// Returns `true` if the wheel matches the given package name and version.
     pub(crate) fn matches(&self, name: Option<&PackageName>, version: Option<&Version>) -> bool {
         name.is_none_or(|name| self.filename.name == *name)
-            && version.is_none_or(|version| self.filename.version == *version)
+            && version.is_none_or(|version| matches_build_version(version, &self.filename.version))
     }
 }
