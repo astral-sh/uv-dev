@@ -350,7 +350,7 @@ impl PythonEnvironment {
     /// for display.
     pub fn get_pyvenv_version_conflict(&self) -> Option<(Version, Version)> {
         let cfg = self.cfg().ok()?;
-        let cfg_version = cfg.version?.into_version();
+        let cfg_version = cfg.version?;
 
         // Determine if we should be checking for patch or pre-release equality
         let exe_version = if cfg_version.release().get(2).is_none() {
@@ -361,6 +361,8 @@ impl PythonEnvironment {
             self.interpreter().python_version().clone()
         };
 
-        (cfg_version != exe_version).then_some((cfg_version, exe_version))
+        // Local labels like `+dev` identify builds, not interpreter compatibility versions.
+        (cfg_version.clone().without_local() != exe_version.clone().without_local())
+            .then_some((cfg_version, exe_version))
     }
 }
