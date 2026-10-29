@@ -6531,6 +6531,53 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     Ok(())
 }
 
+/// Both newly built and cached wheels must match the version in an archive lock.
+#[test]
+fn pep_751_validates_url_sdist_version() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+    let (_, hash) = server
+        .files()
+        .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
+        .expect("source distribution");
+    let pylock = context.temp_dir.child("pylock.toml");
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "a"
+        version = "1.0.0"
+        archive = {{ url = "{url}", hashes = {{ sha256 = "{hash}" }} }}
+    "#, url = server.file_url("a-1.0.0.tar.gz")};
+    let wrong_version = lock.replace("version = \"1.0.0\"", "version = \"2.0.0\"");
+    pylock.write_str(&wrong_version)?;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--preview").arg("--index-url").arg(server.index_url()).arg("pylock.toml"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `a @ http://[LOCALHOST]/files/a-1.0.0.tar.gz`
+      cause: Package metadata version `1.0.0` does not match given version `2.0.0`
+    ");
+
+    pylock.write_str(&lock)?;
+    context
+        .pip_sync()
+        .arg("--preview")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("pylock.toml")
+        .assert()
+        .success();
+    context.reset_venv();
+    pylock.write_str(&wrong_version)?;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--index-url").arg(server.index_url()).args(["--preview", "--offline", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `a @ http://[LOCALHOST]/files/a-1.0.0.tar.gz`
+      cause: Package metadata version `1.0.0` does not match given version `2.0.0`
+    ");
+    Ok(())
+}
+
 #[test]
 fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");

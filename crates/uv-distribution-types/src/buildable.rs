@@ -64,6 +64,7 @@ impl BuildableSource<'_> {
         match self {
             Self::Dist(SourceDist::Registry(dist)) => Some(&dist.version),
             Self::Dist(SourceDist::Path(dist)) => dist.version.as_ref(),
+            Self::Dist(SourceDist::DirectUrl(dist)) => dist.version.as_ref(),
             Self::Dist(_) => None,
             Self::Url(_) => None,
         }

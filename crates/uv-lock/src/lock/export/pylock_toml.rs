@@ -1949,6 +1949,7 @@ impl PylockTomlArchive {
                 DistExtension::Source(ext) => {
                     Ok(Dist::Source(SourceDist::DirectUrl(DirectUrlSourceDist {
                         name: name.clone(),
+                        version: version.cloned(),
                         location: Box::new(url.clone()),
                         subdirectory: self.subdirectory.clone().map(Box::<Path>::from),
                         ext,
