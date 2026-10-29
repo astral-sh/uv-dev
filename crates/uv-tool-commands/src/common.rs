@@ -12,6 +12,7 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use tracing::{debug, warn};
 use uv_cache::{Cache, Refresh};
+use uv_cache_key::CanonicalUrl;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
@@ -22,7 +23,7 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
+    DependencyMetadata, HashCollection, Index, IndexLocations, IndexUrl, InstalledDist, Name,
     NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
@@ -34,6 +35,7 @@ use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
+use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_discovery::ConfigDiscovery;
@@ -47,7 +49,7 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
-use uv_settings::{PythonInstallMirrors, ToolOptions};
+use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -55,6 +57,67 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use uv_resolve_operations::{Error as ResolveError, resolution_markers, resolution_tags};
+
+/// Merge a tool receipt with current configuration, retaining receipt precedence.
+/// A saved proxy is a copy of a declaration, not a second proxy for the same upstream.
+pub(crate) fn options_with_receipt(
+    receipt: &ToolOptions,
+    mut filesystem: ResolverInstallerOptions,
+) -> ResolverInstallerOptions {
+    let mut receipt = ResolverInstallerOptions::from(receipt.clone());
+
+    // Receipts omit credentials, including usernames needed for keyring lookups.
+    if let (Some(stored), Some(configured)) = (
+        receipt.indexes.index_url.as_ref(),
+        filesystem.indexes.index_url.as_ref(),
+    ) {
+        let stored = Index::from(stored.clone());
+        let configured = Index::from(configured.clone());
+        if stored.raw_url().username().is_empty()
+            && stored.raw_url().password().is_none()
+            && (!configured.raw_url().username().is_empty()
+                || configured.raw_url().password().is_some())
+            && CanonicalUrl::new(stored.raw_url().clone())
+                == CanonicalUrl::new(configured.raw_url().clone())
+        {
+            receipt.indexes.index_url = Some(configured.into());
+        }
+    }
+
+    if let (Some(stored), Some(configured)) = (
+        receipt.indexes.index.as_mut(),
+        filesystem.indexes.index.as_mut(),
+    ) {
+        for index in stored.iter_mut().filter(|index| index.proxy_for.is_some()) {
+            let persisted = receipt_index(index.clone());
+            if let Some(position) = configured
+                .iter()
+                .position(|candidate| receipt_index(candidate.clone()) == persisted)
+            {
+                // Restore both index and artifact credentials. Remove only one matching copy:
+                // duplicate declarations in the user's configuration must still be rejected.
+                *index = configured.remove(position).with_promoted_auth_policy();
+            }
+        }
+    }
+
+    receipt.combine(filesystem)
+}
+
+/// Compare declarations in the form persisted by a tool receipt.
+fn receipt_index(index: Index) -> Index {
+    let mut index = index.with_promoted_auth_policy();
+    index.url = IndexUrl::from(VerbatimUrl::from_url(
+        index.raw_url().without_credentials().into_owned(),
+    ));
+    if let Some(url) = &mut index.artifact_base_url {
+        url.remove_credentials();
+    }
+    if let Some(url) = &mut index.publish_url {
+        url.remove_credentials();
+    }
+    index
+}
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]

@@ -1,3 +1,4 @@
+use crate::common::options_with_receipt;
 use std::fmt::Write;
 
 use anyhow::Result;
@@ -130,9 +131,9 @@ pub async fn list(
                 let filesystem = filesystem.clone();
                 async move {
                     let capabilities = IndexCapabilities::default();
-                    let settings = ResolverInstallerSettings::try_from(args.combine(
-                        ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem),
-                    ))?;
+                    let settings = ResolverInstallerSettings::try_from(
+                        args.combine(options_with_receipt(tool.options(), filesystem)),
+                    )?;
                     let interpreter = tool_env.environment().interpreter();
 
                     let client = RegistryClientBuilder::new(

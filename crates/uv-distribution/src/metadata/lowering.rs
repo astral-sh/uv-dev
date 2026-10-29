@@ -242,24 +242,12 @@ impl LoweredRequirement {
                             extra,
                             group,
                         } => {
-                            // Identify the named index from either the project indexes or the workspace indexes,
-                            // in that order.
-                            let Some(index) = locations
-                                .indexes()
-                                .filter(|index| matches!(index.origin, Some(Origin::Cli)))
-                                .chain(project_indexes.iter())
-                                .chain(workspace.indexes().iter())
-                                .find(|Index { name, .. }| {
-                                    name.as_ref().is_some_and(|name| *name == index)
-                                })
-                            else {
-                                let hint = missing_index_hint(locations, &index);
-                                return Err(LoweringError::MissingIndex {
-                                    package: requirement.name.clone(),
-                                    index,
-                                    hint,
-                                });
-                            };
+                            let index = named_package_index(
+                                &requirement.name,
+                                index,
+                                locations,
+                                project_indexes.iter().chain(workspace.indexes().iter()),
+                            )?;
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
@@ -434,21 +422,12 @@ impl LoweredRequirement {
                             (source, marker)
                         }
                         Source::Registry { index, marker, .. } => {
-                            let Some(index) = locations
-                                .indexes()
-                                .filter(|index| matches!(index.origin, Some(Origin::Cli)))
-                                .chain(indexes.iter())
-                                .find(|Index { name, .. }| {
-                                    name.as_ref().is_some_and(|name| *name == index)
-                                })
-                            else {
-                                let hint = missing_index_hint(locations, &index);
-                                return Err(LoweringError::MissingIndex {
-                                    package: requirement.name.clone(),
-                                    index,
-                                    hint,
-                                });
-                            };
+                            let index = named_package_index(
+                                &requirement.name,
+                                index,
+                                locations,
+                                indexes.iter(),
+                            )?;
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
@@ -584,6 +563,13 @@ pub enum LoweringError {
         index: IndexName,
         hint: Option<String>,
     },
+    #[error(
+        "Package `{package}` references proxy index `{index}`; `tool.uv.sources` must reference an upstream package index"
+    )]
+    ProxyIndexSource {
+        package: PackageName,
+        index: IndexName,
+    },
     #[error("Workspace members are not allowed in non-workspace contexts")]
     WorkspaceMember,
     #[error(transparent)]
@@ -652,6 +638,36 @@ impl std::fmt::Display for SourceKind {
             Self::Registry => write!(f, "registry"),
         }
     }
+}
+
+/// Resolve a source within its project or script scope, with CLI definitions taking precedence.
+/// Proxy declarations configure transport and cannot introduce a separate package source.
+fn named_package_index<'a>(
+    package: &PackageName,
+    name: IndexName,
+    locations: &'a IndexLocations,
+    scoped_indexes: impl Iterator<Item = &'a Index>,
+) -> Result<&'a Index, LoweringError> {
+    let index = locations
+        .simple_indexes()
+        .filter(|index| matches!(index.origin, Some(Origin::Cli)))
+        .chain(scoped_indexes)
+        .find(|index| index.name.as_ref() == Some(&name));
+    let Some(index) = index else {
+        let hint = missing_index_hint(locations, &name);
+        return Err(LoweringError::MissingIndex {
+            package: package.clone(),
+            index: name,
+            hint,
+        });
+    };
+    if index.proxy_for.is_some() {
+        return Err(LoweringError::ProxyIndexSource {
+            package: package.clone(),
+            index: name,
+        });
+    }
+    Ok(index)
 }
 
 /// Generate a hint for a missing index if the index name is found in a configuration file

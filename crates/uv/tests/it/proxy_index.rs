@@ -408,6 +408,116 @@ async fn proxy_index_rejects_same_named_package_index_across_configuration_files
     Ok(())
 }
 
+/// A proxy declaration cannot be used to bypass canonical package identity in a named source.
+#[tokio::test]
+async fn proxy_index_rejects_proxy_as_named_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [tool.uv.sources]
+        basic-package = {{ index = "proxy" }}
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{server_url}/simple/"
+        artifact-base-url = "{server_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to parse entry: `basic-package`
+      cause: Package `basic-package` references proxy index `proxy`; `tool.uv.sources` must reference an upstream package index
+    ");
+    assert_no_requests(&server, "proxy index").await?;
+    Ok(())
+}
+
+/// Replaying a receipt must not turn the same configured proxy into two declarations.
+#[tokio::test]
+async fn proxy_index_tool_receipt_reuses_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    let filename = "simple_launcher-0.1.0-py3-none-any.whl";
+    let wheel = fixture(&context, filename)?;
+    mount_simple(
+        &server,
+        "simple-launcher",
+        vec![advertised_file(
+            filename,
+            &format!("{server_url}/files/{filename}"),
+            Some(&sha256(&wheel)),
+        )],
+        3,
+    )
+    .await;
+    mount_metadata(
+        &server,
+        filename,
+        "Metadata-Version: 2.1\nName: simple-launcher\nVersion: 0.1.0\nRequires-Python: >=3.8\n",
+        1,
+    )
+    .await;
+    mount_artifact(&server, filename, wheel, 1).await;
+    let authenticated_url = format!("http://proxy-user:proxy-password@{}", server.address());
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{authenticated_url}/simple/"
+        artifact-base-url = "{authenticated_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    let bin_dir = context.temp_dir.child("bin");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("simple-launcher")
+        .arg("--config-file").arg(config.path())
+        .env(EnvVars::PATH, bin_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + simple-launcher==0.1.0
+    Installed 1 executable: simple_launcher
+    ");
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--config-file").arg(config.path())
+        .env(EnvVars::PATH, bin_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .arg("--config-file").arg(config.path()), @"exit_code: 0 (success)");
+    server.verify().await;
+    assert_authenticated_requests(&server, "proxy-user", "proxy-password").await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_implicitly_routes_pypi_without_a_second_resolution_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
