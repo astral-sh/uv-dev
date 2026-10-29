@@ -1162,3 +1162,1171 @@ fn git_structured_archive_path() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A branch stays tracked across upgrades, including commits with the same package version.
+
+#[test]
+#[cfg(feature = "test-git")]
+fn git_branch() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository
+        .child("packages/example/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("packages/example/src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    context
+        .pip_install()
+        .arg(format!(
+            "example @ git+{repository_url}@main#subdirectory=packages/example"
+        ))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository
+        .child("packages/example/src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/example)
+     + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/example)
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+    ");
+
+    repository
+        .child("packages/example/src/example/__init__.py")
+        .write_str("value = 'third'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/example)
+     + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT]#subdirectory=packages/example)
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    third
+    ");
+
+    Ok(())
+}
+
+/// A foreign installer can record a branch name that looks like a full commit hash.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_full_hex_branch_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let branch = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    let repo = context.temp_dir.child("repo");
+    repo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repo.child("src/example/__init__.py").write_str("")?;
+    Command::new("git")
+        .args(["init", "--initial-branch", branch])
+        .arg(repo.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "first",
+        ])
+        .assert()
+        .success();
+    let first = String::from_utf8(
+        Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )?;
+    let first = first.trim();
+    let url = SafeUrl::from_file_path(repo.path()).expect("absolute repository path");
+    context
+        .pip_install()
+        .arg(format!("example @ git+{url}@{first}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+    let origin = context
+        .site_packages()
+        .join("example-0.1.0.dist-info/direct_url.json");
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&origin))?;
+    metadata["vcs_info"]["requested_revision"] = branch.into();
+    fs_err::write(&origin, serde_json::to_vec(&metadata)?)?;
+    repo.child("src/example/__init__.py")
+        .write_str("updated = True\n")?;
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "second",
+        ])
+        .assert()
+        .success();
+    let second = String::from_utf8(
+        Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )?;
+    let second = second.trim();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==0.1.0 (from git+file://[TEMP_DIR]/repo@[COMMIT])
+     + example==0.1.0 (from git+file://[TEMP_DIR]/repo@[COMMIT])
+    ");
+    let metadata: serde_json::Value = serde_json::from_str(&context.read(&origin))?;
+    assert_eq!(metadata["vcs_info"]["commit_id"], second);
+    assert_eq!(metadata["vcs_info"]["requested_revision"], branch);
+    Ok(())
+}
+
+/// An annotated tag's object ID remains pinned to the commit it peels to.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_annotated_tag_object_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let branch = "main";
+    let repo = context.temp_dir.child("repo");
+    repo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repo.child("src/example/__init__.py").write_str("")?;
+    Command::new("git")
+        .args(["init", "--initial-branch", branch])
+        .arg(repo.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "first",
+        ])
+        .assert()
+        .success();
+    let first = String::from_utf8(
+        Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )?;
+    let first = first.trim();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "tag",
+            "-a",
+            "release",
+            "-m",
+            "release",
+        ])
+        .assert()
+        .success();
+    let object = String::from_utf8(
+        Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "release"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )?;
+    let object = object.trim();
+    assert_ne!(first, object);
+    let url = SafeUrl::from_file_path(repo.path()).expect("absolute repository path");
+    context
+        .pip_install()
+        .arg(format!("example @ git+{url}@{first}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+    let origin = context
+        .site_packages()
+        .join("example-0.1.0.dist-info/direct_url.json");
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&origin))?;
+    metadata["vcs_info"]["requested_revision"] = object.into();
+    fs_err::write(&origin, serde_json::to_vec(&metadata)?)?;
+    repo.child("src/example/__init__.py")
+        .write_str("updated = True\n")?;
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "second",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+    let metadata: serde_json::Value = serde_json::from_str(&context.read(&origin))?;
+    assert_eq!(metadata["vcs_info"]["commit_id"], first);
+    assert_eq!(metadata["vcs_info"]["requested_revision"], object);
+    Ok(())
+}
+
+/// Omitting a revision follows the repository default branch.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_default_branch() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + example==0.2.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+    ");
+
+    Ok(())
+}
+
+/// A full commit pin is unaffected by later commits on the repository branch.
+
+#[test]
+#[cfg(feature = "test-git")]
+fn git_commit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let original_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(original_commit.status.success());
+    let original_commit = String::from_utf8(original_commit.stdout)?;
+    let original_commit = original_commit.trim();
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}@{original_commit}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Ok(())
+}
+
+/// Revision expressions recorded by other installers retain their resolved commit.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_revision_expression_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let original_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(original_commit.status.success());
+    let original_commit = String::from_utf8(original_commit.stdout)?;
+    let original_commit = original_commit.trim();
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}@{original_commit}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    let metadata_path = context
+        .site_packages()
+        .join("example-0.1.0.dist-info/direct_url.json");
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["vcs_info"]["requested_revision"] = "HEAD~1".into();
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Ok(())
+}
+
+/// An abbreviated commit pin must not become a branch selection if a matching branch is added.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_abbreviated_commit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let original_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(original_commit.status.success());
+    let original_commit = String::from_utf8(original_commit.stdout)?;
+    let original_commit = original_commit.trim();
+    let abbreviated_commit = &original_commit[..7];
+
+    context
+        .pip_install()
+        .arg(format!(
+            "example @ git+{repository_url}@{abbreviated_commit}"
+        ))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .arg("update-ref")
+        .arg(format!("refs/heads/{abbreviated_commit}"))
+        .arg("HEAD")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Ok(())
+}
+
+/// Four-character commit pins recorded by other installers remain fixed.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_short_commit_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let original_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(original_commit.status.success());
+    let original_commit = String::from_utf8(original_commit.stdout)?;
+    let original_commit = original_commit.trim();
+    let recorded_revision = &original_commit[..4];
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}@{original_commit}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    let metadata_path = context
+        .site_packages()
+        .join("example-0.1.0.dist-info/direct_url.json");
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["vcs_info"]["requested_revision"] = recorded_revision.to_string().into();
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .arg("update-ref")
+        .arg(format!("refs/heads/{recorded_revision}"))
+        .arg("HEAD")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Ok(())
+}
+
+/// Uppercase commit prefixes remain fixed when a branch uses the same spelling.
+#[test]
+#[cfg(feature = "test-git")]
+fn git_uppercase_commit_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let original_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(original_commit.status.success());
+    let original_commit = String::from_utf8(original_commit.stdout)?;
+    let original_commit = original_commit.trim();
+    let recorded_revision = original_commit[..12].to_ascii_uppercase();
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}@{original_commit}"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    let metadata_path = context
+        .site_packages()
+        .join("example-0.1.0.dist-info/direct_url.json");
+    let mut metadata: serde_json::Value = serde_json::from_str(&context.read(&metadata_path))?;
+    metadata["vcs_info"]["requested_revision"] = recorded_revision.clone().into();
+    fs_err::write(&metadata_path, serde_json::to_vec(&metadata)?)?;
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .arg("update-ref")
+        .arg(format!("refs/heads/{recorded_revision}"))
+        .arg("HEAD")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Ok(())
+}
+
+/// A tag keeps its name: new release tags do not affect it, but moving the requested tag does.
+
+#[test]
+#[cfg(feature = "test-git")]
+fn git_tag() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filters([(r"@[0-9a-f]{40}".to_string(), "@[COMMIT]".to_string())]);
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'first'\n")?;
+
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["tag", "v1"])
+        .assert()
+        .success();
+
+    context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}@v1"))
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+
+    repository
+        .child("src/example/__init__.py")
+        .write_str("value = 'second'\n")?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-am",
+            "Update package",
+        ])
+        .assert()
+        .success();
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["tag", "v2"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first
+    ");
+
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["tag", "--force", "v1"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + example==0.2.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+    ");
+
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import example; print(example.value)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+    ");
+
+    Ok(())
+}

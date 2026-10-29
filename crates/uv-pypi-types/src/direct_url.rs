@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
-use uv_git_types::GitUrl;
+use uv_git_types::{GitReference, GitUrl};
 use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
@@ -243,6 +243,39 @@ pub struct VcsInfo {
     pub requested_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_lfs: Option<bool>, // Prefix lfs with VcsKind::Git per PEP 610
+}
+
+impl VcsInfo {
+    /// Recover the requested Git reference for an upgrade from PEP 610 metadata.
+    pub(crate) fn upgrade_git_reference(&self) -> GitReference {
+        let Some(revision) = self.requested_revision.as_deref() else {
+            return GitReference::DefaultBranch;
+        };
+        if let Some(commit) = self.commit_id.as_deref() {
+            // Other installers accept abbreviated and uppercase object IDs. If the two IDs
+            // differ, the request can be a hexadecimal ref name or an annotated tag object.
+            let hexadecimal =
+                revision.len() >= 4 && revision.bytes().all(|byte| byte.is_ascii_hexdigit());
+            if hexadecimal
+                && commit
+                    .get(..revision.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(revision))
+            {
+                return GitReference::from_rev(commit.to_owned());
+            }
+            if hexadecimal {
+                return GitReference::BranchOrTagOrCommit(revision.to_owned());
+            }
+            // These revision expressions cannot be fetched as branch or tag names.
+            if revision.contains(['~', '^', ':'])
+                || revision.contains("@{")
+                || matches!(revision, "HEAD" | "@")
+            {
+                return GitReference::from_rev(commit.to_owned());
+            }
+        }
+        GitReference::from_rev(revision.to_owned())
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

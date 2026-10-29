@@ -151,11 +151,17 @@ versions using the configured indexes and resolution settings. If the latest ver
 normal resolver priorities determine which packages are upgraded. An upgrade can require downgrading
 another package to satisfy its dependencies. Packages that are no longer needed are retained.
 
-Packages installed from URLs or local directories retain their sources, including recorded Git
-commits and editable installations. Version constraints and extras from the original installation
-are not recorded in the environment and cannot be recovered. Dependencies required only by an extra
-can therefore be upgraded beyond that extra's version bounds. Use `--constraint` to apply version
-bounds to the upgrade.
+Packages installed from URLs or local directories retain their sources and editable status. Git
+installations refresh the originally requested revision, or the repository's default branch if no
+revision was requested. Explicit commit pins and revision expressions that uv cannot refresh, such
+as `HEAD~1`, retain their recorded commits. An annotated tag's object ID also refers to its original
+commit. A requested tag name continues to select that tag; uv does not choose a newer release tag.
+Git subdirectories, archive paths, and LFS settings are retained. Local and editable installations
+use their local source tree.
+
+Version constraints and extras from the original installation are not recorded in the environment
+and cannot be recovered. Dependencies required only by an extra can therefore be upgraded beyond
+that extra's version bounds. Use `--constraint` to apply version bounds to the upgrade.
 
 To preview the changes without modifying the environment:
 

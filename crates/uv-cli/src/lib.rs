@@ -817,6 +817,8 @@ pub enum PipCommand {
     ///
     /// Use `--all` to resolve all installed packages together, including their dependencies.
     /// Packages installed from URLs or local directories retain their sources and editable status.
+    /// Git installations refresh the originally requested revision, or the repository's default
+    /// branch if no revision was requested. Explicit commit pins remain fixed.
     /// Version constraints from the original installation are not retained.
     #[command(
         after_help = "Use `uv help pip upgrade` for more details.",
