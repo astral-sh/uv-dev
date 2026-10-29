@@ -27,8 +27,9 @@ use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
 
 use crate::record::RecordEntry;
+use crate::requested;
 use crate::script::{EntryPoints, Script};
-use crate::{Error, Layout};
+use crate::{Error, Layout, RequestedExtras};
 
 const SHELL_SHEBANG: &str = "#!/bin/sh\n";
 
@@ -230,6 +231,7 @@ fn is_installer_metadata(name: &OsStr) -> bool {
         "REQUESTED",
         "uv_cache.json",
         "uv_build.json",
+        requested::FILE_NAME,
     ]
     .iter()
     .any(|reserved| name.eq_ignore_ascii_case(reserved))
@@ -983,7 +985,7 @@ pub(crate) fn discard_wheel_installer_metadata(
     Ok(())
 }
 
-/// Adds `INSTALLER`, `REQUESTED` and `direct_url.json` to the .dist-info dir
+/// Write installer metadata into the `.dist-info` directory.
 pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Serialize>(
     site_packages: &Path,
     dist_info_prefix: &str,
@@ -991,6 +993,7 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
     direct_url: Option<&DirectUrl>,
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
+    requested_extras: Option<&RequestedExtras>,
     installer: Option<&str>,
     record: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
@@ -1027,6 +1030,16 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
             site_packages,
             &dist_info_dir.join("INSTALLER"),
             installer,
+            record,
+        )?;
+    }
+    if let Some(requested_extras) = requested_extras
+        && !requested_extras.extras.is_empty()
+    {
+        write_file_recorded(
+            site_packages,
+            &dist_info_dir.join(requested::FILE_NAME),
+            serde_json::to_vec(requested_extras)?,
             record,
         )?;
     }
@@ -1659,6 +1672,7 @@ mod test {
             site_packages,
             "foo-0.1.0",
             true,
+            None,
             None,
             None,
             None,

@@ -358,6 +358,7 @@ pub async fn sync_from_lock(
             venv,
             logger,
             installer_metadata,
+            None,
             dry_run,
             printer,
             preview,

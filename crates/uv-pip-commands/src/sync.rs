@@ -48,6 +48,7 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
+use crate::requested_extras;
 use crate::resolve_build_hash_checking;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_install_operations::Changelog;
@@ -396,6 +397,7 @@ pub async fn pip_sync(
     // Determine the set of installed packages.
     let site_packages = SitePackages::from_environment(&environment)?;
 
+    let mut requested = requested_extras::RequestedExtrasMap::new();
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
@@ -478,7 +480,14 @@ pub async fn pip_sync(
         )
         .await
         {
-            Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
+            Ok((resolution, hasher)) => {
+                requested = requested_extras::from_requirements(
+                    &resolution.requirements,
+                    &marker_env,
+                    &resolution.modifiers,
+                );
+                (Resolution::from(resolution), hasher)
+            }
             Err(err) => {
                 return Err(UvError::from(err).into());
             }
@@ -486,6 +495,15 @@ pub async fn pip_sync(
 
         (resolution, hasher)
     };
+
+    if installer_metadata {
+        // Sync inputs replace prior selections, including for packages that need no reinstall.
+        for dist in resolution.distributions() {
+            if !site_packages.get_packages(dist.name()).is_empty() {
+                requested.entry(dist.name().clone()).or_default();
+            }
+        }
+    }
 
     // Constrain any build requirements marked as `match-runtime = true`.
     let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
@@ -537,6 +555,7 @@ pub async fn pip_sync(
         &environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
+        Some(&requested),
         dry_run,
         printer,
         preview,

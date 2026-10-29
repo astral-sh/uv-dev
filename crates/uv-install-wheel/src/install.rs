@@ -17,7 +17,7 @@ use crate::wheel::{
     find_dist_info, install_data, parse_scripts, read_record, write_installer_metadata,
     write_record, write_script_entrypoints,
 };
-use crate::{Error, Layout};
+use crate::{Error, Layout, RequestedExtras};
 
 /// Return the path at which the wheel's `.dist-info` directory will be installed.
 pub fn installed_dist_info_path(
@@ -59,6 +59,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     direct_url: Option<&DirectUrl>,
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
+    requested_extras: Option<&RequestedExtras>,
     installer: Option<&str>,
     installer_metadata: bool,
     link_mode: LinkMode,
@@ -157,6 +158,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             direct_url,
             cache_info,
             build_info,
+            requested_extras,
             installer,
             &mut record,
         )?;

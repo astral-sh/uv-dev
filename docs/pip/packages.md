@@ -159,9 +159,22 @@ commit. A requested tag name continues to select that tag; uv does not choose a 
 Git subdirectories, archive paths, and LFS settings are retained. Local and editable installations
 use their local source tree.
 
-Version constraints and extras from the original installation are not recorded in the environment
-and cannot be recovered. Dependencies required only by an extra can therefore be upgraded beyond
-that extra's version bounds. Use `--constraint` to apply version bounds to the upgrade.
+Extras explicitly requested with `uv pip install`, such as `flask[async]`, are recorded and
+reapplied by `uv pip upgrade --all`. Repeated installations accumulate extra selections after
+applying overrides and exclusions; excluded or inactive requirements leave earlier selections
+untouched. `uv pip sync` replaces them with the selections in its input. Extras requested only by
+another package are resolved from that package's current dependencies. With `uv pip install` or
+`uv pip sync`, `--dry-run` reports a change to the recorded extras even if the installed versions
+already match. `--check` exits with status 1 until the selection is recorded.
+
+Extras selected with older versions of uv, another installer, or `--no-installer-metadata` cannot be
+recovered. To record a missing selection, run `uv pip install 'package[extra]'`; the selection is
+recorded even if all requirements are already satisfied. Without that selection, dependencies
+required only by an extra can be upgraded beyond its version bounds.
+
+Version constraints from the original installation are not recorded. Use `--constraint` to apply
+version bounds to the upgrade. Project commands such as `uv sync` continue to use the project's
+declared requirements and lockfile rather than these pip extra selections.
 
 To preview the changes without modifying the environment:
 

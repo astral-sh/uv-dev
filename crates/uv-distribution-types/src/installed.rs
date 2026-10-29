@@ -376,6 +376,17 @@ impl InstalledDist {
         Ok(None)
     }
 
+    /// Return the installed `.dist-info` directory, if the distribution has one.
+    pub fn dist_info_path(&self) -> Option<&Path> {
+        match &self.kind {
+            InstalledDistKind::Registry(dist) => Some(&dist.path),
+            InstalledDistKind::Url(dist) => Some(&dist.path),
+            InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_)
+            | InstalledDistKind::LegacyEditable(_) => None,
+        }
+    }
+
     /// Return the [`Path`] at which the distribution is stored on-disk.
     pub fn install_path(&self) -> &Path {
         match &self.kind {

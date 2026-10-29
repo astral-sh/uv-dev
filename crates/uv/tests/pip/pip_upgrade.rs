@@ -349,6 +349,117 @@ fn unrecorded_extras() -> Result<()> {
     Ok(())
 }
 
+/// Explicit extras constrain upgrades and activate dependencies added in newer releases.
+#[test]
+fn recorded_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "recorded-extras"
+        [root]
+        requires = ["a[z]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        z = ["b<2"]
+        [packages.a.versions."2.0.0".extras]
+        z = ["b<2", "c"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+        [packages.c.versions."1.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .arg("a[z]==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+     + c==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    c==1.0.0
+    ");
+    insta::assert_snapshot!(context.read(context.site_packages().join("a-2.0.0.dist-info/uv_requested.json")), @r#"{"extras":["z"]}"#);
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A transitive extra must stop constraining the environment when its parent drops it.
+#[test]
+fn transitive_extras_are_not_recorded() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "transitive-extras"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["b[z]"]
+        [packages.a.versions."2.0.0"]
+        requires = ["b"]
+        [packages.b.versions."1.0.0".extras]
+        z = ["c<2"]
+        [packages.c.versions."1.0.0"]
+        [packages.c.versions."2.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert!(
+        !context
+            .site_packages()
+            .join("b-1.0.0.dist-info/uv_requested.json")
+            .exists()
+    );
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     - a==1.0.0
+     + a==2.0.0
+     - c==1.0.0
+     + c==2.0.0
+    ");
+    Ok(())
+}
+
 #[test]
 fn constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");

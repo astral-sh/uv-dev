@@ -2166,6 +2166,617 @@ fn allow_incompatibilities() -> Result<()> {
     Ok(())
 }
 
+/// Explicit extra selections accumulate, including across replacements without extras.
+#[test]
+fn requested_extras_accumulate() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-accumulate"
+        [root]
+        requires = ["a[x,y]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b"]
+        y = ["c"]
+        [packages.b.versions."1.0.0"]
+        [packages.c.versions."1.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .arg("a[x]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a[y]")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + c==1.0.0
+    Updated requested extras for `a`
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x","y"]}"#);
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a", "--reinstall"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ a==1.0.0
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x","y"]}"#);
+    let record = context.read(dist_info.join("RECORD"));
+    let requested_entries = record
+        .lines()
+        .filter(|line| line.starts_with("a-1.0.0.dist-info/uv_requested.json,"))
+        .collect::<Vec<_>>();
+    assert_snapshot!(requested_entries.join("\n"), @"a-1.0.0.dist-info/uv_requested.json,sha256=gK-CO55TP5Ek5zxjmIjTUg_JAB-rKy79Jm3Ro03_HQ0,20");
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("a"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - a==1.0.0
+    ");
+    assert!(!dist_info.exists());
+    Ok(())
+}
+
+/// A satisfied request still records extras; dry runs and disabled metadata do not.
+#[test]
+fn requested_extras_already_satisfied() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-satisfied"
+        [root]
+        requires = ["a[z]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        z = ["b<2"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+
+    context
+        .pip_install()
+        .args(["a", "b==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[z]", "--dry-run"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would update requested extras for `a`
+    ");
+    assert!(!dist_info.join("uv_requested.json").exists());
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[z]", "--check"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Would update requested extras for `a`
+    ");
+    assert!(!dist_info.join("uv_requested.json").exists());
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[z]", "--no-installer-metadata"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    assert!(!dist_info.join("uv_requested.json").exists());
+
+    // Adding this request does not reinstall any package.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a[z]")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated requested extras for `a`
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["z"]}"#);
+
+    // A plain request does not clear the previously selected extra.
+    context
+        .pip_install()
+        .arg("a")
+        .arg("--offline")
+        .assert()
+        .success();
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["z"]}"#);
+    Ok(())
+}
+
+/// Excluded roots must not replace earlier selections when resolution runs.
+#[test]
+fn requested_extras_excluded_resolved() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-excluded"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        y = []
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    let original_record = context.read(dist_info.join("RECORD"));
+    context.temp_dir.child("excludes.txt").write_str("a\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[y]", "--exclude", "excludes.txt", "--upgrade"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+    assert_eq!(context.read(dist_info.join("RECORD")), original_record);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Excluded roots must not add selections on the already-satisfied path.
+#[test]
+fn requested_extras_excluded_satisfied() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-excluded"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        y = []
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    let original_record = context.read(dist_info.join("RECORD"));
+    context.temp_dir.child("excludes.txt").write_str("a\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[y]", "--exclude", "excludes.txt"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+    assert_eq!(context.read(dist_info.join("RECORD")), original_record);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A marker-false override must not replace earlier selections when resolution runs.
+#[test]
+fn requested_extras_overridden_markers_resolved() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-overridden-markers"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        y = []
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    let original_record = context.read(dist_info.join("RECORD"));
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str("a; python_version < '0'\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[y]", "--override", "overrides.txt", "--upgrade"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+    assert_eq!(context.read(dist_info.join("RECORD")), original_record);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A marker-false override must not add selections on the already-satisfied path.
+#[test]
+fn requested_extras_overridden_markers_satisfied() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-overridden-markers"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        y = []
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    let original_record = context.read(dist_info.join("RECORD"));
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str("a; python_version < '0'\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[y]", "--override", "overrides.txt"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+    assert_eq!(context.read(dist_info.join("RECORD")), original_record);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Explicit extras supplied by an override are recorded for later upgrades.
+#[test]
+fn requested_extras_overridden_selection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-overridden-selection"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        y = []
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .args(["a", "b==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str("a[x]\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a[y]", "--override", "overrides.txt", "--upgrade"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated requested extras for `a`
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Extras on unnamed editable requirements are recorded and reused during upgrades.
+#[test]
+fn requested_extras_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        [project.optional-dependencies]
+        z = ["a<2"]
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/src/example/__init__.py")
+        .write_str("")?;
+    context
+        .pip_install()
+        .args(["-e", "./project", "a==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["-e", "./project[z]"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ example==0.1.0 (from file://[TEMP_DIR]/project)
+    ");
+    assert_snapshot!(context.read(context.site_packages().join("example-0.1.0.dist-info/uv_requested.json")), @r#"{"extras":["z"]}"#);
+
+    uv_snapshot!(context.filters(), context.pip_upgrade()
+        .arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Selections belong to the environment, even when environments share cached wheels.
+#[test]
+fn requested_extras_environment_specific() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let other = uv_test::test_context!("3.12").with_cache_dir(&context.cache_dir);
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-environments"
+        [root]
+        requires = ["a[z]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        z = []
+    "#})?);
+    context
+        .pip_install()
+        .args(["a[z]", "--link-mode", "hardlink"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    other
+        .pip_install()
+        .args(["a", "--link-mode", "hardlink"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert_snapshot!(context.read(context.site_packages().join("a-1.0.0.dist-info/uv_requested.json")), @r#"{"extras":["z"]}"#);
+    assert!(
+        !other
+            .site_packages()
+            .join("a-1.0.0.dist-info/uv_requested.json")
+            .exists()
+    );
+    Ok(())
+}
+
+/// An installed replacement retains its extras when a later shared build fails.
+#[test]
+fn requested_extras_partial_install() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-partial-install"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        [packages.a.versions."2.0.0".extras]
+        x = ["b<2"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    let package = context.temp_dir.child("broken");
+    package.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "broken"
+        version = "0.1.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            directory = Path(metadata_directory) / "broken-0.1.0.dist-info"
+            directory.mkdir(exist_ok=True)
+            (directory / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: broken\nVersion: 0.1.0\n"
+            )
+            return directory.name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("intentional build failure")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["a==2.0.0", "./broken", "--no-build-isolation-package", "broken"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+    error: Failed to build `broken @ file://[TEMP_DIR]/broken`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/broken/backend.py", line 12, in build_wheel
+                 raise RuntimeError("intentional build failure")
+             RuntimeError: intentional build failure
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    assert_snapshot!(context.read(context.site_packages().join("a-2.0.0.dist-info/uv_requested.json")), @r#"{"extras":["x"]}"#);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    ");
+    Ok(())
+}
+
+/// Retrying an already-satisfied selection repairs an untracked receipt.
+#[test]
+fn requested_extras_repairs_record() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-repair"
+        [root]
+        requires = ["a[z]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        z = []
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[z]")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    let record_path = dist_info.join("RECORD");
+    let original_record = context.read(&record_path);
+    let missing_entry = original_record
+        .lines()
+        .filter(|line| !line.starts_with("a-1.0.0.dist-info/uv_requested.json,"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs_err::write(&record_path, format!("{missing_entry}\n"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("a[z]")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated requested extras for `a`
+    ");
+    assert_eq!(context.read(&record_path), original_record);
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("a"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - a==1.0.0
+    ");
+    assert!(!dist_info.exists());
+    Ok(())
+}
+
 #[test]
 fn install_extras() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -12398,6 +13009,10 @@ fn wheel_cannot_supply_installer_metadata() -> Result<()> {
                 "./example-1.0.dist-info/direct_url.json",
                 r#"{"url":"https://example.invalid/other.whl","archive_info":{}}"#,
             ),
+            (
+                "example-1.0.dist-info/uv_requested.json",
+                r#"{"extras":["x"]}"#,
+            ),
             ("example-1.0.dist-info/INSTALLER", "another installer"),
         ])
         .build();
@@ -12415,6 +13030,7 @@ fn wheel_cannot_supply_installer_metadata() -> Result<()> {
     ");
     let dist_info = context.site_packages().join("example-1.0.dist-info");
     assert!(!dist_info.join("direct_url.json").exists());
+    assert!(!dist_info.join("uv_requested.json").exists());
     assert_eq!(fs::read_to_string(dist_info.join("INSTALLER"))?, "uv");
     assert_snapshot!(apply_filters(context.read(dist_info.join("RECORD")), context.filters()), @"
     example-1.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
@@ -12437,6 +13053,7 @@ fn wheel_cannot_supply_installer_metadata() -> Result<()> {
      - example==1.0
      + example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl)
     ");
+    assert!(!dist_info.join("uv_requested.json").exists());
     let origin: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dist_info.join("direct_url.json"))?)?;
     assert_eq!(

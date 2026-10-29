@@ -35,6 +35,13 @@ impl PackageChangesReport {
                 .chain(changelog.reinstalled.iter().map(|dist| {
                     PackageChangeReport::from_dist(dist, PackageChangeAction::Reinstalled)
                 }))
+                .chain(changelog.requested_extras.iter().map(|(name, version)| {
+                    PackageChangeReport {
+                        name: name.clone(),
+                        version: Some(version.clone()),
+                        action: PackageChangeAction::RequestedExtrasUpdated,
+                    }
+                }))
                 .collect();
 
         changes.sort_by(|a, b| {
@@ -76,4 +83,5 @@ enum PackageChangeAction {
     Uninstalled,
     Installed,
     Reinstalled,
+    RequestedExtrasUpdated,
 }

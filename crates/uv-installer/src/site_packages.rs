@@ -20,7 +20,7 @@ use uv_distribution_types::{
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
-use uv_pep508::VersionOrUrl;
+use uv_pep508::{Requirement as Pep508Requirement, VersionOrUrl};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{DirectUrl, ResolverMarkerEnvironment, VerbatimParsedUrl};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -223,6 +223,29 @@ impl SitePackages {
             .collect()
     }
 
+    /// Returns a named requirement, using a unique installed URL match for unnamed requirements.
+    pub fn get_named_requirement<'a>(
+        &self,
+        requirement: &'a UnresolvedRequirement,
+    ) -> Option<Cow<'a, Requirement>> {
+        match requirement {
+            UnresolvedRequirement::Named(requirement) => Some(Cow::Borrowed(requirement)),
+            UnresolvedRequirement::Unnamed(requirement) => {
+                let distributions = self.get_urls(requirement.url.verbatim.raw());
+                let [distribution] = distributions.as_slice() else {
+                    return None;
+                };
+                Some(Cow::Owned(Requirement::from(Pep508Requirement {
+                    name: distribution.name().clone(),
+                    version_or_url: Some(VersionOrUrl::Url(requirement.url.clone())),
+                    marker: requirement.marker,
+                    extras: requirement.extras.clone(),
+                    origin: requirement.origin.clone(),
+                })))
+            }
+        }
+    }
+
     /// Returns `true` if there are any installed packages.
     pub(crate) fn any(&self) -> bool {
         self.distributions.iter().any(Option::is_some)
@@ -378,37 +401,13 @@ impl SitePackages {
         let requirements = {
             let mut named = Vec::with_capacity(requirements.len());
             for requirement in requirements {
-                match &requirement.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        named.push(Cow::Borrowed(requirement));
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
-                            [] => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                            [distribution] => {
-                                let requirement = uv_pep508::Requirement {
-                                    name: distribution.name().clone(),
-                                    version_or_url: Some(VersionOrUrl::Url(
-                                        requirement.url.clone(),
-                                    )),
-                                    marker: requirement.marker,
-                                    extras: requirement.extras.clone(),
-                                    origin: requirement.origin.clone(),
-                                };
-                                named.push(Cow::Owned(Requirement::from(requirement)));
-                            }
-                            _ => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                        }
-                    }
-                }
+                let Some(named_requirement) = self.get_named_requirement(&requirement.requirement)
+                else {
+                    return Ok(SatisfiesResult::Unsatisfied(
+                        requirement.requirement.clone(),
+                    ));
+                };
+                named.push(named_requirement);
             }
             named
         };
@@ -418,37 +417,13 @@ impl SitePackages {
         let overrides = {
             let mut named = Vec::with_capacity(overrides.len());
             for requirement in overrides {
-                match &requirement.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        named.push(Cow::Borrowed(requirement));
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
-                            [] => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                            [distribution] => {
-                                let requirement = uv_pep508::Requirement {
-                                    name: distribution.name().clone(),
-                                    version_or_url: Some(VersionOrUrl::Url(
-                                        requirement.url.clone(),
-                                    )),
-                                    marker: requirement.marker,
-                                    extras: requirement.extras.clone(),
-                                    origin: requirement.origin.clone(),
-                                };
-                                named.push(Cow::Owned(Requirement::from(requirement)));
-                            }
-                            _ => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                        }
-                    }
-                }
+                let Some(named_requirement) = self.get_named_requirement(&requirement.requirement)
+                else {
+                    return Ok(SatisfiesResult::Unsatisfied(
+                        requirement.requirement.clone(),
+                    ));
+                };
+                named.push(named_requirement);
             }
             named
         };

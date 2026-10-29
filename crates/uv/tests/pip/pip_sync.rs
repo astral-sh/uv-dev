@@ -6,6 +6,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
+use insta::assert_snapshot;
 use predicates::Predicate;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -16,6 +17,206 @@ use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
 use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot};
+
+/// Sync replaces explicit selections even when the installed versions already match.
+#[test]
+fn requested_extras_replace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-sync"
+        [root]
+        requires = ["a[x,y]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b"]
+        y = ["c"]
+        [packages.b.versions."1.0.0"]
+        [packages.c.versions."1.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .args(["a[x]", "c"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let dist_info = context.site_packages().join("a-1.0.0.dist-info");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["x"]}"#);
+
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("a[y]\nb\nc\n")?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated requested extras for `a`
+    ");
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["y"]}"#);
+
+    requirements.write_str("a\nb\nc\n")?;
+    let record = context.read(dist_info.join("RECORD"));
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--check", "--output-format=json"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "changes": [
+        {
+          "name": "a",
+          "version": "1.0.0",
+          "action": "requested_extras_updated"
+        }
+      ],
+      "dry_run": true
+    }
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Would update requested extras for `a`
+    "#);
+    assert_snapshot!(context.read(dist_info.join("uv_requested.json")), @r#"{"extras":["y"]}"#);
+    assert_eq!(context.read(dist_info.join("RECORD")), record);
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated requested extras for `a`
+    ");
+    assert!(!dist_info.join("uv_requested.json").exists());
+    assert_snapshot!(context.read(dist_info.join("RECORD")), @"
+    a-1.0.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
+    a-1.0.0.dist-info/METADATA,sha256=lJNNw8xNYqJB_Sp-1ht1Kuvj6eNGcJWfI35PRCoT38U,169
+    a-1.0.0.dist-info/RECORD,,
+    a-1.0.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+    a-1.0.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+    a/__init__.py,sha256=J-j-u0itpEFT6irdmWmixQqYMadNl1X91TxUmoiLHMI,22
+    ");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--check", "--output-format=json"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "changes": [],
+      "dry_run": true
+    }
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 3 packages in [TIME]
+    Would make no changes
+    "#);
+    Ok(())
+}
+
+/// A completed replacement records the sync selection before a later shared build fails.
+#[test]
+fn requested_extras_partial_sync() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "requested-extras-partial-sync"
+        [root]
+        requires = ["a[x]"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0".extras]
+        x = ["b<2"]
+        [packages.a.versions."2.0.0".extras]
+        x = ["b<2"]
+        y = ["b<2"]
+        [packages.b.versions."1.0.0"]
+        [packages.b.versions."2.0.0"]
+    "#})?);
+    context
+        .pip_install()
+        .arg("a[x]==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    let package = context.temp_dir.child("broken");
+    package.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "broken"
+        version = "0.1.0"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            directory = Path(metadata_directory) / "broken-0.1.0.dist-info"
+            directory.mkdir(exist_ok=True)
+            (directory / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: broken\nVersion: 0.1.0\n"
+            )
+            return directory.name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("intentional build failure")
+    "#})?;
+
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("a[y]==2.0.0\nb==1.0.0\n./broken\n")?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-build-isolation-package = ['broken']\n")?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+    error: Failed to build `broken @ file://[TEMP_DIR]/broken`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/broken/backend.py", line 12, in build_wheel
+                 raise RuntimeError("intentional build failure")
+             RuntimeError: intentional build failure
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    assert_snapshot!(context.read(context.site_packages().join("a-2.0.0.dist-info/uv_requested.json")), @r#"{"extras":["y"]}"#);
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==2.0.0
+    b==1.0.0
+    ");
+    Ok(())
+}
 
 #[test]
 fn missing_requirements_txt() {

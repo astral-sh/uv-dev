@@ -17,6 +17,7 @@ pub mod uninstall;
 mod install_report;
 mod pylock;
 mod reporters;
+mod requested_extras;
 
 /// Require build hashes independently of runtime checking. Otherwise, verify supplied build
 /// hashes only when runtime checking is enabled.
