@@ -13245,6 +13245,59 @@ fn direct_url_json_git_tag() -> Result<()> {
 }
 
 #[test]
+fn direct_url_json_archive_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut content = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "", None)?;
+    let digest = hex::encode(Sha256::digest(&content));
+    let archive = context.temp_dir.child("example-1.0.tar.gz");
+    archive.write_binary(&content)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute path");
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&format!("example @ {url} --hash=sha256:{digest}\n"))?;
+
+    let origin = context
+        .site_packages()
+        .join("example-1.0.dist-info/direct_url.json");
+    let frozen = format!("example @ {url}#sha256={digest}\n");
+    for _ in 0..2 {
+        context
+            .pip_install()
+            .arg("--no-index")
+            .arg("--require-hashes")
+            .arg("-r")
+            .arg(requirements.path())
+            .assert()
+            .success();
+        let metadata: serde_json::Value = serde_json::from_slice(&fs::read(&origin)?)?;
+        assert_eq!(
+            metadata,
+            json!({"url": url.as_str(), "archive_info": {"hashes": {"sha256": digest}}})
+        );
+        context
+            .pip_freeze()
+            .assert()
+            .success()
+            .stdout(frozen.clone());
+        context.reset_venv();
+    }
+
+    // The extracted project is unchanged, but its frozen archive digest no longer matches.
+    content.extend_from_slice(b"changed archive");
+    archive.write_binary(&content)?;
+    requirements.write_str(&frozen)?;
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg(requirements.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Hash mismatch"));
+    Ok(())
+}
+
+#[test]
 fn direct_url_json_direct_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");

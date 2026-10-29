@@ -3,11 +3,11 @@ use std::path::Path;
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::WheelFilename;
 use uv_normalize::PackageName;
-use uv_pypi_types::{HashDigest, HashDigests, VerbatimParsedUrl};
+use uv_pypi_types::{DirectUrl, HashDigest, HashDigests, VerbatimParsedUrl};
 
 use crate::{
     BuildInfo, BuiltDist, Dist, DistributionMetadata, Hashed, InstalledMetadata, InstalledVersion,
-    Name, ParsedUrl, SourceDist, VersionId, VersionOrUrlRef,
+    Name, SourceDist, VersionId, VersionOrUrlRef,
 };
 
 /// A built distribution (wheel) that exists in the local cache.
@@ -179,11 +179,14 @@ impl CachedDist {
         }
     }
 
-    /// Return the [`ParsedUrl`] of the distribution, if it exists.
-    pub fn parsed_url(&self) -> Option<&ParsedUrl> {
+    /// Return the installed origin metadata for distributions installed from a direct URL.
+    pub fn direct_url(&self) -> Option<DirectUrl> {
         match self {
             Self::Registry(_) => None,
-            Self::Url(dist) => Some(&dist.url.parsed_url),
+            Self::Url(dist) => Some(DirectUrl::from_url_and_hashes(
+                &dist.url.parsed_url,
+                dist.hashes.as_slice(),
+            )),
         }
     }
 

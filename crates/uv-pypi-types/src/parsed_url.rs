@@ -13,7 +13,7 @@ use uv_pep508::{
 use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
-use crate::{ArchiveInfo, DirInfo, DirectUrl, VcsUrl};
+use crate::{ArchiveInfo, DirInfo, DirectUrl, HashDigest, VcsUrl};
 
 #[derive(DebugNoInline, Error)]
 pub enum ParsedUrlError {
@@ -558,6 +558,24 @@ impl TryFrom<SafeUrl> for ParsedUrl {
         } else {
             Ok(Self::Archive(ParsedArchiveUrl::try_from(url)?))
         }
+    }
+}
+
+impl DirectUrl {
+    /// Build installed origin metadata using the digests computed for the downloaded archive.
+    pub fn from_url_and_hashes(url: &ParsedUrl, hashes: &[HashDigest]) -> Self {
+        let mut origin = Self::from(url);
+        if let Self::ArchiveUrl { archive_info, .. } = &mut origin
+            && !hashes.is_empty()
+        {
+            archive_info.hashes = Some(
+                hashes
+                    .iter()
+                    .map(|hash| (hash.algorithm().to_string(), hash.digest().to_owned()))
+                    .collect(),
+            );
+        }
+        origin
     }
 }
 

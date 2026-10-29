@@ -187,10 +187,7 @@ fn install(
             relocatable,
             wheel.path(),
             wheel.filename(),
-            wheel
-                .parsed_url()
-                .map(uv_pypi_types::DirectUrl::from)
-                .as_ref(),
+            wheel.direct_url().as_ref(),
             if wheel.cache_info().is_empty() {
                 None
             } else {
