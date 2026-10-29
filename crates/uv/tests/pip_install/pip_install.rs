@@ -13249,6 +13249,7 @@ fn direct_url_json_archive_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let mut content = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "", None)?;
     let digest = hex::encode(Sha256::digest(&content));
+    let context = context.with_filter((digest.clone(), "[ORIGINAL_HASH]"));
     let archive = context.temp_dir.child("example-1.0.tar.gz");
     archive.write_binary(&content)?;
     let url = SafeUrl::from_file_path(archive.path()).expect("absolute path");
@@ -13258,7 +13259,6 @@ fn direct_url_json_archive_hash() -> Result<()> {
     let origin = context
         .site_packages()
         .join("example-1.0.dist-info/direct_url.json");
-    let frozen = format!("example @ {url}#sha256={digest}\n");
     uv_snapshot!(context.filters(), context.pip_install()
         .args(["--no-index", "--require-hashes", "-r"])
         .arg(requirements.path()), @"
@@ -13274,11 +13274,11 @@ fn direct_url_json_archive_hash() -> Result<()> {
         metadata,
         json!({"url": url.as_str(), "archive_info": {"hashes": {"sha256": digest}}})
     );
-    context
-        .pip_freeze()
-        .assert()
-        .success()
-        .stdout(frozen.clone());
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]
+    ");
 
     context.reset_venv();
     uv_snapshot!(context.filters(), context.pip_install()
@@ -13294,11 +13294,11 @@ fn direct_url_json_archive_hash() -> Result<()> {
         serde_json::from_slice::<serde_json::Value>(&fs::read(&origin)?)?,
         metadata
     );
-    context
-        .pip_freeze()
-        .assert()
-        .success()
-        .stdout(frozen.clone());
+    let frozen = uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]
+    ");
     uv_snapshot!(context.filters(), context.pip_uninstall().arg(format!("{url}#sha256={digest}")), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -13309,11 +13309,9 @@ fn direct_url_json_archive_hash() -> Result<()> {
     // The extracted project is unchanged, but its frozen archive digest no longer matches.
     content.extend_from_slice(b"changed archive");
     archive.write_binary(&content)?;
-    requirements.write_str(&frozen)?;
+    requirements.write_binary(&frozen.stdout)?;
     let modified_digest = hex::encode(Sha256::digest(&content));
-    let context = context
-        .with_filter((digest, "[ORIGINAL_HASH]"))
-        .with_filter((modified_digest, "[MODIFIED_HASH]"));
+    let context = context.with_filter((modified_digest, "[MODIFIED_HASH]"));
     uv_snapshot!(context.filters(), context.pip_install()
         .args(["--no-index", "--require-hashes", "-r"])
         .arg(requirements.path()), @"

@@ -281,7 +281,7 @@ impl DirectUrl {
     /// Reconstruct a requirement URL, including the recorded digest of an archive.
     pub fn to_requirement_url(&self) -> SafeUrl {
         let archive_hash = match self {
-            DirectUrl::ArchiveUrl { archive_info, .. } => archive_info
+            Self::ArchiveUrl { archive_info, .. } => archive_info
                 .hashes
                 .as_ref()
                 .and_then(|hashes| {
@@ -302,7 +302,7 @@ impl DirectUrl {
 
     fn to_url(&self, archive_hash: Option<String>) -> SafeUrl {
         match self {
-            DirectUrl::LocalDirectory {
+            Self::LocalDirectory {
                 url,
                 subdirectory,
                 dir_info: _,
@@ -313,7 +313,7 @@ impl DirectUrl {
                 }
                 url
             }
-            DirectUrl::ArchiveUrl {
+            Self::ArchiveUrl {
                 url, subdirectory, ..
             } => {
                 let mut url = url.as_url().clone();
@@ -329,7 +329,7 @@ impl DirectUrl {
                 }
                 url
             }
-            DirectUrl::VcsUrl {
+            Self::VcsUrl {
                 url,
                 subdirectory,
                 path,
