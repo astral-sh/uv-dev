@@ -1586,7 +1586,7 @@ impl Identifier for PathBuiltDist {
 
 impl Identifier for GitPathBuiltDist {
     fn distribution_id(&self) -> DistributionId {
-        self.url.distribution_id()
+        DistributionId::from_git(&self.url, &self.git)
     }
 
     fn resource_id(&self) -> ResourceId {
@@ -1616,7 +1616,7 @@ impl Identifier for DirectorySourceDist {
 
 impl Identifier for GitPathSourceDist {
     fn distribution_id(&self) -> DistributionId {
-        self.url.distribution_id()
+        DistributionId::from_git(&self.url, &self.git)
     }
 
     fn resource_id(&self) -> ResourceId {
@@ -1626,7 +1626,7 @@ impl Identifier for GitPathSourceDist {
 
 impl Identifier for GitDirectorySourceDist {
     fn distribution_id(&self) -> DistributionId {
-        self.url.distribution_id()
+        DistributionId::from_git(&self.url, &self.git)
     }
 
     fn resource_id(&self) -> ResourceId {
@@ -1716,7 +1716,7 @@ impl Identifier for DirectSourceUrl<'_> {
 
 impl Identifier for GitDirectorySourceUrl<'_> {
     fn distribution_id(&self) -> DistributionId {
-        self.url.distribution_id()
+        DistributionId::from_git(self.url, self.git)
     }
 
     fn resource_id(&self) -> ResourceId {
@@ -1726,7 +1726,7 @@ impl Identifier for GitDirectorySourceUrl<'_> {
 
 impl Identifier for GitPathSourceUrl<'_> {
     fn distribution_id(&self) -> DistributionId {
-        self.url.distribution_id()
+        DistributionId::from_git(self.url, self.git)
     }
 
     fn resource_id(&self) -> ResourceId {

@@ -1121,6 +1121,7 @@ impl From<RequirementSource> for RequirementSourceWire {
                     }
                     GitReference::BranchOrTag(rev)
                     | GitReference::BranchOrTagOrCommit(rev)
+                    | GitReference::BranchOrTagWithFallback { rev, .. }
                     | GitReference::NamedRef(rev) => {
                         url.query_pairs_mut().append_pair("rev", rev.as_str());
                     }
@@ -1169,6 +1170,7 @@ impl From<RequirementSource> for RequirementSourceWire {
                     }
                     GitReference::BranchOrTag(rev)
                     | GitReference::BranchOrTagOrCommit(rev)
+                    | GitReference::BranchOrTagWithFallback { rev, .. }
                     | GitReference::NamedRef(rev) => {
                         url.query_pairs_mut().append_pair("rev", rev.as_str());
                     }

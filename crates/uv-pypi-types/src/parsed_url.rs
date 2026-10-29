@@ -13,7 +13,7 @@ use uv_pep508::{
 use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
-use crate::{ArchiveInfo, DirInfo, DirectUrl, HashDigest, VcsKind, VcsUrl};
+use crate::{ArchiveInfo, DirInfo, DirectUrl, HashDigest, VcsInfo, VcsKind, VcsUrl};
 
 #[derive(DebugNoInline, Error)]
 pub enum ParsedUrlError {
@@ -86,12 +86,13 @@ impl VerbatimParsedUrl {
         })
     }
 
-    /// Recover an installed direct source for an upgrade with its recorded origin.
+    /// Recover an installed requirement using its selected project, archive digest, or Git reference.
     pub fn for_upgrade(source: &DirectUrl) -> Result<Self, ParsedUrlError> {
-        let parsed_url = ParsedUrl::try_from(source)?;
+        let parsed_url = ParsedUrl::from_installed(source, VcsInfo::upgrade_git_reference)?;
         let url = match &parsed_url {
             ParsedUrl::Directory(directory) => directory.url.clone(),
-            _ => source.to_requirement_url(),
+            ParsedUrl::GitDirectory(_) | ParsedUrl::GitPath(_) => parsed_url.clone().into(),
+            ParsedUrl::Path(_) | ParsedUrl::Archive(_) => source.to_requirement_url(),
         };
         Ok(Self {
             parsed_url,
@@ -584,6 +585,21 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
     /// Reconstruct an installed source without reparsing structured fields as URL fragments.
     /// Git sources select the recorded commit when available.
     fn try_from(value: &DirectUrl) -> Result<Self, Self::Error> {
+        Self::from_installed(value, |info| {
+            info.commit_id
+                .as_ref()
+                .or(info.requested_revision.as_ref())
+                .cloned()
+                .map_or(GitReference::DefaultBranch, GitReference::from_rev)
+        })
+    }
+}
+
+impl ParsedUrl {
+    fn from_installed(
+        value: &DirectUrl,
+        git_reference: impl FnOnce(&VcsInfo) -> GitReference,
+    ) -> Result<Self, ParsedUrlError> {
         match value {
             DirectUrl::LocalDirectory {
                 url,
@@ -650,17 +666,9 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
                 // The metadata URL has already passed credential validation with its VCS prefix.
                 let repository = SafeUrl::parse_relaxed(repository)
                     .map_err(|err| ParsedUrlError::UrlParse(repository.to_string(), err.into()))?;
-                let revision = url
-                    .vcs_info()
-                    .commit_id
-                    .as_ref()
-                    .or(url.vcs_info().requested_revision.as_ref());
-                let reference = revision
-                    .cloned()
-                    .map_or(GitReference::DefaultBranch, GitReference::from_rev);
                 let git = GitUrl::from_fields(
                     repository,
-                    reference,
+                    git_reference(url.vcs_info()),
                     None,
                     url.vcs_info().git_lfs.unwrap_or_default().into(),
                 )?;
@@ -808,7 +816,8 @@ impl From<ParsedArchiveUrl> for SafeUrl {
 impl From<ParsedGitPathUrl> for SafeUrl {
     fn from(value: ParsedGitPathUrl) -> Self {
         let lfs = value.url.lfs().enabled();
-        let mut url = Self::parse(&format!("{}{}", "git+", Self::from(value.url).as_str()))
+        // The repository URL is already structured; its path and revision are not credentials.
+        let mut url = Self::parse_relaxed(&format!("{}{}", "git+", Self::from(value.url).as_str()))
             .expect("Git URL is invalid");
         let mut frags = vec![format!("path={}", value.install_path.display())];
         if lfs {
@@ -822,7 +831,8 @@ impl From<ParsedGitPathUrl> for SafeUrl {
 impl From<ParsedGitDirectoryUrl> for SafeUrl {
     fn from(value: ParsedGitDirectoryUrl) -> Self {
         let lfs = value.url.lfs().enabled();
-        let mut url = Self::parse(&format!("{}{}", "git+", Self::from(value.url).as_str()))
+        // The repository URL is already structured; its path and revision are not credentials.
+        let mut url = Self::parse_relaxed(&format!("{}{}", "git+", Self::from(value.url).as_str()))
             .expect("Git URL is invalid");
         let mut frags: Vec<String> = Vec::new();
         if let Some(subdirectory) = value.subdirectory {
@@ -982,6 +992,31 @@ mod tests {
         assert_eq!(
             SafeUrl::from(&metadata).as_str(),
             "git+https://example.com/team:repo.git@v1"
+        );
+        assert_eq!(
+            SafeUrl::from(parsed_url).as_str(),
+            "git+https://example.com/team:repo.git@v1"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_git_archive_with_colon_in_path() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            r#"{
+                "url": "https://example.com/team:repo.git",
+                "vcs_info": {
+                    "vcs": "git",
+                    "commit_id": "0123456789abcdef0123456789abcdef01234567",
+                    "requested_revision": "main"
+                },
+                "path": "dist/example-1.0.0-py3-none-any.whl"
+            }"#
+            .as_bytes(),
+        )?;
+        assert_eq!(
+            SafeUrl::from(ParsedUrl::try_from(&metadata)?).as_str(),
+            "git+https://example.com/team:repo.git@0123456789abcdef0123456789abcdef01234567#path=dist/example-1.0.0-py3-none-any.whl"
         );
         Ok(())
     }

@@ -139,6 +139,15 @@ impl GitResolver {
             return Ok(Some(precise));
         }
 
+        // The commits endpoint cannot tell whether a hexadecimal revision resolved as a name
+        // or an object. Fetch the explicit refs before falling back to the installed commit.
+        if matches!(
+            url.reference(),
+            GitReference::BranchOrTagWithFallback { .. }
+        ) {
+            return Ok(None);
+        }
+
         // If the URL is a GitHub URL, attempt to resolve it via the GitHub API.
         let Some(GitHubRepository { owner, repo }) = GitHubRepository::parse(url.repository())
         else {

@@ -30,6 +30,9 @@ pub enum GitReference {
     BranchOrTag(String),
     /// An ambiguous reference, including abbreviated commits and hexadecimal branch or tag names.
     BranchOrTagOrCommit(String),
+    /// A hexadecimal name from an installed origin. If no branch or tag has that name,
+    /// the origin already identifies the commit selected by the object ID.
+    BranchOrTagWithFallback { rev: String, commit: Box<GitOid> },
     /// From a named reference, like `refs/pull/493/head`.
     NamedRef(String),
     /// The default branch of the repository, the reference named `HEAD`.
@@ -58,7 +61,7 @@ impl GitReference {
             Self::Tag(rev) => Some(rev),
             Self::Branch(rev) => Some(rev),
             Self::BranchOrTag(rev) => Some(rev),
-            Self::BranchOrTagOrCommit(rev) => Some(rev),
+            Self::BranchOrTagOrCommit(rev) | Self::BranchOrTagWithFallback { rev, .. } => Some(rev),
             Self::NamedRef(rev) => Some(rev),
             Self::DefaultBranch => None,
         }
@@ -71,7 +74,7 @@ impl GitReference {
             Self::Tag(rev) => rev,
             Self::Branch(rev) => rev,
             Self::BranchOrTag(rev) => rev,
-            Self::BranchOrTagOrCommit(rev) => rev,
+            Self::BranchOrTagOrCommit(rev) | Self::BranchOrTagWithFallback { rev, .. } => rev,
             Self::NamedRef(rev) => rev,
             Self::DefaultBranch => "HEAD",
         }
@@ -90,6 +93,7 @@ impl GitReference {
             | Self::Tag(_)
             | Self::BranchOrTag(_)
             | Self::BranchOrTagOrCommit(_)
+            | Self::BranchOrTagWithFallback { .. }
             | Self::NamedRef(_)
             | Self::DefaultBranch => None,
         }
@@ -107,7 +111,9 @@ impl GitReference {
             Self::Branch(_) => "branch",
             Self::Tag(_) => "tag",
             Self::BranchOrTag(_) => "branch or tag",
-            Self::BranchOrTagOrCommit(_) => "branch, tag, or commit",
+            Self::BranchOrTagOrCommit(_) | Self::BranchOrTagWithFallback { .. } => {
+                "branch, tag, or commit"
+            }
             Self::NamedRef(_) => "ref",
             Self::DefaultBranch => "default branch",
         }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_fs::normalize_path;
-use uv_git_types::GitUrl;
+use uv_git_types::{GitOid, GitReference, GitUrl};
 
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -205,10 +205,30 @@ impl Display for VersionId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DistributionId {
     Url(CanonicalUrl),
+    /// An installed Git reference whose fallback commit is absent from the URL spelling.
+    GitWithFallback {
+        url: Box<CanonicalUrl>,
+        commit: GitOid,
+    },
     PathBuf(PathBuf),
     Digest(HashDigest),
     AbsoluteUrl(String),
     RelativeUrl(String, String),
+}
+
+impl DistributionId {
+    /// A named Git requirement and an installed reference may spell the same URL but resolve
+    /// differently when the name disappears. Look up their metadata independently.
+    pub(crate) fn from_git(url: &SafeUrl, git: &GitUrl) -> Self {
+        let url = CanonicalUrl::new(url.clone());
+        match git.reference() {
+            GitReference::BranchOrTagWithFallback { commit, .. } => Self::GitWithFallback {
+                url: Box::new(url),
+                commit: **commit,
+            },
+            _ => Self::Url(url),
+        }
+    }
 }
 
 /// A unique identifier for a resource, like a URL or a Git repository.
