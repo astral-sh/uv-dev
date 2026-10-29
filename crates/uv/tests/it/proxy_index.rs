@@ -9,6 +9,7 @@ use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
@@ -687,6 +688,97 @@ async fn proxy_index_wheel_metadata_cache_policy_uses_endpoint_order() -> Result
     fs_err::remove_file(context.temp_dir.join("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    server.verify().await;
+    Ok(())
+}
+
+/// After five rejected versions, batch prefetch can reach an unmappable older release even though
+/// the next version satisfies every dependency. An unused release must not abort that resolution.
+#[tokio::test]
+async fn proxy_index_batch_prefetch_ignores_unused_mapping_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{server_url}/simple/"
+        artifact-base-url = "{server_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("backtrack-alpha\n")?;
+
+    let name = "backtrack-alpha".parse()?;
+    let mut files = Vec::new();
+    for version in 4..=10 {
+        let wheel_version = format!("{version}.0.0").parse()?;
+        let dependency_version = version.max(5);
+        let requirements = [format!("backtrack-beta=={dependency_version}.0.0").parse()?];
+        let (filename, wheel) = WheelBuilder::new(&name, &wheel_version)
+            .requires(&requirements)
+            .build();
+        let directory = if version == 4 { "unmapped" } else { "files" };
+        files.push(advertised_file(
+            &filename,
+            &format!("{server_url}/{directory}/{filename}"),
+            Some(&sha256(&wheel)),
+        ));
+        Mock::given(method("GET"))
+            .and(path(format!("/{directory}/{filename}.metadata")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(formatdoc! {"
+                Metadata-Version: 2.3
+                Name: backtrack-alpha
+                Version: {version}.0.0
+                Requires-Dist: backtrack-beta=={dependency_version}.0.0
+            "}))
+            .mount(&server)
+            .await;
+    }
+    mount_simple(&server, "backtrack-alpha", files, 1).await;
+    let (filename, wheel) =
+        WheelBuilder::new(&"backtrack-beta".parse()?, &"5.0.0".parse()?).build();
+    mount_simple(
+        &server,
+        "backtrack-beta",
+        vec![advertised_file(
+            &filename,
+            &format!("{server_url}/files/{filename}"),
+            Some(&sha256(&wheel)),
+        )],
+        1,
+    )
+    .await;
+    mount_metadata(
+        &server,
+        &filename,
+        "Metadata-Version: 2.3\nName: backtrack-beta\nVersion: 5.0.0\n",
+        1,
+    )
+    .await;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backtrack-alpha==5.0.0
+        # via -r requirements.in
+    backtrack-beta==5.0.0
+        # via backtrack-alpha
+
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
