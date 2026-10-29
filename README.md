@@ -24,6 +24,8 @@ The maintainer's concerns therefore include diagnostic clarity as well as the va
 
 The reporter says they limited the transcript in astral-sh/uv#22985 to `-v` because reviewing the additional information in `-vv` or `-vvv` output for sharing implications would take too much time. This is a reported barrier to supplying more detailed diagnostics; it does not establish what sensitive information the omitted logs contained. They describe the enhancement as low priority and would like the issue kept open for a potential community contribution. That preference is not maintainer approval to implement it.
 
+The reporter would also accept the maintainer's proposed general stripped-log mode; home-prefix abbreviation was intended as a smaller initial proposal. They favor redaction by default with a way to obtain unredacted details when needed for diagnosis. This clarifies the reporter's acceptable scope and preferences, without establishing an agreed design or maintainer approval.
+
 The reporter cites astral-sh/uv#9452 as encouraging log sharing. Inspection confirms that its “What information to include” section requests command output with `--verbose` and suggests repeated `-v` flags for additional logs. The inspected issue body contains no warning about personal or sensitive information in those logs. The reporter interprets that encouragement as implying some degree of safety; the maintainer's stated position remains that verbose logs are not designed for de-identified sharing.
 
 ## Classification
