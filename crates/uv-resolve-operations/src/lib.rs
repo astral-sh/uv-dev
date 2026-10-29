@@ -90,6 +90,26 @@ pub async fn read_constraints(
     )
 }
 
+/// Resolve the names of requirement specifications, including bare archive and source tree URLs.
+pub async fn resolve_requirement_names<'a, Context: BuildContext + 'a>(
+    requirements: Vec<UnresolvedRequirementSpecification>,
+    hasher: &HashStrategy,
+    index: &InMemoryIndex,
+    database: impl FnOnce() -> DistributionDatabase<'a, Context>,
+    printer: Printer,
+) -> Result<Vec<Requirement>, Error> {
+    let (mut requirements, unnamed) = partition_requirements(requirements);
+    if !unnamed.is_empty() {
+        requirements.extend(
+            NamedRequirementsResolver::new(hasher, index, database())
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(unnamed.into_iter())
+                .await?,
+        );
+    }
+    Ok(requirements)
+}
+
 /// Resolve a set of requirements, similar to running `pip compile`.
 pub async fn resolve(
     requirements: Vec<UnresolvedRequirementSpecification>,
@@ -126,27 +146,21 @@ pub async fn resolve(
 
     // Resolve the requirements from the provided sources.
     let requirements = {
-        // Partition the requirements into named and unnamed requirements.
-        let (mut requirements, unnamed) = partition_requirements(requirements);
-
-        // Resolve any unnamed requirements.
-        if !unnamed.is_empty() {
-            requirements.extend(
-                NamedRequirementsResolver::new(
-                    hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
+        let mut requirements = resolve_requirement_names(
+            requirements,
+            hasher,
+            index,
+            || {
+                DistributionDatabase::new(
+                    client,
+                    build_dispatch,
+                    concurrency.downloads_semaphore.clone(),
                 )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
-            );
-        }
+                .with_recorder(recorder.clone())
+            },
+            printer,
+        )
+        .await?;
 
         // Resolve any source trees into requirements.
         if !source_trees.is_empty() {
@@ -259,31 +273,21 @@ pub async fn resolve(
         .augment_with_requirements(requirements.iter())?;
 
     // Resolve the overrides from the provided sources.
-    let overrides = {
-        // Partition the overrides into named and unnamed requirements.
-        let (mut overrides, unnamed) = partition_requirements(overrides);
-
-        // Resolve any unnamed overrides.
-        if !unnamed.is_empty() {
-            overrides.extend(
-                NamedRequirementsResolver::new(
-                    &hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
-            );
-        }
-
-        overrides
-    };
+    let overrides = resolve_requirement_names(
+        overrides,
+        &hasher,
+        index,
+        || {
+            DistributionDatabase::new(
+                client,
+                build_dispatch,
+                concurrency.downloads_semaphore.clone(),
+            )
+            .with_recorder(recorder.clone())
+        },
+        printer,
+    )
+    .await?;
 
     // Collect constraints, overrides, and excludes.
     let constraints = Constraints::from_requirements(

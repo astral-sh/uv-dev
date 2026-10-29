@@ -594,14 +594,7 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
                     let install_path = url
                         .to_file_path()
                         .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?;
-                    let ext = DistExtension::from_path(&install_path).map_err(|err| {
-                        ParsedUrlError::MissingExtensionPath(install_path.clone(), err)
-                    })?;
-                    Ok(Self::Path(ParsedPathUrl::from_source(
-                        install_path.into_boxed_path(),
-                        ext,
-                        url,
-                    )))
+                    Self::from_file_archive(url, install_path, subdirectory.clone())
                 } else {
                     let ext = DistExtension::from_path(url.path())
                         .map_err(|err| ParsedUrlError::MissingExtensionUrl(url.to_string(), err))?;

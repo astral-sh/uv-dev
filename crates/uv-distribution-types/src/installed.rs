@@ -166,6 +166,19 @@ impl InstalledDist {
     ///
     /// See: <https://packaging.python.org/en/latest/specifications/recording-installed-packages/#recording-installed-packages>
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        Self::try_from_path_with_origin(path, false)
+    }
+
+    /// Read an installed distribution for an upgrade. An unusable origin is checked when
+    /// constructing the root requirement, after applying exclusions and overrides.
+    pub fn try_from_path_for_upgrade(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        Self::try_from_path_with_origin(path, true)
+    }
+
+    fn try_from_path_with_origin(
+        path: &Path,
+        defer_invalid_origin: bool,
+    ) -> Result<Option<Self>, InstalledDistError> {
         // Ex) `cffi-1.16.0.dist-info`
         if path.extension().is_some_and(|ext| ext == "dist-info") {
             let Some(file_stem) = path.file_stem() else {
@@ -183,7 +196,9 @@ impl InstalledDist {
             let cache_info = Self::read_cache_info(path)?;
             let build_info = Self::read_build_info(path)?;
 
-            return if let Some((direct_url, url)) = Self::read_direct_url(path)? {
+            return if let Some((direct_url, url)) =
+                Self::read_direct_url(path, defer_invalid_origin)?
+            {
                 Ok(Some(Self::from(InstalledDistKind::Url(
                     InstalledDirectUrlDist {
                         name,
@@ -365,7 +380,10 @@ impl InstalledDist {
     }
 
     /// Read the `direct_url.json` file from a `.dist-info` directory.
-    fn read_direct_url(path: &Path) -> Result<Option<(DirectUrl, SafeUrl)>, InstalledDistError> {
+    fn read_direct_url(
+        path: &Path,
+        defer_invalid_origin: bool,
+    ) -> Result<Option<(DirectUrl, SafeUrl)>, InstalledDistError> {
         let path = path.join("direct_url.json");
         let file = match fs_err::File::open(&path) {
             Ok(file) => file,
@@ -378,6 +396,7 @@ impl InstalledDist {
                 warn!("Failed to parse direct URL: {err}");
                 Ok(None)
             }
+            Err(DirectUrlError::Json(_)) if defer_invalid_origin => Ok(None),
             Err(DirectUrlError::Json(err)) => Err(err.into()),
         }
     }

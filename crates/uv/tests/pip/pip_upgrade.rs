@@ -9,10 +9,10 @@ use assert_fs::prelude::*;
 use indoc::indoc;
 
 use uv_fs::copy_dir_all;
-#[cfg(feature = "test-git")]
 use uv_redacted::SafeUrl;
 #[cfg(feature = "test-git-lfs")]
 use uv_static::EnvVars;
+use uv_test::archive::generate_source_archive;
 use uv_test::packse::PackseServer;
 #[cfg(feature = "test-git")]
 use uv_test::packse::WheelBuilder;
@@ -621,6 +621,113 @@ fn invalid_direct_url() -> Result<()> {
     ----- stdout -----
     a==1.0.0
     ");
+    Ok(())
+}
+
+/// A globally excluded package is left installed without consulting its source.
+#[test]
+fn excluded_invalid_origin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let origin = context
+        .site_packages()
+        .join("a-1.0.0.dist-info/direct_url.json");
+    fs_err::write(&origin, "{")?;
+    let exclusions = context.temp_dir.child("exclude.txt");
+    exclusions.write_str("a\n")?;
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all").arg("--exclude").arg(exclusions.path()).arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    assert_eq!(fs_err::read_to_string(origin)?, "{");
+    Ok(())
+}
+
+/// Resolve a bare override URL before reading the origin it replaces.
+#[test]
+fn overridden_invalid_origin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    fs_err::write(
+        context
+            .site_packages()
+            .join("a-1.0.0.dist-info/direct_url.json"),
+        r#"{"url":"git@example.invalid:repo.git","vcs_info":{"vcs":"git","commit_id":"deadbeef"}}"#,
+    )?;
+    let overrides = context.temp_dir.child("overrides.txt");
+    overrides.write_str(&format!(
+        "{}\n",
+        server.file_url("a-2.0.0-py3-none-any.whl")
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all").arg("--overrides")
+        .arg(overrides.path()).arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0
+     + a==2.0.0 (from http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl)
+    ");
+    context.assert_installed("a", "2.0.0");
+    Ok(())
+}
+
+/// A PEP 610 origin from another installer keeps its selected local archive project.
+#[test]
+fn installed_local_archive_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let archive = context.temp_dir.child("projects.tar.gz");
+    archive.write_binary(&generate_source_archive(
+        &"a".parse()?,
+        &"2.0.0".parse()?,
+        "packages/a",
+        None,
+    )?)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
+    fs_err::write(
+        context
+            .site_packages()
+            .join("a-1.0.0.dist-info/direct_url.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"url": url.as_str(), "archive_info": {}, "subdirectory":"packages/a"}),
+        )?,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all").arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0 (from file://[TEMP_DIR]/projects.tar.gz#subdirectory=packages/a)
+     + a==2.0.0 (from file://[TEMP_DIR]/projects.tar.gz#subdirectory=packages/a)
+    ");
+    context.assert_installed("a", "2.0.0");
     Ok(())
 }
 

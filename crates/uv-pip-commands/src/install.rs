@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
@@ -14,11 +14,12 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, Constraints, DryRun, EditableMode,
-    ExcludeDependency, ExtrasSpecification, HashCheckingMode, IndexStrategy, KeyringProviderType,
-    Modifications, NoSources, Override, PipInstallFormat, Reinstall, TargetTriple, Upgrade,
+    ExcludeDependency, Excludes, ExtrasSpecification, HashCheckingMode, IndexStrategy,
+    KeyringProviderType, Modifications, NoSources, Override, PipInstallFormat, Reinstall,
+    TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
     InstalledDistKind, Name, NameRequirementSpecification, Origin, PackageConfigSettings,
@@ -27,7 +28,7 @@ use uv_distribution_types::{
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_normalize::{DefaultExtras, DefaultGroups};
+use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
@@ -95,12 +96,17 @@ pub enum PipInstallMode {
 /// Use every installed distribution as a root requirement without its installed version pin.
 fn installed_requirements(
     site_packages: &SitePackages,
+    overridden: &BTreeSet<&PackageName>,
 ) -> anyhow::Result<Vec<UnresolvedRequirementSpecification>> {
     site_packages
         .iter()
         .sorted_by(|left, right| left.name().cmp(right.name()))
         .map(|dist| {
-            let version_or_url = match &dist.kind {
+            // The resolver substitutes every global override for this name, including its marker.
+            // Only a root that survives that substitution needs its recorded origin.
+            let version_or_url = if overridden.contains(dist.name()) {
+                None
+            } else { match &dist.kind {
                 InstalledDistKind::Registry(dist) => {
                     // The installed-package index tolerates invalid source URLs. Their presence
                     // must not be interpreted as a registry origin when upgrading automatically.
@@ -133,7 +139,7 @@ fn installed_requirements(
                         verbatim,
                     }))
                 }
-            };
+            }};
 
             Ok(Requirement::from(Pep508Requirement {
                 name: dist.name().clone(),
@@ -219,7 +225,7 @@ pub async fn pip_install(
         project,
         requirements,
         constraints,
-        overrides,
+        mut overrides,
         mut override_dependencies,
         excludes,
         pylock,
@@ -394,7 +400,7 @@ pub async fn pip_install(
     let defer_site_packages = matches!(modifications, Modifications::Sufficient)
         && (pylock.is_some() || matches!(&reinstall, Reinstall::All));
 
-    let (requirements, site_packages) = match mode {
+    let (mut requirements, site_packages) = match mode {
         PipInstallMode::Install => {
             let site_packages = if defer_site_packages {
                 None
@@ -404,9 +410,11 @@ pub async fn pip_install(
             (requirements, site_packages)
         }
         PipInstallMode::UpgradeAll => {
-            let site_packages = SitePackages::from_environment(&environment)?;
-            let requirements = installed_requirements(&site_packages)?;
-            if requirements.is_empty() {
+            let site_packages = SitePackages::from_environment_for_upgrade(
+                &environment,
+                &Excludes::from_entries(excludes.iter().cloned()),
+            )?;
+            if site_packages.iter().next().is_none() {
                 DefaultInstallLogger.on_check(0, start, printer, dry_run)?;
                 write_install_report(&Changelog::default(), dry_run, output_format, printer)?;
                 return Ok(ExitStatus::Success);
@@ -487,21 +495,26 @@ pub async fn pip_install(
     };
 
     // Collect the set of required hashes.
-    let hasher = if let Some(hash_checking) = hash_checking {
-        HashStrategy::from_requirements(
-            requirements
-                .iter()
-                .chain(overrides.iter())
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            constraints
-                .iter()
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            Some(&marker_env),
-            hash_checking,
-        )?
-    } else {
-        HashStrategy::default()
-    };
+    let requirement_hashes =
+        |requirements: &[UnresolvedRequirementSpecification],
+         overrides: &[UnresolvedRequirementSpecification]| {
+            if let Some(hash_checking) = hash_checking {
+                HashStrategy::from_requirements(
+                    requirements
+                        .iter()
+                        .chain(overrides.iter())
+                        .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                    constraints
+                        .iter()
+                        .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                    Some(&marker_env),
+                    hash_checking,
+                )
+            } else {
+                Ok(HashStrategy::default())
+            }
+        };
+    let mut hasher = requirement_hashes(&requirements, &overrides)?;
 
     // Incorporate any index locations from the provided sources.
     let index_locations = index_locations.combine(
@@ -593,6 +606,36 @@ pub async fn pip_install(
         concurrency.clone(),
         preview,
     );
+
+    if let (PipInstallMode::UpgradeAll, Some(site_packages)) = (mode, &site_packages) {
+        // An override can be an unnamed file or URL. Resolve its name before reconstructing
+        // installed roots, so discarded metadata cannot block an explicitly supplied replacement.
+        let named = uv_resolve_operations::resolve_requirement_names(
+            overrides.clone(),
+            &hasher,
+            state.index(),
+            || {
+                DistributionDatabase::new(
+                    &client,
+                    &build_dispatch,
+                    concurrency.downloads_semaphore.clone(),
+                )
+            },
+            printer,
+        )
+        .await?;
+        override_dependencies.extend(named.into_iter().map(Override::Requirement));
+        let overridden = override_dependencies
+            .iter()
+            .filter_map(|entry| match entry {
+                Override::Requirement(requirement) => Some(&requirement.name),
+                Override::Package(_) => None,
+            })
+            .collect();
+        requirements = installed_requirements(site_packages, &overridden)?;
+        hasher = requirement_hashes(&requirements, &overrides)?;
+        overrides.clear();
+    }
 
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
