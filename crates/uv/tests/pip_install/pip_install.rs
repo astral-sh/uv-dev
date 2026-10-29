@@ -13326,7 +13326,7 @@ fn direct_url_json_direct_url() -> Result<()> {
     direct_url.assert(predicates::path::is_file());
 
     let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{}}"#);
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{"hashes":{"sha256":"be5895c175dbca2d91709a6ab7d5f28e1794272db551ae9a5faf3ae2ed74c3d8"}}}"#);
 
     Ok(())
 }
@@ -13359,7 +13359,7 @@ fn direct_url_json_query() -> Result<()> {
     direct_url.assert(predicates::path::is_file());
 
     let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D","archive_info":{}}"#);
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D","archive_info":{"hashes":{"sha256":"4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"}}}"#);
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
