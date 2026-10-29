@@ -1403,6 +1403,186 @@ async fn proxy_index_pip_compile_pylock_preserves_canonical_artifact_and_hash() 
     Ok(())
 }
 
+/// A package's proxy index applies only to artifacts from its selected registry source.
+#[tokio::test]
+async fn proxy_index_pylock_retains_selected_proxy_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    let flat_url = flat.uri();
+    let preferred_wheel = "basic_package-0.1.0-1-py3-none-any.whl";
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let source = fixture(&context, SOURCE_FILENAME)?;
+    let source_hash = sha256(&source);
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            preferred_wheel,
+            &format!("{proxy_url}/files/{preferred_wheel}"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    mount_artifact(&proxy, preferred_wheel, wheel.clone(), 1).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            r#"<a href="{flat_url}/files/{WHEEL_FILENAME}#sha256={WHEEL_HASH}">{WHEEL_FILENAME}</a>
+                <a href="{flat_url}/files/{SOURCE_FILENAME}#sha256={source_hash}">{SOURCE_FILENAME}</a>"#,
+        ), "text/html"))
+        .expect(1)
+        .mount(&flat).await;
+    mount_artifact(&flat, WHEEL_FILENAME, wheel, 0).await;
+    mount_artifact(&flat, SOURCE_FILENAME, source, 0).await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+
+        [[dependency-metadata]]
+        name = "basic-package"
+        version = "0.1.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.txt")
+        .arg("--find-links").arg(format!("{flat_url}/links/"))
+        .arg("--no-header").arg("-o").arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12.[X]"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    index = "https://pypi.org/simple"
+    wheels = [{ url = "https://files.pythonhosted.org/packages/basic_package-0.1.0-1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview-features").arg("pylock,proxy-index")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    Ok(())
+}
+
+/// Choosing a find-links wheel must not leave proxied alternatives without a package index.
+#[tokio::test]
+async fn proxy_index_pylock_retains_selected_find_links_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    let flat_url = flat.uri();
+    let preferred_wheel = "basic_package-0.1.0-1-py3-none-any.whl";
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let source = fixture(&context, SOURCE_FILENAME)?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{proxy_url}/files/{WHEEL_FILENAME}"),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                SOURCE_FILENAME,
+                &format!("{proxy_url}/files/{SOURCE_FILENAME}"),
+                Some(&sha256(&source)),
+            ),
+        ],
+        1,
+    )
+    .await;
+    mount_artifact(&proxy, WHEEL_FILENAME, wheel.clone(), 0).await;
+    mount_artifact(&proxy, SOURCE_FILENAME, source, 0).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            r#"<a href="{flat_url}/files/{preferred_wheel}#sha256={WHEEL_HASH}">{preferred_wheel}</a>"#,
+        ), "text/html"))
+        .expect(1)
+        .mount(&flat).await;
+    mount_artifact(&flat, preferred_wheel, wheel, 1).await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+
+        [[dependency-metadata]]
+        name = "basic-package"
+        version = "0.1.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.txt")
+        .arg("--find-links").arg(format!("{flat_url}/links/"))
+        .arg("--no-header").arg("-o").arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12.[X]"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    wheels = [{ url = "http://[LOCALHOST]/files/basic_package-0.1.0-1-py3-none-any.whl", hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview-features").arg("pylock,proxy-index")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_pip_installs_hashless_live_artifact() -> Result<()> {
     let context = uv_test::test_context!("3.12");

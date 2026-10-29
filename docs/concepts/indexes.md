@@ -94,7 +94,10 @@ must also reject the artifact download.
 When installing from `pylock.toml`, uv can use the proxy only if `packages.index` identifies the
 upstream index for that package. Without this field, uv downloads directly from the recorded
 artifact URL. `uv pip compile --format pylock.toml` records the upstream URL in `packages.index`
-when it selects a file from a proxied index.
+when it selects a file from a proxied index. If a proxy and `--find-links` supply artifacts for the
+same package version, the export retains only artifacts from the selected package source. This keeps
+every artifact consistent with the package's index and prevents later installs from bypassing the
+proxy or routing unrelated files through it.
 
 To proxy a different index, give the upstream index a `name` and an `artifact-base-url`:
 
