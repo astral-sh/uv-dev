@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -221,7 +222,20 @@ pub fn reserved_script_name(name: &str) -> Option<&str> {
     .then_some(normalized_name)
 }
 
-/// An unpacked wheel whose data directories cannot overwrite a reserved script.
+/// Metadata determined by the installer, even if a repacked wheel contains a copy.
+fn is_installer_metadata(name: &OsStr) -> bool {
+    [
+        "direct_url.json",
+        "INSTALLER",
+        "REQUESTED",
+        "uv_cache.json",
+        "uv_build.json",
+    ]
+    .iter()
+    .any(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
+/// An unpacked wheel whose data directories cannot overwrite installer metadata or a reserved script.
 pub(crate) struct ValidatedWheel<'wheel> {
     path: &'wheel Path,
 }
@@ -233,7 +247,12 @@ impl<'wheel> ValidatedWheel<'wheel> {
         dist_info_prefix: &str,
     ) -> Result<Self, Error> {
         let data_dir = wheel.join(format!("{dist_info_prefix}.data"));
+        if !data_dir.is_dir() {
+            return Ok(Self { path: wheel });
+        }
         for (source, destination) in [
+            (data_dir.join("purelib"), &layout.scheme.purelib),
+            (data_dir.join("platlib"), &layout.scheme.platlib),
             (data_dir.join("scripts"), &layout.scheme.scripts),
             (data_dir.join("data"), &layout.scheme.data),
         ] {
@@ -248,10 +267,22 @@ impl<'wheel> ValidatedWheel<'wheel> {
                 }
 
                 let relative = relative_to(entry.path(), &source)?;
-                validate_data_script_destination(
-                    &destination.join(relative),
-                    &layout.scheme.scripts,
-                )?;
+                let target = destination.join(relative);
+                validate_data_script_destination(&target, &layout.scheme.scripts)?;
+                if target.file_name().is_some_and(is_installer_metadata)
+                    && let Some(parent) = target.parent()
+                    && parent
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("dist-info"))
+                    && parent.parent().is_some_and(|root| {
+                        root == layout.scheme.purelib || root == layout.scheme.platlib
+                    })
+                {
+                    return Err(Error::InvalidWheel(format!(
+                        "Wheel data cannot install metadata at `{}`",
+                        target.simplified_display()
+                    )));
+                }
             }
         }
 
@@ -917,6 +948,31 @@ fn write_file_recorded(
         path: relative_path.portable_display().to_string(),
         hash: Some(encoded_hash),
         size: Some(content.as_ref().len() as u64),
+    });
+    Ok(())
+}
+
+/// Remove installer metadata shipped in a wheel before recording this installation.
+pub(crate) fn discard_wheel_installer_metadata(
+    site_packages: &Path,
+    dist_info_prefix: &str,
+    record: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let dist_info = PathBuf::from(format!("{dist_info_prefix}.dist-info"));
+    let mut discarded = false;
+    for entry in fs::read_dir(site_packages.join(&dist_info))? {
+        let entry = entry?;
+        if is_installer_metadata(&entry.file_name()) {
+            fs::remove_file(entry.path())?;
+            discarded = true;
+        }
+    }
+    if !discarded {
+        return Ok(());
+    }
+    record.retain(|entry| {
+        let path = Path::new(&entry.path);
+        !(path.parent() == Some(&dist_info) && path.file_name().is_some_and(is_installer_metadata))
     });
     Ok(())
 }
