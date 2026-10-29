@@ -1,10 +1,15 @@
 use crate::{Error, ErrorKind};
 use async_http_range_reader::AsyncHttpRangeReader;
-use futures::io::BufReader;
+use futures::io::{AsyncBufRead, AsyncSeek, BufReader, Cursor};
+use std::ops::Range;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use uv_distribution_filename::WheelFilename;
 use uv_metadata::{find_archive_dist_info, validate_archive_variant};
+use uv_pypi_types::ResolutionMetadata;
 use uv_redacted::SafeUrl;
+
+/// The initial remote ZIP prefetch, sized for a typical central directory.
+pub(crate) const CENTRAL_DIRECTORY_SIZE: u64 = 16_384;
 
 /// Read `METADATA` and, for a variant wheel, validate `variant.json` using HTTP range requests.
 ///
@@ -50,18 +55,38 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
     filename: &WheelFilename,
     debug_name: &SafeUrl,
     reader: &mut AsyncHttpRangeReader,
-) -> Result<String, Error> {
+) -> Result<ResolutionMetadata, Error> {
     // Make sure we have the back part of the stream.
-    // Best guess for the central directory size inside the zip
-    const CENTRAL_DIRECTORY_SIZE: u64 = 16384;
     // Because the zip index is at the back
     reader
         .prefetch(reader.len().saturating_sub(CENTRAL_DIRECTORY_SIZE)..reader.len())
         .await;
 
-    // Construct a zip reader to uses the stream.
-    let buf = BufReader::new(reader.compat());
-    let mut reader = async_zip::base::read::seek::ZipFileReader::new(buf)
+    wheel_metadata_from_zip(
+        filename,
+        debug_name,
+        BufReader::new(reader.compat()),
+        async |reader, range| reader.get_mut().get_mut().prefetch(range).await,
+    )
+    .await
+}
+
+/// Read metadata from a complete wheel using the same ZIP validation as a ranged response.
+pub(crate) async fn wheel_metadata_from_bytes(
+    filename: &WheelFilename,
+    debug_name: &SafeUrl,
+    bytes: Vec<u8>,
+) -> Result<ResolutionMetadata, Error> {
+    wheel_metadata_from_zip(filename, debug_name, Cursor::new(bytes), async |_, _| {}).await
+}
+
+async fn wheel_metadata_from_zip<R: AsyncBufRead + AsyncSeek + Unpin>(
+    filename: &WheelFilename,
+    debug_name: &SafeUrl,
+    reader: R,
+    prefetch: impl AsyncFnOnce(&mut R, Range<u64>),
+) -> Result<ResolutionMetadata, Error> {
+    let mut reader = async_zip::base::read::seek::ZipFileReader::new(reader)
         .await
         .map_err(|err| ErrorKind::Zip(filename.clone(), err))?;
 
@@ -93,12 +118,7 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
 
     // Prefetching is optional. The ZIP reader validates the entry range when it is opened.
     if let Some(end) = end {
-        reader
-            .inner_mut()
-            .get_mut()
-            .get_mut()
-            .prefetch(offset..end)
-            .await;
+        prefetch(reader.inner_mut(), offset..end).await;
     }
 
     // Read the contents of the METADATA file
@@ -118,5 +138,11 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
             .await
             .map_err(|err| ErrorKind::Metadata(debug_name.to_string(), err))?;
     }
-    Ok(contents)
+    ResolutionMetadata::parse_metadata(contents.as_bytes()).map_err(|err| {
+        Error::from(ErrorKind::MetadataParseError(
+            filename.clone(),
+            debug_name.to_string(),
+            Box::new(err),
+        ))
+    })
 }

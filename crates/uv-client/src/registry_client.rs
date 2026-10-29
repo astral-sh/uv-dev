@@ -40,10 +40,12 @@ use uv_small_str::SmallString;
 use uv_torch::TorchStrategy;
 
 use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, RedirectPolicy};
-use crate::cached_client::CacheControl;
+use crate::cached_client::{CacheControl, CachedClientError};
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
-use crate::remote_metadata::wheel_metadata_from_remote_zip;
+use crate::remote_metadata::{
+    CENTRAL_DIRECTORY_SIZE, wheel_metadata_from_bytes, wheel_metadata_from_remote_zip,
+};
 use crate::rkyvutil::OwnedArchive;
 use crate::{
     BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
@@ -1004,8 +1006,9 @@ impl RegistryClient {
     ///
     /// For a remote wheel, we try the following ways to fetch the metadata:
     /// 1. From a [PEP 658](https://peps.python.org/pep-0658/) data-dist-info-metadata url
-    /// 2. From a remote wheel by partial zip reading
-    /// 3. From a (temp) download of a remote wheel (this is a fallback, the webserver should support range requests)
+    /// 2. From the complete ZIP archive if the wheel fits in the initial prefetch.
+    /// 3. From a remote wheel by partial ZIP reading.
+    /// 4. By streaming the wheel when the server does not support range requests.
     #[instrument(skip_all, fields(% built_dist))]
     pub async fn wheel_metadata(
         &self,
@@ -1051,6 +1054,7 @@ impl RegistryClient {
                 self.wheel_metadata_no_pep658(
                     &wheel.filename,
                     &wheel.url,
+                    wheel.size,
                     None,
                     WheelCache::Url(&wheel.url),
                     capabilities,
@@ -1215,11 +1219,11 @@ impl RegistryClient {
                 .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
                 .await?)
         } else {
-            // Without PEP 658, read the metadata from the wheel using HTTP range requests.
-            // If the server doesn't support range requests, fall back to streaming the wheel.
+            // Without PEP 658, read the metadata from the wheel itself.
             self.wheel_metadata_no_pep658(
                 filename,
                 url,
+                file.size,
                 Some(index),
                 WheelCache::Index(index),
                 capabilities,
@@ -1228,11 +1232,76 @@ impl RegistryClient {
         }
     }
 
+    /// Try a single GET for a wheel that should fit in the initial ZIP prefetch. If the
+    /// response exceeds the prefetch, use the usual range requests to find the central directory.
+    async fn try_small_wheel_metadata(
+        &self,
+        filename: &WheelFilename,
+        url: &SafeUrl,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+    ) -> Result<Option<ResolutionMetadata>, Error> {
+        let req = self
+            .uncached_client(url)
+            .get(url.clone())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+
+        let result = self
+            .cached_client()
+            .get_serde_with_retry(
+                req,
+                cache_entry,
+                cache_control,
+                async |mut response: Response, _: &mut RetryState| {
+                    if response
+                        .content_length()
+                        .is_some_and(|size| size > CENTRAL_DIRECTORY_SIZE)
+                    {
+                        return Err(SmallWheelError::TooLarge);
+                    }
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = response.chunk().await.map_err(|err| {
+                        Error::from(ErrorKind::from_reqwest(
+                            url.clone(),
+                            err,
+                            self.client.certificate_source(),
+                        ))
+                    })? {
+                        if chunk.len() as u64 > CENTRAL_DIRECTORY_SIZE - bytes.len() as u64 {
+                            return Err(SmallWheelError::TooLarge);
+                        }
+                        bytes.extend_from_slice(&chunk);
+                    }
+
+                    Ok(wheel_metadata_from_bytes(filename, url, bytes).await?)
+                },
+            )
+            .await;
+        match result {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(CachedClientError::Callback {
+                err: SmallWheelError::TooLarge,
+                ..
+            }) => Ok(None),
+            Err(CachedClientError::Callback {
+                err: SmallWheelError::Read(err),
+                retries,
+                duration,
+            }) => Err(Error::new(err.into_kind(), retries, duration)),
+            Err(CachedClientError::Client(err)) => Err(err),
+        }
+    }
+
     /// Get the wheel metadata if it isn't available in an index through PEP 658
     async fn wheel_metadata_no_pep658<'data>(
         &self,
         filename: &'data WheelFilename,
         url: &'data SafeUrl,
+        size: Option<u64>,
         index: Option<&'data IndexUrl>,
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
@@ -1263,6 +1332,15 @@ impl RegistryClient {
             let lock_entry = cache_entry.with_file(format!("{}.lock", filename.cache_key()));
             lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
         };
+
+        if self.metadata_range_request == MetadataRangeRequest::Fallback
+            && size.is_some_and(|size| size <= CENTRAL_DIRECTORY_SIZE)
+            && let Some(metadata) = self
+                .try_small_wheel_metadata(filename, url, &cache_entry, cache_control.clone())
+                .await?
+        {
+            return Ok(metadata);
+        }
 
         // Attempt to fetch via a range request.
         if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
@@ -1308,14 +1386,7 @@ impl RegistryClient {
                     .await
                     .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
                     trace!("Getting metadata for `{filename}` by range request");
-                    let text = wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
-                    ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
-                        Error::from(ErrorKind::MetadataParseError(
-                            filename.clone(),
-                            url.to_string(),
-                            Box::new(err),
-                        ))
-                    })
+                    wheel_metadata_from_remote_zip(filename, url, &mut reader).await
                 }
                 .boxed_local()
                 .instrument(info_span!("read_metadata_range_request", wheel = %filename))
@@ -1411,6 +1482,14 @@ impl RegistryClient {
             std::io::Error::other(err)
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SmallWheelError {
+    #[error("wheel exceeds the initial ZIP prefetch size")]
+    TooLarge,
+    #[error(transparent)]
+    Read(#[from] Error),
 }
 
 #[derive(Debug)]
