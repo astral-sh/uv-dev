@@ -1082,12 +1082,17 @@ impl PubGrubReportFormatter<'_> {
         let publish_date = version_maps
             .iter()
             .filter_map(|version_map| {
-                version_map.get(&version).and_then(|prioritized| {
-                    prioritized
-                        .files()
-                        .filter_map(|file| file.upload_time_utc_ms)
-                        .min()
-                })
+                // A failed artifact mapping cannot contribute a publish-date hint.
+                version_map
+                    .get(&version)
+                    .ok()
+                    .flatten()
+                    .and_then(|prioritized| {
+                        prioritized
+                            .files()
+                            .filter_map(|file| file.upload_time_utc_ms)
+                            .min()
+                    })
             })
             .min()
             .and_then(|upload_time| {
@@ -1128,7 +1133,10 @@ impl PubGrubReportFormatter<'_> {
             return None;
         };
 
-        let candidate = selector.select_no_preference(name, set, version_maps, env)?;
+        // Do not replace the resolution failure with an error constructing an optional hint.
+        let candidate = selector
+            .select_no_preference(name, set, version_maps, env)
+            .ok()??;
 
         let prioritized = candidate.prioritized()?;
 
