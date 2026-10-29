@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22292,
+        "title": "Honor advisory ID preference in `uv audit`",
+        "url": "https://github.com/astral-sh/uv/pull/22292",
+        "state": "merged",
+        "reason": "Merged October 7, before the reported uv 0.13.6 release. It makes PYSEC aliases take precedence over GHSA/CVE display IDs, explaining why separate OSV records now display the same PYSEC identifier. It changes display selection only; it does not deduplicate findings or reconcile fix versions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20399,
+        "title": "Scope OSV fixes to matching packages",
+        "url": "https://github.com/astral-sh/uv/pull/20399",
+        "state": "merged",
+        "reason": "An earlier incorrect-fix-version correction, merged July 15. It filters OSV fixed events by package and ecosystem. This report instead involves two alias-linked records for the same PyPI package with conflicting fixed events; the earlier fix remains present and does not address this case."
+      },
+      {
+        "kind": "issue",
+        "number": 19492,
+        "title": "uv audit fails with error decoding response body when OSV returns empty range events",
+        "url": "https://github.com/astral-sh/uv/issues/19492",
+        "state": "closed",
+        "reason": "Related upstream advisory-data precedent: a maintainer specifically advises checking pypa/advisory-database for incorrect or missing fix information. That issue concerned malformed OSV events and was resolved by an upstream backfill; this report concerns successfully parsed, inconsistent records and duplicate counts."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open/closed issues and open/closed/merged PRs using authenticated gh. Separately searched duplicate advisories/counts and incorrect fix versions: exact PYSEC-2026-4320 and GHSA-6q48-6c7w-9gw2 identifiers, certifi/version literals, audit duplicate/repeated/same vulnerability, vulnerability count, aliases, deduplication, OSV wrong, fixed in, and fix/fixed version. Used area:uv-audit and package-independent queries; supplemented empty PR keyword results with an all-state listing of 5,000 recent PRs covering audit's introduction. Inspected candidate bodies, comments, reviews, relevant diffs, and roadmap references. Ruled out astral-sh/uv#20399 as the same bug, astral-sh/uv#18968 as configuration handling, and astral-sh/uv#19660 with astral-sh/uv#19872 as SARIF output work. astral-sh/uv#18506 is a broad roadmap without a matching deduplication item. No prior fix or open discussion tracking this same problem was found."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that alias-linked OSV records remain separate findings and are counted as separate vulnerabilities, producing misleading output. Live OSV records also confirm the reported fixed-version conflict: PYSEC says 2026.10.19 while GHSA and GitHub's advisory say 2026.10.18. No existing item tracks the same problem, and the earlier display-ID and package-scoping fixes did not implement alias deduplication; this is not an established regression of those fixes.",
+  "summary": "No matching duplicate or historical deduplication fix found. astral-sh/uv#22292 explains the identical display IDs; astral-sh/uv#20399 addresses a different fix-version bug; astral-sh/uv#19492 provides upstream data-quality guidance.",
+  "draft_response": "You're seeing two OSV records for the same vulnerability. uv currently keeps both findings and displays their preferred PYSEC identifier, so it also counts the vulnerability twice. That is a reporting bug; this issue can track deduplicating aliased findings and correcting the counts.\n\nThe fix-version mismatch is present upstream: OSV's PYSEC-2026-4320 record specifies 2026.10.19, while its GHSA-6q48-6c7w-9gw2 record and GitHub's advisory specify 2026.10.18. uv reads those fixed-version fields directly. Please report the incorrect fixed event in vulns/certifi/PYSEC-2026-4320.yaml to pypa/advisory-database so the source data can be corrected as well."
+}
