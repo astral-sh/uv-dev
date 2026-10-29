@@ -65,14 +65,25 @@ impl<'a> BuiltWheelIndex<'a> {
             WheelCache::Url(source_dist.url.raw()).root(),
         );
 
-        // Read the revision from the cache.
-        let Some(pointer) = HttpRevisionPointer::read_from(cache_shard.entry(HTTP_REVISION))?
-        else {
-            return Ok(None);
+        let (revision, cache_info) = if source_dist.location.scheme() == "file" {
+            let path = source_dist
+                .location
+                .to_file_path()
+                .map_err(|()| Error::NonFileUrl(source_dist.location.as_ref().clone()))?;
+            let Some(pointer) = LocalRevisionPointer::read_fresh(&cache_shard, &path)? else {
+                return Ok(None);
+            };
+            let info = pointer.cache_info().clone();
+            (pointer.into_revision(), info)
+        } else {
+            let Some(pointer) = HttpRevisionPointer::read_from(cache_shard.entry(HTTP_REVISION))?
+            else {
+                return Ok(None);
+            };
+            (pointer.into_revision(), CacheInfo::default())
         };
 
         // Omit wheels whose source archive does not satisfy the required hashes and size.
-        let revision = pointer.into_revision();
         if !revision.satisfies(self.hasher.archive_policy(source_dist))
             || source_dist
                 .size
@@ -100,12 +111,7 @@ impl<'a> BuiltWheelIndex<'a> {
         Ok(self
             .find(&cache_shard, source_dist.version.as_deref())
             .map(|wheel| {
-                CachedWheel::from_entry(
-                    wheel,
-                    revision.into_hashes(),
-                    CacheInfo::default(),
-                    build_info,
-                )
+                CachedWheel::from_entry(wheel, revision.into_hashes(), cache_info, build_info)
             }))
     }
 
@@ -116,18 +122,12 @@ impl<'a> BuiltWheelIndex<'a> {
             WheelCache::Path(&source_dist.url).root(),
         );
 
-        // Read the revision from the cache.
-        let Some(pointer) = LocalRevisionPointer::read_from(cache_shard.entry(LOCAL_REVISION))?
+        let Some(pointer) =
+            LocalRevisionPointer::read_fresh(&cache_shard, &source_dist.install_path)?
         else {
             return Ok(None);
         };
-
-        // If the distribution is stale, omit it from the index.
-        let cache_info =
-            CacheInfo::from_file(&source_dist.install_path).map_err(Error::CacheRead)?;
-        if cache_info != *pointer.cache_info() {
-            return Ok(None);
-        }
+        let cache_info = pointer.cache_info().clone();
 
         // Enforce hash-checking by omitting any wheels that don't satisfy the required hashes.
         let revision = pointer.into_revision();

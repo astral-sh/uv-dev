@@ -10,7 +10,7 @@ pub use crate::unnamed::*;
 pub use uv_configuration::RequirementsInput;
 
 use uv_distribution::check_supported_wheel_variant;
-use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
+use uv_distribution_types::{Dist, DistErrorKind, Requirement};
 
 mod extras;
 mod lookahead;
@@ -74,60 +74,10 @@ impl Error {
 
 /// Convert a [`Requirement`] into a [`Dist`], if it is a direct URL.
 pub(crate) fn required_dist(requirement: &Requirement) -> Result<Option<Dist>, Error> {
-    let dist = match &requirement.source {
-        RequirementSource::Registry { .. } => return Ok(None),
-        RequirementSource::Url {
-            subdirectory,
-            location,
-            ext,
-            url,
-        } => Dist::from_http_url(
-            requirement.name.clone(),
-            url.clone(),
-            location.as_url().clone(),
-            subdirectory.clone(),
-            *ext,
-        )?,
-        RequirementSource::GitDirectory {
-            git,
-            subdirectory,
-            url,
-        } => Dist::from_git_directory_url(
-            requirement.name.clone(),
-            url.clone(),
-            git.clone(),
-            subdirectory.clone(),
-        )?,
-        RequirementSource::GitPath {
-            git,
-            install_path,
-            ext,
-            url,
-        } => Dist::from_git_path_url(
-            requirement.name.clone(),
-            url.clone(),
-            git.clone(),
-            install_path.clone(),
-            *ext,
-        )?,
-        RequirementSource::Path {
-            install_path,
-            ext,
-            url,
-        } => Dist::from_file_url(requirement.name.clone(), url.clone(), install_path, *ext)?,
-        RequirementSource::Directory {
-            install_path,
-            r#virtual,
-            url,
-            editable,
-        } => Dist::from_directory_url(
-            requirement.name.clone(),
-            url.clone(),
-            install_path,
-            *editable,
-            *r#virtual,
-        )?,
+    let Some(url) = requirement.source.to_verbatim_parsed_url() else {
+        return Ok(None);
     };
+    let dist = Dist::from_url(requirement.name.clone(), url)?;
 
     // A direct requirement has no index from which to resolve a wheel variant.
     if let Dist::Built(built) = &dist

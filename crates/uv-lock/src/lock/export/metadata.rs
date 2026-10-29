@@ -223,7 +223,7 @@ impl MetadataWorkspaceMember {
     ) -> Option<Self> {
         let path = match &package_id.source {
             Source::Directory(path) | Source::Editable(path) | Source::Virtual(path) => path,
-            Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(_) => {
+            Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(..) => {
                 return None;
             }
         };
@@ -920,6 +920,8 @@ enum MetadataSource {
     },
     Path {
         path: PortablePathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subdirectory: Option<PortablePathBuf>,
     },
     Directory {
         directory: PortablePathBuf,
@@ -949,7 +951,7 @@ impl Display for MetadataSource {
             Self::Registry {
                 registry: MetadataRegistrySource::Path(path),
             }
-            | Self::Path { path }
+            | Self::Path { path, .. }
             | Self::Directory { directory: path }
             | Self::Editable { editable: path }
             | Self::Virtual { r#virtual: path }
@@ -995,8 +997,9 @@ impl MetadataSource {
                 subdirectory: subdirectory
                     .map(|path| normalize_workspace_relative_path(workspace_root, &path)),
             },
-            Source::Path(path) => Self::Path {
+            Source::Path(path, subdirectory) => Self::Path {
                 path: normalize_workspace_relative_path(workspace_root, &path),
+                subdirectory: subdirectory.map(PortablePathBuf::from),
             },
             Source::Directory(path) => Self::Directory {
                 directory: normalize_workspace_relative_path(workspace_root, &path),

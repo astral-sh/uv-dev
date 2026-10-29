@@ -3046,10 +3046,18 @@ impl Lock {
                     ),
                     package.hashes(),
                 ),
-                Source::Path(path) => (
-                    VersionId::from_path(&absolute_path(root, path)?),
-                    package.hashes(),
-                ),
+                Source::Path(path, subdirectory) => {
+                    let path = absolute_path(root, path)?;
+                    let id = if let Some(subdirectory) = subdirectory {
+                        VersionId::from_archive(
+                            verbatim_url(&path, &package.id)?.to_url(),
+                            Some(subdirectory.to_path_buf()),
+                        )
+                    } else {
+                        VersionId::from_path(&path)
+                    };
+                    (id, package.hashes())
+                }
                 Source::Git(..)
                 | Source::Directory(_)
                 | Source::Editable(_)
@@ -3234,7 +3242,7 @@ impl Lock {
                 Source::Directory(path) | Source::Editable(path) | Source::Virtual(path) => {
                     path.as_ref()
                 }
-                Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(_) => {
+                Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(..) => {
                     return None;
                 }
             };
@@ -4707,10 +4715,12 @@ impl Lock {
                 continue;
             }
 
-            // Validating a direct URL package requires retrieving metadata from the remote
-            // artifact. In offline mode, preserve the metadata captured in the lockfile rather
-            // than requiring that artifact to already be present in the cache.
-            if matches!(&package.id.source, Source::Direct(..)) && database.client().is_offline() {
+            // In offline mode, a remote archive may be unavailable. A file URL can still be
+            // validated against its local archive.
+            if database.client().is_offline()
+                && let Source::Direct(url, _) = &package.id.source
+                && url.to_url()?.scheme() != "file"
+            {
                 trace!(
                     "Skipping metadata validation for `{}` because its direct URL cannot be refreshed while offline",
                     package.id
@@ -5904,7 +5914,7 @@ impl Lock {
             Source::Editable(_)
             | Source::Directory(_)
             | Source::Virtual(_)
-            | Source::Path(_)
+            | Source::Path(..)
             | Source::Direct(..)
             | Source::Git(..)
             | Source::Registry(_) => FirstParty::No,
@@ -5917,7 +5927,7 @@ impl Lock {
             first_party,
         )?;
         let locked_hashes = match (&package.id.source, &dist) {
-            (Source::Direct(..) | Source::Path(_), Dist::Source(_)) if !hashes.is_empty() => {
+            (Source::Direct(..) | Source::Path(..), Dist::Source(_)) if !hashes.is_empty() => {
                 Some(HashValidation::All(hashes.as_slice()))
             }
             (Source::Registry(_), Dist::Source(_)) if !hashes.is_empty() => {
@@ -6740,7 +6750,7 @@ impl Package {
                         };
                         Dist::Built(BuiltDist::Registry(reg_built_dist))
                     }
-                    Source::Path(path) => {
+                    Source::Path(path, _) => {
                         let filename: WheelFilename =
                             self.wheels[best_wheel_index].filename.clone();
                         let install_path = absolute_path(workspace_root, path)?;
@@ -6918,7 +6928,7 @@ impl Package {
         first_party: FirstParty,
     ) -> Result<Option<uv_distribution_types::SourceDist>, LockError> {
         let sdist = match &self.id.source {
-            Source::Path(path) => {
+            Source::Path(path, subdirectory) => {
                 // A direct path source can also be a wheel, so validate the extension.
                 let DistExtension::Source(ext) = DistExtension::from_path(path).map_err(|err| {
                     LockErrorKind::MissingExtension {
@@ -6937,14 +6947,32 @@ impl Package {
                 }
                 let install_path = absolute_path(workspace_root, path)?;
                 let given = path.to_str().expect("lock file paths must be UTF-8");
-                let path_dist = PathSourceDist {
-                    name: self.id.name.clone(),
-                    version: self.id.version.clone(),
-                    url: verbatim_url(&install_path, &self.id)?.with_given(given),
-                    install_path: install_path.into_boxed_path(),
-                    ext,
-                };
-                uv_distribution_types::SourceDist::Path(path_dist)
+                let url = verbatim_url(&install_path, &self.id)?;
+                if let Some(subdirectory) = subdirectory {
+                    let location = url.to_url();
+                    let archive = ParsedArchiveUrl::from_source(
+                        location.clone(),
+                        Some(subdirectory.clone()),
+                        DistExtension::Source(ext),
+                    );
+                    uv_distribution_types::SourceDist::DirectUrl(DirectUrlSourceDist {
+                        name: self.id.name.clone(),
+                        version: self.id.version.clone().map(Box::new),
+                        location: Box::new(location),
+                        subdirectory: Some(subdirectory.clone()),
+                        ext,
+                        url: VerbatimUrl::from_url(SafeUrl::from(archive)).with_given(given),
+                        size: None,
+                    })
+                } else {
+                    uv_distribution_types::SourceDist::Path(PathSourceDist {
+                        name: self.id.name.clone(),
+                        version: self.id.version.clone(),
+                        url: url.with_given(given),
+                        install_path: install_path.into_boxed_path(),
+                        ext,
+                    })
+                }
             }
             Source::Directory(path) => {
                 let install_path = absolute_path(workspace_root, path)?;
@@ -7730,7 +7758,7 @@ enum Source {
     /// A direct HTTP(S) URL.
     Direct(UrlString, DirectSource),
     /// A path to a local source or built archive.
-    Path(Box<Path>),
+    Path(Box<Path>, Option<Box<Path>>),
     /// A path to a local directory.
     Directory(Box<Path>),
     /// A path to a local directory that should be installed as editable.
@@ -7773,7 +7801,7 @@ impl Source {
                 Self::from_registry_source_dist(reg_dist, root)
             }
             uv_distribution_types::SourceDist::DirectUrl(ref direct_dist) => {
-                Ok(Self::from_direct_source_dist(direct_dist))
+                Self::from_direct_source_dist(direct_dist, root)
             }
             uv_distribution_types::SourceDist::GitDirectory(ref git_dist) => {
                 Ok(Self::from_git_directory_source_dist(git_dist))
@@ -7811,13 +7839,27 @@ impl Source {
         )
     }
 
-    fn from_direct_source_dist(direct_dist: &DirectUrlSourceDist) -> Self {
-        Self::Direct(
+    fn from_direct_source_dist(
+        direct_dist: &DirectUrlSourceDist,
+        root: &Path,
+    ) -> Result<Self, LockError> {
+        if direct_dist.url.prefers_relative()
+            && let Some(subdirectory) = &direct_dist.subdirectory
+            && let Ok(path) = direct_dist.location.to_file_path()
+        {
+            let path = try_relative_to_if(&path, root, true)
+                .map_err(LockErrorKind::DistributionRelativePath)?;
+            return Ok(Self::Path(
+                path.into_boxed_path(),
+                Some(subdirectory.clone()),
+            ));
+        }
+        Ok(Self::Direct(
             normalize_url(direct_dist.url.to_url()),
             DirectSource {
                 subdirectory: direct_dist.subdirectory.clone(),
             },
-        )
+        ))
     }
 
     fn from_path_built_dist(path_dist: &PathBuiltDist, root: &Path) -> Result<Self, LockError> {
@@ -7827,7 +7869,7 @@ impl Source {
             path_dist.url.prefers_relative(),
         )
         .map_err(LockErrorKind::DistributionRelativePath)?;
-        Ok(Self::Path(path.into_boxed_path()))
+        Ok(Self::Path(path.into_boxed_path(), None))
     }
 
     fn from_path_source_dist(path_dist: &PathSourceDist, root: &Path) -> Result<Self, LockError> {
@@ -7837,7 +7879,7 @@ impl Source {
             path_dist.url.prefers_relative(),
         )
         .map_err(LockErrorKind::DistributionRelativePath)?;
-        Ok(Self::Path(path.into_boxed_path()))
+        Ok(Self::Path(path.into_boxed_path(), None))
     }
 
     fn from_directory_source_dist(
@@ -7985,8 +8027,28 @@ impl Source {
                 normalize_url(actual) == normalize_url(expected.into_url())
                     && source.subdirectory == *subdirectory
             }
-            (Self::Path(path), RequirementSource::Path { install_path, .. }) => {
+            (
+                Self::Path(path, subdirectory),
+                RequirementSource::Path {
+                    install_path,
+                    subdirectory: requested,
+                    ..
+                },
+            ) => {
                 normalize_path(root.join(path)).as_ref() == install_path.as_ref()
+                    && subdirectory == requested
+            }
+            (
+                Self::Path(path, Some(subdirectory)),
+                RequirementSource::Url {
+                    location,
+                    subdirectory: Some(requested),
+                    ..
+                },
+            ) => {
+                location.to_file_path().is_ok_and(|expected| {
+                    normalize_path(root.join(path)) == normalize_path(expected)
+                }) && subdirectory == requested
             }
             (
                 Self::Directory(path) | Self::Editable(path) | Self::Virtual(path),
@@ -8056,7 +8118,7 @@ impl Source {
     /// Returns `true` if the source is that of a wheel.
     fn is_wheel(&self) -> bool {
         match self {
-            Self::Path(path) => {
+            Self::Path(path, _) => {
                 matches!(
                     DistExtension::from_path(path).ok(),
                     Some(DistExtension::Wheel)
@@ -8096,7 +8158,7 @@ impl Source {
     fn is_local(&self) -> bool {
         matches!(
             self,
-            Self::Path(_) | Self::Directory(_) | Self::Editable(_) | Self::Virtual(_)
+            Self::Path(..) | Self::Directory(_) | Self::Editable(_) | Self::Virtual(_)
         )
     }
 }
@@ -8108,7 +8170,7 @@ impl Display for Source {
                 write!(f, "{}+{}", self.name(), url)
             }
             Self::Registry(RegistrySource::Path(path))
-            | Self::Path(path)
+            | Self::Path(path, _)
             | Self::Directory(path)
             | Self::Editable(path)
             | Self::Virtual(path) => {
@@ -8128,7 +8190,7 @@ impl Source {
             Self::Registry(_)
             | Self::Git(..)
             | Self::Direct(..)
-            | Self::Path(_)
+            | Self::Path(..)
             | Self::Directory(_) => false,
         }
     }
@@ -8177,6 +8239,10 @@ enum SourceWire {
     },
     Path {
         path: PortablePathBuf,
+    },
+    Archive {
+        archive: PortablePathBuf,
+        subdirectory: PortablePathBuf,
     },
     Directory {
         directory: PortablePathBuf,
@@ -8247,7 +8313,11 @@ impl TryFrom<SourceWire> for Source {
                     subdirectory: subdirectory.map(Box::<std::path::Path>::from),
                 },
             )),
-            Path { path } => Ok(Self::Path(path.into())),
+            Path { path } => Ok(Self::Path(path.into(), None)),
+            SourceWire::Archive {
+                archive,
+                subdirectory,
+            } => Ok(Self::Path(archive.into(), Some(subdirectory.into()))),
             Directory { directory } => Ok(Self::Directory(directory.into())),
             Editable { editable } => Ok(Self::Editable(editable.into())),
             Virtual { r#virtual } => Ok(Self::Virtual(r#virtual.into())),

@@ -486,8 +486,16 @@ fn write_source_inline(writer: &mut LockWriter, source: &Source) -> Result<(), W
                 )?;
             }
         }
-        Source::Path(path) => {
+        Source::Path(path, None) => {
             writer.inline_value(&mut first, "path", PortablePath::from(path).to_string())?;
+        }
+        Source::Path(path, Some(subdirectory)) => {
+            writer.inline_value(&mut first, "archive", PortablePath::from(path).to_string())?;
+            writer.inline_value(
+                &mut first,
+                "subdirectory",
+                PortablePath::from(subdirectory).to_string(),
+            )?;
         }
         Source::Directory(path) => {
             writer.inline_value(

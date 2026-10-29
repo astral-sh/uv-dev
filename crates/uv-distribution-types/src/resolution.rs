@@ -226,6 +226,7 @@ impl From<&ResolvedDist> for RequirementSource {
                     }
                 }
                 Dist::Built(BuiltDist::Path(wheel)) => Self::Path {
+                    subdirectory: None,
                     install_path: wheel.install_path.clone(),
                     url: wheel.url.clone(),
                     ext: DistExtension::Wheel,
@@ -265,6 +266,7 @@ impl From<&ResolvedDist> for RequirementSource {
                     subdirectory: sdist.subdirectory.clone(),
                 },
                 Dist::Source(SourceDist::Path(sdist)) => Self::Path {
+                    subdirectory: None,
                     install_path: sdist.install_path.clone(),
                     url: sdist.url.clone(),
                     ext: DistExtension::Source(sdist.ext),

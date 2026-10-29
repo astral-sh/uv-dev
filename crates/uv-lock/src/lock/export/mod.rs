@@ -316,7 +316,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 Source::Registry(_)
                 | Source::Git(..)
                 | Source::Direct(..)
-                | Source::Path(_)
+                | Source::Path(..)
                 | Source::Directory(_)
                 | Source::Editable(_) => true,
             };

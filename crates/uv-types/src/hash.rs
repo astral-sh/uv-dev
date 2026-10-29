@@ -544,6 +544,18 @@ impl HashStrategy {
             RequirementSource::GitPath {
                 git, install_path, ..
             } => Some(VersionId::from_git(git, Some(install_path))),
+            RequirementSource::Path {
+                subdirectory: Some(subdirectory),
+                url,
+                ..
+            } => {
+                let mut location = url.to_url();
+                location.set_fragment(None);
+                Some(VersionId::from_archive(
+                    location,
+                    Some(subdirectory.to_path_buf()),
+                ))
+            }
             RequirementSource::Path { install_path, .. } => {
                 Some(VersionId::from_path(install_path))
             }

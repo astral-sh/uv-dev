@@ -196,7 +196,7 @@ impl<'a> ComponentBuilder<'a> {
             Source::Git(url, _) => ("pypi", vec![("vcs_url", url.as_ref())]),
             Source::Direct(url, _) => ("pypi", vec![("download_url", url.as_ref())]),
             // No purl for local sources
-            Source::Path(_) | Source::Directory(_) | Source::Editable(_) | Source::Virtual(_) => {
+            Source::Path(..) | Source::Directory(_) | Source::Editable(_) | Source::Virtual(_) => {
                 return None;
             }
         };
@@ -410,7 +410,7 @@ pub fn from_lock<'lock>(
         .map(|node| {
             let package_type = if workspace_member_ids.contains(&node.package.id) {
                 let path = match &node.package.id.source {
-                    Source::Path(path)
+                    Source::Path(path, _)
                     | Source::Directory(path)
                     | Source::Editable(path)
                     | Source::Virtual(path) => path,

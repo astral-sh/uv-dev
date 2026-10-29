@@ -57,8 +57,8 @@ impl Revision {
 
     /// Set the size of the downloaded archive.
     #[must_use]
-    pub(crate) fn with_size(mut self, size: u64) -> Self {
-        self.size = Some(size);
+    pub(crate) fn with_size(mut self, size: Option<u64>) -> Self {
+        self.size = size;
         self
     }
 }
@@ -105,14 +105,13 @@ mod tests {
     #[test]
     fn round_trip_current_revision() {
         for size in [None, Some(42)] {
-            let mut original = Revision::new().with_hashes(HashDigests::from(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .parse::<HashDigest>()
-                    .expect("valid SHA-256 digest"),
-            ));
-            if let Some(size) = size {
-                original = original.with_size(size);
-            }
+            let original = Revision::new()
+                .with_hashes(HashDigests::from(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        .parse::<HashDigest>()
+                        .expect("valid SHA-256 digest"),
+                ))
+                .with_size(size);
             let bytes = rmp_serde::to_vec(&original).expect("serialize revision");
             let parsed: Revision = rmp_serde::from_slice(&bytes).expect("deserialize revision");
             assert_eq!(parsed.id().as_str(), original.id().as_str());
@@ -130,7 +129,7 @@ mod tests {
             size: Option<u64>,
         }
 
-        let revision = Revision::new().with_size(42);
+        let revision = Revision::new().with_size(Some(42));
         let bytes = rmp_serde::to_vec(&revision).expect("serialize revision");
         let serialized: SerializedRevision =
             rmp_serde::from_slice(&bytes).expect("deserialize revision with string ID");

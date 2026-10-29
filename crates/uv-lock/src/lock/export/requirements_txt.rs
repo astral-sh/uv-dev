@@ -8,7 +8,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{DistExtension, SourceDistExtension};
-use uv_fs::Simplified;
+use uv_fs::{Simplified, relative_file_url};
 use uv_git_types::GitReference;
 use uv_normalize::PackageName;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl};
@@ -128,7 +128,19 @@ impl std::fmt::Display for RequirementsTxtExport<'_> {
                         url.displayable_with_credentials()
                     )?;
                 }
-                Source::Path(path) | Source::Directory(path) => {
+                Source::Path(path, Some(subdirectory)) => {
+                    if path.is_absolute() {
+                        write!(
+                            f,
+                            "{}",
+                            SafeUrl::from_file_path(path).map_err(|()| std::fmt::Error)?
+                        )?;
+                    } else {
+                        write!(f, "{}", relative_file_url(&anchor(path)))?;
+                    }
+                    write!(f, "#subdirectory={}", subdirectory.portable_display())?;
+                }
+                Source::Path(path, None) | Source::Directory(path) => {
                     if path.is_absolute() {
                         write!(
                             f,
@@ -211,7 +223,7 @@ enum RequirementComparator<'lock> {
 impl<'lock> From<&'lock Package> for RequirementComparator<'lock> {
     fn from(value: &'lock Package) -> Self {
         match &value.id.source {
-            Source::Path(path) | Source::Directory(path) => Self::Path(path),
+            Source::Path(path, _) | Source::Directory(path) => Self::Path(path),
             Source::Editable(path) => Self::Editable(path),
             _ => Self::Package(&value.id),
         }

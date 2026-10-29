@@ -59,6 +59,87 @@ use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, copy_dir_ignore, download_to_disk, uv_snapshot,
 };
 
+/// A relative archive with a selected project needs a file URL so pip parses its fragment.
+#[test]
+fn local_archive_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
+    context
+        .temp_dir
+        .child("packages%20old/projects.tar.gz")
+        .write_binary(&archive)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example @ ./packages%20old/projects.tar.gz#subdirectory=nested\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./packages%2520old/projects.tar.gz#subdirectory=nested
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example @ ${ARCHIVE}/projects.tar.gz#subdirectory=nested\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .env("ARCHIVE", "file://./packages%2520old")
+        .args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./packages%2520old/projects.tar.gz#subdirectory=nested
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// File aliases are equivalent only when they select the same project in the archive.
+#[test]
+fn local_archive_subdirectory_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = context.temp_dir.child("original.tar.gz");
+    let alias = context.temp_dir.child("alias.tar.gz");
+    let project = "[project]\nname = 'example'\nversion = '1.0'\n";
+    write_tar_gz(
+        File::create(original.path())?,
+        &[
+            ("projects/one/pyproject.toml", project),
+            ("projects/two/pyproject.toml", project),
+        ],
+    )?;
+    fs_err::hard_link(original.path(), alias.path())?;
+    let requirements = context.temp_dir.child("requirements.in");
+    requirements.write_str(indoc! {"
+        example @ ./original.tar.gz#subdirectory=one
+        example @ ./alias.tar.gz#subdirectory=one
+    "})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./alias.tar.gz#subdirectory=one
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    requirements.write_str(indoc! {"
+        example @ ./original.tar.gz#subdirectory=one
+        example @ ./alias.tar.gz#subdirectory=two
+    "})?;
+    uv_snapshot!(context.filters(), context.pip_compile().args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requirements contain conflicting URLs for package `example`:
+    - file://[TEMP_DIR]/alias.tar.gz#subdirectory=two
+    - file://[TEMP_DIR]/original.tar.gz#subdirectory=one
+    ");
+    Ok(())
+}
+
 #[test]
 fn compile_requirements_in() -> Result<()> {
     let context = uv_test::test_context!("3.12");

@@ -103,16 +103,15 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             });
         }
 
-        // If the requirement is a source archive, try to extract the package name from the archive
-        // filename. This isn't guaranteed to work.
-        //
-        // Ex) `anyio-4.3.0.tar.gz`
-        if let Some(filename) = requirement
-            .url
-            .verbatim
-            .filename()
-            .ok()
-            .and_then(|filename| SourceDistFilename::parsed_normalized_filename(&filename).ok())
+        // Infer the name from an sdist filename such as `anyio-4.3.0.tar.gz`. When the
+        // requirement selects a subdirectory, read the name from that project instead.
+        if !matches!(&requirement.url.parsed_url, ParsedUrl::Archive(archive) if archive.subdirectory.is_some())
+            && let Some(filename) = requirement
+                .url
+                .verbatim
+                .filename()
+                .ok()
+                .and_then(|filename| SourceDistFilename::parsed_normalized_filename(&filename).ok())
         {
             // But ignore GitHub archives, like:
             //   https://github.com/python/mypy/archive/refs/heads/release-1.11.zip
@@ -245,6 +244,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                 SourceUrl::Path(PathSourceUrl {
                     url: &requirement.url.verbatim,
                     path: Cow::Borrowed(&parsed_path_url.install_path),
+                    subdirectory: None,
                     ext,
                 })
             }

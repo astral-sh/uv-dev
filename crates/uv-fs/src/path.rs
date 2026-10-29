@@ -174,6 +174,21 @@ fn escape_path_for_python<P: AsRef<Path>>(path: P) -> String {
     literal
 }
 
+/// Encode a relative filesystem path for use in a `file:` requirement URL.
+pub fn relative_file_url(path: &Path) -> String {
+    const PATH: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'/')
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    let path = path.to_slash_lossy();
+    format!(
+        "file:{}",
+        percent_encoding::utf8_percent_encode(&path, PATH)
+    )
+}
+
 /// Normalize the `path` component of a URL for use as a file path.
 ///
 /// For example, on Windows, transforms `C:\Users\ferris\wheel-0.42.0.tar.gz` to

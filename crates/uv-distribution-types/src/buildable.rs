@@ -244,6 +244,7 @@ impl<'a> From<&'a GitDirectorySourceDist> for GitDirectorySourceUrl<'a> {
 #[derive(Debug, Clone)]
 pub struct PathSourceUrl<'a> {
     pub url: &'a SafeUrl,
+    pub subdirectory: Option<&'a Path>,
     pub path: Cow<'a, Path>,
     pub ext: SourceDistExtension,
 }
@@ -260,6 +261,7 @@ impl<'a> From<&'a PathSourceDist> for PathSourceUrl<'a> {
             url: &dist.url,
             path: Cow::Borrowed(&dist.install_path),
             ext: dist.ext,
+            subdirectory: None,
         }
     }
 }

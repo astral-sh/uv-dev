@@ -39,7 +39,8 @@ pub(super) struct ValidatedSourceArchive {
 /// Metadata computed while consuming a source archive.
 pub(super) struct SourceArchiveMetadata {
     pub(super) hashes: Vec<HashDigest>,
-    pub(super) size: u64,
+    /// The complete size, when validation consumed the entire archive.
+    pub(super) size: Option<u64>,
 }
 
 impl ValidatedSourceArchive {
@@ -82,20 +83,23 @@ impl ValidatedSourceArchive {
                 .await
                 .map_err(|err| Error::Extract(source.to_string(), err))?;
 
-        if !algorithms.is_empty() || validation.expected_size.is_some() {
+        let size = if !algorithms.is_empty() || validation.expected_size.is_some() {
             hasher.finish().await.map_err(Error::HashExhaustion)?;
-        }
-        let size = hasher.bytes_read();
-        if let Some(expected) = validation.expected_size
-            && size != expected
-        {
-            return Err(Error::MismatchedSize {
-                distribution: source.to_string(),
-                expected,
-                actual: size,
-            });
-        }
-
+            let size = hasher.bytes_read();
+            if let Some(expected) = validation.expected_size
+                && size != expected
+            {
+                return Err(Error::MismatchedSize {
+                    distribution: source.to_string(),
+                    expected,
+                    actual: size,
+                });
+            }
+            Some(size)
+        } else {
+            // Extraction can stop before trailing padding or other bytes in the file.
+            None
+        };
         let hashes = hashers
             .into_iter()
             .map(HashDigest::from)
@@ -222,8 +226,9 @@ mod tests {
         )?;
         let cache = cache()?;
         let trailing_read = Cell::new(false);
-        extract(&cache, reader(&bytes, &trailing_read), NO_VALIDATION).await?;
+        let archive = extract(&cache, reader(&bytes, &trailing_read), NO_VALIDATION).await?;
         assert!(!trailing_read.get());
+        assert_eq!(archive.metadata.size, None);
 
         let digest = HashDigest::from(Hasher::from(HashAlgorithm::Sha256));
         for validation in [
@@ -314,7 +319,7 @@ mod tests {
         )
         .await?;
         assert_eq!(archive.metadata.hashes, [existing_hash]);
-        assert_eq!(archive.metadata.size, bytes.len() as u64);
+        assert_eq!(archive.metadata.size, Some(bytes.len() as u64));
         let staging_dir = archive.staging_dir.path().to_path_buf();
         assert!(staging_dir.is_dir());
         drop(archive);

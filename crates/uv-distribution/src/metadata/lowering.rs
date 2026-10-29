@@ -988,6 +988,7 @@ fn path_source(
             return Err(LoweringError::PackagedFile(url.to_string()));
         }
         Ok(RequirementSource::Path {
+            subdirectory: None,
             ext: DistExtension::from_path(&install_path)
                 .map_err(|err| ParsedUrlError::MissingExtensionPath(path.to_path_buf(), err))?,
             install_path: install_path.into_boxed_path(),
