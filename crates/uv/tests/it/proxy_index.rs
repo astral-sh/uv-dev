@@ -9,6 +9,8 @@ use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+#[cfg(feature = "test-universal")]
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
@@ -1214,6 +1216,147 @@ async fn proxy_index_pip_compile_pylock_preserves_canonical_artifact_and_hash() 
     assert_requested_once(&physical_index, "/simple/basic-package/").await?;
     assert_requested_once(&physical_artifacts, &format!("/files/{WHEEL_FILENAME}")).await?;
     assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    Ok(())
+}
+
+/// A universal pylock can combine wheels from a proxy and `--find-links` for the same version.
+/// Installing the find-links wheel must not apply the proxy's artifact URL mapping to it.
+#[tokio::test]
+#[cfg(feature = "test-universal")]
+async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let find_links = MockServer::start().await;
+    let upstream_url = upstream.uri();
+    let proxy_url = proxy.uri();
+    let find_links_url = find_links.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index", "pylock"]
+
+        [[index]]
+        name = "upstream"
+        url = "{upstream_url}/simple/"
+        artifact-base-url = "{upstream_url}/files/"
+        default = true
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "upstream"
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0\n")?;
+
+    // The higher build tag selects the proxy wheel for metadata during universal resolution.
+    let linux_filename = "basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows_filename = "basic_package-0.1.0-1-cp312-cp312-win_amd64.whl";
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let (_, linux_wheel) = WheelBuilder::new(&name, &version)
+        .tag("cp312-cp312-manylinux_2_17_x86_64")
+        .build();
+    let (_, windows_wheel) = WheelBuilder::new(&name, &version)
+        .tag("cp312-cp312-win_amd64")
+        .build();
+    let linux_hash = sha256(&linux_wheel);
+    let windows_hash = sha256(&windows_wheel);
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            linux_filename,
+            &format!("{proxy_url}/files/{linux_filename}"),
+            Some(&linux_hash),
+        )],
+        1,
+    )
+    .await;
+    mount_metadata(&proxy, linux_filename, WHEEL_METADATA, 1).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{find_links_url}/files/{windows_filename}#sha256={windows_hash}">{windows_filename}</a>"#
+            ),
+            "text/html",
+        ))
+        .expect(1)
+        .mount(&find_links)
+        .await;
+    mount_artifact(&proxy, linux_filename, linux_wheel, 1).await;
+    mount_artifact(&find_links, windows_filename, windows_wheel, 1).await;
+
+    let mut filters = context.filters();
+    filters.insert(0, (&linux_hash, "[LINUX_HASH]"));
+    filters.insert(0, (&windows_hash, "[WINDOWS_HASH]"));
+    filters.insert(0, (&upstream_url, "[UPSTREAM]"));
+    filters.insert(0, (&find_links_url, "[FIND_LINKS]"));
+    uv_snapshot!(filters, context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--universal")
+        .arg("--python-version").arg("3.12")
+        .arg("--find-links").arg(format!("{find_links_url}/links/"))
+        .arg("--format").arg("pylock.toml")
+        .arg("--no-header")
+        .arg("--output-file").arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    index = "[UPSTREAM]/simple/"
+    wheels = [
+        { url = "[FIND_LINKS]/files/basic_package-0.1.0-1-cp312-cp312-win_amd64.whl", hashes = { sha256 = "[WINDOWS_HASH]" } },
+        { url = "[UPSTREAM]/files/basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "[LINUX_HASH]" } },
+    ]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("pylock.toml")
+        .arg("--python-platform").arg("x86_64-unknown-linux-gnu")
+        .arg("--target").arg("linux"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("pylock.toml")
+        .arg("--python-platform").arg("x86_64-pc-windows-msvc")
+        .arg("--target").arg("windows"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    proxy.verify().await;
+    find_links.verify().await;
+    assert_no_requests(&upstream, "upstream index").await?;
     Ok(())
 }
 
