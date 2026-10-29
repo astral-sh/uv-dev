@@ -12,9 +12,11 @@ The concrete examples are `DEBUG Found user configuration in: /home/jdoe/.config
 
 No duplicate found. astral-sh/uv#4345 and merged astral-sh/uv#5311 and astral-sh/uv#5313 cover narrower managed-interpreter path omission while retaining full paths in verbose logs.
 
-## Draft response
+## Maintainer position
 
-Your configuration and workspace examples match the current behavior: those debug messages print paths without abbreviating the home directory. The managed-Python changes in astral-sh/uv#5311 and astral-sh/uv#5313 intentionally kept paths in debug logs, so they do not cover this request. This is an enhancement. Before implementation, we need to settle which output should abbreviate home paths, how to recognize both the symlinked and resolved home directory, and whether an opt-out is needed.
+In astral-sh/uv#22986, zanieb (identified as a repository member in the supplied discussion) questions whether home-path scrubbing is worthwhile: verbose logs can contain other personal information and are not designed to be shared in a de-identified form. Source: the October 29, 2026 comment at 16:47:04 UTC, comment ID 6502813576.
+
+This establishes a concern about the value and privacy expectations of the proposed feature. It does not record a final acceptance or rejection. Home-prefix abbreviation would address the reporter's examples, but should not be presented as making verbose logs de-identified. The enhancement classification and existing source findings remain applicable.
 
 ## Classification
 
@@ -57,6 +59,8 @@ The closest-looking excluded issues were inspected with their comments:
 
 ## Maintainer next step
 
-Agree on the scope of home abbreviation before implementation: which human-readable diagnostics should use it, whether path-valued command output needs separate treatment, how both the configured home path and its resolved target should be recognized, and whether users need an opt-out. Any implementation should account for both direct path formatting and existing shared display helpers; changing only `user_display()` would not affect the two reported logging sites.
+First determine whether the limited reduction in exposed personal information from home-prefix abbreviation justifies the feature, given the maintainer's concern that verbose logs contain other personal information and are not designed for de-identified sharing. Acceptance remains unresolved.
+
+If maintainers agree to pursue it, settle which human-readable diagnostics should use abbreviation, whether path-valued command output needs separate treatment, how both the configured home path and its resolved target should be recognized, and whether users need an opt-out. Any implementation should account for both direct path formatting and existing shared display helpers; changing only `user_display()` would not affect the two reported logging sites.
 
 This handoff is based on read-only GitHub and source inspection. No reproduction, build, or tests were run. Only this temporary README was updated; no checkout files or GitHub objects were changed.
