@@ -13259,14 +13259,9 @@ fn direct_url_json_archive_hash() -> Result<()> {
         .site_packages()
         .join("example-1.0.dist-info/direct_url.json");
     let frozen = format!("example @ {url}#sha256={digest}\n");
-    let install = || {
-        let mut command = context.pip_install();
-        command
-            .args(["--no-index", "--require-hashes", "-r"])
-            .arg(requirements.path());
-        command
-    };
-    uv_snapshot!(context.filters(), install(), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -13286,7 +13281,9 @@ fn direct_url_json_archive_hash() -> Result<()> {
         .stdout(frozen.clone());
 
     context.reset_venv();
-    uv_snapshot!(context.filters(), install(), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -13302,21 +13299,35 @@ fn direct_url_json_archive_hash() -> Result<()> {
         .assert()
         .success()
         .stdout(frozen.clone());
-    context.reset_venv();
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg(format!("{url}#sha256={digest}")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
 
     // The extracted project is unchanged, but its frozen archive digest no longer matches.
     content.extend_from_slice(b"changed archive");
     archive.write_binary(&content)?;
     requirements.write_str(&frozen)?;
-    context
-        .pip_install()
-        .arg("--no-index")
-        .arg("--require-hashes")
-        .arg("-r")
-        .arg(requirements.path())
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Hash mismatch"));
+    let modified_digest = hex::encode(Sha256::digest(&content));
+    let context = context
+        .with_filter((digest, "[ORIGINAL_HASH]"))
+        .with_filter((modified_digest, "[MODIFIED_HASH]"));
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]`
+      cause: Hash mismatch for `example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]`
+
+             Expected:
+               sha256:[ORIGINAL_HASH]
+
+             Computed:
+               sha256:[MODIFIED_HASH]
+    ");
     Ok(())
 }
 
