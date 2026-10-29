@@ -18,6 +18,8 @@ In astral-sh/uv#22986, zanieb (identified as a repository member in the supplied
 
 zanieb also questions whether less-specific paths improve the user experience, because removing personal information can obscure what is happening in diagnostic logs. They see potential value in a general mode that produces stripped logs for sharing, while describing that as a much larger project. Source: the October 29, 2026 comment at 18:36:32 UTC, comment ID 6505216618.
 
+zanieb clarifies that uv already makes substantial efforts to strip secrets, and distinguishes that existing behavior from redacting personally identifying information such as home-directory paths. This is a maintainer statement about existing secret handling, not an independent verification of its coverage. The discussion does not establish an actual secret leak; the reporter's API-key example illustrates their general concern about sharing logs.
+
 The maintainer's concerns therefore include diagnostic clarity as well as the value and privacy expectations of the feature. A general stripped-log mode is a suggested direction, with no approved design or implementation commitment in the supplied discussion. There is no explicit final acceptance or rejection of this issue. Home-prefix abbreviation would address the reporter's examples, but should not be presented as making verbose logs de-identified. The enhancement classification and existing source findings remain applicable.
 
 ## Reporter impact and priority
