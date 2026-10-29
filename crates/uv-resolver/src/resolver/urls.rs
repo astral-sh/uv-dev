@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use either::Either;
 use rustc_hash::FxHashMap;
 use same_file::is_same_file;
@@ -9,6 +11,7 @@ use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pep508::VerbatimUrl;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl, VerbatimParsedUrl};
+use uv_redacted::SafeUrl;
 
 use crate::resolver::ForkMap;
 use crate::{DependencyMode, Manifest, ResolveError, ResolverEnvironment};
@@ -256,7 +259,7 @@ fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
         (ParsedUrl::Archive(a), ParsedUrl::Archive(b)) => {
             a.subdirectory.as_deref().map(uv_fs::normalize_path)
                 == b.subdirectory.as_deref().map(uv_fs::normalize_path)
-                && CanonicalUrl::new(a.url.clone()) == CanonicalUrl::new(b.url.clone())
+                && same_archive_location(&a.url, &b.url)
         }
         (ParsedUrl::GitDirectory(a), ParsedUrl::GitDirectory(b)) => {
             a.subdirectory.as_deref().map(uv_fs::normalize_path)
@@ -267,15 +270,26 @@ fn same_resource(a: &ParsedUrl, b: &ParsedUrl, git: &GitResolver) -> bool {
             uv_fs::normalize_path(&a.install_path) == uv_fs::normalize_path(&b.install_path)
                 && git.same_ref(&a.url, &b.url)
         }
-        (ParsedUrl::Path(a), ParsedUrl::Path(b)) => {
-            a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false)
-        }
+        (ParsedUrl::Path(a), ParsedUrl::Path(b)) => same_path(&a.install_path, &b.install_path),
         (ParsedUrl::Directory(a), ParsedUrl::Directory(b)) => {
-            (a.install_path == b.install_path
-                || is_same_file(&a.install_path, &b.install_path).unwrap_or(false))
+            same_path(&a.install_path, &b.install_path)
                 && a.editable.is_none_or(|a| b.editable.is_none_or(|b| a == b))
         }
         _ => false,
     }
+}
+
+/// Local archive paths can be aliases for the same file.
+fn same_archive_location(a: &SafeUrl, b: &SafeUrl) -> bool {
+    if a.scheme() == "file"
+        && b.scheme() == "file"
+        && let (Ok(a), Ok(b)) = (a.to_file_path(), b.to_file_path())
+    {
+        return same_path(&a, &b);
+    }
+    CanonicalUrl::new(a.clone()) == CanonicalUrl::new(b.clone())
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b || is_same_file(a, b).unwrap_or(false)
 }
