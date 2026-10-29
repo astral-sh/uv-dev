@@ -1,6 +1,14 @@
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       save-rust-cache:
         required: false
         type: string
@@ -20,8 +28,8 @@ env:
 jobs:
   build-binary-linux-libc:
     name: "linux libc"
-    timeout-minutes: 10
-    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8-github }}
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -52,8 +60,8 @@ jobs:
 
   build-binary-linux-aarch64:
     name: "linux aarch64"
-    timeout-minutes: 10
-    runs-on: github-ubuntu-24.04-aarch64-4
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-aarch64-4 }}
     env:
       RUSTC_BOOTSTRAP: 1
       # Use `rustc`'s bundled `lld` instead of the system linker.
@@ -86,8 +94,8 @@ jobs:
 
   build-binary-linux-armv7-gnueabihf:
     name: "linux armv7 gnueabihf"
-    timeout-minutes: 15
-    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: ${{ inputs.free-runners && 30 || 15 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8-github }}
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -136,8 +144,8 @@ jobs:
 
   build-binary-linux-musl:
     name: "linux musl"
-    timeout-minutes: 10
-    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8-github }}
     env:
       RUSTC_BOOTSTRAP: 1
       # Use `rustc`'s bundled `lld` instead of the system linker.
@@ -177,8 +185,8 @@ jobs:
 
   build-binary-macos-aarch64:
     name: "macos aarch64"
-    timeout-minutes: 10
-    runs-on: namespace-profile-macos-15
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).macos-aarch64-8 }}
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -209,8 +217,8 @@ jobs:
 
   build-binary-macos-x86_64:
     name: "macos x86_64"
-    timeout-minutes: 10
-    runs-on: namespace-profile-macos-15
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).macos-aarch64-8 }}
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -248,7 +256,7 @@ jobs:
 
   build-binary-windows-x86_64:
     name: "windows x86_64"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     runs-on: windows-latest
     env:
       RUSTC_BOOTSTRAP: 1
@@ -291,7 +299,7 @@ jobs:
 
   build-binary-windows-aarch64:
     name: "windows aarch64"
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.free-runners && 30 || 15 }}
     runs-on: windows-11-arm
     env:
       RUSTC_BOOTSTRAP: 1
@@ -334,8 +342,8 @@ jobs:
 
   build-binary-msrv:
     name: "msrv"
-    runs-on: github-ubuntu-24.04-x86_64-8
-    timeout-minutes: 10
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8-github }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -359,8 +367,8 @@ jobs:
 
   build-binary-android-aarch64:
     name: "android aarch64"
-    timeout-minutes: 10
-    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8-github }}
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -416,8 +424,8 @@ jobs:
 
   build-binary-freebsd:
     name: "freebsd"
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

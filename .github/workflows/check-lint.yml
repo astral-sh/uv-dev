@@ -1,6 +1,14 @@
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       code-changed:
         required: true
         type: string
@@ -24,8 +32,8 @@ env:
 
 jobs:
   ruff:
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,8 +47,8 @@ jobs:
       - run: uv run --only-group check ruff check .
 
   ty:
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,8 +75,8 @@ jobs:
           done
 
   shellcheck:
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,8 +91,8 @@ jobs:
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
   validate-pyproject:
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,8 +107,8 @@ jobs:
         run: ./scripts/validate-pyproject.sh
 
   readme:
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,9 +120,9 @@ jobs:
 
   clippy-ubuntu:
     name: "clippy on linux"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     if: ${{ inputs.code-changed == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     env:
       RUSTC_BOOTSTRAP: "1"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
@@ -135,9 +143,9 @@ jobs:
 
   clippy-windows:
     name: "clippy on windows"
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.free-runners && 30 || 15 }}
     if: ${{ inputs.code-changed == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: namespace-profile-windows-2022-x86-64-4
+    runs-on: ${{ fromJSON(inputs.runners).windows-x86_64-4 }}
     env:
       RUSTC_BOOTSTRAP: "1"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
@@ -170,8 +178,8 @@ jobs:
 
   cargo-deny:
     name: "cargo deny"
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,9 +203,9 @@ jobs:
           uv run --only-dev cargo deny --manifest-path crates/uv-build/Cargo.toml --all-features check bans
 
   hawk:
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.free-runners && 30 || 15 }}
     if: ${{ inputs.code-changed == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -218,9 +226,9 @@ jobs:
 
   shear:
     name: "cargo shear"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     # `cargo shear` needs `cargo metadata` and the Rust toolchain.
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,7 +243,7 @@ jobs:
 
   typos:
     name: "check for typos"
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

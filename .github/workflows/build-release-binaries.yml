@@ -11,6 +11,14 @@ name: "Build release binaries"
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       plan:
         required: false
         type: string
@@ -38,7 +46,7 @@ permissions:
 jobs:
   sdist:
     name: sdist
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -121,7 +129,7 @@ jobs:
 
   macos-x86_64:
     name: x86_64-apple-darwin
-    runs-on: namespace-profile-macos-15
+    runs-on: ${{ fromJSON(inputs.runners).macos-aarch64-8 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,7 +204,7 @@ jobs:
 
   macos-aarch64:
     name: aarch64-apple-darwin
-    runs-on: namespace-profile-macos-15
+    runs-on: ${{ fromJSON(inputs.runners).macos-aarch64-8 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -299,7 +307,7 @@ jobs:
 
   windows:
     name: ${{ matrix.platform.target }}
-    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    runs-on: ${{ fromJSON(inputs.runners).windows-x86_64-16 }}
     strategy:
       matrix:
         platform:
@@ -448,7 +456,7 @@ jobs:
   test-windows-aarch64:
     name: "test aarch64-pc-windows-msvc wheels"
     needs: windows
-    runs-on: github-windows-11-aarch64-8
+    runs-on: ${{ fromJSON(inputs.runners).windows-aarch64-8 }}
     steps:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -477,7 +485,7 @@ jobs:
 
   linux:
     name: ${{ matrix.target }}
-    runs-on: depot-ubuntu-latest-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     strategy:
       matrix:
         include:
@@ -630,7 +638,7 @@ jobs:
   linux-arm:
     name: ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: ${{ matrix.platform.pgo && 60 || 30 }}
+    timeout-minutes: ${{ (matrix.platform.pgo || inputs.free-runners) && 60 || 30 }}
     strategy:
       matrix:
         platform:
@@ -639,10 +647,9 @@ jobs:
             arch: aarch64
             test_image: arm64v8/ubuntu:20.04@sha256:0908a765aeb02fe4e564b543eaed1d77839b7a08de94041e24328b2cb62ac553
             test_platform: linux/arm64
-            # The instrumented PGO build can exceed 32 GB of RAM and be reaped
-            # so we use a 64 GB runner for headroom
-            runner: depot-ubuntu-24.04-arm-16
-            pgo: true
+            # PGO can exceed 32 GB of RAM. Free runners build without PGO.
+            runner: ${{ fromJSON(inputs.runners).ubuntu-aarch64-pgo || fromJSON(inputs.runners).ubuntu-aarch64-4 }}
+            pgo: ${{ fromJSON(inputs.runners).ubuntu-aarch64-pgo != '' }}
             # see https://github.com/astral-sh/ruff/issues/3791
             # and https://github.com/gnzlbg/jemallocator/issues/170#issuecomment-1503228963
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
@@ -652,14 +659,14 @@ jobs:
             arch: armv7
             test_image: arm32v7/ubuntu:20.04@sha256:d9a6ab6baaf86907ea1d46f0cbc87547920077c9c6017721faed6eeb51e9aa7e
             test_platform: linux/arm/v7
-            runner: depot-ubuntu-24.04-8
+            runner: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8 }}
             pgo: false
             manylinux: 2_17
           - target: arm-unknown-linux-musleabihf
             arch: arm
             test_image: balenalib/rpi-raspbian:bullseye@sha256:851cfc48b26f6413a72a7f6873a7624ba2a427048976f6ab4483f72fe165d4f1
             test_platform: linux/arm/v6
-            runner: depot-ubuntu-24.04-8
+            runner: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8 }}
             pgo: false
             # Special case: armv6l is linux_armv6l, no manylinux or musllinux.
             # "auto" instead of "off" to get the cross container
@@ -784,8 +791,8 @@ jobs:
   # Like `linux-arm`.
   linux-s390x:
     name: ${{ matrix.platform.target }}
-    timeout-minutes: 30
-    runs-on: depot-ubuntu-latest-4
+    timeout-minutes: ${{ inputs.free-runners && 60 || 30 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     strategy:
       matrix:
         platform:
@@ -901,7 +908,7 @@ jobs:
   # Like `linux-arm`, but install the `gcc-powerpc64-linux-gnu` package.
   linux-powerpc:
     name: ${{ matrix.platform.target }}
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     strategy:
       matrix:
         platform:
@@ -1017,8 +1024,8 @@ jobs:
   # Like `linux-arm`.
   linux-riscv64:
     name: ${{ matrix.platform.target }}
-    timeout-minutes: 30
-    runs-on: depot-ubuntu-latest-4
+    timeout-minutes: ${{ inputs.free-runners && 60 || 30 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     strategy:
       matrix:
         platform:
@@ -1128,7 +1135,7 @@ jobs:
 
   musllinux:
     name: ${{ matrix.target }}
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     strategy:
       matrix:
         target:
@@ -1238,7 +1245,7 @@ jobs:
 
   musllinux-cross:
     name: ${{ matrix.platform.target }}
-    runs-on: depot-ubuntu-24.04-8
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-8 }}
     env:
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-C target-feature=+crt-static"
     strategy:
@@ -1395,7 +1402,7 @@ jobs:
 
   check-wheels:
     name: "check wheel contents"
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     env:
       UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
     needs:

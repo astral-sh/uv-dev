@@ -1,6 +1,10 @@
 on:
   workflow_call:
     inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       save-rust-cache:
         required: false
         type: string
@@ -19,9 +23,9 @@ env:
 jobs:
   benchmarks-walltime-build:
     name: "walltime build"
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-16 }}
     # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ fromJSON(inputs.runners).ubuntu-x86_64-codspeed != '' && (github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main')) }}
     timeout-minutes: 30
     env:
       RUSTC_BOOTSTRAP: "1"
@@ -80,8 +84,9 @@ jobs:
           retention-days: 1
 
   benchmarks-walltime-run:
+    if: ${{ fromJSON(inputs.runners).ubuntu-x86_64-codspeed != '' }}
     name: "walltime on x86_64 linux"
-    runs-on: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-codspeed }}
     needs: benchmarks-walltime-build
     timeout-minutes: 30
     permissions:
@@ -146,7 +151,7 @@ jobs:
 
   benchmarks-simulated:
     name: "simulated"
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4 }}
     # Only uv measures main; uv-dev reuses the resulting profiles.
     if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
     timeout-minutes: 30

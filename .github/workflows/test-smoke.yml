@@ -1,6 +1,14 @@
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Whether the selected runners use the free tier"
+        required: true
+        type: boolean
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
       sha:
         description: "The commit SHA to use for artifact names"
         required: true
@@ -19,8 +27,8 @@ env:
 jobs:
   smoke-test-linux:
     name: "linux"
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,8 +55,8 @@ jobs:
 
   smoke-test-linux-aarch64:
     name: "linux aarch64"
-    timeout-minutes: 10
-    runs-on: github-ubuntu-24.04-aarch64-2
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-aarch64-2 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,8 +83,8 @@ jobs:
 
   smoke-test-linux-musl:
     name: "linux musl"
-    timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     container: alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,7 +107,7 @@ jobs:
 
   smoke-test-macos:
     name: "macos"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,7 +135,7 @@ jobs:
 
   smoke-test-windows-x86_64:
     name: "windows x86_64"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,7 +164,7 @@ jobs:
 
   smoke-test-windows-aarch64:
     name: "windows aarch64"
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.free-runners && 20 || 10 }}
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

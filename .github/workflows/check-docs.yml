@@ -1,5 +1,10 @@
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,7 +17,7 @@ jobs:
   docs:
     timeout-minutes: 10
     name: "mkdocs"
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     env:
       RUSTC_BOOTSTRAP: "1"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
