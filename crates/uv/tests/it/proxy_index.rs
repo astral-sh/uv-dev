@@ -1741,6 +1741,56 @@ async fn proxy_index_rejects_hashless_selected_source() -> Result<()> {
     Ok(())
 }
 
+/// A query-bearing artifact must fail before its credentials can reach a lockfile or download.
+#[tokio::test]
+async fn proxy_index_rejects_artifact_queries_before_metadata_requests() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let index = MockServer::start().await;
+    let artifacts = MockServer::start().await;
+    let index_url = index.uri();
+    let artifacts_url = artifacts.uri();
+    mount_simple(
+        &index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{artifacts_url}/files/{WHEEL_FILENAME}?private-key=secret"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package==0.1.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{index_url}/simple/"
+        artifact-base-url = "{artifacts_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Cannot map proxy artifact URL `http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl`: artifact URLs with query strings are not supported
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert_no_requests(&artifacts, "artifact host").await?;
+    index.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_rejects_unmapped_artifact_without_origin_fallback() -> Result<()> {
     let context = uv_test::test_context!("3.12");

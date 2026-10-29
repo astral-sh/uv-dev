@@ -105,6 +105,15 @@ pub enum ProxyIndexError {
         prefix: Box<SafeUrl>,
     },
 
+    /// The artifact cannot be represented by a portable prefix mapping.
+    #[error("Cannot map proxy artifact URL `{url}`: {reason}")]
+    UnsupportedArtifactUrl {
+        /// The artifact URL with its query omitted from diagnostics.
+        url: Box<SafeUrl>,
+        /// The unsupported part of the URL mapping contract.
+        reason: &'static str,
+    },
+
     /// A registry artifact location could not be converted to an absolute URL.
     #[error(transparent)]
     InvalidArtifactUrl(#[from] ToUrlError),
@@ -130,24 +139,11 @@ impl UrlPrefix {
             });
         }
 
-        for segment in url.path().split('/') {
-            let Ok(decoded) = percent_encoding::percent_decode_str(segment).decode_utf8() else {
-                return Err(ProxyIndexConfigError::InvalidMapping {
-                    url: Box::new(url),
-                    reason: "index and artifact base URLs must contain valid UTF-8 path segments",
-                });
-            };
-
-            if matches!(decoded.as_ref(), "." | "..")
-                || decoded.contains('/')
-                || decoded.contains('\\')
-                || decoded.contains('\0')
-            {
-                return Err(ProxyIndexConfigError::InvalidMapping {
-                    url: Box::new(url),
-                    reason: "index and artifact base URLs cannot contain path traversal or encoded separators",
-                });
-            }
+        if let Err(reason) = validate_path(url.path()) {
+            return Err(ProxyIndexConfigError::InvalidMapping {
+                url: Box::new(url),
+                reason,
+            });
         }
 
         Ok(Self(url))
@@ -172,6 +168,23 @@ impl UrlPrefix {
             .strip_prefix(prefix_path)
             .and_then(|suffix| suffix.strip_prefix('/'))
     }
+}
+
+/// Prefix replacement preserves encoded path segments only when each segment has one meaning.
+fn validate_path(path: &str) -> Result<(), &'static str> {
+    for segment in path.split('/') {
+        let decoded = percent_encoding::percent_decode_str(segment)
+            .decode_utf8()
+            .map_err(|_| "URL paths must contain valid UTF-8 segments")?;
+        if matches!(decoded.as_ref(), "." | "..")
+            || decoded.contains('/')
+            || decoded.contains('\\')
+            || decoded.contains('\0')
+        {
+            return Err("URL paths cannot contain traversal or encoded separators");
+        }
+    }
+    Ok(())
 }
 
 /// A package index URL that is safe to use as a route prefix.
@@ -238,6 +251,23 @@ impl ArtifactUrlMapping {
         prefix: &UrlPrefix,
         target: &UrlPrefix,
     ) -> Result<SafeUrl, ProxyIndexError> {
+        // Query parameters can contain credentials or signatures scoped to one host. They cannot
+        // be copied between proxy and upstream URLs or persisted as portable artifact identity.
+        if url.query().is_some() {
+            let mut url = url.clone();
+            url.set_query(None);
+            return Err(ProxyIndexError::UnsupportedArtifactUrl {
+                url: Box::new(url),
+                reason: "artifact URLs with query strings are not supported",
+            });
+        }
+        if let Err(reason) = validate_path(url.path()) {
+            return Err(ProxyIndexError::UnsupportedArtifactUrl {
+                url: Box::new(url.clone()),
+                reason,
+            });
+        }
+
         let Some(suffix) = prefix.path_suffix(url) else {
             return Err(ProxyIndexError::UnmappedUrl {
                 url: Box::new(url.clone()),
@@ -254,7 +284,6 @@ impl ArtifactUrlMapping {
         } else {
             rewritten.set_path(&format!("{target_path}/{suffix}"));
         }
-        rewritten.set_query(url.query());
         rewritten.set_fragment(url.fragment());
         Ok(rewritten)
     }
@@ -674,17 +703,16 @@ mod tests {
     }
 
     #[test]
-    fn proxy_artifact_mapping_preserves_encoded_suffix_and_query() -> TestResult {
+    fn proxy_artifact_mapping_preserves_encoded_suffix_and_fragment() -> TestResult {
         let locations = pypi_locations(pypi_proxy()?)?;
         let route = locations
             .proxy_route_for(&index_url("https://pypi.org/simple/")?)
             .ok_or("missing proxy route")?;
         let canonical = url(
-            "https://files.pythonhosted.org/packages/example%20project/package%2B1.whl?download=1#sha256=abc",
+            "https://files.pythonhosted.org/packages/example%20project/package%2B1.whl#sha256=abc",
         )?;
-        let expected = url(
-            "https://proxy.example.com/files/example%20project/package%2B1.whl?download=1#sha256=abc",
-        )?;
+        let expected =
+            url("https://proxy.example.com/files/example%20project/package%2B1.whl#sha256=abc")?;
 
         let canonical = locked_location(canonical);
         let effective = route.artifact_url_for_request(&canonical)?;
@@ -700,6 +728,65 @@ mod tests {
         assert_eq!(canonicalized.dist_info_metadata, Some(HashDigests::empty()));
         assert_eq!(canonicalized.size, Some(123));
         assert_eq!(canonicalized.upload_time_utc_ms, Some(456));
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_artifact_mapping_rejects_queries_in_both_directions() -> TestResult {
+        let locations = pypi_locations(pypi_proxy()?)?;
+        let route = locations
+            .proxy_route_for(&index_url("https://pypi.org/simple/")?)
+            .ok_or("missing proxy route")?;
+        let error = File::from_proxy_index(
+            response_file(url(
+                "https://proxy.example.com/files/package.whl?private-key=secret",
+            )?),
+            route,
+        )
+        .expect_err("query strings cannot be persisted");
+        assert_eq!(
+            error.to_string(),
+            "Cannot map proxy artifact URL `https://proxy.example.com/files/package.whl`: artifact URLs with query strings are not supported"
+        );
+
+        let error = route
+            .artifact_url_for_request(&locked_location(url(
+                "https://files.pythonhosted.org/packages/package.whl?download=1",
+            )?))
+            .expect_err("locked query strings cannot be forwarded");
+        assert_eq!(
+            error.to_string(),
+            "Cannot map proxy artifact URL `https://files.pythonhosted.org/packages/package.whl`: artifact URLs with query strings are not supported"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_artifact_mapping_rejects_ambiguous_path_segments() -> TestResult {
+        let locations = pypi_locations(pypi_proxy()?)?;
+        let route = locations
+            .proxy_route_for(&index_url("https://pypi.org/simple/")?)
+            .ok_or("missing proxy route")?;
+        for suffix in [
+            "folder%2fpackage.whl",
+            "folder%5cpackage.whl",
+            "%00package.whl",
+            "%ffpackage.whl",
+        ] {
+            assert!(matches!(
+                File::from_proxy_index(
+                    response_file(url(&format!("https://proxy.example.com/files/{suffix}"))?),
+                    route
+                ),
+                Err(ProxyIndexError::UnsupportedArtifactUrl { .. })
+            ));
+            assert!(matches!(
+                route.artifact_url_for_request(&locked_location(url(&format!(
+                    "https://files.pythonhosted.org/packages/{suffix}"
+                ))?)),
+                Err(ProxyIndexError::UnsupportedArtifactUrl { .. })
+            ));
+        }
         Ok(())
     }
 
