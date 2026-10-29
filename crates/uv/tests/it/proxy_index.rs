@@ -9,6 +9,7 @@ use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
@@ -781,6 +782,76 @@ async fn proxy_index_locks_canonical_urls_without_origin_requests() -> Result<()
     assert_authenticated_requests(&physical_artifacts, "artifact-user", "artifact-password")
         .await?;
     assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    Ok(())
+}
+
+/// Direct URL dependencies still use the upstream host and need its named index credentials,
+/// even when registry dependencies from that index are routed through a proxy.
+#[tokio::test]
+async fn proxy_index_direct_url_uses_upstream_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"basic-package".parse()?, &"0.1.0".parse()?).build();
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let upstream_url = upstream.uri();
+    let proxy_url = proxy.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "upstream"
+        url = "{upstream_url}/simple/"
+        artifact-base-url = "{upstream_url}/files/"
+        default = true
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "upstream"
+    "#})?;
+
+    Mock::given(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(405))
+        .with_priority(1)
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(1)
+        .expect(1..)
+        .mount(&upstream)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("{upstream_url}/files/{filename}"))
+        .env("UV_INDEX_UPSTREAM_USERNAME", "upstream-user")
+        .env("UV_INDEX_UPSTREAM_PASSWORD", "upstream-password"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0 (from http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl)
+    ");
+
+    upstream.verify().await;
+    assert_no_requests(&proxy, "proxy index").await?;
     Ok(())
 }
 
