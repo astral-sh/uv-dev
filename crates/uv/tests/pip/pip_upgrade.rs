@@ -614,12 +614,42 @@ fn invalid_direct_url() -> Result<()> {
         .arg("--index-url").arg(server.index_url()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot upgrade `a`: the recorded source URL in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json` could not be parsed
+    error: Cannot upgrade `a`: failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
+      cause: relative URL without a base
     ");
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
     exit_code: 0 (success)
     ----- stdout -----
     a==1.0.0
+    ");
+    Ok(())
+}
+
+/// Malformed installed metadata includes the JSON error and location in the diagnostic.
+#[test]
+fn malformed_direct_url_json() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    fs_err::write(
+        context
+            .site_packages()
+            .join("a-1.0.0.dist-info/direct_url.json"),
+        "{",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot upgrade `a`: failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
+      cause: EOF while parsing an object at line 1 column 1
     ");
     Ok(())
 }

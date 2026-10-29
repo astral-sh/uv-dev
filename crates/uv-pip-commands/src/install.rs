@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use anyhow::bail;
+use anyhow::Context;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use thiserror::Error;
@@ -21,7 +20,7 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
+    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, InstalledDist,
     InstalledDistKind, Name, NameRequirementSpecification, Origin, PackageConfigSettings,
     Requirement, Resolution, UnresolvedRequirementSpecification,
 };
@@ -102,44 +101,12 @@ fn installed_requirements(
         .iter()
         .sorted_by(|left, right| left.name().cmp(right.name()))
         .map(|dist| {
-            // The resolver substitutes every global override for this name, including its marker.
-            // Only a root that survives that substitution needs its recorded origin.
+            // Each global override substitutes its own marker and source.
             let version_or_url = if overridden.contains(dist.name()) {
                 None
-            } else { match &dist.kind {
-                InstalledDistKind::Registry(dist) => {
-                    // The installed-package index tolerates invalid source URLs. Their presence
-                    // must not be interpreted as a registry origin when upgrading automatically.
-                    let metadata = dist.path.join("direct_url.json");
-                    match fs_err::symlink_metadata(&metadata) {
-                        Ok(_) => bail!(
-                            "Cannot upgrade `{}`: the recorded source URL in `{}` could not be parsed",
-                            dist.name,
-                            metadata.user_display()
-                        ),
-                        Err(err) if err.kind() == ErrorKind::NotFound => None,
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-                InstalledDistKind::EggInfoFile(_)
-                | InstalledDistKind::EggInfoDirectory(_) => None,
-                InstalledDistKind::Url(dist) => Some(VersionOrUrl::Url(VerbatimParsedUrl {
-                    parsed_url: ParsedUrl::try_from(dist.direct_url.as_ref())?,
-                    verbatim: VerbatimUrl::from_url(dist.url.clone()),
-                })),
-                InstalledDistKind::LegacyEditable(dist) => {
-                    let verbatim = VerbatimUrl::from_url(dist.target_url.clone());
-                    Some(VersionOrUrl::Url(VerbatimParsedUrl {
-                        parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
-                            install_path: verbatim.as_path()?.into_boxed_path(),
-                            url: dist.target_url.clone(),
-                            editable: Some(true),
-                            r#virtual: None,
-                        }),
-                        verbatim,
-                    }))
-                }
-            }};
+            } else {
+                installed_version_or_url(dist)?
+            };
 
             Ok(Requirement::from(Pep508Requirement {
                 name: dist.name().clone(),
@@ -151,6 +118,40 @@ fn installed_requirements(
             .into())
         })
         .collect()
+}
+
+/// Reconstruct a direct origin without pinning a registry package to its installed version.
+fn installed_version_or_url(
+    dist: &InstalledDist,
+) -> anyhow::Result<Option<VersionOrUrl<VerbatimParsedUrl>>> {
+    dist.check_upgrade_origin().with_context(|| {
+        format!(
+            "Cannot upgrade `{}`: failed to read the recorded origin in `{}`",
+            dist.name(),
+            dist.install_path().join("direct_url.json").user_display(),
+        )
+    })?;
+    Ok(match &dist.kind {
+        InstalledDistKind::Registry(_)
+        | InstalledDistKind::EggInfoFile(_)
+        | InstalledDistKind::EggInfoDirectory(_) => None,
+        InstalledDistKind::Url(dist) => Some(VersionOrUrl::Url(VerbatimParsedUrl {
+            parsed_url: ParsedUrl::try_from(dist.direct_url.as_ref())?,
+            verbatim: VerbatimUrl::from_url(dist.url.clone()),
+        })),
+        InstalledDistKind::LegacyEditable(dist) => {
+            let verbatim = VerbatimUrl::from_url(dist.target_url.clone());
+            Some(VersionOrUrl::Url(VerbatimParsedUrl {
+                parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
+                    install_path: verbatim.as_path()?.into_boxed_path(),
+                    url: dist.target_url.clone(),
+                    editable: Some(true),
+                    r#virtual: None,
+                }),
+                verbatim,
+            }))
+        }
+    })
 }
 
 /// Install packages into the current environment.
