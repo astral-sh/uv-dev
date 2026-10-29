@@ -6,6 +6,8 @@ Classification: bug
 
 ## Summary
 
+A focused fix is implemented in the checkout. Virtual-environment metadata now accepts PEP 440 local version labels, preserving relocatable launchers and interpreter-version compatibility checks. The updated parent regression and directly related sync coverage pass in the debug test profile.
+
 Reproduced on Ubuntu 24.04.5 x86_64 with the installed uv 0.13.5 and an unmodified, locally built CPython 3.16.0a1+dev. Running `uvx --python ./python pycowsay hello` installs the tool, then exits with code 2 and the reported `Failed to spawn` / `No such file or directory (os error 2)` error.
 
 The installed `pycowsay` script exists, but its absolute shebang points to the temporary environment location that no longer exists after uv moves the environment into its cache. The cached environment's Python works and runs the script successfully when invoked explicitly. A separate metadata-only control confirms that adding +dev to `version_info` causes uv to generate this non-relocatable launcher despite `relocatable = true`.
@@ -14,7 +16,7 @@ The reporter observed the failure with Python 3.15 and 3.16 development builds o
 
 ## Classification
 
-Confirmed bug in environment metadata handling and tool launcher relocation. The +dev suffix is intentional upstream, as documented in python/cpython#99968. Interpreter discovery accepts it and environment creation writes it to `pyvenv.cfg`, but the configuration reader rejects local versions. The installer then treats the environment as non-relocatable and writes an absolute interpreter path. Moving the environment leaves that path dangling.
+Confirmed bug in environment metadata handling and tool launcher relocation. The +dev suffix is intentional upstream, as documented in python/cpython#99968. Before the fix, interpreter discovery accepted it and environment creation wrote it to `pyvenv.cfg`, but the configuration reader rejected local versions. The installer then treated the environment as non-relocatable and wrote an absolute interpreter path. Moving the environment left that path dangling. The fix changes the metadata reader, without changing Python request parsing.
 
 This differs from the historical bare-trailing-plus parsing issue astral-sh/uv#1357, fixed by astral-sh/uv#1771. There is no evidence that the older fix regressed. The observed failure concerns the newly exposed +dev metadata path; astral-sh/uv#13992 and astral-sh/uv#20849 concern adjacent spawn diagnostics. No matching duplicate was found in the related-issue investigation.
 
@@ -94,22 +96,23 @@ produces an absolute shebang pointing at `metadata-control/bin/python`. Renaming
 
 ### Existing test coverage
 
-Searched `crates/uv/tests/` and `crates/uv-client/tests/it/`, including the current tool, Python, and pip integration-test modules. No test covering a +dev interpreter version in virtual-environment metadata was found. Relevant adjacent tests were read, including their setup and assertions:
+Searched `crates/uv/tests/` and `crates/uv-client/tests/it/`, including the current tool, Python, and pip integration-test modules. The parent regression from astral-sh/uv-dev#3035 now covers a +dev version written by `uv venv`, consumed during wheel installation, and used to execute a console script after relocation. It is retained in `crates/uv/tests/pip_install/pip_install.rs::install_relocatable_dev_python`, with the final expectation changed from ENOENT to successful execution. Relevant adjacent tests were also inspected:
 
 - `crates/uv/tests/tool/tool_run.rs::tool_run_cache` uses ordinary Python 3.11/3.12, runs black successfully, checks cached reuse and refresh behavior, and verifies that changing the interpreter or dependencies creates another environment. It does not exercise +dev metadata.
 - `crates/uv/tests/pip_install/pip_install.rs::install_relocatable` creates a relocatable Python 3.12 environment, installs a local console-script fixture, and asserts execution before and after moving the environment and through a symlink on Unix. It does not include a local-version suffix.
 - `crates/uv/tests/python/venv.rs::verify_pyvenv_cfg_relocatable` uses ordinary Python 3.12 and checks `relocatable = true` and activation-script contents. It does not test the +dev configuration round trip or a relocated installed console script.
 
-The tool and pip-install modules are gated by `test-python` and `test-pypi`; the venv module is gated by `test-python`. These Rust tests were inspected, not executed. No repository test files were added or modified.
+The tool and pip-install modules are gated by `test-python` and `test-pypi`; the venv module is gated by `test-python`. The parent regression retains its Unix gate; both modified integration-test modules retain their existing Python/PyPI feature gates. Focused execution results are recorded in the Fix section. No new test function or fixture file was needed.
 
 ### Scope and retained evidence
 
 The primary observation covers CPython 3.16.0a1+dev on Linux with uv 0.13.5. macOS, CPython 3.15, the reporter's Python 3.14.8+ control, tox, and uv 0.12.23/0.13.6 were not separately run. Those limits do not prevent reproduction of the reported command and error with a genuine development interpreter.
 
-Build logs, the exact CPython commit, the isolated environment settings, baseline and failing command outputs, launcher/configuration evidence, and metadata-control results are retained under `/tmp/uv-22989-s_w7v_rd`. In particular, see `dev.json`, `dev.stderr`, `dev-environment.json`, `cpython-version.txt`, and `metadata-control-results.json`.
+Build logs, the exact CPython commit, the isolated environment settings, baseline and failing command outputs, launcher/configuration evidence, and metadata-control results were recorded under `/tmp/uv-22989-s_w7v_rd`. Those records included `dev.json`, `dev.stderr`, `dev-environment.json`, `cpython-version.txt`, and `metadata-control-results.json`. These temporary artifacts are not present on the current fix runner; the checked-in parent regression provides a repeatable simulation of the development version string using `sitecustomize.py`.
 
 ## Related
 
+- astral-sh/uv-dev#3035 — Parent regression pull request. Adds `install_relocatable_dev_python`, initially asserting the broken launcher after relocation. The fix retains its producer/consumer setup and changes that final assertion to successful execution.
 - astral-sh/uv#1357 — Support Python versions with trailing `+` (issue, closed). Historical CPython development-build compatibility issue: versions such as 3.11.4+ failed during interpreter version parsing. Maintainer discussion led to stripping the bare trailing plus. The new report reaches tool spawning with a valid +dev local version; the source exposes a different pyvenv.cfg parsing and relocation path.
 - astral-sh/uv#1771 — strip trailing `+` from version number of local Python builds (pull request, merged). Merged on 2024-02-20 to fix astral-sh/uv#1357 by stripping a final + from python_full_version. That workaround remains in the checkout and deliberately leaves +dev intact. It does not fix rejection of local versions when reading pyvenv.cfg, so this report does not establish a regression of that fix.
 - python/cpython#99968 — Python version ending with plus sign not compatible with PEP 508 `python_full_version` marker (issue, closed). Verified upstream context for the trigger. CPython maintainers confirmed on 2026-05-27 that upcoming 3.15+ development builds would use +dev; a June comment shows 3.15.0b2+dev. This establishes that the suffix is intentional, but does not track uv's tool-launch failure.
@@ -118,7 +121,7 @@ Build logs, the exact CPython commit, the isolated environment settings, baselin
 
 ## Supporting source evidence
 
-Inspected checkout: `d2152bc80fe9b9ef3fe6acceffd408d9bdd90b23`.
+The following describes the implementation before the fix, inspected at `d2152bc80fe9b9ef3fe6acceffd408d9bdd90b23`. The fix checkout started at parent regression commit `ea034a905059ec437564a754a50dc1114baaf0c2`.
 
 1. `crates/uv-python-interpreter/python/get_interpreter_info.py:65` obtains `python_full_version` from `platform.python_version()`; lines 98–99 strip only a bare final plus. A +dev suffix survives.
 2. `crates/uv-virtualenv/src/virtualenv.rs:556` writes the full version into `version_info` for environments not using a managed minor-version link. The same function writes `relocatable = true` at line 573 when requested.
@@ -143,8 +146,33 @@ Further inspected candidates were also distinct:
 
 The related-issue investigation used the authenticated GitHub CLI only for reads. Searches included historical closed issues and merged fixes as well as open work. The upstream lead was verified against its discussion rather than assumed to establish the uv failure's cause.
 
-## Suggested follow-up
+## Fix
 
-Ensure Python versions emitted into environment metadata can be read back, and that a metadata parse failure cannot silently disable the relocatability needed by cached tool environments. Regression coverage should exercise +dev metadata and a console entry point after relocation, following the existing integration-test style and feature gates above.
+**Outcome: fixed in the checkout.** Changes are limited to two production files and two directly relevant existing integration-test files.
 
-The reproduction required only a temporary CPython build and the installed uv executable. No uv build was performed, no repository files were changed, and no GitHub objects were modified. Only this issue-context README and temporary reproduction artifacts were written.
+### Implementation
+
+`crates/uv-python-interpreter/src/virtualenv.rs` parses the `version` and `version_info` metadata fields as `uv_pep440::Version`, instead of the request-oriented `PythonVersion` type that rejects local versions. This accepts the full version emitted by environment creation, including +dev, so reading the configuration retains `relocatable = true`. Console entry points consequently remain runnable after the environment moves. Python request validation is unchanged.
+
+`crates/uv-python-interpreter/src/environment.rs` compares versions without local build labels when checking interpreter compatibility. Major/minor, patch, and prerelease comparisons retain their existing selection rules; a local build label alone does not make an otherwise matching interpreter incompatible. Version values returned for diagnostics retain their labels.
+
+### Related manifestation and coverage
+
+The same parsing failure also disabled interpreter-version conflict detection. A targeted pre-fix command with a Python 3.12 interpreter and `version_info = 3.11.0+dev` let `uv sync --offline` succeed while leaving the incompatible metadata and environment in place. The existing `sync_when_virtual_environment_incompatible_with_interpreter` test in `crates/uv/tests/sync/sync.rs` now uses that local-version fixture and requires environment recreation. It also verifies that adding only +dev to a matching version does not recreate the environment. Its ordinary `version = 3.11.0` fixture continues to cover the other metadata field.
+
+The parent `install_relocatable_dev_python` test retains its generated +dev metadata snapshot, local wheel, successful execution before relocation, environment move, and launcher existence check. It now snapshots successful execution after relocation. The adjacent ordinary `install_relocatable` test was run unchanged. No additional command-level regressions were added for commands that reuse the same installation path.
+
+### Validation
+
+Before production changes, the original parent regression passed while asserting ENOENT. After changing its final assertion to the desired output, it failed at the relocated launcher with `No such file or directory (os error 2)`. The extended sync test also failed before production changes because its expected environment removal/recreation was absent. These failures establish both covered manifestations of the metadata parsing defect.
+
+Successful focused checks after the fix:
+
+- `cargo test -p uv --test pip_install install_relocatable -- --nocapture` — 2 passed: the updated parent regression and ordinary relocatable installation.
+- `cargo test -p uv --test sync sync::sync_when_virtual_environment_incompatible_with_interpreter -- --exact` — 1 passed, including matching local metadata, incompatible local metadata, and ordinary version metadata.
+- `cargo fmt --all` — passed using the matching rustfmt 1.99.0 distribution extracted under `/tmp`; the runner's installed toolchain lacked rustfmt and its component directory was read-only.
+- `git diff --check` — passed.
+
+Tests used the unoptimized debug/test profile on Linux. No full suite or release build was run. Test logs are `/tmp/uv-parent-test.log`, `/tmp/uv-parent-red.log`, `/tmp/uv-sync-red.log`, `/tmp/uv-fix-relocatable.log`, and `/tmp/uv-fix-sync.log`. No commits, Git configuration changes, or GitHub writes were made.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3042

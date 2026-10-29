@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Accept +dev version labels in virtual-environment metadata so installed launchers remain runnable after relocation. Preserve interpreter compatibility checks while ignoring local build labels. Update the parent regression to require successful execution and extend existing sync coverage for compatible and incompatible development-version metadata.",
+  "validation": [
+    "Debug-profile relocation tests: 2 passed.",
+    "Debug-profile interpreter compatibility integration test: passed.",
+    "cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3042"
+}
