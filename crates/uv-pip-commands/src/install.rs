@@ -592,7 +592,8 @@ pub async fn pip_install(
             },
             printer,
         )
-        .await?;
+        .await
+        .map_err(UvError::from)?;
         override_dependencies.extend(named.into_iter().map(Override::Requirement));
         let overridden = override_dependencies
             .iter()

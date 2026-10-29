@@ -662,18 +662,6 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
     }
 }
 
-impl From<&ParsedUrl> for DirectUrl {
-    fn from(value: &ParsedUrl) -> Self {
-        match value {
-            ParsedUrl::Path(value) => Self::from(value),
-            ParsedUrl::Directory(value) => Self::from(value),
-            ParsedUrl::GitPath(value) => Self::from(value),
-            ParsedUrl::GitDirectory(value) => Self::from(value),
-            ParsedUrl::Archive(value) => Self::from(value),
-        }
-    }
-}
-
 impl DirectUrl {
     /// Build installed origin metadata using the digests computed for the downloaded archive.
     pub fn from_url_and_hashes(url: &ParsedUrl, hashes: &[HashDigest]) -> Self {
@@ -689,6 +677,18 @@ impl DirectUrl {
             );
         }
         origin
+    }
+}
+
+impl From<&ParsedUrl> for DirectUrl {
+    fn from(value: &ParsedUrl) -> Self {
+        match value {
+            ParsedUrl::Path(value) => Self::from(value),
+            ParsedUrl::Directory(value) => Self::from(value),
+            ParsedUrl::GitPath(value) => Self::from(value),
+            ParsedUrl::GitDirectory(value) => Self::from(value),
+            ParsedUrl::Archive(value) => Self::from(value),
+        }
     }
 }
 

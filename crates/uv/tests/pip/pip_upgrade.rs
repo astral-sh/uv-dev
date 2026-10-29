@@ -683,6 +683,29 @@ fn excluded_invalid_origin() -> Result<()> {
     Ok(())
 }
 
+/// An invalid unnamed override is a user input error, as it is for `pip install`.
+#[test]
+fn invalid_unnamed_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg("a")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let overrides = context.temp_dir.child("overrides.txt");
+    overrides.write_str("https://example.invalid/bad.whl\n")?;
+    uv_snapshot!(context.filters(), context.pip_upgrade().arg("--all")
+        .arg("--overrides").arg(overrides.path()).arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The wheel filename `bad.whl` is invalid: Must have a version
+    ");
+    Ok(())
+}
+
 /// Resolve a bare override URL before reading the origin it replaces.
 #[test]
 fn overridden_invalid_origin() -> Result<()> {
