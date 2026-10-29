@@ -54,11 +54,12 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
+use crate::requested_extras;
 use crate::resolve_build_hash_checking;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_install_operations::Changelog;
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
+use uv_install_operations::{Changelog, RequestedExtrasChanges};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
@@ -101,18 +102,23 @@ fn installed_requirements(
         .iter()
         .sorted_by(|left, right| left.name().cmp(right.name()))
         .map(|dist| {
-            // Each global override substitutes its own marker and source.
-            let version_or_url = if overridden.contains(dist.name()) {
-                None
+            // A global override substitutes its own origin, extras, and marker.
+            let (version_or_url, extras) = if overridden.contains(dist.name()) {
+                (None, Box::default())
             } else {
-                dist.upgrade_source()
+                let version_or_url = dist
+                    .upgrade_source()
                     .with_context(|| format!("Cannot upgrade `{}`", dist.name()))?
-                    .map(VersionOrUrl::Url)
+                    .map(VersionOrUrl::Url);
+                let extras = requested_extras::read(dist)?
+                    .map(|requested| requested.extras.into_iter().collect())
+                    .unwrap_or_default();
+                (version_or_url, extras)
             };
 
             Ok(Requirement::from(Pep508Requirement {
                 name: dist.name().clone(),
-                extras: Box::new([]),
+                extras,
                 version_or_url,
                 marker: MarkerTree::TRUE,
                 origin: None,
@@ -432,7 +438,39 @@ pub async fn pip_install(
                         debug!("Requirement satisfied: {requirement}");
                     }
                 }
-                DefaultInstallLogger.on_check(requirements.len(), start, printer, dry_run)?;
+                let changes = if installer_metadata {
+                    let mut requested = requested_extras::from_satisfied_requirements(
+                        &requirements,
+                        site_packages,
+                        &marker_env,
+                        &overrides,
+                        &override_dependencies,
+                        &excludes,
+                    )?;
+                    let packages = requested.keys().cloned().collect::<Vec<_>>();
+                    requested_extras::extend_with_installed(
+                        &mut requested,
+                        site_packages,
+                        &packages,
+                    )?;
+                    RequestedExtrasChanges::for_satisfied(&requested, site_packages)?
+                } else {
+                    RequestedExtrasChanges::default()
+                };
+                let changelog = match changes.finish(
+                    requirements.len(),
+                    start,
+                    &DefaultInstallLogger,
+                    dry_run,
+                    printer,
+                ) {
+                    Ok(changelog) => changelog,
+                    Err(uv_install_operations::Error::OutdatedEnvironment(changelog)) => {
+                        write_install_report(&changelog, dry_run, output_format, printer)?;
+                        return Ok(ExitStatus::Failure);
+                    }
+                    Err(err) => return Err(UvError::from(err).into()),
+                };
 
                 if strict && !dry_run.enabled() {
                     uv_install_operations::diagnose_site_packages(
@@ -447,7 +485,7 @@ pub async fn pip_install(
                     )?;
                 }
 
-                write_install_report(&Changelog::default(), dry_run, output_format, printer)?;
+                write_install_report(&changelog, dry_run, output_format, printer)?;
                 return Ok(ExitStatus::Success);
             }
             SatisfiesResult::Unsatisfied(requirement) => {
@@ -607,6 +645,7 @@ pub async fn pip_install(
         overrides.clear();
     }
 
+    let mut requested = requested_extras::RequestedExtrasMap::new();
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
@@ -690,7 +729,14 @@ pub async fn pip_install(
         )
         .await
         {
-            Ok((graph, hasher)) => (Resolution::from(graph), hasher),
+            Ok((graph, hasher)) => {
+                requested = requested_extras::from_requirements(
+                    &graph.requirements,
+                    &marker_env,
+                    &graph.modifiers,
+                );
+                (Resolution::from(graph), hasher)
+            }
             Err(err) => {
                 return Err(UvError::from(err).into());
             }
@@ -710,6 +756,14 @@ pub async fn pip_install(
         )?,
         Some(site_packages) => site_packages,
     };
+
+    if installer_metadata {
+        requested_extras::extend_with_installed(
+            &mut requested,
+            &site_packages,
+            resolution.distributions().map(Name::name),
+        )?;
+    }
 
     // Constrain any build requirements marked as `match-runtime = true`.
     let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
@@ -761,6 +815,7 @@ pub async fn pip_install(
         &environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
+        Some(requested),
         dry_run,
         printer,
         preview,

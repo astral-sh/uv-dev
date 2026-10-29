@@ -241,6 +241,7 @@ pub async fn sync_from_lock(
         cache,
         venv,
         &tags,
+        None,
     )?;
 
     // Avoid constructing an HTTP client and build dispatch when planning shows that there is no

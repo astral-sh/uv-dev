@@ -15,6 +15,7 @@ use uv_pypi_types::Scheme;
 pub use install::{install_wheel, installed_dist_info_path};
 pub use linker::{InstallState, LinkMode};
 pub use record::RecordEntry;
+pub use requested::{RequestedExtras, RequestedExtrasError, RequestedExtrasUpdate};
 pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninstall_wheel};
 pub use wheel::{
     WheelFile, read_record, read_record_into_iter, reserved_script_name, validate_and_heal_record,
@@ -23,6 +24,7 @@ pub use wheel::{
 mod install;
 mod linker;
 mod record;
+mod requested;
 mod script;
 mod uninstall;
 mod wheel;

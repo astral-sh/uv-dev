@@ -175,12 +175,7 @@ impl InstallLogger for DefaultInstallLogger {
         )
     }
 
-    fn on_complete(
-        &self,
-        changelog: &Changelog,
-        printer: Printer,
-        _dry_run: DryRun,
-    ) -> fmt::Result {
+    fn on_complete(&self, changelog: &Changelog, printer: Printer, dry_run: DryRun) -> fmt::Result {
         for event in changelog
             .uninstalled
             .iter()
@@ -238,6 +233,14 @@ impl InstallLogger for DefaultInstallLogger {
                     )?;
                 }
             }
+        }
+        for name in changelog.requested_extras.keys() {
+            let action = if dry_run.enabled() {
+                "Would update"
+            } else {
+                "Updated"
+            };
+            writeln!(printer.stderr(), "{action} requested extras for `{name}`")?;
         }
         Ok(())
     }

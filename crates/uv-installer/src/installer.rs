@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -6,7 +7,8 @@ use tracing::{instrument, warn};
 
 use uv_cache::Cache;
 use uv_distribution_types::CachedDist;
-use uv_install_wheel::{Layout, LinkMode};
+use uv_install_wheel::{Layout, LinkMode, RequestedExtras};
+use uv_normalize::PackageName;
 use uv_preview::Preview;
 use uv_python_interpreter::PythonEnvironment;
 use uv_threads::initialize_rayon_once;
@@ -37,6 +39,8 @@ pub struct Installer<'a> {
     name: Option<String>,
     /// The metadata associated with the [`Installer`].
     metadata: bool,
+    /// Explicit extras to record with each completed installation.
+    requested_extras: Option<&'a BTreeMap<PackageName, RequestedExtras>>,
     /// Preview settings for the installer.
     preview: Preview,
 }
@@ -51,6 +55,7 @@ impl<'a> Installer<'a> {
             reporter: None,
             name: Some("uv".to_string()),
             metadata: true,
+            requested_extras: None,
             preview,
         }
     }
@@ -97,6 +102,18 @@ impl<'a> Installer<'a> {
         }
     }
 
+    /// Set the explicit extras to record in each installed wheel's metadata.
+    #[must_use]
+    pub fn with_requested_extras(
+        self,
+        requested_extras: Option<&'a BTreeMap<PackageName, RequestedExtras>>,
+    ) -> Self {
+        Self {
+            requested_extras,
+            ..self
+        }
+    }
+
     /// Install a set of wheels into a Python virtual environment.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
     pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
@@ -107,6 +124,7 @@ impl<'a> Installer<'a> {
             reporter,
             name: installer_name,
             metadata: installer_metadata,
+            requested_extras,
             preview,
         } = self;
 
@@ -120,6 +138,7 @@ impl<'a> Installer<'a> {
 
         let layout = venv.interpreter().layout();
         let relocatable = venv.relocatable();
+        let requested_extras = requested_extras.cloned();
         // Initialize the threadpool with the user settings.
         initialize_rayon_once();
         rayon::spawn(move || {
@@ -131,6 +150,7 @@ impl<'a> Installer<'a> {
                 reporter.as_ref(),
                 relocatable,
                 installer_metadata,
+                requested_extras.as_ref(),
                 preview,
             );
 
@@ -161,6 +181,7 @@ impl<'a> Installer<'a> {
             self.reporter.as_ref(),
             self.venv.relocatable(),
             self.metadata,
+            self.requested_extras,
             self.preview,
         )
     }
@@ -176,6 +197,7 @@ fn install(
     reporter: Option<&Arc<dyn Reporter>>,
     relocatable: bool,
     installer_metadata: bool,
+    requested_extras: Option<&BTreeMap<PackageName, RequestedExtras>>,
     preview: Preview,
 ) -> Result<Vec<CachedDist>, InstallError> {
     // Initialize the threadpool with the user settings.
@@ -194,6 +216,7 @@ fn install(
                 Some(wheel.cache_info())
             },
             wheel.build_info(),
+            requested_extras.and_then(|requested| requested.get(&wheel.filename().name)),
             installer_name,
             installer_metadata,
             link_mode,

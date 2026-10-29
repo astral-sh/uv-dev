@@ -1,6 +1,6 @@
 //! Installation workflows used by uv commands.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,7 +21,9 @@ use uv_distribution_types::{
     InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
-use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
+use uv_install_wheel::{
+    LinkMode, RequestedExtras, installed_dist_info_path, read_record_into_iter,
+};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -43,6 +45,9 @@ mod error;
 pub mod loggers;
 pub mod report;
 mod reporters;
+mod requested_extras;
+
+pub use requested_extras::RequestedExtrasChanges;
 
 pub use error::Error;
 
@@ -150,6 +155,8 @@ pub struct Changelog {
     uninstalled: HashSet<ChangedDist>,
     /// The distributions that were reinstalled.
     reinstalled: HashSet<ChangedDist>,
+    /// Distributions whose requested extras changed without installing a wheel.
+    requested_extras: BTreeMap<PackageName, Version>,
 }
 
 impl Changelog {
@@ -172,6 +179,7 @@ impl Changelog {
             installed,
             uninstalled,
             reinstalled,
+            requested_extras: BTreeMap::new(),
         }
     }
 
@@ -192,16 +200,16 @@ impl Changelog {
         Self::from_local(installed, Vec::new())
     }
 
-    /// Returns `true` if the changelog includes a distribution with the given name, either via
-    /// an installation or uninstallation.
+    /// Returns `true` if the package was installed, removed, or had its requested extras updated.
     pub fn includes(&self, name: &PackageName) -> bool {
         self.installed.iter().any(|dist| dist.name() == name)
             || self.uninstalled.iter().any(|dist| dist.name() == name)
+            || self.requested_extras.contains_key(name)
     }
 
     /// Returns `true` if the changelog is empty.
     pub fn is_empty(&self) -> bool {
-        self.installed.is_empty() && self.uninstalled.is_empty()
+        self.installed.is_empty() && self.uninstalled.is_empty() && self.requested_extras.is_empty()
     }
 }
 
@@ -216,6 +224,8 @@ pub enum BytecodeCompilation {
 /// An installation plan and the time required to create it.
 pub struct InstallationPlan {
     plan: Plan,
+    requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
+    requested_extras_changes: RequestedExtrasChanges,
     elapsed: Duration,
 }
 
@@ -236,8 +246,15 @@ impl InstallationPlan {
         cache: &Cache,
         venv: &PythonEnvironment,
         tags: &Tags,
+        requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
     ) -> Result<Self, Error> {
         let start = Instant::now();
+        // The package planner consumes the index. Keep the locations of installed receipts
+        // so we can plan updates for the distributions it leaves in place.
+        let candidates = requested_extras
+            .as_ref()
+            .map(|requested| RequestedExtrasChanges::candidates(requested, &site_packages))
+            .unwrap_or_default();
         let plan = Planner::new(resolution)
             .build(
                 site_packages,
@@ -256,8 +273,21 @@ impl InstallationPlan {
             )
             .map_err(Error::Plan)?;
 
+        let requested_extras_changes = if candidates.is_empty() {
+            RequestedExtrasChanges::default()
+        } else {
+            let removed: HashSet<_> = plan
+                .reinstalls
+                .iter()
+                .chain(&plan.extraneous)
+                .map(InstalledDist::install_path)
+                .collect();
+            RequestedExtrasChanges::plan(candidates, |path| !removed.contains(path))?
+        };
         Ok(Self {
             plan,
+            requested_extras,
+            requested_extras_changes,
             elapsed: start.elapsed(),
         })
     }
@@ -274,6 +304,7 @@ impl InstallationPlan {
             && self.plan.reinstalls.is_empty()
             && (self.plan.extraneous.is_empty()
                 || matches!(modifications, Modifications::Sufficient))
+            && self.requested_extras_changes.is_empty()
             && (compile.is_none() || dry_run.enabled())
     }
 
@@ -289,12 +320,13 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         debug_assert!(self.is_noop(modifications, compile, dry_run));
 
-        let (plan, start) = self.into_parts();
+        let start = self.start();
         if dry_run.enabled() {
             report_dry_run(
                 dry_run,
                 resolution,
-                plan,
+                self.plan,
+                self.requested_extras_changes,
                 modifications,
                 start,
                 logger,
@@ -306,10 +338,9 @@ impl InstallationPlan {
         }
     }
 
-    fn into_parts(self) -> (Plan, Instant) {
+    fn start(&self) -> Instant {
         let now = Instant::now();
-        let start = now.checked_sub(self.elapsed).unwrap_or(now);
-        (self.plan, start)
+        now.checked_sub(self.elapsed).unwrap_or(now)
     }
 }
 
@@ -335,6 +366,7 @@ pub async fn install(
     venv: &PythonEnvironment,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
+    requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
     dry_run: DryRun,
     printer: Printer,
     preview: Preview,
@@ -354,8 +386,8 @@ pub async fn install(
         cache,
         venv,
         tags,
+        requested_extras.filter(|_| installer_metadata),
     )?;
-
     plan.execute(
         resolution,
         modifications,
@@ -402,13 +434,20 @@ impl InstallationPlan {
         printer: Printer,
         preview: Preview,
     ) -> Result<Changelog, Error> {
-        let (plan, start) = self.into_parts();
+        let start = self.start();
+        let Self {
+            plan,
+            requested_extras,
+            requested_extras_changes,
+            ..
+        } = self;
 
         if dry_run.enabled() {
             return report_dry_run(
                 dry_run,
                 resolution,
                 plan,
+                requested_extras_changes,
                 modifications,
                 start,
                 logger.as_ref(),
@@ -436,8 +475,13 @@ impl InstallationPlan {
             && extraneous.is_empty()
             && compile.is_none()
         {
-            logger.on_check(resolution.len(), start, printer, dry_run)?;
-            return Ok(Changelog::default());
+            return requested_extras_changes.finish(
+                resolution.len(),
+                start,
+                logger.as_ref(),
+                dry_run,
+                printer,
+            );
         }
 
         // Partition into two sets: those that require build isolation, and those that disable it. This
@@ -475,6 +519,7 @@ impl InstallationPlan {
                 venv,
                 logger.as_ref(),
                 installer_metadata,
+                requested_extras.as_ref(),
                 printer,
                 preview,
             )
@@ -504,6 +549,7 @@ impl InstallationPlan {
                 venv,
                 logger.as_ref(),
                 installer_metadata,
+                requested_extras.as_ref(),
                 printer,
                 preview,
             )
@@ -525,7 +571,8 @@ impl InstallationPlan {
         }
 
         // Construct a summary of the changes made to the environment.
-        let changelog = Changelog::from_local(installs, uninstalls);
+        let mut changelog = Changelog::from_local(installs, uninstalls);
+        requested_extras_changes.apply(&mut changelog, dry_run)?;
 
         // Notify the user of any environment modifications.
         logger.on_complete(&changelog, printer, dry_run)?;
@@ -685,6 +732,7 @@ async fn execute_plan(
     venv: &PythonEnvironment,
     logger: &dyn InstallLogger,
     installer_metadata: bool,
+    requested_extras: Option<&BTreeMap<PackageName, RequestedExtras>>,
     printer: Printer,
     preview: Preview,
 ) -> Result<(Vec<CachedDist>, Vec<InstalledDist>), Error> {
@@ -778,6 +826,7 @@ async fn execute_plan(
             .with_link_mode(link_mode)
             .with_cache(cache)
             .with_installer_metadata(installer_metadata)
+            .with_requested_extras(requested_extras)
             .with_reporter(Arc::new(
                 InstallReporter::from(printer).with_length(installs.len() as u64),
             ))
@@ -797,6 +846,7 @@ fn report_dry_run(
     dry_run: DryRun,
     resolution: &Resolution,
     plan: Plan,
+    requested_extras_changes: RequestedExtrasChanges,
     modifications: Modifications,
     start: std::time::Instant,
     logger: &dyn InstallLogger,
@@ -817,8 +867,7 @@ fn report_dry_run(
 
     // Nothing to do.
     if remote.is_empty() && cached.is_empty() && reinstalls.is_empty() && extraneous.is_empty() {
-        logger.on_check(resolution.len(), start, printer, dry_run)?;
-        return Ok(Changelog::default());
+        return requested_extras_changes.finish(resolution.len(), start, logger, dry_run, printer);
     }
 
     // Download, build, and unzip any missing distributions.
@@ -853,7 +902,8 @@ fn report_dry_run(
             .map(|dist| ChangedDist::Local(dist.into())),
     );
 
-    let changelog = Changelog::new(installed, uninstalled);
+    let mut changelog = Changelog::new(installed, uninstalled);
+    requested_extras_changes.apply(&mut changelog, dry_run)?;
 
     logger.on_complete(&changelog, printer, dry_run)?;
 
