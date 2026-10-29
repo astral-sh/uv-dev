@@ -1,11 +1,9 @@
 use std::fmt::{Display, Formatter};
 use std::io;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use serde::de::value::Error as ValueError;
-use serde::de::{DeserializeSeed, IgnoredAny, IntoDeserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
@@ -946,95 +944,33 @@ enum RequirementSourceWire {
     },
 }
 
-/// A duplicate or malformed field disqualifies only the variants that use it.
+/// A duplicate or a type mismatch disqualifies only the variants that use this field.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SourceField<T> {
     #[serde(skip)]
     Missing,
-    Null,
     Valid(T),
     Invalid(IgnoredAny),
 }
 
 impl<T> SourceField<T> {
-    fn from_string<'de>(value: impl IntoDeserializer<'de, ValueError>) -> Self
-    where
-        T: Deserialize<'de>,
-    {
-        T::deserialize(value.into_deserializer()).map_or(Self::Invalid(IgnoredAny), Self::Valid)
-    }
-
     fn record(&mut self, value: Self) {
         *self = match self {
             Self::Missing => value,
-            Self::Null | Self::Valid(_) | Self::Invalid(_) => Self::Invalid(IgnoredAny),
+            Self::Valid(_) | Self::Invalid(_) => Self::Invalid(IgnoredAny),
         };
     }
 
-    fn optional(self) -> Result<Option<T>, ()> {
+    fn or_default(self) -> Option<T>
+    where
+        T: Default,
+    {
         match self {
-            Self::Missing | Self::Null => Ok(None),
-            Self::Valid(value) => Ok(Some(value)),
-            Self::Invalid(_) => Err(()),
+            Self::Missing => Some(T::default()),
+            Self::Valid(value) => Some(value),
+            Self::Invalid(_) => None,
         }
-    }
-}
-
-// A string-shaped field can contain arbitrary unrelated data. Consume containers
-// without buffering them so a later valid source can still win.
-struct StringField<T>(PhantomData<T>);
-
-impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for &mut SourceField<T> {
-    type Value = ();
-
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        self.record(deserializer.deserialize_any(StringField(PhantomData))?);
-        Ok(())
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Visitor<'de> for StringField<T> {
-    type Value = SourceField<T>;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a string")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(SourceField::from_string(value))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(SourceField::from_string(value))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(SourceField::Null)
-    }
-
-    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
-        Ok(SourceField::Invalid(IgnoredAny))
-    }
-
-    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
-        Ok(SourceField::Invalid(IgnoredAny))
-    }
-
-    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
-        Ok(SourceField::Invalid(IgnoredAny))
-    }
-
-    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
-        Ok(SourceField::Invalid(IgnoredAny))
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        IgnoredAny.visit_map(map).map(SourceField::Invalid)
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
-        IgnoredAny.visit_seq(seq).map(SourceField::Invalid)
     }
 }
 
@@ -1097,16 +1033,15 @@ impl<'de> Visitor<'de> for SourceVisitor {
         let mut conflict = SourceField::Missing;
         while let Some(field) = map.next_key()? {
             match field {
-                Field::Git => map.next_value_seed(&mut git)?,
-                Field::Url => map.next_value_seed(&mut url)?,
-                Field::Subdirectory => map.next_value_seed(&mut subdirectory)?,
-                Field::Path => map.next_value_seed(&mut path)?,
-                Field::Directory => map.next_value_seed(&mut directory)?,
-                Field::Editable => map.next_value_seed(&mut editable)?,
-                Field::Virtual => map.next_value_seed(&mut virtual_directory)?,
-                Field::Specifier => map.next_value_seed(&mut specifier)?,
-                Field::Index => map.next_value_seed(&mut index)?,
-                // Buffer this structured field so a malformed conflict can fall through.
+                Field::Git => git.record(map.next_value()?),
+                Field::Url => url.record(map.next_value()?),
+                Field::Subdirectory => subdirectory.record(map.next_value()?),
+                Field::Path => path.record(map.next_value()?),
+                Field::Directory => directory.record(map.next_value()?),
+                Field::Editable => editable.record(map.next_value()?),
+                Field::Virtual => virtual_directory.record(map.next_value()?),
+                Field::Specifier => specifier.record(map.next_value()?),
+                Field::Index => index.record(map.next_value()?),
                 Field::Conflict => conflict.record(map.next_value()?),
                 Field::Other => {
                     map.next_value::<IgnoredAny>()?;
@@ -1119,7 +1054,7 @@ impl<'de> Visitor<'de> for SourceVisitor {
         if let SourceField::Valid(git) = git {
             return Ok(RequirementSourceWire::Git { git });
         }
-        if let (SourceField::Valid(url), Ok(subdirectory)) = (url, subdirectory.optional()) {
+        if let (SourceField::Valid(url), Some(subdirectory)) = (url, subdirectory.or_default()) {
             return Ok(RequirementSourceWire::Direct { url, subdirectory });
         }
         if let SourceField::Valid(path) = path {
@@ -1134,14 +1069,11 @@ impl<'de> Visitor<'de> for SourceVisitor {
         if let SourceField::Valid(r#virtual) = virtual_directory {
             return Ok(RequirementSourceWire::Virtual { r#virtual });
         }
-        let specifier = match specifier {
-            SourceField::Missing => Some(VersionSpecifiers::empty()),
-            SourceField::Valid(value) => Some(value),
-            SourceField::Null | SourceField::Invalid(_) => None,
-        };
-        if let (Some(specifier), Ok(index), Ok(conflict)) =
-            (specifier, index.optional(), conflict.optional())
-        {
+        if let (Some(specifier), Some(index), Some(conflict)) = (
+            specifier.or_default(),
+            index.or_default(),
+            conflict.or_default(),
+        ) {
             return Ok(RequirementSourceWire::Registry {
                 specifier,
                 index,
@@ -1535,18 +1467,13 @@ mod tests {
         Ok(())
     }
 
-    /// An unrelated array may be deeper than the JSON value deserializer's recursion limit.
+    /// A recognized field must fit within the recursion limit even when another source is valid.
     #[test]
-    fn source_skips_nested_invalid_field() -> Result<(), Box<dyn Error>> {
+    fn source_rejects_field_beyond_recursion_limit() {
         let nested = format!("{}0{}", "[".repeat(150), "]".repeat(150));
         let input = format!(r#"{{"path":{nested},"directory":"package"}}"#);
-        let source: RequirementSourceWire = serde_json::from_str(&input)?;
-        insta::assert_json_snapshot!(source, @r#"
-        {
-          "directory": "package"
-        }
-        "#);
-        Ok(())
+        let error = serde_json::from_str::<RequirementSourceWire>(&input).unwrap_err();
+        insta::assert_snapshot!(error, @"recursion limit exceeded at line 1 column 135");
     }
 
     #[test]
