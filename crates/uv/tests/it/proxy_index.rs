@@ -6,7 +6,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::formatdoc;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use wiremock::matchers::{basic_auth, header_exists, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
@@ -1536,17 +1536,12 @@ async fn proxy_index_routes_source_through_proxy_and_reuses_offline_cache() -> R
      + source-package==1.0.0
     ");
 
-    uv_snapshot!(context.filters(), context
-        .sync()
-        .arg("--offline")
-        .arg("--frozen")
-        .arg("--reinstall"), @"
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.sync().arg("--offline").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ source-package==1.0.0
+     + source-package==1.0.0
     ");
 
     assert_eq!(context.read("uv.lock"), original_lock);
@@ -1610,38 +1605,53 @@ async fn proxy_index_installs_existing_locked_source_without_simple_requests() -
     Ok(())
 }
 
+/// Cached wheels are scoped to the upstream or proxy Simple index URL, including offline.
 #[tokio::test]
-async fn proxy_index_redownloads_artifacts_when_proxy_changes() -> Result<()> {
+async fn proxy_index_cache_is_scoped_to_effective_index_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = fixture(&context, WHEEL_FILENAME)?;
-    let canonical_index = MockServer::start().await;
-    let canonical_artifacts = MockServer::start().await;
-    let physical_index_a = MockServer::start().await;
-    let physical_artifacts_a = MockServer::start().await;
-    let physical_index_b = MockServer::start().await;
-    let physical_artifacts_b = MockServer::start().await;
+    let canonical = MockServer::start().await;
+    let proxy_a = MockServer::start().await;
+    let proxy_b = MockServer::start().await;
 
-    ProxyConfiguration {
-        canonical_index_url: canonical_index.uri(),
-        canonical_artifact_url: canonical_artifacts.uri(),
-        physical_index_url: physical_index_a.uri(),
-        physical_artifact_url: physical_artifacts_a.uri(),
-        dependency: "basic-package==0.1.0",
-        dependency_metadata: None,
-    }
-    .write(&context)?;
+    let upstream_configuration = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package==0.1.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "canonical"
+        url = "{}/simple/"
+        artifact-base-url = "{}/packages/"
+        default = true
+        "#, canonical.uri(), canonical.uri()
+    };
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&upstream_configuration)?;
     write_frozen_lock(
         &context,
-        &canonical_index,
+        &canonical,
         "basic-package",
         "0.1.0",
         &format!(
             r#"wheels = [{{ url = "{}/packages/{WHEEL_FILENAME}", hash = "sha256:{WHEEL_HASH}" }}]"#,
-            canonical_artifacts.uri()
+            canonical.uri()
         ),
     )?;
     let original_lock = context.read("uv.lock");
-    mount_artifact(&physical_artifacts_a, WHEEL_FILENAME, wheel.clone(), 1).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/packages/{WHEEL_FILENAME}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+    mount_artifact(&proxy_a, WHEEL_FILENAME, wheel.clone(), 1).await;
+    mount_artifact(&proxy_b, WHEEL_FILENAME, wheel, 1).await;
 
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
@@ -1651,32 +1661,276 @@ async fn proxy_index_redownloads_artifacts_when_proxy_changes() -> Result<()> {
      + basic-package==0.1.0
     ");
 
-    ProxyConfiguration {
-        canonical_index_url: canonical_index.uri(),
-        canonical_artifact_url: canonical_artifacts.uri(),
-        physical_index_url: physical_index_b.uri(),
-        physical_artifact_url: physical_artifacts_b.uri(),
-        dependency: "basic-package==0.1.0",
-        dependency_metadata: None,
-    }
-    .write(&context)?;
-    mount_artifact(&physical_artifacts_b, WHEEL_FILENAME, wheel, 1).await;
+    context.reset_venv();
+    pyproject.write_str(&formatdoc! {r#"
+        {upstream_configuration}
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        proxy-for = "canonical"
+        "#, proxy_a.uri(), proxy_a.uri()
+    })?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--reinstall"), @"
+    // The upstream cache cannot satisfy a request routed through a new proxy.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package==0.1.0`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl
+
+    hint: `basic-package` (v0.1.0) was included because `project` (v0.1.0) depends on `basic-package`
+    "#);
+    assert_no_requests(&proxy_a, "uncached proxy while offline").await?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ basic-package==0.1.0
+     + basic-package==0.1.0
+    ");
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    context.reset_venv();
+    pyproject.write_str(&formatdoc! {r#"
+        {upstream_configuration}
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        proxy-for = "canonical"
+        "#, proxy_b.uri(), proxy_b.uri()
+    })?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    context.reset_venv();
+    pyproject.write_str(&upstream_configuration)?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
     ");
 
     assert_eq!(context.read("uv.lock"), original_lock);
-    assert_requested_once(&physical_artifacts_a, &format!("/files/{WHEEL_FILENAME}")).await?;
-    assert_requested_once(&physical_artifacts_b, &format!("/files/{WHEEL_FILENAME}")).await?;
-    assert_no_requests(&physical_index_a, "original physical Simple index").await?;
-    assert_no_requests(&physical_index_b, "replacement physical Simple index").await?;
-    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    assert_requested_once(&canonical, &format!("/packages/{WHEEL_FILENAME}")).await?;
+    assert_requested_once(&proxy_a, &format!("/files/{WHEEL_FILENAME}")).await?;
+    assert_requested_once(&proxy_b, &format!("/files/{WHEEL_FILENAME}")).await?;
+    assert_eq!(
+        canonical
+            .received_requests()
+            .await
+            .context("canonical origin should record requests")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        proxy_a
+            .received_requests()
+            .await
+            .context("proxy A should record requests")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        proxy_b
+            .received_requests()
+            .await
+            .context("proxy B should record requests")?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+/// Built wheels from source distributions are also scoped to the physical proxy.
+#[tokio::test]
+async fn proxy_index_cached_source_is_scoped_to_proxy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = fixture(&context, SOURCE_ZIP_FILENAME)?;
+    let source_hash = sha256(&source);
+    let canonical = MockServer::start().await;
+    let proxy_a = MockServer::start().await;
+    let proxy_b = MockServer::start().await;
+
+    let configuration = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["source-package==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "canonical"
+        url = "{}/simple/"
+        artifact-base-url = "{}/packages/"
+        default = true
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        proxy-for = "canonical"
+        "#, canonical.uri(), canonical.uri(), proxy_a.uri(), proxy_a.uri()
+    };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&configuration)?;
+    write_frozen_lock(
+        &context,
+        &canonical,
+        "source-package",
+        "1.0.0",
+        &format!(
+            r#"sdist = {{ url = "{}/packages/{SOURCE_ZIP_FILENAME}", hash = "sha256:{source_hash}" }}"#,
+            canonical.uri()
+        ),
+    )?;
+    let original_lock = context.read("uv.lock");
+    mount_artifact(&proxy_a, SOURCE_ZIP_FILENAME, source.clone(), 1).await;
+    mount_artifact(&proxy_b, SOURCE_ZIP_FILENAME, source, 1).await;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-package==1.0.0
+    ");
+
+    context.reset_venv();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&configuration.replace(&proxy_a.uri(), &proxy_b.uri()))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-package==1.0.0
+    ");
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+     + source-package==1.0.0
+    ");
+
+    assert_eq!(context.read("uv.lock"), original_lock);
+    assert_requested_once(&proxy_a, &format!("/files/{SOURCE_ZIP_FILENAME}")).await?;
+    assert_requested_once(&proxy_b, &format!("/files/{SOURCE_ZIP_FILENAME}")).await?;
+    assert_no_requests(&canonical, "canonical origin").await?;
+    Ok(())
+}
+
+/// Cached proxy digests can satisfy a subset of algorithms, but cannot authorize a wrong hash.
+#[tokio::test]
+async fn proxy_index_cached_wheel_checks_mixed_hash_algorithms() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let sha512 = hex::encode(Sha512::digest(&wheel));
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "canonical"
+        url = "{}/simple/"
+        artifact-base-url = "{}/packages/"
+        default = true
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        proxy-for = "canonical"
+        "#, canonical.uri(), canonical.uri(), proxy.uri(), proxy.uri()
+        })?;
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("cache-control", "max-age=3600")
+            .set_body_raw(json!({
+                "meta": { "api-version": "1.1" },
+                "name": "basic-package",
+                "files": [advertised_file(WHEEL_FILENAME, &format!("{}/files/{WHEEL_FILENAME}", proxy.uri()), Some(WHEEL_HASH))],
+            }).to_string(), "application/vnd.pypi.simple.v1+json"))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    mount_artifact(&proxy, WHEEL_FILENAME, wheel, 2).await;
+
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&format!(
+        "basic-package==0.1.0 --hash=sha256:{WHEEL_HASH} --hash=sha512:{sha512}"
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").arg("--require-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    context.reset_venv();
+    requirements.write_str(&format!("basic-package==0.1.0 --hash=sha256:{WHEEL_HASH}"))?;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").arg("--require-hashes").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    context.reset_venv();
+    requirements.write_str(&format!(
+        "basic-package==0.1.0 --hash=sha512:{}",
+        "0".repeat(128)
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").arg("--require-hashes"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download `basic-package==0.1.0`
+      cause: Hash mismatch for `basic-package==0.1.0`
+
+             Expected:
+               sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82
+               sha512:765bde25938af485e492e25ee0e8cde262462565122c1301213a69bf9ceb2008e3997b652a604092a238c4b1a6a334e697ff3cee3c22f9a617cb14f34e26ef17
+    "#);
+
+    assert_no_requests(&canonical, "canonical origin").await?;
     Ok(())
 }
 
@@ -1937,7 +2191,8 @@ async fn proxy_index_rejects_cached_wheel_when_hash_changes() -> Result<()> {
     let mut filters = context.filters();
     filters.push((actual_hash.as_str(), "[COMPUTED_HASH]"));
     let mut command = context.pip_sync();
-    command.arg("requirements.txt").arg("--reinstall");
+    command.arg("requirements.txt");
+    context.reset_venv();
 
     uv_snapshot!(filters, command, @r"
     exit_code: 1 (failure)
@@ -2040,7 +2295,8 @@ async fn proxy_index_rejects_cached_source_when_hash_changes() -> Result<()> {
     let mut filters = context.filters();
     filters.push((actual_hash.as_str(), "[COMPUTED_HASH]"));
     let mut command = context.pip_sync();
-    command.arg("requirements.txt").arg("--reinstall");
+    command.arg("requirements.txt");
+    context.reset_venv();
 
     uv_snapshot!(filters, command, @r"
     exit_code: 1 (failure)
