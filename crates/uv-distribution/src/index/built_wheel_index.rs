@@ -5,7 +5,7 @@ use uv_cache_info::CacheInfo;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, ConfigSettings, DirectUrlSourceDist, DirectorySourceDist,
     ExtraBuildRequirement, ExtraBuildRequires, ExtraBuildVariables, GitDirectorySourceDist,
-    GitPathSourceDist, Hashed, PackageConfigSettings, PathSourceDist,
+    GitPathSourceDist, Hashed, PackageConfigSettings, PathSourceDist, matches_build_version,
 };
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -329,10 +329,9 @@ impl<'a> BuiltWheelIndex<'a> {
             match ResolvedWheel::from_built_source(&wheel_dir, self.cache) {
                 None => {}
                 Some(dist_info) => {
-                    if let Some(version) = version
-                        && *version != dist_info.filename.version
-                        && *version != dist_info.filename.version.clone().without_local()
-                    {
+                    if version.is_some_and(|version| {
+                        !matches_build_version(version, &dist_info.filename.version)
+                    }) {
                         continue;
                     }
 
