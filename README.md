@@ -97,11 +97,24 @@ The setup and assertions of these tests were read; the Rust integration suite wa
 
 These tests are gated by `#[cfg(feature = "test-git")]`. `TestContext::new_with_versions_and_bin` creates a fresh cache directory. Searches also covered `crates/uv-client/tests/it/`; no test for this precise database-initialization/removal race was identified. Existing coverage is related functionality, not proof against the reported race.
 
+### Additional reported reproduction
+
+Contributor `nooscraft` reports in the discussion of astral-sh/uv#22975 that 25 runs on macOS using `main` all succeeded with a local repository, three subdirectory packages pinned to the same tag, and an empty cache for every run. The comment does not provide the tested commit, exact macOS/Git/Python versions, fixture, commands, or trace artifacts. Treat this as a contributor-reported result, separate from the 20 retained Ubuntu sync invocations above. It broadens the reported successful configurations but does not reproduce the Ubuntu 26.04 failure or establish a fix on `main`.
+
+The contributor describes subsequent fetches waiting for the repository lock and then using the existing Git source, consistent with the source inspection and retained traces. Early lock release or actors not sharing a lock remain investigative possibilities, not established causes. The failing process's identity, arguments, working directory, and lock events are still needed to explain the discrepancy.
+
 ### Limits and evidence needed
 
 The report's stated three-package shape was sufficient for a meaningful targeted attempt, including the affected uv version, matching Git/Python versions, and two concurrency stress variants. Nevertheless, Ubuntu 26.04 and the original GitHub repository, project, lockfile, Git configuration, and CI workflow were not available. This result does not establish a fix in 0.13.x or exclude a configuration-dependent failure.
 
-To reproduce the remaining discrepancy, request a minimal runnable repository with its exact `pyproject.toml` and `uv.lock`, a sanitized failing Git Trace2 log plus `RUST_LOG=uv_git=trace,uv_fs=trace` retaining process IDs and lock events, and the relevant CI steps. Confirm whether other uv processes, cache restoration, cleanup, custom Git templates, hooks, or filesystem mounts can touch the cache. A fresh-cache comparison on uv 0.13.6 would help, but the installed 0.13.5 comparison already succeeded here.
+To reproduce the remaining discrepancy, the missing evidence is:
+
+- A minimal runnable repository with its exact `pyproject.toml` and `uv.lock`, plus the relevant CI steps.
+- Sanitized failing Git Trace2 and uv logs retaining process IDs and lock events. The contributor identifies `RUST_LOG=uv_git=debug,uv_fs::locked_file=trace` as a focused logging configuration for acquisition and release of `git-v1/locks/<digest>`; the broader `RUST_LOG=uv_git=trace,uv_fs=trace` configuration above also covers these events.
+- Process B's full arguments and working directory from the failing Trace2 output, to identify which repository check it performs and where it runs.
+- The filesystem type and mount configuration for `UV_CACHE_DIR`, and whether another uv step, background `uv run`, cache restoration, cleanup, custom Git template, or hook can access the same cache during the job.
+
+A fresh-cache comparison on uv 0.13.6 would help, but the installed 0.13.5 comparison already succeeded here. Neither those retained results nor the contributor's macOS result establish a fix in 0.13.x or on `main`.
 
 ## Implementation and release context
 
