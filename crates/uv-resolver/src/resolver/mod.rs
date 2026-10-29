@@ -25,8 +25,9 @@ use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
-    IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
-    ResolutionRecorder, ResolvedDist, SourceDist, VariantsJsonContent, VersionOrUrlRef,
+    IndexMetadata, IndexUrl, InstalledDist, Name, ProxyIndexError, RemoteSource, Requirement,
+    RequiresPython, ResolutionRecorder, ResolvedDist, SourceDist, VariantsJsonContent,
+    VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
@@ -165,6 +166,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
 struct WheelVariantSelection<'a> {
     /// The first distribution we can use, with variant compatibility applied.
     distribution: Option<Cow<'a, PrioritizedDist>>,
+    /// The first unmappable ordinary file if no variant or other distribution works.
+    mapping_error: Option<&'a ProxyIndexError>,
     /// Why we couldn't check all the variants, even if we found a usable distribution.
     unavailable: Option<MetadataUnavailable>,
 }
@@ -1405,6 +1408,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         };
         let candidate = if let Some(prioritized) = &variant.distribution {
             candidate.with_prioritized_dist(prioritized)
+        } else if let Some(error) = variant.mapping_error.or_else(|| {
+            candidate
+                .prioritized()
+                .and_then(PrioritizedDist::variant_mapping_error)
+        }) {
+            return Err(error.clone().into());
         } else if let Some(reason) = &variant.unavailable {
             return Ok(Some(ResolverVersion::Unavailable(
                 candidate.version().clone(),
@@ -1589,6 +1598,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 selection.distribution = Some(Cow::Borrowed(dist));
                 break;
             }
+            selection.mapping_error = selection
+                .mapping_error
+                .or_else(|| dist.variant_mapping_error());
         }
         Ok(selection)
     }

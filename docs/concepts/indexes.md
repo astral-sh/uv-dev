@@ -122,8 +122,11 @@ uv requires a supported hash for each proxied artifact it writes to `uv.lock` or
 including when exporting an existing `uv.lock`. `uv sync --frozen` can install a proxied artifact if
 the existing `uv.lock` has no hash for it, but verifies the hash when one is present.
 
-Proxies that serve signed artifact URLs are not supported. uv writes artifact URL query parameters
-to the lockfile and sends them to the upstream artifact host when downloading without the proxy.
+uv rejects artifact query strings, including signed download parameters, when mapping URLs between a
+proxy and its upstream. Encoded spaces and other ordinary path characters are preserved, but encoded
+path separators, NUL bytes, and invalid UTF-8 segments are rejected. These checks apply when
+processing proxy responses and preparing proxied downloads from an existing lockfile. Exporting
+`uv.lock` to `pylock.toml` copies the recorded artifact URLs without performing this mapping.
 
 With the `wheel-variants` preview enabled, uv fetches `*-variants.json` metadata from the URL
 advertised by the proxy. The `artifact-base-url` mapping does not apply to this metadata, so uv can

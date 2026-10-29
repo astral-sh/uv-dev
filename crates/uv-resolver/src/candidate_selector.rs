@@ -686,22 +686,20 @@ impl CandidateSelector {
             };
 
             // If candidate is not compatible due to exclude newer, continue searching.
+            // A pending wheel variant may still be usable even if the ordinary file is excluded.
             // This is a special case — we pretend versions with exclude newer incompatibilities
             // do not exist so that they are not present in error messages in our test suite.
             // TODO(zanieb): Now that `--exclude-newer` is user facing we may want to consider
             // flagging this behavior such that we _will_ report filtered distributions due to
             // exclude-newer in our error messages.
-            if matches!(
-                candidate.dist(),
-                CandidateDist::Incompatible {
-                    incompatible_dist: IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(
-                        _
-                    )) | IncompatibleDist::Wheel(
-                        IncompatibleWheel::ExcludeNewer(_)
-                    ),
-                    ..
-                }
-            ) {
+            if let CandidateDist::Incompatible {
+                incompatible_dist:
+                    IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(_))
+                    | IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(_)),
+                prioritized_dist,
+            } = candidate.dist()
+                && !prioritized_dist.has_pending_variants()
+            {
                 continue;
             }
 
