@@ -24,7 +24,7 @@ jobs:
       issues: read
     outputs:
       changed: ${{ steps.changes.outputs.changed }}
-      context-sha: ${{ steps.issue.outputs.context-sha }}
+      context-revision: ${{ steps.issue-context.outputs.revision }}
       issue-number: ${{ steps.issue.outputs.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,35 +57,6 @@ jobs:
 
           echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
-          branch="refs/heads/issue/$ISSUE_NUMBER"
-          repository="https://github.com/astral-sh/uv-dev.git"
-
-          if git ls-remote --exit-code "$repository" "$branch" > /dev/null; then
-            git init --quiet "$RUNNER_TEMP/issue-context"
-            git -C "$RUNNER_TEMP/issue-context" fetch --quiet --depth 1 \
-              "$repository" "$branch"
-            git -C "$RUNNER_TEMP/issue-context" checkout --quiet FETCH_HEAD
-          else
-            status="$?"
-            if [ "$status" -ne 2 ]; then
-              exit "$status"
-            fi
-
-            echo "No issue context exists for $GITHUB_REPOSITORY#$ISSUE_NUMBER."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ ! -f "$RUNNER_TEMP/issue-context/README.md" ]; then
-            echo "The issue context for $GITHUB_REPOSITORY#$ISSUE_NUMBER is not initialized."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "exists=true" >> "$GITHUB_OUTPUT"
-          echo "context-sha=$(git -C "$RUNNER_TEMP/issue-context" rev-parse HEAD)" \
-            >> "$GITHUB_OUTPUT"
-
           {
             printf 'Issue context update for #%s: %s\n\n' \
               "$ISSUE_NUMBER" \
@@ -96,9 +67,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
 
+      - name: "Load issue context"
+        id: issue-context
+        uses: $/.github/actions/load-issue-context
+        with:
+          issue-number: ${{ steps.issue.outputs.number }}
+          path: ${{ runner.temp }}/issue-context
+          allow-missing: "true"
+
       - name: "Find previous Codex thread"
         id: find-thread
-        if: steps.issue.outputs.exists == 'true'
+        if: steps.issue-context.outputs.exists == 'true'
         run: |
           artifact_name="codex-thread-issue-$ISSUE_NUMBER"
           artifacts="$(gh api \
@@ -266,7 +245,7 @@ jobs:
       group: issue-context-${{ needs.update.outputs.issue-number }}
       cancel-in-progress: false
     permissions:
-      id-token: write # for the uv-dev issue-context credential broker
+      issues: write
     steps:
       - name: "Download issue context"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -274,50 +253,9 @@ jobs:
           name: issue-comment-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-context-update
 
-      - name: "Get issue context token"
-        id: token
-        uses: astral-sh/github-actions/simple-token-service@eb81cf4d13127c3f9539f621c17e4c65327636c8
+      - name: "Publish issue context"
+        uses: $/.github/actions/save-issue-context
         with:
-          exchange-url: ${{ secrets.STS_API_URL }}/exchange
-          audience: ${{ secrets.STS_API_URL }}
-          repository: astral-sh/uv-dev
-          permissions: |
-            contents: write
-
-      - name: "Persist issue context"
-        run: |
-          branch="issue/$ISSUE_NUMBER"
-
-          git init --quiet "$RUNNER_TEMP/issue-context"
-          cd "$RUNNER_TEMP/issue-context"
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
-          git fetch --quiet origin "refs/heads/$branch"
-          git checkout --quiet FETCH_HEAD
-
-          if [ "$(git rev-parse HEAD)" != "$CONTEXT_SHA" ]; then
-            echo "The issue context changed while this comment was being analyzed."
-            echo "Skipping the stale update to preserve the newer issue context."
-            exit 0
-          fi
-
-          cp "$RUNNER_TEMP/issue-context-update/README.md" README.md
-          git add README.md
-
-          if git diff --cached --quiet; then
-            echo "The existing issue context is unchanged."
-            exit 0
-          fi
-
-          git \
-            -c user.name="astral-automations-bot[bot]" \
-            -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
-            commit --message "Update issue context from a comment"
-          git push origin "HEAD:refs/heads/$branch"
-
-          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/%s\n' "$branch" \
-            >> "$GITHUB_STEP_SUMMARY"
-        env:
-          CONTEXT_SHA: ${{ needs.update.outputs.context-sha }}
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          ISSUE_NUMBER: ${{ needs.update.outputs.issue-number }}
+          issue-number: ${{ needs.update.outputs.issue-number }}
+          expected-revision: ${{ needs.update.outputs.context-revision }}
+          readme: ${{ runner.temp }}/issue-context-update/README.md
