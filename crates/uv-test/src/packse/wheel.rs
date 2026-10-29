@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
 
-use uv_distribution_filename::VariantLabel;
+use uv_distribution_filename::{BuildTag, VariantLabel};
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
@@ -35,6 +35,7 @@ pub struct WheelBuilder<'a> {
     extras: Option<&'a BTreeMap<ExtraName, Vec<Requirement>>>,
     requires_python: Option<&'a VersionSpecifiers>,
     tag: &'a str,
+    build_tag: Option<&'a BuildTag>,
     entry_points: &'a [String],
     files: &'a [(&'a str, &'a str)],
     variant: Option<(&'a VariantLabel, &'a str)>,
@@ -49,6 +50,7 @@ impl<'a> WheelBuilder<'a> {
             extras: None,
             requires_python: None,
             tag: DEFAULT_WHEEL_TAG,
+            build_tag: None,
             entry_points: &[],
             files: &[],
             variant: None,
@@ -72,6 +74,11 @@ impl<'a> WheelBuilder<'a> {
 
     pub fn tag(mut self, tag: &'a str) -> Self {
         self.tag = tag;
+        self
+    }
+
+    pub fn build_tag(mut self, build_tag: &'a BuildTag) -> Self {
+        self.build_tag = Some(build_tag);
         self
     }
 
@@ -105,21 +112,23 @@ impl<'a> WheelBuilder<'a> {
             self.extras.unwrap_or(&BTreeMap::new()),
             self.requires_python,
         );
+        let mut wheel_metadata = formatdoc! {"
+            Wheel-Version: 1.0
+            Generator: uv-test
+            Root-Is-Purelib: true
+            Tag: {tag}
+        "};
+        if let Some(build_tag) = self.build_tag {
+            writeln!(wheel_metadata, "Build: {build_tag}")
+                .expect("writing to a string should succeed");
+        }
         let mut entries = vec![
             (
                 format!("{normalized}/__init__.py"),
                 format!("__version__ = \"{version}\"\n"),
             ),
             (format!("{dist_info}/METADATA"), metadata),
-            (
-                format!("{dist_info}/WHEEL"),
-                formatdoc! {"
-                    Wheel-Version: 1.0
-                    Generator: uv-test
-                    Root-Is-Purelib: true
-                    Tag: {tag}
-                "},
-            ),
+            (format!("{dist_info}/WHEEL"), wheel_metadata),
         ];
 
         if !self.entry_points.is_empty() {
@@ -156,10 +165,13 @@ impl<'a> WheelBuilder<'a> {
             .expect("failed to write `RECORD` file");
 
         let bytes = block_on(zip.close()).expect("failed to finish in-memory wheel");
+        let build = self
+            .build_tag
+            .map_or_else(String::new, |tag| format!("-{tag}"));
         let filename = if let Some((label, _)) = self.variant {
-            format!("{normalized}-{version}-{tag}-{label}.whl")
+            format!("{normalized}-{version}{build}-{tag}-{label}.whl")
         } else {
-            format!("{normalized}-{version}-{tag}.whl")
+            format!("{normalized}-{version}{build}-{tag}.whl")
         };
         (filename, bytes)
     }

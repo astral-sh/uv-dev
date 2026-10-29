@@ -1257,15 +1257,15 @@ async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
         .write_str("basic-package==0.1.0\n")?;
 
     // The higher build tag selects the proxy wheel for metadata during universal resolution.
-    let linux_filename = "basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl";
-    let windows_filename = "basic_package-0.1.0-1-cp312-cp312-win_amd64.whl";
     let name = "basic-package".parse()?;
     let version = "0.1.0".parse()?;
-    let (_, linux_wheel) = WheelBuilder::new(&name, &version)
+    let (linux_filename, linux_wheel) = WheelBuilder::new(&name, &version)
         .tag("cp312-cp312-manylinux_2_17_x86_64")
+        .build_tag(&"2".parse()?)
         .build();
-    let (_, windows_wheel) = WheelBuilder::new(&name, &version)
+    let (windows_filename, windows_wheel) = WheelBuilder::new(&name, &version)
         .tag("cp312-cp312-win_amd64")
+        .build_tag(&"1".parse()?)
         .build();
     let linux_hash = sha256(&linux_wheel);
     let windows_hash = sha256(&windows_wheel);
@@ -1273,14 +1273,14 @@ async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
         &proxy,
         "basic-package",
         vec![advertised_file(
-            linux_filename,
+            &linux_filename,
             &format!("{proxy_url}/files/{linux_filename}"),
             Some(&linux_hash),
         )],
         1,
     )
     .await;
-    mount_metadata(&proxy, linux_filename, WHEEL_METADATA, 1).await;
+    mount_metadata(&proxy, &linux_filename, WHEEL_METADATA, 1).await;
     Mock::given(method("GET"))
         .and(path("/links/"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
@@ -1292,8 +1292,8 @@ async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
         .expect(1)
         .mount(&find_links)
         .await;
-    mount_artifact(&proxy, linux_filename, linux_wheel, 1).await;
-    mount_artifact(&find_links, windows_filename, windows_wheel, 1).await;
+    mount_artifact(&proxy, &linux_filename, linux_wheel, 1).await;
+    mount_artifact(&find_links, &windows_filename, windows_wheel, 1).await;
 
     let mut filters = context.filters();
     filters.insert(0, (&linux_hash, "[LINUX_HASH]"));
