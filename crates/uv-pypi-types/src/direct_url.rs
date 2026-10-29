@@ -138,8 +138,9 @@ pub enum DirectUrlError {
 
 /// Read `direct_url.json` and return its decoded [`DirectUrl`] and reconstructed [`SafeUrl`].
 ///
-/// The URL can include a VCS prefix and revision, an archive hash, or a subdirectory fragment
-/// derived from the metadata.
+/// The source URL includes its VCS revision and subdirectory, but not an archive digest
+/// computed by the installer. Converting the metadata to a [`SafeUrl`] also includes the
+/// recorded digest, suitable for a frozen requirement.
 ///
 /// # Errors
 ///
@@ -182,7 +183,7 @@ pub fn read_direct_url_json(reader: impl Read) -> Result<(DirectUrl, SafeUrl), D
             path,
         },
     };
-    let url = SafeUrl::from(&metadata);
+    let url = metadata.to_url(None);
     Ok((metadata, url))
 }
 
@@ -272,8 +273,36 @@ impl std::fmt::Display for VcsKind {
 
 impl From<&DirectUrl> for SafeUrl {
     fn from(value: &DirectUrl) -> Self {
-        match value {
-            DirectUrl::LocalDirectory {
+        value.to_requirement_url()
+    }
+}
+
+impl DirectUrl {
+    /// Reconstruct a requirement URL, including the recorded digest of an archive.
+    pub fn to_requirement_url(&self) -> SafeUrl {
+        let archive_hash = match self {
+            Self::ArchiveUrl { archive_info, .. } => archive_info
+                .hashes
+                .as_ref()
+                .and_then(|hashes| {
+                    HashAlgorithm::preferred().find_map(|algorithm| {
+                        hashes
+                            .get(algorithm.as_str())
+                            .map(|digest| format!("{algorithm}={digest}"))
+                    })
+                })
+                .or_else(|| {
+                    let hash = archive_info.hash.as_ref()?;
+                    Hashes::parse_fragment(hash).is_ok().then(|| hash.clone())
+                }),
+            _ => None,
+        };
+        self.to_url(archive_hash)
+    }
+
+    fn to_url(&self, archive_hash: Option<String>) -> SafeUrl {
+        match self {
+            Self::LocalDirectory {
                 url,
                 subdirectory,
                 dir_info: _,
@@ -284,31 +313,15 @@ impl From<&DirectUrl> for SafeUrl {
                 }
                 url
             }
-            DirectUrl::ArchiveUrl {
-                url,
-                subdirectory,
-                archive_info,
+            Self::ArchiveUrl {
+                url, subdirectory, ..
             } => {
                 let mut url = url.as_url().clone();
                 let mut fragments = Vec::new();
                 if let Some(subdirectory) = subdirectory {
                     fragments.push(format!("subdirectory={}", subdirectory.display()));
                 }
-                if let Some(hash) = archive_info
-                    .hashes
-                    .as_ref()
-                    .and_then(|hashes| {
-                        HashAlgorithm::preferred().find_map(|algorithm| {
-                            hashes
-                                .get(algorithm.as_str())
-                                .map(|digest| format!("{algorithm}={digest}"))
-                        })
-                    })
-                    .or_else(|| {
-                        let hash = archive_info.hash.as_ref()?;
-                        Hashes::parse_fragment(hash).is_ok().then(|| hash.clone())
-                    })
-                {
+                if let Some(hash) = archive_hash {
                     fragments.push(hash);
                 }
                 if !fragments.is_empty() {
@@ -316,7 +329,7 @@ impl From<&DirectUrl> for SafeUrl {
                 }
                 url
             }
-            DirectUrl::VcsUrl {
+            Self::VcsUrl {
                 url,
                 subdirectory,
                 path,

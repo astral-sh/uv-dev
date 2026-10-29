@@ -22,7 +22,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::VersionOrUrl;
 use uv_platform_tags::Tags;
-use uv_pypi_types::{ResolverMarkerEnvironment, VerbatimParsedUrl};
+use uv_pypi_types::{DirectUrl, ResolverMarkerEnvironment, VerbatimParsedUrl};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_redacted::SafeUrl;
 use uv_types::InstalledPackagesProvider;
@@ -32,7 +32,7 @@ use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 
 /// An index over the packages installed in an environment.
 ///
-/// Packages are indexed by both name and (for editable installs) URL.
+/// Packages are indexed by name and, for direct installations, by URL.
 #[derive(Debug, Clone)]
 pub struct SitePackages {
     interpreter: Interpreter,
@@ -44,7 +44,7 @@ pub struct SitePackages {
     /// it is possible to have multiple distributions with the same name to be present in the
     /// virtual environment, which we handle gracefully.
     by_name: FxHashMap<PackageName, Vec<usize>>,
-    /// The installed editable distributions, keyed by URL.
+    /// The installed direct distributions, keyed by source and requirement URL.
     by_url: FxHashMap<SafeUrl, Vec<usize>>,
 }
 
@@ -140,6 +140,13 @@ impl SitePackages {
                 // Index the distribution by URL.
                 if let InstalledDistKind::Url(dist) = &dist_info.kind {
                     by_url.entry(dist.url.clone()).or_default().push(idx);
+                    if matches!(&*dist.direct_url, DirectUrl::ArchiveUrl { .. }) {
+                        // The same archive can be requested with or without its recorded digest.
+                        let requirement_url = dist.direct_url.to_requirement_url();
+                        if requirement_url != dist.url {
+                            by_url.entry(requirement_url).or_default().push(idx);
+                        }
+                    }
                 }
 
                 // Add the distribution to the database.

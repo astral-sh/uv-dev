@@ -114,7 +114,7 @@ fn freeze_url() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     anyio==4.3.0
-    iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl#sha256=b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
 
     ----- stderr -----
     warning: The package `anyio` requires `idna>=2.8`, but it's not installed

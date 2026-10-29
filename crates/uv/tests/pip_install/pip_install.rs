@@ -13245,6 +13245,91 @@ fn direct_url_json_git_tag() -> Result<()> {
 }
 
 #[test]
+fn direct_url_json_archive_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut content = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "", None)?;
+    let digest = hex::encode(Sha256::digest(&content));
+    let context = context.with_filter((digest.clone(), "[ORIGINAL_HASH]"));
+    let archive = context.temp_dir.child("example-1.0.tar.gz");
+    archive.write_binary(&content)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute path");
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&format!("example @ {url} --hash=sha256:{digest}\n"))?;
+
+    let origin = context
+        .site_packages()
+        .join("example-1.0.dist-info/direct_url.json");
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
+    let metadata = serde_json::from_slice::<serde_json::Value>(&fs::read(&origin)?)?;
+    assert_eq!(
+        metadata,
+        json!({"url": url.as_str(), "archive_info": {"hashes": {"sha256": digest}}})
+    );
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]
+    ");
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&origin)?)?,
+        metadata
+    );
+    let frozen = uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]
+    ");
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg(format!("{url}#sha256={digest}")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - example==1.0 (from file://[TEMP_DIR]/example-1.0.tar.gz)
+    ");
+
+    // The extracted project is unchanged, but its frozen archive digest no longer matches.
+    content.extend_from_slice(b"changed archive");
+    archive.write_binary(&content)?;
+    requirements.write_binary(&frozen.stdout)?;
+    let modified_digest = hex::encode(Sha256::digest(&content));
+    let context = context.with_filter((modified_digest, "[MODIFIED_HASH]"));
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--require-hashes", "-r"])
+        .arg(requirements.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]`
+      cause: Hash mismatch for `example @ file://[TEMP_DIR]/example-1.0.tar.gz#sha256=[ORIGINAL_HASH]`
+
+             Expected:
+               sha256:[ORIGINAL_HASH]
+
+             Computed:
+               sha256:[MODIFIED_HASH]
+    ");
+    Ok(())
+}
+
+#[test]
 fn direct_url_json_direct_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -13273,7 +13358,7 @@ fn direct_url_json_direct_url() -> Result<()> {
     direct_url.assert(predicates::path::is_file());
 
     let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{}}"#);
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{"hashes":{"sha256":"be5895c175dbca2d91709a6ab7d5f28e1794272db551ae9a5faf3ae2ed74c3d8"}}}"#);
 
     Ok(())
 }
@@ -13306,7 +13391,7 @@ fn direct_url_json_query() -> Result<()> {
     direct_url.assert(predicates::path::is_file());
 
     let direct_url_content = context.read(direct_url.path());
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D","archive_info":{}}"#);
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D","archive_info":{"hashes":{"sha256":"4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"}}}"#);
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
