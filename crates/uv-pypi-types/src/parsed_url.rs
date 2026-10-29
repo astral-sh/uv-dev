@@ -25,6 +25,8 @@ pub enum ParsedUrlError {
     },
     #[error("Expected a subdirectory within the local archive, found `{}`", .0.display())]
     InvalidArchiveSubdirectory(Box<Path>),
+    #[error("Expected a subdirectory within the local directory, found `{}`", .0.display())]
+    InvalidDirectorySubdirectory(Box<Path>),
     #[error("Invalid path in file URL: {0}")]
     InvalidFileUrl(String),
     #[error(transparent)]
@@ -86,9 +88,14 @@ impl VerbatimParsedUrl {
 
     /// Recover an installed direct source for an upgrade with its recorded origin.
     pub fn for_upgrade(source: &DirectUrl) -> Result<Self, ParsedUrlError> {
+        let parsed_url = ParsedUrl::try_from(source)?;
+        let url = match &parsed_url {
+            ParsedUrl::Directory(directory) => directory.url.clone(),
+            _ => source.to_requirement_url(),
+        };
         Ok(Self {
-            parsed_url: ParsedUrl::try_from(source)?,
-            verbatim: VerbatimUrl::from_url(source.to_requirement_url()),
+            parsed_url,
+            verbatim: VerbatimUrl::from_url(url),
         })
     }
 
@@ -497,10 +504,7 @@ impl ParsedUrl {
                 .components()
                 .any(|part| part != Component::CurDir)
         {
-            if subdirectory
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
-            {
+            if !is_relative_subdirectory(&subdirectory) {
                 return Err(ParsedUrlError::InvalidArchiveSubdirectory(subdirectory));
             }
             url.set_fragment(None);
@@ -517,6 +521,11 @@ impl ParsedUrl {
             )))
         }
     }
+}
+
+fn is_relative_subdirectory(path: &Path) -> bool {
+    path.components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 impl TryFrom<SafeUrl> for ParsedUrl {
@@ -579,13 +588,25 @@ impl TryFrom<&DirectUrl> for ParsedUrl {
             DirectUrl::LocalDirectory {
                 url,
                 dir_info,
-                subdirectory: _,
+                subdirectory,
             } => {
-                let install_path = url
+                let mut install_path = url
                     .to_file_path()
                     .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?;
+                let url = if let Some(subdirectory) = subdirectory {
+                    if !is_relative_subdirectory(subdirectory) {
+                        return Err(ParsedUrlError::InvalidDirectorySubdirectory(
+                            subdirectory.clone(),
+                        ));
+                    }
+                    install_path.push(subdirectory);
+                    SafeUrl::from_file_path(&install_path)
+                        .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?
+                } else {
+                    url.as_url().clone()
+                };
                 Ok(Self::Directory(ParsedDirectoryUrl {
-                    url: url.as_url().clone(),
+                    url,
                     install_path: install_path.into_boxed_path(),
                     editable: dir_info.editable,
                     r#virtual: None,

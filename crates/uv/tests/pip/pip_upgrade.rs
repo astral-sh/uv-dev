@@ -745,6 +745,54 @@ fn overridden_invalid_origin() -> Result<()> {
     Ok(())
 }
 
+/// A directory origin can select a project below the recorded root.
+#[test]
+fn installed_local_directory_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .pip_install()
+        .arg(server.file_url("a-1.0.0-py3-none-any.whl"))
+        .assert()
+        .success();
+    let root = context.temp_dir.child("projects");
+    root.child("nested/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "2.0.0"
+        [build-system]
+        requires = ["uv_build>=0.13,<0.14"]
+        build-backend = "uv_build"
+    "#})?;
+    root.child("nested/src/a/__init__.py").write_str("")?;
+    let url = SafeUrl::from_file_path(root.path()).expect("absolute directory path");
+    fs_err::write(
+        context
+            .site_packages()
+            .join("a-1.0.0.dist-info/direct_url.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "url": url.as_str(), "dir_info": {}, "subdirectory": "nested",
+        }))?,
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==1.0.0 (from file://[TEMP_DIR]/projects#subdirectory=nested)
+     + a==2.0.0 (from file://[TEMP_DIR]/projects/nested)
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a @ file://[TEMP_DIR]/projects/nested
+    ");
+    Ok(())
+}
+
 /// A PEP 610 origin from another installer keeps its selected local archive project.
 #[test]
 fn installed_local_archive_subdirectory() -> Result<()> {
