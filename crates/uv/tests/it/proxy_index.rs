@@ -1,14 +1,18 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow};
+#[cfg(feature = "test-pypi")]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::formatdoc;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use wiremock::matchers::{basic_auth, method, path};
+use wiremock::matchers::{basic_auth, header_exists, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+#[cfg(feature = "test-pypi")]
+use uv_test::venv_bin_path;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
@@ -781,6 +785,596 @@ async fn proxy_index_locks_canonical_urls_without_origin_requests() -> Result<()
     assert_authenticated_requests(&physical_artifacts, "artifact-user", "artifact-password")
         .await?;
     assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    Ok(())
+}
+
+/// Relative redirects and relative artifact links are resolved against the physical response URL.
+#[tokio::test]
+async fn proxy_index_relative_redirects_preserve_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [tool.uv]
+            preview-features = ["proxy-index"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-base-url = "{}/packages/"
+            default = true
+
+            [[tool.uv.index]]
+            name = "proxy"
+            url = "http://proxy-user:proxy-password@{}/simple/"
+            artifact-base-url = "{}/files/"
+            proxy-for = "canonical"
+            "#,
+            canonical.uri(),
+            canonical.uri(),
+            proxy.address(),
+            proxy.uri(),
+        })?;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "../../files/basic-package/"),
+        )
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/basic-package/"))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({
+                "meta": { "api-version": "1.1" },
+                "name": "basic-package",
+                "files": [advertised_file(WHEEL_FILENAME, &format!("../{WHEEL_FILENAME}"), Some(WHEEL_HASH))],
+            }).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}.metadata")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(
+            ResponseTemplate::new(303)
+                .insert_header("Location", format!("../metadata/{WHEEL_FILENAME}.metadata")),
+        )
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/metadata/{WHEEL_FILENAME}.metadata")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("../downloads/{WHEEL_FILENAME}")),
+        )
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/downloads/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    insta::with_settings!({
+        filters => [
+            (regex::escape(&canonical.uri()).as_str(), "http://[CANONICAL]"),
+            (regex::escape(&proxy.uri()).as_str(), "http://[PROXY]"),
+        ],
+    }, {
+        insta::assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        wheels = [
+            { url = "http://[CANONICAL]/packages/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "basic-package" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "basic-package", specifier = "==0.1.0" }]
+        "#);
+    });
+    assert_authenticated_requests(&proxy, "proxy-user", "proxy-password").await?;
+    assert_eq!(
+        proxy
+            .received_requests()
+            .await
+            .context("proxy should record requests")?
+            .len(),
+        6
+    );
+    assert_no_requests(&canonical, "canonical origin").await?;
+    Ok(())
+}
+
+/// A 303 keeps HEAD intact; a server without range support then receives a separate GET.
+#[tokio::test]
+async fn proxy_index_redirect_303_preserves_metadata_head() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.13"
+            dependencies = ["basic-package==0.1.0"]
+
+            [tool.uv]
+            preview-features = ["proxy-index"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-base-url = "{}/packages/"
+            default = true
+
+            [[tool.uv.index]]
+            name = "proxy"
+            url = "{}/simple/"
+            artifact-base-url = "{}/files/"
+            proxy-for = "canonical"
+            "#,
+            canonical.uri(),
+            canonical.uri(),
+            proxy.uri(),
+            proxy.uri(),
+        })?;
+
+    let mut file = advertised_file(
+        WHEEL_FILENAME,
+        &format!("{}/files/{WHEEL_FILENAME}", proxy.uri()),
+        Some(WHEEL_HASH),
+    );
+    file["core-metadata"] = json!(false);
+    mount_simple(&proxy, "basic-package", vec![file], 1).await;
+    Mock::given(path(format!("/files/{WHEEL_FILENAME}")))
+        .respond_with(
+            ResponseTemplate::new(303)
+                .insert_header("Location", format!("../downloads/{WHEEL_FILENAME}")),
+        )
+        .expect(2)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/downloads/{WHEEL_FILENAME}")))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/downloads/{WHEEL_FILENAME}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    insta::with_settings!({
+        filters => [
+            (regex::escape(&canonical.uri()).as_str(), "http://[CANONICAL]"),
+            (regex::escape(&proxy.uri()).as_str(), "http://[PROXY]"),
+        ],
+    }, {
+        insta::assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.13"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        wheels = [
+            { url = "http://[CANONICAL]/packages/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "basic-package" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "basic-package", specifier = "==0.1.0" }]
+        "#);
+    });
+    assert_eq!(
+        proxy
+            .received_requests()
+            .await
+            .context("proxy should record requests")?
+            .len(),
+        5
+    );
+    assert_no_requests(&canonical, "canonical origin").await?;
+    Ok(())
+}
+
+/// Credentials for a proxy must not reach a different origin serving a redirected artifact.
+#[tokio::test]
+async fn proxy_index_redirect_strips_cross_origin_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let storage = MockServer::start().await;
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [tool.uv]
+            preview-features = ["proxy-index"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-base-url = "{}/packages/"
+            default = true
+
+            [[tool.uv.index]]
+            name = "proxy"
+            url = "http://proxy-user:proxy-password@{}/simple/"
+            artifact-base-url = "http://proxy-user:proxy-password@{}/files/"
+            proxy-for = "canonical"
+            "#,
+            canonical.uri(),
+            canonical.uri(),
+            proxy.address(),
+            proxy.address(),
+        })?;
+    write_frozen_lock(
+        &context,
+        &canonical,
+        "basic-package",
+        "0.1.0",
+        &format!(
+            r#"wheels = [{{ url = "{}/packages/{WHEEL_FILENAME}", hash = "sha256:{WHEEL_HASH}" }}]"#,
+            canonical.uri()
+        ),
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(303).insert_header(
+            "Location",
+            format!("{}/files/{WHEEL_FILENAME}", storage.uri()),
+        ))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(header_exists("authorization"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(0)
+        .mount(&storage)
+        .await;
+    mount_artifact(&storage, WHEEL_FILENAME, wheel, 1).await;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_requested_once(&proxy, &format!("/files/{WHEEL_FILENAME}")).await?;
+    assert_eq!(
+        proxy
+            .received_requests()
+            .await
+            .context("proxy should record requests")?
+            .len(),
+        1
+    );
+    let requests = storage
+        .received_requests()
+        .await
+        .context("storage should record requests")?;
+    assert_eq!(requests.len(), 1);
+    assert!(!header_exists("authorization").matches(&requests[0]));
+    assert_no_requests(&canonical, "canonical origin").await?;
+    Ok(())
+}
+
+/// Redirected artifact requests can authenticate with the destination's netrc credentials.
+#[tokio::test]
+async fn proxy_index_redirect_uses_destination_netrc() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let storage = MockServer::start().await;
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [tool.uv]
+            preview-features = ["proxy-index"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-base-url = "{}/packages/"
+            default = true
+
+            [[tool.uv.index]]
+            name = "proxy"
+            url = "http://proxy-user:proxy-password@{}/simple/"
+            artifact-base-url = "{}/files/"
+            proxy-for = "canonical"
+            "#,
+            canonical.uri(),
+            canonical.uri(),
+            proxy.address(),
+            proxy.uri(),
+        })?;
+    write_frozen_lock(
+        &context,
+        &canonical,
+        "basic-package",
+        "0.1.0",
+        &format!(
+            r#"wheels = [{{ url = "{}/packages/{WHEEL_FILENAME}", hash = "sha256:{WHEEL_HASH}" }}]"#,
+            canonical.uri()
+        ),
+    )?;
+    let netrc = context.temp_dir.child(".netrc");
+    netrc.write_str("machine localhost login storage-user password storage-password\n")?;
+
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(302).insert_header(
+            "Location",
+            format!(
+                "http://localhost:{}/files/{WHEEL_FILENAME}",
+                storage.address().port()
+            ),
+        ))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("storage-user", "storage-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&storage)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&storage)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").env(EnvVars::NETRC, netrc.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_authenticated_requests(&proxy, "proxy-user", "proxy-password").await?;
+    let requests = storage
+        .received_requests()
+        .await
+        .context("storage should record requests")?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| !header_exists("authorization").matches(request)
+                || basic_auth("storage-user", "storage-password").matches(request))
+    );
+    assert_no_requests(&canonical, "canonical origin").await?;
+    Ok(())
+}
+
+/// A redirect that supplies a destination username can retrieve a different keyring password.
+#[cfg(feature = "test-pypi")]
+#[tokio::test]
+async fn proxy_index_redirect_uses_destination_keyring() -> Result<()> {
+    let keyring_context = uv_test::test_context!("3.12");
+    keyring_context
+        .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("test/packages/keyring_test_plugin"),
+        )
+        .assert()
+        .success();
+
+    let context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy_index = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let storage = MockServer::start().await;
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [tool.uv]
+            preview-features = ["proxy-index"]
+            keyring-provider = "subprocess"
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-base-url = "{}/packages/"
+            default = true
+
+            [[tool.uv.index]]
+            name = "proxy"
+            url = "http://proxy-user@{}/simple/"
+            artifact-base-url = "http://proxy-user@{}/files/"
+            proxy-for = "canonical"
+            "#,
+            canonical.uri(),
+            canonical.uri(),
+            proxy_index.address(),
+            proxy.address(),
+        })?;
+    write_frozen_lock(
+        &context,
+        &canonical,
+        "basic-package",
+        "0.1.0",
+        &format!(
+            r#"wheels = [{{ url = "{}/packages/{WHEEL_FILENAME}", hash = "sha256:{WHEEL_HASH}" }}]"#,
+            canonical.uri()
+        ),
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(302).insert_header(
+            "Location",
+            format!(
+                "http://storage-user@{}/files/{WHEEL_FILENAME}",
+                storage.address()
+            ),
+        ))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("storage-user", "storage-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&storage)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&storage)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen")
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv))
+        .env(EnvVars::KEYRING_TEST_CREDENTIALS, json!({
+            proxy.address().to_string(): { "proxy-user": "proxy-password" },
+            storage.address().to_string(): { "storage-user": "storage-password" },
+        }).to_string()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Keyring request for proxy-user@http://[LOCALHOST]/files/
+    Keyring request for proxy-user@[LOCALHOST]
+    Keyring request for storage-user@http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl
+    Keyring request for storage-user@[LOCALHOST]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    "#);
+
+    let requests = storage
+        .received_requests()
+        .await
+        .context("storage should record requests")?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| !basic_auth("proxy-user", "proxy-password").matches(request))
+    );
+    assert_no_requests(&proxy_index, "proxy Simple index").await?;
+    assert_no_requests(&canonical, "canonical origin").await?;
     Ok(())
 }
 
