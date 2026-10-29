@@ -656,7 +656,7 @@ impl Index {
     }
 
     /// Return the [`IndexStatusCodeStrategy`] for this index.
-    pub(crate) fn status_code_strategy(&self) -> IndexStatusCodeStrategy {
+    fn status_code_strategy(&self) -> IndexStatusCodeStrategy {
         if let Some(ignore_error_codes) = &self.ignore_error_codes {
             IndexStatusCodeStrategy::from_ignored_error_codes(ignore_error_codes)
         } else {
@@ -665,7 +665,7 @@ impl Index {
     }
 
     /// Return the cache control header for file requests to this index, if any.
-    pub(crate) fn artifact_cache_control(&self) -> Option<HeaderValue> {
+    fn artifact_cache_control(&self) -> Option<HeaderValue> {
         self.cache_control
             .as_ref()
             .and_then(|cache_control| cache_control.files.clone())
