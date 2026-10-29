@@ -1934,6 +1934,375 @@ async fn proxy_index_cached_wheel_checks_mixed_hash_algorithms() -> Result<()> {
     Ok(())
 }
 
+/// A lock resolved from a private HTML index can be consumed through a proxy with an empty cache.
+#[tokio::test]
+async fn proxy_index_consumes_upstream_lock_with_empty_cache() -> Result<()> {
+    let lock_context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let wheel = fixture(&lock_context, WHEEL_FILENAME)?;
+    let source = fixture(&lock_context, SOURCE_ZIP_FILENAME)?;
+    let source_hash = sha256(&source);
+
+    let configuration = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package==0.1.0", "source-package==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "source-package"
+        version = "1.0.0"
+        requires-dist = []
+
+        [[tool.uv.index]]
+        name = "canonical"
+        url = "{}/simple/"
+        artifact-base-url = "{}/packages/"
+        authenticate = "always"
+        default = true
+        "#, canonical.uri(), canonical.uri()
+    };
+    lock_context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&configuration)?;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(formatdoc! {r#"
+            <!DOCTYPE html>
+            <a href="../../packages/{WHEEL_FILENAME}#sha256={WHEEL_HASH}" data-core-metadata="true" data-upload-time="2024-03-24T00:00:00Z">{WHEEL_FILENAME}</a>
+            "#}, "text/html"))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/source-package/"))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(formatdoc! {r#"
+            <!DOCTYPE html>
+            <a href="../../packages/{SOURCE_ZIP_FILENAME}#sha256={source_hash}" data-upload-time="2024-03-24T00:00:00Z">{SOURCE_ZIP_FILENAME}</a>
+            "#}, "text/html"))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/packages/{WHEEL_FILENAME}.metadata")))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+
+    uv_snapshot!(lock_context.filters(), lock_context.lock()
+        .env(EnvVars::index_username("CANONICAL"), "upstream-user")
+        .env(EnvVars::index_password("CANONICAL"), "upstream-password"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let lock = lock_context.read("uv.lock");
+    insta::with_settings!({
+        filters => [
+            (regex::escape(&canonical.uri()).as_str(), "http://[CANONICAL]"),
+            (regex::escape(&proxy.uri()).as_str(), "http://[PROXY]"),
+        ],
+    }, {
+        insta::assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[manifest.dependency-metadata]]
+        name = "source-package"
+        version = "1.0.0"
+
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        wheels = [
+            { url = "http://[CANONICAL]/packages/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "basic-package" },
+            { name = "source-package" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "basic-package", specifier = "==0.1.0" },
+            { name = "source-package", specifier = "==1.0.0" },
+        ]
+
+        [[package]]
+        name = "source-package"
+        version = "1.0.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        sdist = { url = "http://[CANONICAL]/packages/source_package-1.0.0.zip", hash = "sha256:12aa6b2266b338191811e6f8b0ec7f17f3e373ad24df2f0bc3bcd3f36b48edee", upload-time = "2024-03-24T00:00:00Z" }
+        "#);
+    });
+
+    // A separate context has neither installed packages nor cached metadata or artifacts.
+    let sync_context = uv_test::test_context!("3.12");
+    sync_context.temp_dir.child("uv.lock").write_str(&lock)?;
+    sync_context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        {configuration}
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        authenticate = "always"
+        proxy-for = "canonical"
+        "#, proxy.uri(), proxy.uri()
+        })?;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{SOURCE_ZIP_FILENAME}")))
+        .and(basic_auth("proxy-user", "proxy-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+
+    uv_snapshot!(sync_context.filters(), sync_context.sync().arg("--frozen")
+        .env(EnvVars::index_username("PROXY"), "proxy-user")
+        .env(EnvVars::index_password("PROXY"), "proxy-password"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + basic-package==0.1.0
+     + source-package==1.0.0
+    ");
+
+    assert_eq!(sync_context.read("uv.lock"), lock);
+    assert_authenticated_requests(&canonical, "upstream-user", "upstream-password").await?;
+    assert_authenticated_requests(&proxy, "proxy-user", "proxy-password").await?;
+    assert_eq!(
+        canonical
+            .received_requests()
+            .await
+            .context("canonical origin should record requests")?
+            .len(),
+        3
+    );
+    assert_eq!(
+        proxy
+            .received_requests()
+            .await
+            .context("proxy should record requests")?
+            .len(),
+        2
+    );
+    Ok(())
+}
+
+/// A lock resolved through an authenticated JSON proxy remains usable without that proxy.
+#[tokio::test]
+async fn proxy_index_generated_lock_installs_upstream_with_empty_cache() -> Result<()> {
+    let lock_context = uv_test::test_context!("3.12");
+    let canonical = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let wheel = fixture(&lock_context, WHEEL_FILENAME)?;
+    let source = fixture(&lock_context, SOURCE_ZIP_FILENAME)?;
+    let source_hash = sha256(&source);
+
+    let configuration = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package==0.1.0", "source-package==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "source-package"
+        version = "1.0.0"
+        requires-dist = []
+
+        [[tool.uv.index]]
+        name = "canonical"
+        url = "{}/simple/"
+        artifact-base-url = "{}/packages/"
+        authenticate = "always"
+        default = true
+        "#, canonical.uri(), canonical.uri()
+    };
+    lock_context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        {configuration}
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{}/simple/"
+        artifact-base-url = "{}/files/"
+        authenticate = "always"
+        proxy-for = "canonical"
+        "#, proxy.uri(), proxy.uri()
+        })?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{}/files/{WHEEL_FILENAME}", proxy.uri()),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    mount_simple(
+        &proxy,
+        "source-package",
+        vec![advertised_file(
+            SOURCE_ZIP_FILENAME,
+            &format!("{}/files/{SOURCE_ZIP_FILENAME}", proxy.uri()),
+            Some(&source_hash),
+        )],
+        1,
+    )
+    .await;
+    mount_metadata(&proxy, WHEEL_FILENAME, WHEEL_METADATA, 1).await;
+
+    uv_snapshot!(lock_context.filters(), lock_context.lock()
+        .env(EnvVars::index_username("PROXY"), "proxy-user")
+        .env(EnvVars::index_password("PROXY"), "proxy-password"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let lock = lock_context.read("uv.lock");
+    insta::with_settings!({
+        filters => [
+            (regex::escape(&canonical.uri()).as_str(), "http://[CANONICAL]"),
+            (regex::escape(&proxy.uri()).as_str(), "http://[PROXY]"),
+        ],
+    }, {
+        insta::assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[manifest.dependency-metadata]]
+        name = "source-package"
+        version = "1.0.0"
+
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        wheels = [
+            { url = "http://[CANONICAL]/packages/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "basic-package" },
+            { name = "source-package" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "basic-package", specifier = "==0.1.0" },
+            { name = "source-package", specifier = "==1.0.0" },
+        ]
+
+        [[package]]
+        name = "source-package"
+        version = "1.0.0"
+        source = { registry = "http://[CANONICAL]/simple/" }
+        sdist = { url = "http://[CANONICAL]/packages/source_package-1.0.0.zip", hash = "sha256:12aa6b2266b338191811e6f8b0ec7f17f3e373ad24df2f0bc3bcd3f36b48edee", upload-time = "2024-03-24T00:00:00Z" }
+        "#);
+    });
+    assert_no_requests(&canonical, "canonical origin while locking through proxy").await?;
+
+    let sync_context = uv_test::test_context!("3.12");
+    sync_context.temp_dir.child("uv.lock").write_str(&lock)?;
+    sync_context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&configuration)?;
+    Mock::given(method("GET"))
+        .and(path(format!("/packages/{WHEEL_FILENAME}")))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/packages/{SOURCE_ZIP_FILENAME}")))
+        .and(basic_auth("upstream-user", "upstream-password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .expect(1)
+        .mount(&canonical)
+        .await;
+
+    uv_snapshot!(sync_context.filters(), sync_context.sync().arg("--frozen")
+        .env(EnvVars::index_username("CANONICAL"), "upstream-user")
+        .env(EnvVars::index_password("CANONICAL"), "upstream-password"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + basic-package==0.1.0
+     + source-package==1.0.0
+    ");
+
+    assert_eq!(sync_context.read("uv.lock"), lock);
+    assert_authenticated_requests(&proxy, "proxy-user", "proxy-password").await?;
+    assert_authenticated_requests(&canonical, "upstream-user", "upstream-password").await?;
+    assert_eq!(
+        proxy
+            .received_requests()
+            .await
+            .context("proxy should record requests")?
+            .len(),
+        3
+    );
+    assert_eq!(
+        canonical
+            .received_requests()
+            .await
+            .context("canonical origin should record requests")?
+            .len(),
+        2
+    );
+    Ok(())
+}
+
 /// A lock created without the proxy can contain a hashless artifact that export must reject.
 #[tokio::test]
 async fn proxy_index_export_rejects_missing_hash_in_frozen_lock() -> Result<()> {
