@@ -795,6 +795,15 @@ impl SourceDist {
         }
     }
 
+    /// The version to check against a built wheel, including archive filenames and lockfile pins.
+    pub fn expected_version(&self) -> Option<&Version> {
+        match self {
+            Self::DirectUrl(dist) => dist.version.as_deref(),
+            Self::Path(dist) => dist.version.as_ref(),
+            _ => self.version(),
+        }
+    }
+
     /// Returns `true` if the distribution is editable.
     pub fn is_editable(&self) -> bool {
         match self {

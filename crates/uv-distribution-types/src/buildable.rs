@@ -62,10 +62,7 @@ impl BuildableSource<'_> {
     /// Return the [`Version`] of the source, if available.
     pub fn version(&self) -> Option<&Version> {
         match self {
-            Self::Dist(SourceDist::Registry(dist)) => Some(&dist.version),
-            Self::Dist(SourceDist::Path(dist)) => dist.version.as_ref(),
-            Self::Dist(SourceDist::DirectUrl(dist)) => dist.version.as_deref(),
-            Self::Dist(_) => None,
+            Self::Dist(dist) => dist.expected_version(),
             Self::Url(_) => None,
         }
     }

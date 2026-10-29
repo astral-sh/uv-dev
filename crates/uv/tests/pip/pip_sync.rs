@@ -6578,6 +6578,71 @@ fn pep_751_validates_url_sdist_version() -> Result<()> {
     Ok(())
 }
 
+/// A build dependency reused during the same sync must still match its runtime lock.
+#[test]
+fn pep_751_validates_url_sdist_version_in_flight() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use uv_test::archive::generate_source_archive;
+    use uv_test::packse::WheelBuilder;
+
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"a".parse()?, &"1.0.0".parse()?, "", None)?;
+    let hash = hex::encode(Sha256::digest(&archive));
+    let files = context.temp_dir.child("files");
+    files.child("a-1.0.0.tar.gz").write_binary(&archive)?;
+    let server = FindLinksServer::new(files.path());
+    let url = format!("{}/a-1.0.0.tar.gz", server.url());
+
+    let b = context.temp_dir.child("b");
+    let (filename, wheel) = WheelBuilder::new(&"b".parse()?, &"1.0".parse()?).build();
+    b.child(&filename).write_binary(&wheel)?;
+    b.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [build-system]
+        requires = ["a @ {url}"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    b.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            copyfile(Path(__file__).with_name("{filename}"), Path(wheel_directory) / "{filename}")
+            return "{filename}"
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(r#"no-build-isolation-package = ["a"]"#)?;
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "a"
+        version = "2.0.0"
+        archive = {{ url = "{url}", hashes = {{ sha256 = "{hash}" }} }}
+        [[packages]]
+        name = "b"
+        version = "1.0"
+        directory = {{ path = "b" }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["--preview", "--no-index", "pylock.toml"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    error: Failed to download and build `a @ http://[LOCALHOST]/a-1.0.0.tar.gz`
+      cause: Package metadata version `1.0.0` does not match given version `2.0.0`
+    ");
+    context.assert_not_installed("a");
+    Ok(())
+}
+
 #[test]
 fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");

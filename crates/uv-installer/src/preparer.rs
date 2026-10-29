@@ -155,7 +155,11 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                         };
                         return Err(Error::from_dist(dist, err, resolution));
                     }
-                    if let Some(version) = dist.version() {
+                    let expected_version = match &dist {
+                        Dist::Built(wheel) => Some(wheel.version()),
+                        Dist::Source(source) => source.expected_version(),
+                    };
+                    if let Some(version) = expected_version {
                         if *version != cached.filename().version
                             && *version != cached.filename().version.clone().without_local()
                         {
