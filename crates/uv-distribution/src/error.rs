@@ -9,7 +9,8 @@ use uv_cache::Error as CacheError;
 use uv_client::WrappedReqwestError;
 use uv_distribution_filename::{VariantLabel, WheelFilename, WheelFilenameError};
 use uv_distribution_types::{
-    InstalledDist, InstalledDistError, IsBuildBackendError, UnsupportedVariantProperties,
+    InstalledDist, InstalledDistError, IsBuildBackendError, RegistryArtifactRequestError,
+    UnsupportedVariantProperties,
 };
 use uv_fs::Simplified;
 use uv_git::GitError;
@@ -410,6 +411,17 @@ impl Error {
                     actual,
                 }
             }
+        }
+    }
+}
+
+impl From<RegistryArtifactRequestError> for Error {
+    fn from(error: RegistryArtifactRequestError) -> Self {
+        match error {
+            RegistryArtifactRequestError::Proxy(error) => {
+                Self::Client(uv_client::ErrorKind::ProxyIndex(error).into())
+            }
+            RegistryArtifactRequestError::InvalidUrl(error) => Self::InvalidUrl(error),
         }
     }
 }

@@ -32,8 +32,8 @@ use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
     DirectorySourceUrl, ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, Hashed,
-    IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist,
-    SourceUrl,
+    PathSourceUrl, RegistryArtifactRequest, RegistryRequestContext, RemoteSource,
+    RequirementSource, RequiresPython, SourceDist, SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
@@ -47,7 +47,7 @@ use uv_redacted::SafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
 
-use crate::distribution_database::{ManagedClient, RegistryArtifactRequest};
+use crate::distribution_database::ManagedClient;
 use crate::error::Error;
 use crate::hash::ArtifactHashPolicy;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
@@ -290,21 +290,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let RegistryArtifactRequest {
-                    index,
-                    url,
-                    is_proxy,
-                } = RegistryArtifactRequest::new(
+                let request = RegistryArtifactRequest::new(
                     &dist.index,
                     &dist.file.url,
                     client.index_locations(),
                 )?;
+                let context = request.context();
+                let url = request.into_url();
 
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
                 let cache_shard = self.build_context.cache().shard(
                     CacheBucket::SourceDistributions,
-                    WheelCache::Index(index)
+                    WheelCache::Index(context.index())
                         .wheel_dir(dist.name.as_ref())
                         .join(dist.version.to_string()),
                 );
@@ -333,12 +331,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.url(
                     source,
                     &url,
-                    Some(index),
+                    Some(context),
                     &cache_shard,
                     None,
                     dist.ext,
                     tags,
-                    ArtifactHashPolicy::for_registry(hashes, is_proxy, dist.file.hashes.as_slice()),
+                    ArtifactHashPolicy::for_registry(
+                        hashes,
+                        context.is_proxy(),
+                        dist.file.hashes.as_slice(),
+                    ),
                     client,
                 )
                 .boxed_local()
@@ -462,20 +464,18 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<ArchiveMetadata, Error> {
         let metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let RegistryArtifactRequest {
-                    index,
-                    url,
-                    is_proxy,
-                } = RegistryArtifactRequest::new(
+                let request = RegistryArtifactRequest::new(
                     &dist.index,
                     &dist.file.url,
                     client.index_locations(),
                 )?;
+                let context = request.context();
+                let url = request.into_url();
 
                 // For registry source distributions, shard by package, then version.
                 let cache_shard = self.build_context.cache().shard(
                     CacheBucket::SourceDistributions,
-                    WheelCache::Index(index)
+                    WheelCache::Index(context.index())
                         .wheel_dir(dist.name.as_ref())
                         .join(dist.version.to_string()),
                 );
@@ -503,11 +503,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.url_metadata(
                     source,
                     &url,
-                    Some(index),
+                    Some(context),
                     &cache_shard,
                     None,
                     dist.ext,
-                    ArtifactHashPolicy::for_registry(hashes, is_proxy, dist.file.hashes.as_slice()),
+                    ArtifactHashPolicy::for_registry(
+                        hashes,
+                        context.is_proxy(),
+                        dist.file.hashes.as_slice(),
+                    ),
                     client,
                 )
                 .boxed_local()
@@ -666,7 +670,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         &self,
         source: &BuildableSource<'data>,
         url: &'data SafeUrl,
-        index: Option<&'data IndexUrl>,
+        context: Option<RegistryRequestContext<'data>>,
         cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
@@ -678,7 +682,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Fetch the revision for the source distribution.
         let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+            .url_revision(source, ext, url, context, cache_shard, hashes, client)
             .await?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
@@ -726,7 +730,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source,
                 ext,
                 url,
-                index,
+                context,
                 &source_dist_entry,
                 revision,
                 hashes,
@@ -791,7 +795,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         &self,
         source: &BuildableSource<'data>,
         url: &'data SafeUrl,
-        index: Option<&'data IndexUrl>,
+        context: Option<RegistryRequestContext<'data>>,
         cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
@@ -802,7 +806,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Fetch the revision for the source distribution.
         let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+            .url_revision(source, ext, url, context, cache_shard, hashes, client)
             .await?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
@@ -864,7 +868,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source,
                 ext,
                 url,
-                index,
+                context,
                 &source_dist_entry,
                 revision,
                 hashes,
@@ -968,7 +972,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
         url: &SafeUrl,
-        index: Option<&IndexUrl>,
+        context: Option<RegistryRequestContext<'_>>,
         cache_shard: &CacheShard,
         hashes: ArtifactHashPolicy<'_>,
         client: &ManagedClient<'_>,
@@ -978,12 +982,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .request_policy(index)
-                        .artifact_cache_control()
-                }) =>
+                if let Some(header) =
+                    context.and_then(|context| context.policy().artifact_cache_control()) =>
             {
                 CacheControl::Override(header)
             }
@@ -2764,7 +2764,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
         url: &SafeUrl,
-        index: Option<&IndexUrl>,
+        context: Option<RegistryRequestContext<'_>>,
         entry: &CacheEntry,
         revision: Revision,
         hashes: ArtifactHashPolicy<'_>,
@@ -2776,12 +2776,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .request_policy(index)
-                        .artifact_cache_control()
-                }) =>
+                if let Some(header) =
+                    context.and_then(|context| context.policy().artifact_cache_control()) =>
             {
                 CacheControl::Override(header)
             }
