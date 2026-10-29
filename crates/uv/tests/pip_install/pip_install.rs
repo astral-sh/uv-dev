@@ -1,6 +1,4 @@
 use std::fmt::Write;
-#[cfg(unix)]
-use std::io::ErrorKind;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -11688,13 +11686,11 @@ fn install_relocatable_dev_python() -> Result<()> {
         .child("bin/simple-launcher")
         .assert(predicate::path::is_file());
 
-    // Reading +dev fails and discards `relocatable = true`, so the launcher retains its old
-    // interpreter path and cannot run after relocation: astral-sh/uv#22989.
-    let error = context
-        .external_command(relocated.child("bin/simple-launcher"))
-        .output()
-        .expect_err("the launcher still points to the original environment");
-    assert_eq!(error.kind(), ErrorKind::NotFound);
+    uv_snapshot!(context.external_command(relocated.child("bin/simple-launcher")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from simple-launcher!
+    ");
 
     Ok(())
 }

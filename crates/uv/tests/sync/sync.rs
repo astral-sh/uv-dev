@@ -15170,15 +15170,37 @@ fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
         assert_snapshot!(lines[3], @"version_info = 3.12.[X]");
     });
 
-    // Simulate an incompatible `pyvenv.cfg:version_info` value created
-    // by uv or virtualenv.
+    // A local build label alone does not require recreating a compatible environment.
+    let contents = context
+        .read(".venv/pyvenv.cfg")
+        .lines()
+        .map(|line| {
+            if line.starts_with("version_info =") {
+                format!("{line}+dev")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs_err::write(&pyvenv_cfg, contents)?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    // A development build's local version label must not hide an incompatible interpreter.
+    // Simulate a `pyvenv.cfg:version_info` value created by uv or virtualenv.
     let pyvenv_cfg = context.venv.child("pyvenv.cfg");
     let contents = context
         .read(".venv/pyvenv.cfg")
         .lines()
         .map(|line| {
             if line.trim_start().starts_with("version") {
-                "version_info = 3.11.0".to_string()
+                "version_info = 3.11.0+dev".to_string()
             } else {
                 line.to_string()
             }
