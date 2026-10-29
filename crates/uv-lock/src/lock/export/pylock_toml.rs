@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf, absolute};
 use std::str::FromStr;
@@ -9,7 +9,6 @@ use futures::{StreamExt, TryStreamExt};
 use jiff::Timestamp;
 use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
-use petgraph::graph::NodeIndex;
 use serde::Deserialize;
 use toml::Table as TomlTable;
 use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
@@ -35,7 +34,9 @@ use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
+use uv_pep508::{
+    MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString, VerbatimUrl,
+};
 use uv_platform_tags::{TagCompatibility, TagPriority, Tags};
 use uv_pypi_types::{HashDigests, Hashes, ParsedGitDirectoryUrl, VcsKind};
 use uv_redacted::SafeUrl;
@@ -120,6 +121,10 @@ pub enum PylockTomlErrorKind {
         "Package `{0}` must include one of: `wheels`, `directory`, `archive`, `sdist`, or `vcs`"
     )]
     MissingSource(PackageName),
+    #[error(
+        "Cannot represent overlapping artifact sources for `{0}` in a universal pylock.toml; compile for a specific platform"
+    )]
+    OverlappingArtifactSources(PackageName),
     #[error("Package `{0}` uses a Git archive, which pylock.toml export does not support")]
     GitArchiveUnsupported(PackageName),
     #[error("Package `{0}` resolved to a wheel variant, which pylock.toml export does not support")]
@@ -501,23 +506,13 @@ impl<'lock> PylockToml {
                 .as_ref()
                 .filter(|_| !matches!(&**dist, Dist::Source(SourceDist::Directory(..))));
 
-            // Retain the canonical index so a later install can find its configured proxy.
-            // `packages.index` applies to every file for this version. If a proxy and `--find-links`
-            // both supply files, selecting a proxied file can make uv reject a `--find-links` URL;
-            // selecting a `--find-links` file can make uv download a proxied file directly.
-            let index = dist
-                .index()
-                .filter(|index| index_locations.proxy_route_for(index).is_some())
-                .map(|index| index.url().clone().with_policy(Stripped));
-
-            // Create a `pylock.toml`-style package.
-            let mut package = PylockTomlPackage {
+            let new_package = || PylockTomlPackage {
                 name: dist.name().clone(),
                 version: version.cloned(),
                 marker: node.marker.pep508(),
                 requires_python: None,
                 dependencies: vec![],
-                index,
+                index: None,
                 vcs: None,
                 directory: None,
                 archive: None,
@@ -525,6 +520,53 @@ impl<'lock> PylockToml {
                 wheels: None,
             };
 
+            let mut add_registry = |wheels: &[RegistryBuiltWheel],
+                                    sdist: Option<&RegistrySourceDist>,
+                                    selected: &IndexUrl|
+             -> Result<(), PylockTomlErrorKind> {
+                let name = dist.name();
+                let no_binary = build_options.no_binary_package(name);
+                let artifacts = RegistryArtifacts {
+                    wheels: wheels
+                        .iter()
+                        .filter(|wheel| {
+                            !no_binary
+                                && !is_wheel_unreachable(
+                                    &wheel.filename,
+                                    resolution,
+                                    &requires_python,
+                                    node_index,
+                                    tags,
+                                )
+                        })
+                        .collect(),
+                    sdist: sdist.filter(|_| !build_options.no_build_package(name)),
+                };
+                for entry in artifacts.partition(
+                    name,
+                    selected,
+                    index_locations,
+                    node.marker.pep508(),
+                    tags.is_some(),
+                )? {
+                    let mut package = new_package();
+                    package.marker = entry.marker;
+                    package.index = entry
+                        .index
+                        .filter(|index| index_locations.proxy_route_for(index).is_some())
+                        .map(|index| index.url().clone().with_policy(Stripped));
+                    package.wheels = Self::convert_wheels(entry.artifacts.wheels, index_locations)?;
+                    package.sdist = entry
+                        .artifacts
+                        .sdist
+                        .map(|sdist| Self::convert_sdist(sdist, index_locations))
+                        .transpose()?;
+                    packages.push(package);
+                }
+                Ok(())
+            };
+
+            let mut package = new_package();
             match &**dist {
                 Dist::Built(dist) if dist.wheel_filename().variant().is_some() => {
                     return Err(PylockTomlErrorKind::WheelVariantUnsupported(package.name));
@@ -560,54 +602,8 @@ impl<'lock> PylockToml {
                     return Err(PylockTomlErrorKind::GitArchiveUnsupported(package.name));
                 }
                 Dist::Built(BuiltDist::Registry(dist)) => {
-                    package.wheels = Self::filter_and_convert_wheels(
-                        resolution,
-                        tags,
-                        &requires_python,
-                        node_index,
-                        &dist.wheels,
-                        build_options.no_binary_package(dist.name()),
-                        index_locations,
-                    )?;
-
-                    // Filter sdist based on build options (--only-binary).
-                    let no_build = build_options.no_build_package(dist.name());
-
-                    if !no_build {
-                        if let Some(sdist) = dist.sdist.as_ref() {
-                            Self::validate_proxy_artifact(
-                                index_locations,
-                                &sdist.index,
-                                &sdist.name,
-                                &sdist.file,
-                            )?;
-                            let url = sdist
-                                .file
-                                .url
-                                .to_url()
-                                .map_err(PylockTomlErrorKind::ToUrl)?;
-                            package.sdist = Some(PylockTomlSdist {
-                                // Optional "when the last component of path/ url would be the same value".
-                                name: if url
-                                    .filename()
-                                    .is_ok_and(|filename| filename == *sdist.file.filename)
-                                {
-                                    None
-                                } else {
-                                    Some(sdist.file.filename.clone())
-                                },
-                                upload_time: sdist
-                                    .file
-                                    .upload_time_utc_ms
-                                    .map(Timestamp::from_millisecond)
-                                    .transpose()?,
-                                url: Some(url.with_policy(Raw)),
-                                path: None,
-                                size: sdist.file.size,
-                                hashes: Hashes::from(sdist.file.hashes.clone()),
-                            });
-                        }
-                    }
+                    add_registry(&dist.wheels, dist.sdist.as_ref(), &dist.best_wheel().index)?;
+                    continue;
                 }
                 Dist::Source(SourceDist::DirectUrl(dist)) => {
                     package.archive = Some(PylockTomlArchive {
@@ -666,48 +662,8 @@ impl<'lock> PylockToml {
                     });
                 }
                 Dist::Source(SourceDist::Registry(dist)) => {
-                    package.wheels = Self::filter_and_convert_wheels(
-                        resolution,
-                        tags,
-                        &requires_python,
-                        node_index,
-                        &dist.wheels,
-                        build_options.no_binary_package(&dist.name),
-                        index_locations,
-                    )?;
-
-                    // Filter sdist based on build options (--only-binary).
-                    let no_build = build_options.no_build_package(&dist.name);
-
-                    if !no_build {
-                        Self::validate_proxy_artifact(
-                            index_locations,
-                            &dist.index,
-                            &dist.name,
-                            &dist.file,
-                        )?;
-                        let url = dist.file.url.to_url().map_err(PylockTomlErrorKind::ToUrl)?;
-                        package.sdist = Some(PylockTomlSdist {
-                            // Optional "when the last component of path/ url would be the same value".
-                            name: if url
-                                .filename()
-                                .is_ok_and(|filename| filename == *dist.file.filename)
-                            {
-                                None
-                            } else {
-                                Some(dist.file.filename.clone())
-                            },
-                            upload_time: dist
-                                .file
-                                .upload_time_utc_ms
-                                .map(Timestamp::from_millisecond)
-                                .transpose()?,
-                            url: Some(url.with_policy(Raw)),
-                            path: None,
-                            size: dist.file.size,
-                            hashes: Hashes::from(dist.file.hashes.clone()),
-                        });
-                    }
+                    add_registry(&dist.wheels, Some(dist), &dist.index)?;
+                    continue;
                 }
             }
 
@@ -732,37 +688,41 @@ impl<'lock> PylockToml {
         })
     }
 
-    /// Filter wheels based on build options (--no-binary) and incompatible tags and return the
-    /// rest.
-    ///
-    /// Returns `Ok(None)` if no wheels are compatible.
-    fn filter_and_convert_wheels(
-        resolution: &ResolverOutput,
-        tags: Option<&Tags>,
-        requires_python: &RequiresPython,
-        node_index: NodeIndex,
-        wheels: &[RegistryBuiltWheel],
-        no_binary: bool,
+    fn convert_sdist(
+        sdist: &RegistrySourceDist,
+        index_locations: &IndexLocations,
+    ) -> Result<PylockTomlSdist, PylockTomlErrorKind> {
+        Self::validate_proxy_artifact(index_locations, &sdist.index, &sdist.name, &sdist.file)?;
+        let url = sdist
+            .file
+            .url
+            .to_url()
+            .map_err(PylockTomlErrorKind::ToUrl)?;
+        Ok(PylockTomlSdist {
+            name: if url
+                .filename()
+                .is_ok_and(|filename| filename == *sdist.file.filename)
+            {
+                None
+            } else {
+                Some(sdist.file.filename.clone())
+            },
+            upload_time: sdist
+                .file
+                .upload_time_utc_ms
+                .map(Timestamp::from_millisecond)
+                .transpose()?,
+            url: Some(url.with_policy(Raw)),
+            path: None,
+            size: sdist.file.size,
+            hashes: Hashes::from(sdist.file.hashes.clone()),
+        })
+    }
+
+    fn convert_wheels(
+        wheels: Vec<&RegistryBuiltWheel>,
         index_locations: &IndexLocations,
     ) -> Result<Option<Vec<PylockTomlWheel>>, PylockTomlErrorKind> {
-        if no_binary {
-            return Ok(None);
-        }
-
-        // Filter wheels based on tag compatibility and requires-python.
-        let wheels: Vec<_> = wheels
-            .iter()
-            .filter(|wheel| {
-                !is_wheel_unreachable(
-                    &wheel.filename,
-                    resolution,
-                    requires_python,
-                    node_index,
-                    tags,
-                )
-            })
-            .collect();
-
         if wheels.is_empty() {
             return Ok(None);
         }
@@ -1554,6 +1514,146 @@ impl<'lock> PylockToml {
         }
 
         Ok(Resolution::new(graph))
+    }
+}
+
+/// Reachable artifacts for one package entry. PEP 751 records the index on the entry,
+/// so files that require different routes can only share an entry without a proxy.
+#[derive(Default)]
+struct RegistryArtifacts<'a> {
+    wheels: Vec<&'a RegistryBuiltWheel>,
+    sdist: Option<&'a RegistrySourceDist>,
+}
+
+struct RegistryPackageEntry<'a> {
+    index: Option<&'a IndexUrl>,
+    marker: MarkerTree,
+    artifacts: RegistryArtifacts<'a>,
+}
+
+impl<'a> RegistryArtifacts<'a> {
+    fn partition(
+        self,
+        name: &PackageName,
+        selected: &'a IndexUrl,
+        index_locations: &IndexLocations,
+        marker: MarkerTree,
+        concrete: bool,
+    ) -> Result<Vec<RegistryPackageEntry<'a>>, PylockTomlErrorKind> {
+        if self.wheels.is_empty()
+            && self.sdist.is_none()
+            && index_locations.proxy_route_for(selected).is_some()
+        {
+            return Err(PylockTomlErrorKind::MissingSource(name.clone()));
+        }
+        let proxied = self
+            .wheels
+            .iter()
+            .map(|wheel| &wheel.index)
+            .chain(self.sdist.map(|sdist| &sdist.index))
+            .any(|index| index_locations.proxy_route_for(index).is_some());
+        if !proxied {
+            return Ok(vec![RegistryPackageEntry {
+                index: None,
+                marker,
+                artifacts: self,
+            }]);
+        }
+        // Concrete installs follow the selected source. In a universal lock, every direct
+        // source uses its file URLs without an index, so direct files can share one entry.
+        let route = |index: &'a IndexUrl| {
+            (concrete || index_locations.proxy_route_for(index).is_some()).then_some(index)
+        };
+        let mut sources = BTreeMap::<Option<&IndexUrl>, Self>::new();
+        for wheel in self.wheels {
+            sources
+                .entry(route(&wheel.index))
+                .or_default()
+                .wheels
+                .push(wheel);
+        }
+        if let Some(sdist) = self.sdist {
+            sources.entry(route(&sdist.index)).or_default().sdist = Some(sdist);
+        }
+        if sources.len() == 1 {
+            let (index, artifacts) = sources.pop_first().unwrap();
+            return Ok(vec![RegistryPackageEntry {
+                index,
+                marker,
+                artifacts,
+            }]);
+        }
+        if concrete {
+            // All remaining files match the target. Use the resolver's preferred route.
+            let (index, artifacts) = sources
+                .remove_entry(&route(selected))
+                .ok_or_else(|| PylockTomlErrorKind::OverlappingArtifactSources(name.clone()))?;
+            return Ok(vec![RegistryPackageEntry {
+                index,
+                marker,
+                artifacts,
+            }]);
+        }
+
+        let (default_index, default) = sources
+            .remove_entry(&route(selected))
+            .or_else(|| sources.pop_first())
+            .unwrap();
+        let mut covered = marker.and(default.platforms());
+        let mut alternatives = MarkerTree::FALSE;
+        let mut entries = Vec::with_capacity(sources.len() + 1);
+        for (index, artifacts) in sources {
+            let applies = marker.and(artifacts.platforms());
+            if !covered.is_disjoint(applies) {
+                return Err(PylockTomlErrorKind::OverlappingArtifactSources(
+                    name.clone(),
+                ));
+            }
+            covered = covered.or(applies);
+            alternatives = alternatives.or(applies);
+            entries.push(RegistryPackageEntry {
+                index,
+                marker: applies,
+                artifacts,
+            });
+        }
+        // Keep the original requirement active even on a platform without a wheel:
+        // an install there should diagnose the missing wheel, not omit the package.
+        entries.push(RegistryPackageEntry {
+            index: default_index,
+            marker: marker.and(alternatives.negate()),
+            artifacts: default,
+        });
+        Ok(entries)
+    }
+
+    /// An upper bound on the platforms that can install these files. Unknown tags and
+    /// source distributions must be treated as potentially overlapping every platform.
+    fn platforms(&self) -> MarkerTree {
+        if self.sdist.is_some() {
+            return MarkerTree::TRUE;
+        }
+        self.wheels
+            .iter()
+            .flat_map(|wheel| wheel.filename.platform_tags())
+            .fold(MarkerTree::FALSE, |markers, tag| {
+                let value = if tag.is_windows() {
+                    "win32"
+                } else if tag.is_linux() {
+                    "linux"
+                } else if tag.is_macos() {
+                    "darwin"
+                } else if tag.is_android() {
+                    "android"
+                } else {
+                    return MarkerTree::TRUE;
+                };
+                markers.or(MarkerTree::expression(MarkerExpression::String {
+                    key: MarkerValueString::SysPlatform,
+                    operator: MarkerOperator::Equal,
+                    value: value.into(),
+                }))
+            })
     }
 }
 
