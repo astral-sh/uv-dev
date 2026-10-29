@@ -8,7 +8,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{DistExtension, SourceDistExtension};
-use uv_fs::Simplified;
+use uv_fs::{Simplified, relative_file_url};
 use uv_git_types::GitReference;
 use uv_normalize::PackageName;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl};
@@ -136,7 +136,7 @@ impl std::fmt::Display for RequirementsTxtExport<'_> {
                             SafeUrl::from_file_path(path).map_err(|()| std::fmt::Error)?
                         )?;
                     } else {
-                        write!(f, "file:{}", anchor(path).portable_display())?;
+                        write!(f, "{}", relative_file_url(&anchor(path)))?;
                     }
                     write!(f, "#subdirectory={}", subdirectory.portable_display())?;
                 }

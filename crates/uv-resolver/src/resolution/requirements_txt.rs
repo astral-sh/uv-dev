@@ -8,9 +8,10 @@ use uv_distribution_types::{
     DistributionMetadata, Name, RequiresPython, ResolvedDist, SimplifiedMarkerTree, Verbatim,
     VersionOrUrlRef,
 };
+use uv_fs::relative_file_url;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, Scheme, split_scheme};
+use uv_pep508::{MarkerTree, Scheme, expand_env_vars, split_scheme};
 use uv_pypi_types::HashDigest;
 
 use crate::resolution::AnnotatedDist;
@@ -48,10 +49,27 @@ impl<'dist> RequirementsTxtDist<'dist> {
         // If the URL is not _definitively_ a `file://` URL, write it as a relative path.
         if self.dist.is_local() {
             if let VersionOrUrlRef::Url(url) = self.dist.version_or_url() {
+                let fragment = url.fragment().filter(|fragment| {
+                    self.dist.source_tree().is_none()
+                        && fragment
+                            .split('&')
+                            .any(|field| field.starts_with("subdirectory="))
+                });
                 let given = url.verbatim();
-                let given = match split_scheme(&given) {
+                // Expansion determines whether the original input was a filesystem path or a URL.
+                let given = if fragment.is_some()
+                    && let Cow::Owned(expanded) = expand_env_vars(&given)
+                {
+                    Cow::Owned(expanded)
+                } else {
+                    given
+                };
+                let scheme =
+                    split_scheme(&given).map(|(scheme, path)| (Scheme::parse(scheme), path));
+                let is_file_url = matches!(scheme, Some((Some(Scheme::File), _)));
+                let given = match scheme {
                     Some((scheme, path)) => {
-                        match Scheme::parse(scheme) {
+                        match scheme {
                             Some(Scheme::File) => {
                                 if path
                                     .strip_prefix("//localhost")
@@ -93,15 +111,17 @@ impl<'dist> RequirementsTxtDist<'dist> {
                     }
                 };
                 if let Some(given) = given {
-                    // Pip treats a fragment on a bare path as part of the filename.
-                    let given = if let Some(fragment) = url.fragment() {
+                    // Pip treats a bare archive path with a subdirectory fragment as a filename.
+                    let given = if let Some(fragment) = fragment {
                         let path = given
                             .split_once('#')
                             .map_or(given.as_ref(), |(path, _)| path);
                         if Path::new(path).is_absolute() {
                             Cow::Owned(url.to_string())
-                        } else {
+                        } else if is_file_url {
                             Cow::Owned(format!("file:{path}#{fragment}"))
+                        } else {
+                            Cow::Owned(format!("{}#{fragment}", relative_file_url(Path::new(path))))
                         }
                     } else {
                         given

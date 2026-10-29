@@ -561,15 +561,13 @@ impl Dist {
         url: VerbatimUrl,
         git: GitUrl,
         subdirectory: Option<Box<Path>>,
-    ) -> Result<Self, Error> {
-        Ok(Self::Source(SourceDist::GitDirectory(
-            GitDirectorySourceDist {
-                name,
-                git: Box::new(git),
-                subdirectory,
-                url,
-            },
-        )))
+    ) -> Self {
+        Self::Source(SourceDist::GitDirectory(GitDirectorySourceDist {
+            name,
+            git: Box::new(git),
+            subdirectory,
+            url,
+        }))
     }
 
     /// Create a [`Dist`] for a source archive within a Git repository (i.e., a `git+https://` or `git+ssh://` URL).
@@ -635,9 +633,12 @@ impl Dist {
                 directory.editable,
                 directory.r#virtual,
             ),
-            ParsedUrl::GitDirectory(git) => {
-                Self::from_git_directory_url(name, url.verbatim, git.url, git.subdirectory)
-            }
+            ParsedUrl::GitDirectory(git) => Ok(Self::from_git_directory_url(
+                name,
+                url.verbatim,
+                git.url,
+                git.subdirectory,
+            )),
             ParsedUrl::GitPath(git) => {
                 Self::from_git_path_url(name, url.verbatim, git.url, git.install_path, git.ext)
             }

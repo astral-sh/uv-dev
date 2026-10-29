@@ -12599,7 +12599,7 @@ fn local_archive_subdirectory() -> Result<()> {
         .arg(format!("example @ {url}#subdirectory=packages/missing")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `example @ file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/missing`
+    error: Failed to build `example @ file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/missing`
       cause: The source distribution `file://[TEMP_DIR]/collection-1.0.tar.gz#subdirectory=packages/missing` has no subdirectory `packages/missing`
     ");
     Ok(())

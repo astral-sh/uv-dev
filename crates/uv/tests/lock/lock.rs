@@ -3482,6 +3482,21 @@ fn local_archive_subdirectory_lock_offline() -> Result<()> {
     "#})?;
     context.lock().arg("--offline").assert().success();
     let original = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-header", "--no-emit-project", "--format", "pylock.toml",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "example"
+    version = "1.0"
+    archive = { path = "[TEMP_DIR]/projects.tar.gz", subdirectory = "nested", hashes = { sha256 = "[ORIGINAL_HASH]" } }
+    "#);
+
     archive.write_binary(&changed_archive)?;
     uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
     exit_code: 2 (failure)
@@ -3515,13 +3530,15 @@ fn local_archive_subdirectory_relocated() -> Result<()> {
     let moved = context.temp_dir.child("moved");
     let original_url = SafeUrl::from_file_path(original.path()).expect("absolute project path");
     let moved_url = SafeUrl::from_file_path(moved.path()).expect("absolute project path");
-    original.child("projects.tar.gz").write_binary(&archive)?;
+    original
+        .child("packages%20old/projects.tar.gz")
+        .write_binary(&archive)?;
     original.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "parent"
         version = "1.0"
         requires-python = ">=3.12"
-        dependencies = ["example @ ${PROJECT_ROOT}/projects.tar.gz#subdirectory=packages/example"]
+        dependencies = ["example @ ${PROJECT_ROOT}/packages%2520old/projects.tar.gz#subdirectory=packages/example"]
     "#})?;
     context
         .lock()
@@ -3542,7 +3559,7 @@ fn local_archive_subdirectory_relocated() -> Result<()> {
         [[package]]
         name = "example"
         version = "1.0"
-        source = { archive = "projects.tar.gz", subdirectory = "packages/example" }
+        source = { archive = "packages%20old/projects.tar.gz", subdirectory = "packages/example" }
         sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [[package]]
@@ -3554,7 +3571,7 @@ fn local_archive_subdirectory_relocated() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "example", archive = "projects.tar.gz", subdirectory = "packages/example" }]
+        requires-dist = [{ name = "example", archive = "packages%20old/projects.tar.gz", subdirectory = "packages/example" }]
         "#);
     });
 
@@ -3598,13 +3615,28 @@ fn local_archive_subdirectory_relocated() -> Result<()> {
         [[packages]]
         name = "example"
         version = "1.0"
-        archive = { path = "projects.tar.gz", subdirectory = "packages/example", hashes = { sha256 = "[ARCHIVE_HASH]" } }
+        archive = { path = "packages%20old/projects.tar.gz", subdirectory = "packages/example", hashes = { sha256 = "[ARCHIVE_HASH]" } }
         "#);
     });
     context
         .pip_sync()
         .args(["--offline", "--no-cache"])
         .arg(pylock.path())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export()
+        .current_dir(moved.path()).env("PROJECT_ROOT", moved_url.as_str())
+        .args(["--frozen", "--no-header", "--no-annotate", "--no-hashes", "--no-emit-project",
+            "--format", "requirements.txt", "--output-file", "requirements.txt"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./packages%2520old/projects.tar.gz#subdirectory=packages/example
+    ");
+    context.reset_venv();
+    context
+        .pip_sync()
+        .current_dir(moved.path())
+        .args(["--offline", "--no-cache", "requirements.txt"])
         .assert()
         .success();
     context.assert_installed("example", "1.0");

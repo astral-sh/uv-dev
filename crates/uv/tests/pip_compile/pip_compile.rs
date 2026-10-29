@@ -66,16 +66,30 @@ fn local_archive_subdirectory() -> Result<()> {
     let archive = generate_source_archive(&"example".parse()?, &"1.0".parse()?, "nested", None)?;
     context
         .temp_dir
-        .child("projects.tar.gz")
+        .child("packages%20old/projects.tar.gz")
         .write_binary(&archive)?;
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("example @ ./projects.tar.gz#subdirectory=nested\n")?;
+        .write_str("example @ ./packages%20old/projects.tar.gz#subdirectory=nested\n")?;
     uv_snapshot!(context.filters(), context.pip_compile().args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    file:./projects.tar.gz#subdirectory=nested
+    file:./packages%2520old/projects.tar.gz#subdirectory=nested
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example @ ${ARCHIVE}/projects.tar.gz#subdirectory=nested\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .env("ARCHIVE", "file://./packages%2520old")
+        .args(["--offline", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    file:./packages%2520old/projects.tar.gz#subdirectory=nested
 
     ----- stderr -----
     Resolved 1 package in [TIME]

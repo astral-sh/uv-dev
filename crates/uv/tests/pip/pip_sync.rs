@@ -6576,7 +6576,7 @@ fn local_archive_subdirectory_pylock_cache() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=missing`
+    error: Failed to build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=missing`
       cause: The source distribution `file://[TEMP_DIR]/projects.tar.gz#subdirectory=missing` has no subdirectory `missing`
     ");
     Ok(())
@@ -6642,7 +6642,7 @@ fn local_archive_subdirectory_pylock_size() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+    error: Failed to build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
       cause: Size mismatch for `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`: expected 1 bytes, but downloaded [SIZE] bytes
     ");
 
@@ -6657,7 +6657,7 @@ fn local_archive_subdirectory_pylock_size() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync().args(["--preview", "--offline", "pylock.toml"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
+    error: Failed to build `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`
       cause: Size mismatch for `example @ file://[TEMP_DIR]/projects.tar.gz#subdirectory=nested`: expected 1 bytes, but downloaded [SIZE] bytes
     ");
     Ok(())

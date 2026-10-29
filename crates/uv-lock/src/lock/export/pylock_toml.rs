@@ -1890,10 +1890,10 @@ impl PylockTomlArchive {
         size: Option<u64>,
         hashes: Hashes,
     ) -> Self {
-        let (url, path) = if dist.url.prefers_relative()
-            && let Ok(path) = dist.location.to_file_path()
-        {
-            let path = try_relative_to_if(&path, root, true).unwrap_or(path);
+        let (url, path) = if let Ok(path) = dist.location.to_file_path() {
+            // A direct URL reconstructed from a lock has no relative spelling to retain.
+            let relative = dist.url.given().is_some() && dist.url.prefers_relative();
+            let path = try_relative_to_if(&path, root, relative).unwrap_or(path);
             (None, Some(PortablePathBuf::from(path.into_boxed_path())))
         } else {
             (Some(url.clone().with_policy(Raw)), None)
