@@ -614,7 +614,8 @@ fn invalid_direct_url() -> Result<()> {
         .arg("--index-url").arg(server.index_url()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot upgrade `a`: failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
+    error: Cannot upgrade `a`
+      cause: Failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
       cause: relative URL without a base
     ");
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
@@ -648,7 +649,8 @@ fn malformed_direct_url_json() -> Result<()> {
         .arg("--index-url").arg(server.index_url()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot upgrade `a`: failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
+    error: Cannot upgrade `a`
+      cause: Failed to read the recorded origin in `[SITE_PACKAGES]/a-1.0.0.dist-info/direct_url.json`
       cause: EOF while parsing an object at line 1 column 1
     ");
     Ok(())

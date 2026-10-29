@@ -14,7 +14,11 @@ use uv_fs::Simplified;
 use uv_install_wheel::WheelFile;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pypi_types::{DirectUrl, DirectUrlError, MetadataError, read_direct_url_json};
+use uv_pep508::VerbatimUrl;
+use uv_pypi_types::{
+    DirectUrl, DirectUrlError, MetadataError, ParsedDirectoryUrl, ParsedUrl, ParsedUrlError,
+    VerbatimParsedUrl, read_direct_url_json,
+};
 use uv_redacted::SafeUrl;
 
 use crate::{
@@ -69,6 +73,18 @@ pub enum InstalledDistError {
         #[source]
         err: Box<MetadataError>,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum InstalledSourceError {
+    #[error("Failed to read the recorded origin in `{}`", path.user_display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        err: Arc<InstalledDistError>,
+    },
+    #[error(transparent)]
+    Parse(#[from] ParsedUrlError),
 }
 
 #[derive(Debug, Clone)]
@@ -393,12 +409,34 @@ impl InstalledDist {
         }
     }
 
-    /// Check the recorded origin before using this package as an upgrade root.
-    pub fn check_upgrade_origin(&self) -> Result<(), Arc<InstalledDistError>> {
-        match &self.origin_error {
-            Some(err) => Err(Arc::clone(err)),
-            None => Ok(()),
+    /// Reconstruct the source of an installed package for an upgrade.
+    ///
+    /// A registry distribution has no direct source. Unreadable origins must not be treated
+    /// as registry installations.
+    pub fn upgrade_source(&self) -> Result<Option<VerbatimParsedUrl>, InstalledSourceError> {
+        if let Some(err) = &self.origin_error {
+            return Err(InstalledSourceError::Read {
+                path: self.install_path().join("direct_url.json"),
+                err: Arc::clone(err),
+            });
         }
+        Ok(match &self.kind {
+            InstalledDistKind::Registry(_)
+            | InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_) => None,
+            InstalledDistKind::Url(dist) => {
+                Some(VerbatimParsedUrl::for_upgrade(&dist.direct_url, &dist.url)?)
+            }
+            InstalledDistKind::LegacyEditable(dist) => Some(VerbatimParsedUrl {
+                parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
+                    install_path: dist.target.clone(),
+                    url: dist.target_url.clone(),
+                    editable: Some(true),
+                    r#virtual: None,
+                }),
+                verbatim: VerbatimUrl::from_url(dist.target_url.clone()),
+            }),
+        })
     }
 
     /// Read the `direct_url.json` file from a `.dist-info` directory.

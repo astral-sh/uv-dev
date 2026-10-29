@@ -20,18 +20,18 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, InstalledDist,
-    InstalledDistKind, Name, NameRequirementSpecification, Origin, PackageConfigSettings,
-    Requirement, Resolution, UnresolvedRequirementSpecification,
+    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
+    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VerbatimUrl, VersionOrUrl};
+use uv_pep508::{MarkerTree, Requirement as Pep508Requirement, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{Conflicts, ParsedDirectoryUrl, ParsedUrl, VerbatimParsedUrl};
+use uv_pypi_types::Conflicts;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
 use uv_python_interpreter::PythonEnvironment;
@@ -105,7 +105,9 @@ fn installed_requirements(
             let version_or_url = if overridden.contains(dist.name()) {
                 None
             } else {
-                installed_version_or_url(dist)?
+                dist.upgrade_source()
+                    .with_context(|| format!("Cannot upgrade `{}`", dist.name()))?
+                    .map(VersionOrUrl::Url)
             };
 
             Ok(Requirement::from(Pep508Requirement {
@@ -118,40 +120,6 @@ fn installed_requirements(
             .into())
         })
         .collect()
-}
-
-/// Reconstruct a direct origin without pinning a registry package to its installed version.
-fn installed_version_or_url(
-    dist: &InstalledDist,
-) -> anyhow::Result<Option<VersionOrUrl<VerbatimParsedUrl>>> {
-    dist.check_upgrade_origin().with_context(|| {
-        format!(
-            "Cannot upgrade `{}`: failed to read the recorded origin in `{}`",
-            dist.name(),
-            dist.install_path().join("direct_url.json").user_display(),
-        )
-    })?;
-    Ok(match &dist.kind {
-        InstalledDistKind::Registry(_)
-        | InstalledDistKind::EggInfoFile(_)
-        | InstalledDistKind::EggInfoDirectory(_) => None,
-        InstalledDistKind::Url(dist) => Some(VersionOrUrl::Url(VerbatimParsedUrl {
-            parsed_url: ParsedUrl::try_from(dist.direct_url.as_ref())?,
-            verbatim: VerbatimUrl::from_url(dist.url.clone()),
-        })),
-        InstalledDistKind::LegacyEditable(dist) => {
-            let verbatim = VerbatimUrl::from_url(dist.target_url.clone());
-            Some(VersionOrUrl::Url(VerbatimParsedUrl {
-                parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
-                    install_path: verbatim.as_path()?.into_boxed_path(),
-                    url: dist.target_url.clone(),
-                    editable: Some(true),
-                    r#virtual: None,
-                }),
-                verbatim,
-            }))
-        }
-    })
 }
 
 /// Install packages into the current environment.

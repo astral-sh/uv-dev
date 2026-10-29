@@ -84,6 +84,14 @@ impl VerbatimParsedUrl {
         })
     }
 
+    /// Recover an installed direct source for an upgrade with its recorded origin.
+    pub fn for_upgrade(source: &DirectUrl, recorded_url: &SafeUrl) -> Result<Self, ParsedUrlError> {
+        Ok(Self {
+            parsed_url: ParsedUrl::try_from(source)?,
+            verbatim: VerbatimUrl::from_url(recorded_url.clone()),
+        })
+    }
+
     /// Returns `true` if the URL is editable.
     pub fn is_editable(&self) -> bool {
         self.parsed_url.is_editable()
