@@ -1935,6 +1935,7 @@ fn reinstall_extras() -> Result<()> {
      + h2==4.1.0
      + hpack==4.0.0
      + hyperframe==6.0.1
+    Updated requested extras for `httpx`
     "
     );
 
@@ -13504,7 +13505,7 @@ fn static_metadata_installed_extra() -> Result<()> {
         .arg("--no-deps"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Updated requested extras for `iniconfig`
     "
     );
 

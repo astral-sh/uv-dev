@@ -555,7 +555,7 @@ pub async fn pip_sync(
         &environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
-        Some(&requested),
+        Some(requested),
         dry_run,
         printer,
         preview,

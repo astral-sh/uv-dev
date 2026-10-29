@@ -815,7 +815,7 @@ pub async fn pip_install(
         &environment,
         Box::new(DefaultInstallLogger),
         installer_metadata,
-        Some(&requested),
+        Some(requested),
         dry_run,
         printer,
         preview,

@@ -224,7 +224,8 @@ pub enum BytecodeCompilation {
 /// An installation plan and the time required to create it.
 pub struct InstallationPlan {
     plan: Plan,
-    requested_extras: RequestedExtrasChanges,
+    requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
+    requested_extras_changes: RequestedExtrasChanges,
     elapsed: Duration,
 }
 
@@ -245,8 +246,15 @@ impl InstallationPlan {
         cache: &Cache,
         venv: &PythonEnvironment,
         tags: &Tags,
+        requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
     ) -> Result<Self, Error> {
         let start = Instant::now();
+        // The package planner consumes the index. Keep the locations of installed receipts
+        // so we can plan updates for the distributions it leaves in place.
+        let candidates = requested_extras
+            .as_ref()
+            .map(|requested| RequestedExtrasChanges::candidates(requested, &site_packages))
+            .unwrap_or_default();
         let plan = Planner::new(resolution)
             .build(
                 site_packages,
@@ -265,10 +273,22 @@ impl InstallationPlan {
             )
             .map_err(Error::Plan)?;
 
+        let requested_extras_changes = if candidates.is_empty() {
+            RequestedExtrasChanges::default()
+        } else {
+            let removed: HashSet<_> = plan
+                .reinstalls
+                .iter()
+                .chain(&plan.extraneous)
+                .map(InstalledDist::install_path)
+                .collect();
+            RequestedExtrasChanges::plan(candidates, |path| !removed.contains(path))?
+        };
         Ok(Self {
             plan,
+            requested_extras,
+            requested_extras_changes,
             elapsed: start.elapsed(),
-            requested_extras: RequestedExtrasChanges::default(),
         })
     }
 
@@ -284,7 +304,7 @@ impl InstallationPlan {
             && self.plan.reinstalls.is_empty()
             && (self.plan.extraneous.is_empty()
                 || matches!(modifications, Modifications::Sufficient))
-            && self.requested_extras.is_empty()
+            && self.requested_extras_changes.is_empty()
             && (compile.is_none() || dry_run.enabled())
     }
 
@@ -300,13 +320,13 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         debug_assert!(self.is_noop(modifications, compile, dry_run));
 
-        let (plan, requested_extras_changes, start) = self.into_parts();
+        let start = self.start();
         if dry_run.enabled() {
             report_dry_run(
                 dry_run,
                 resolution,
-                plan,
-                requested_extras_changes,
+                self.plan,
+                self.requested_extras_changes,
                 modifications,
                 start,
                 logger,
@@ -318,10 +338,9 @@ impl InstallationPlan {
         }
     }
 
-    fn into_parts(self) -> (Plan, RequestedExtrasChanges, Instant) {
+    fn start(&self) -> Instant {
         let now = Instant::now();
-        let start = now.checked_sub(self.elapsed).unwrap_or(now);
-        (self.plan, self.requested_extras, start)
+        now.checked_sub(self.elapsed).unwrap_or(now)
     }
 }
 
@@ -347,18 +366,12 @@ pub async fn install(
     venv: &PythonEnvironment,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    requested_extras: Option<&BTreeMap<PackageName, RequestedExtras>>,
+    requested_extras: Option<BTreeMap<PackageName, RequestedExtras>>,
     dry_run: DryRun,
     printer: Printer,
     preview: Preview,
 ) -> Result<Changelog, Error> {
-    // Keep the paths from the original environment index. The planner identifies which
-    // distributions will be replaced; those wheels write their own receipts at installation.
-    let candidates = requested_extras
-        .filter(|_| installer_metadata)
-        .map(|requested| RequestedExtrasChanges::candidates(requested, &site_packages))
-        .unwrap_or_default();
-    let mut plan = InstallationPlan::build(
+    let plan = InstallationPlan::build(
         resolution,
         site_packages,
         installation,
@@ -373,19 +386,8 @@ pub async fn install(
         cache,
         venv,
         tags,
+        requested_extras.filter(|_| installer_metadata),
     )?;
-
-    if !candidates.is_empty() {
-        let removed: HashSet<_> = plan
-            .plan
-            .reinstalls
-            .iter()
-            .chain(&plan.plan.extraneous)
-            .map(InstalledDist::install_path)
-            .collect();
-        plan.requested_extras =
-            RequestedExtrasChanges::plan(candidates, |path| !removed.contains(path))?;
-    }
     plan.execute(
         resolution,
         modifications,
@@ -402,7 +404,6 @@ pub async fn install(
         venv,
         logger,
         installer_metadata,
-        requested_extras,
         dry_run,
         printer,
         preview,
@@ -429,12 +430,17 @@ impl InstallationPlan {
         venv: &PythonEnvironment,
         logger: Box<dyn InstallLogger>,
         installer_metadata: bool,
-        requested_extras: Option<&BTreeMap<PackageName, RequestedExtras>>,
         dry_run: DryRun,
         printer: Printer,
         preview: Preview,
     ) -> Result<Changelog, Error> {
-        let (plan, requested_extras_changes, start) = self.into_parts();
+        let start = self.start();
+        let Self {
+            plan,
+            requested_extras,
+            requested_extras_changes,
+            ..
+        } = self;
 
         if dry_run.enabled() {
             return report_dry_run(
@@ -513,7 +519,7 @@ impl InstallationPlan {
                 venv,
                 logger.as_ref(),
                 installer_metadata,
-                requested_extras,
+                requested_extras.as_ref(),
                 printer,
                 preview,
             )
@@ -543,7 +549,7 @@ impl InstallationPlan {
                 venv,
                 logger.as_ref(),
                 installer_metadata,
-                requested_extras,
+                requested_extras.as_ref(),
                 printer,
                 preview,
             )
