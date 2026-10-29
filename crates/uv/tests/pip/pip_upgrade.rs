@@ -566,7 +566,8 @@ fn target() {
 /// A direct URL must not be replaced by the newer registry package with the same name.
 #[test]
 fn direct_url() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"sha256=[0-9a-f]{64}", "sha256=[SHA256]"));
     let server = PackseServer::new("simple/single-package.toml");
 
     context
@@ -587,7 +588,7 @@ fn direct_url() {
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
+    a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl#sha256=[SHA256]
     ");
 }
 
@@ -789,7 +790,8 @@ fn installed_local_archive_subdirectory() -> Result<()> {
 /// A registry duplicate must not discard the direct URL recorded for the same package.
 #[test]
 fn duplicate_registry_and_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"sha256=[0-9a-f]{64}", "sha256=[SHA256]"));
     let duplicate = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/single-package.toml");
     context
@@ -819,12 +821,12 @@ fn duplicate_registry_and_url() -> Result<()> {
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
      - a==1.0.0
-     ~ a==2.0.0 (from http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl)
+     ~ a==2.0.0 (from http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl#sha256=[SHA256])
     ");
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl
+    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl#sha256=[SHA256]
     ");
     Ok(())
 }
@@ -832,7 +834,8 @@ fn duplicate_registry_and_url() -> Result<()> {
 /// Conflicting installed URLs must fail instead of arbitrarily selecting one source.
 #[test]
 fn duplicate_urls() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"sha256=[0-9a-f]{64}", "sha256=[SHA256]"));
     let duplicate = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/single-package.toml");
     context
@@ -862,8 +865,8 @@ fn duplicate_urls() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl
-    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl
+    a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl#sha256=[SHA256]
+    a @ http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl#sha256=[SHA256]
     ");
     Ok(())
 }
