@@ -12504,6 +12504,34 @@ fn wheel_cannot_relocate_installer_metadata_through_symlink() -> Result<()> {
     Ok(())
 }
 
+/// Headers use a package-specific directory which can also alias site-packages.
+#[test]
+#[cfg(unix)]
+fn wheel_cannot_relocate_installer_metadata_via_headers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let include = context.venv.join("include/site/python3.12");
+    fs::create_dir_all(&include)?;
+    fs_err::os::unix::fs::symlink(context.site_packages(), include.join("example"))?;
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[(
+            "example-1.0.data/headers/other-2.dist-info/direct_url.json",
+            "{}",
+        )])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: example-1.0-py3-none-any.whl (example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel data cannot install metadata at `[VENV]/include/site/python3.12/example/other-2.dist-info/direct_url.json`
+    ");
+    assert!(!context.site_packages().join("other-2.dist-info").exists());
+    Ok(())
+}
+
 /// Disabling installer metadata also discards metadata supplied by the wheel.
 #[test]
 fn wheel_cannot_supply_disabled_installer_metadata() -> Result<()> {

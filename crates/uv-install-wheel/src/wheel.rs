@@ -245,14 +245,17 @@ impl<'wheel> ValidatedWheel<'wheel> {
         layout: &Layout,
         wheel: &'wheel Path,
         dist_info_prefix: &str,
+        dist_name: &PackageName,
     ) -> Result<Self, Error> {
         let data_dir = wheel.join(format!("{dist_info_prefix}.data"));
         if !data_dir.is_dir() {
             return Ok(Self { path: wheel });
         }
+        let headers = headers_directory(layout, dist_name);
         for (source, destination) in [
             (data_dir.join("purelib"), &layout.scheme.purelib),
             (data_dir.join("platlib"), &layout.scheme.platlib),
+            (data_dir.join("headers"), &headers),
             (data_dir.join("scripts"), &layout.scheme.scripts),
             (data_dir.join("data"), &layout.scheme.data),
         ] {
@@ -279,6 +282,11 @@ impl<'wheel> ValidatedWheel<'wheel> {
     pub(crate) fn as_path(&self) -> &Path {
         self.path
     }
+}
+
+/// Headers are installed under a package-specific directory in the include scheme.
+fn headers_directory(layout: &Layout, name: &PackageName) -> PathBuf {
+    layout.scheme.include.join(name.as_str())
 }
 
 /// Wheel data must not place installer-owned files into an installed distribution,
@@ -552,7 +560,7 @@ pub(crate) enum LibKind {
 fn move_folder_recorded(
     src_dir: &Path,
     dest_dir: &Path,
-    scripts: &Path,
+    layout: &Layout,
     site_packages: &Path,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
@@ -575,7 +583,8 @@ fn move_folder_recorded(
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
         } else {
-            validate_data_script_destination(&target, scripts)?;
+            validate_data_script_destination(&target, &layout.scheme.scripts)?;
+            validate_data_metadata_destination(&target, layout)?;
             rename_or_copy.rename_or_copy(src, &target)?;
             let entry = record
                 .iter_mut()
@@ -630,6 +639,7 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
+    validate_data_metadata_destination(&script_absolute, layout)?;
     let script_relative =
         pathdiff::diff_paths(&script_absolute, site_packages).ok_or_else(|| {
             Error::Io(io::Error::other(format!(
@@ -839,13 +849,7 @@ pub(crate) fn install_data(
                     layout.scheme.data.user_display()
                 );
                 // Move the content of the folder to the root of the venv
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.data,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.data, layout, site_packages, record)?;
             }
             Some("scripts") => {
                 trace!(
@@ -891,19 +895,13 @@ pub(crate) fn install_data(
                 }
             }
             Some("headers") => {
-                let target_path = layout.scheme.include.join(dist_name.as_str());
+                let target_path = headers_directory(layout, dist_name);
                 trace!(
                     ?dist_name,
                     "Installing data/headers to `{}`",
                     target_path.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &target_path,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &target_path, layout, site_packages, record)?;
             }
             Some("purelib") => {
                 trace!(
@@ -911,13 +909,7 @@ pub(crate) fn install_data(
                     "Installing data/purelib to `{}`",
                     layout.scheme.purelib.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.purelib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.purelib, layout, site_packages, record)?;
             }
             Some("platlib") => {
                 trace!(
@@ -925,13 +917,7 @@ pub(crate) fn install_data(
                     "Installing data/platlib to `{}`",
                     layout.scheme.platlib.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.platlib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.platlib, layout, site_packages, record)?;
             }
             _ => {
                 return Err(Error::InvalidWheel(format!(
