@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04.5 x86_64 with installed uv 0.13.5 and an unmodified CPython 3.16.0a1+dev build, `uvx --python ./python pycowsay hello` exits 2 with `Failed to spawn: pycowsay` and `No such file or directory (os error 2)`. The installed launcher points to a removed temporary interpreter path; invoking it with the cached environment’s Python succeeds. A metadata-only control confirms that adding +dev to version_info defeats relocatable launcher generation. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, test coverage, and limitations. No checkout files or GitHub objects were changed."
+}
