@@ -12385,6 +12385,177 @@ fn resolve_derivation_chain() -> Result<()> {
     Ok(())
 }
 
+/// A repacked wheel cannot supply the origin of a registry installation.
+#[test]
+fn wheel_cannot_supply_installer_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((
+        regex::escape("example-1.0.dist-info/uv_cache.json,sha256=") + ".*",
+        "example-1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]",
+    ));
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[
+            (
+                "./example-1.0.dist-info/direct_url.json",
+                r#"{"url":"https://example.invalid/other.whl","archive_info":{}}"#,
+            ),
+            ("example-1.0.dist-info/INSTALLER", "another installer"),
+        ])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--no-index", "--find-links", ".", "example"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0
+    ");
+    let dist_info = context.site_packages().join("example-1.0.dist-info");
+    assert!(!dist_info.join("direct_url.json").exists());
+    assert_eq!(fs::read_to_string(dist_info.join("INSTALLER"))?, "uv");
+    assert_snapshot!(apply_filters(context.read(dist_info.join("RECORD")), context.filters()), @"
+    example-1.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
+    example-1.0.dist-info/METADATA,sha256=uq1luq_1TjccXq_QlHl61jUE_rrRkuCIehSfL47zxkY,49
+    example-1.0.dist-info/RECORD,,
+    example-1.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+    example-1.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+    example-1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]
+    example/__init__.py,sha256=kM55qqhSrc4b-StNTuN03Srg0kwfg1G4BckCKhUytaE,20
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--reinstall").arg(wheel_path.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - example==1.0
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl)
+    ");
+    let origin: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dist_info.join("direct_url.json"))?)?;
+    assert_eq!(
+        origin["url"],
+        SafeUrl::from_file_path(wheel_path.path())
+            .expect("absolute wheel path")
+            .as_str()
+    );
+    assert_eq!(
+        fs::read_to_string(dist_info.join("RECORD"))?
+            .matches("/direct_url.json,")
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+/// Wheel data must not overwrite another installed distribution's origin.
+#[test]
+fn wheel_cannot_relocate_installer_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[(
+            "example-1.0.data/purelib/other-2.dist-info/direct_url.json",
+            "{}",
+        )])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: example-1.0-py3-none-any.whl (example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel data cannot install metadata at `[SITE_PACKAGES]/other-2.dist-info/direct_url.json`
+    ");
+    assert!(!context.site_packages().join("other-2.dist-info").exists());
+    Ok(())
+}
+
+/// A symlink into site-packages must not let wheel data install an origin there.
+#[test]
+#[cfg(unix)]
+fn wheel_cannot_relocate_installer_metadata_through_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    fs_err::os::unix::fs::symlink(context.site_packages(), context.venv.join("library-alias"))?;
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[(
+            "example-1.0.data/data/library-alias/other-2.dist-info/direct_url.json",
+            "{}",
+        )])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: example-1.0-py3-none-any.whl (example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel data cannot install metadata at `[VENV]/library-alias/other-2.dist-info/direct_url.json`
+    ");
+    assert!(!context.site_packages().join("other-2.dist-info").exists());
+    Ok(())
+}
+
+/// Headers use a package-specific directory which can also alias site-packages.
+#[test]
+#[cfg(unix)]
+fn wheel_cannot_relocate_installer_metadata_via_headers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let include = context.venv.join("include/site/python3.12");
+    fs::create_dir_all(&include)?;
+    fs_err::os::unix::fs::symlink(context.site_packages(), include.join("example"))?;
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[(
+            "example-1.0.data/headers/other-2.dist-info/direct_url.json",
+            "{}",
+        )])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: example-1.0-py3-none-any.whl (example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel data cannot install metadata at `[VENV]/include/site/python3.12/example/other-2.dist-info/direct_url.json`
+    ");
+    assert!(!context.site_packages().join("other-2.dist-info").exists());
+    Ok(())
+}
+
+/// Disabling installer metadata also discards metadata supplied by the wheel.
+#[test]
+fn wheel_cannot_supply_disabled_installer_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0".parse()?)
+        .files(&[("example-1.0.dist-info/direct_url.json", "{}")])
+        .build();
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-installer-metadata").arg(wheel_path.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0 (from file://[TEMP_DIR]/example-1.0-py3-none-any.whl)
+    ");
+    let dist_info = context.site_packages().join("example-1.0.dist-info");
+    assert!(!dist_info.join("direct_url.json").exists());
+    assert!(!fs::read_to_string(dist_info.join("RECORD"))?.contains("direct_url.json"));
+    Ok(())
+}
+
 /// Ensure that `UV_NO_INSTALLER_METADATA` env var is respected.
 #[test]
 fn respect_no_installer_metadata_env_var() {
