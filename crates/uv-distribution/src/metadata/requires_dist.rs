@@ -65,6 +65,31 @@ impl RequiresDist {
             return Self::from_metadata23_with_source_context(metadata, git_member);
         };
 
+        let project_workspace = if !sources.is_none()
+            && project_workspace
+                .current_project()
+                .pyproject_toml()
+                .has_workspace_group_includes()
+        {
+            let discovery = DiscoveryOptions {
+                members: MemberDiscovery::Existing,
+                ..discovery
+            };
+            let Some(workspace) = ProjectWorkspace::from_maybe_project_root(
+                install_path,
+                &discovery,
+                cache,
+                workspace_cache,
+            )
+            .await?
+            else {
+                return Self::from_metadata23_with_source_context(metadata, git_member);
+            };
+            workspace
+        } else {
+            project_workspace
+        };
+
         Self::from_project_workspace(
             metadata,
             &project_workspace,
@@ -135,9 +160,10 @@ impl RequiresDist {
             .map(ToolUvSources::inner)
             .unwrap_or(&empty);
 
-        let dependency_groups = FlatDependencyGroups::from_pyproject_toml(
+        let dependency_groups = FlatDependencyGroups::from_workspace(
             project_workspace.current_project().root(),
             project_workspace.current_project().pyproject_toml(),
+            project_workspace.workspace(),
         )?;
 
         // Now that we've resolved the dependency groups, we can validate that each source references
@@ -148,7 +174,7 @@ impl RequiresDist {
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, flat_group) in dependency_groups {
             let mut requirements = Vec::new();
-            for requirement in flat_group.requirements {
+            for requirement in flat_group.requirements.into_requirements() {
                 if no_sources.for_package(&requirement.name) {
                     requirements.push(Requirement::from(requirement));
                     continue;

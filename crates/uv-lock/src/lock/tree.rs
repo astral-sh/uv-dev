@@ -161,7 +161,11 @@ impl<'env> TreeDisplay<'env> {
                 .dependency_groups
                 .iter()
                 .filter_map(|(group, deps)| {
-                    if groups.contains(group) {
+                    if groups.contains(group)
+                        || lock.includes_workspace_group(dist.name(), group, |group| {
+                            groups.contains(group)
+                        })
+                    {
                         Some(deps.iter().map(move |dep| (group, dep)))
                     } else {
                         None
@@ -173,9 +177,15 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
 
-                if markers
-                    .is_some_and(|markers| !dep.complexified_marker.evaluate_no_extras(markers))
-                {
+                let mut marker = dep.complexified_marker;
+                if !groups.contains(group) {
+                    marker.and(UniversalMarker::from_combined(lock.workspace_group_marker(
+                        dist.name(),
+                        group,
+                        |group| groups.contains(group),
+                    )));
+                }
+                if markers.is_some_and(|markers| !marker.evaluate_no_extras(markers)) {
                     continue;
                 }
 
@@ -187,11 +197,7 @@ impl<'env> TreeDisplay<'env> {
                 graph.add_edge(
                     index,
                     dep_index,
-                    Edge::Dev(
-                        group,
-                        Some(RequestedExtras::Dependency(&dep.extra)),
-                        dep.complexified_marker,
-                    ),
+                    Edge::Dev(group, Some(RequestedExtras::Dependency(&dep.extra)), marker),
                 );
 
                 // Push its dependencies on the queue.
@@ -1311,7 +1317,15 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         let groups = package
             .dependency_groups
             .keys()
-            .filter(|group| self.tree.groups.contains(group))
+            .filter(|group| {
+                self.tree.groups.contains(group)
+                    || self
+                        .tree
+                        .lock
+                        .includes_workspace_group(package.name(), group, |group| {
+                            self.tree.groups.contains(group)
+                        })
+            })
             .cloned()
             .collect::<Vec<_>>();
 
