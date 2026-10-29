@@ -1336,6 +1336,126 @@ async fn proxy_index_pylock_installs_mixed_find_links_wheels() -> Result<()> {
     Ok(())
 }
 
+/// A higher build tag on a `--find-links` wheel makes it the metadata source for the release.
+/// Installing a different platform's registry wheel must still honor the proxy's denial.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_honors_denial_with_find_links_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let find_links = MockServer::start().await;
+    let upstream_url = upstream.uri();
+    let proxy_url = proxy.uri();
+    let find_links_url = find_links.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index", "pylock"]
+
+        [[index]]
+        name = "upstream"
+        url = "{upstream_url}/simple/"
+        artifact-base-url = "{upstream_url}/files/"
+        default = true
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "upstream"
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0\n")?;
+
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let (linux_filename, linux_wheel) = WheelBuilder::new(&name, &version)
+        .tag("cp312-cp312-manylinux_2_17_x86_64")
+        .build_tag(&"1".parse()?)
+        .build();
+    let (windows_filename, windows_wheel) = WheelBuilder::new(&name, &version)
+        .tag("cp312-cp312-win_amd64")
+        .build_tag(&"2".parse()?)
+        .build();
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            &linux_filename,
+            &format!("{proxy_url}/files/{linux_filename}"),
+            Some(&sha256(&linux_wheel)),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{find_links_url}/files/{windows_filename}#sha256={}">{windows_filename}</a>"#,
+                sha256(&windows_wheel),
+            ),
+            "text/html",
+        ))
+        .mount(&find_links)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{windows_filename}")))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&find_links)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{windows_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(windows_wheel))
+        .expect(1..)
+        .mount(&find_links)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--universal")
+        .arg("--python-version").arg("3.12")
+        .arg("--find-links").arg(format!("{find_links_url}/links/"))
+        .arg("--output-file").arg("pylock.toml")
+        .arg("--quiet"), @"exit_code: 0 (success)");
+    find_links.verify().await;
+
+    // The upstream would serve the wheel if uv bypassed the proxy.
+    mount_artifact(&upstream, &linux_filename, linux_wheel, 0).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{linux_filename}")))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1..)
+        .mount(&proxy)
+        .await;
+    let context = context.with_cache_dir("install-cache");
+    let mut filters = context.filters();
+    filters.insert(0, (&proxy_url, "[PROXY]"));
+    uv_snapshot!(filters, context
+        .pip_sync()
+        .arg("pylock.toml")
+        .arg("--python-platform").arg("x86_64-unknown-linux-gnu")
+        .arg("--target").arg("linux"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    error: Failed to download `basic-package==0.1.0`
+      cause: Failed to fetch: [PROXY]/files/basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl
+      cause: HTTP status client error (403 Forbidden) for url ([PROXY]/files/basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl)
+    ");
+
+    proxy.verify().await;
+    assert_no_requests(&upstream, "upstream index").await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_pip_installs_hashless_live_artifact() -> Result<()> {
     let context = uv_test::test_context!("3.12");
