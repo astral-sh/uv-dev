@@ -9,6 +9,8 @@ use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Match, Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
@@ -404,6 +406,70 @@ async fn proxy_index_rejects_same_named_package_index_across_configuration_files
 
     assert_no_requests(&physical_index, "physical proxy index").await?;
     assert_no_requests(&physical_artifacts, "physical artifact origin").await?;
+    Ok(())
+}
+
+/// Simple index paths are distinct even when one is the other's path with a `.git` suffix.
+#[tokio::test]
+async fn proxy_index_does_not_intercept_a_distinct_index_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let upstream = PackageServer::new(&name).await;
+    let proxy = PackageServer::new(&name).await;
+    let upstream_url = upstream.mock_server().uri();
+    let proxy_url = proxy.mock_server().uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxied"
+        url = "{upstream_url}/simple.git/"
+        artifact-base-url = "{upstream_url}/proxied-files/"
+        explicit = true
+
+        [[index]]
+        name = "requested"
+        url = "{upstream_url}/simple/"
+        default = true
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/"
+        proxy-for = "proxied"
+    "#})?;
+
+    let builder = WheelBuilder::new(&name, &version);
+    let (filename, requested_wheel) = builder.files(&[("supplier.txt", "requested")]).build();
+    let (_, proxy_wheel) = builder.files(&[("supplier.txt", "proxy")]).build();
+    upstream
+        .serve(&filename, &requested_wheel, Some(&sha256(&requested_wheel)))
+        .await;
+    proxy
+        .serve(&filename, &proxy_wheel, Some(&sha256(&proxy_wheel)))
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg("basic-package==0.1.0")
+        .arg("--target").arg("site"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_eq!(context.read("site/supplier.txt"), "requested");
+    assert_no_requests(proxy.mock_server(), "proxy for the other index").await?;
     Ok(())
 }
 
