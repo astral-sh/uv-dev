@@ -1,10 +1,11 @@
 use std::fmt::{Display, Formatter};
 use std::io;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer, StringDeserializer};
-use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::value::Error as ValueError;
+use serde::de::{DeserializeSeed, IgnoredAny, IntoDeserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
@@ -945,10 +946,127 @@ enum RequirementSourceWire {
     },
 }
 
+/// A duplicate or malformed field disqualifies only the variants that use it.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SourceField<T> {
+    #[serde(skip)]
+    Missing,
+    Null,
+    Valid(T),
+    Invalid(IgnoredAny),
+}
+
+impl<T> SourceField<T> {
+    fn from_string<'de>(value: impl IntoDeserializer<'de, ValueError>) -> Self
+    where
+        T: Deserialize<'de>,
+    {
+        T::deserialize(value.into_deserializer()).map_or(Self::Invalid(IgnoredAny), Self::Valid)
+    }
+
+    fn record(&mut self, value: Self) {
+        *self = match self {
+            Self::Missing => value,
+            Self::Null | Self::Valid(_) | Self::Invalid(_) => Self::Invalid(IgnoredAny),
+        };
+    }
+
+    fn optional(self) -> Result<Option<T>, ()> {
+        match self {
+            Self::Missing | Self::Null => Ok(None),
+            Self::Valid(value) => Ok(Some(value)),
+            Self::Invalid(_) => Err(()),
+        }
+    }
+}
+
+// A string-shaped field can contain arbitrary unrelated data. Consume containers
+// without buffering them so a later valid source can still win.
+struct StringField<T>(PhantomData<T>);
+
+impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for &mut SourceField<T> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        self.record(deserializer.deserialize_any(StringField(PhantomData))?);
+        Ok(())
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Visitor<'de> for StringField<T> {
+    type Value = SourceField<T>;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a string")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(SourceField::from_string(value))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(SourceField::from_string(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(SourceField::Null)
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(SourceField::Invalid(IgnoredAny))
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(SourceField::Invalid(IgnoredAny))
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(SourceField::Invalid(IgnoredAny))
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(SourceField::Invalid(IgnoredAny))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        IgnoredAny.visit_map(map).map(SourceField::Invalid)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+        IgnoredAny.visit_seq(seq).map(SourceField::Invalid)
+    }
+}
+
 impl<'de> Deserialize<'de> for RequirementSourceWire {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(SourceVisitor)
+    }
+}
+
+struct SourceVisitor;
+
+impl<'de> Visitor<'de> for SourceVisitor {
+    type Value = RequirementSourceWire;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a requirement source")
+    }
+
+    // Scalar URLs can contain credentials or signed query parameters.
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Err(E::custom("invalid requirement source"))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
     {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "lowercase")]
@@ -967,216 +1085,70 @@ impl<'de> Deserialize<'de> for RequirementSourceWire {
             Other,
         }
 
-        enum Value {
-            Missing,
-            String(String),
-            Null,
-            Invalid,
-        }
-
-        impl Value {
-            fn read<'de, A>(&mut self, map: &mut A) -> Result<(), A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let value = map.next_value()?;
-                *self = match self {
-                    Self::Missing => value,
-                    Self::String(_) | Self::Null | Self::Invalid => Self::Invalid,
-                };
-                Ok(())
-            }
-
-            fn required<T: DeserializeOwned>(self) -> Result<T, ()> {
-                match self {
-                    Self::String(value) => {
-                        T::deserialize(StringDeserializer::<serde::de::value::Error>::new(value))
-                            .map_err(|_| ())
-                    }
-                    Self::Missing | Self::Null | Self::Invalid => Err(()),
-                }
-            }
-
-            fn optional<T: DeserializeOwned>(self) -> Result<Option<T>, ()> {
-                match self {
-                    Self::Missing | Self::Null => Ok(None),
-                    Self::String(value) => Self::String(value).required().map(Some),
-                    Self::Invalid => Err(()),
+        let mut git = SourceField::Missing;
+        let mut url = SourceField::Missing;
+        let mut subdirectory = SourceField::Missing;
+        let mut path = SourceField::Missing;
+        let mut directory = SourceField::Missing;
+        let mut editable = SourceField::Missing;
+        let mut virtual_directory = SourceField::Missing;
+        let mut specifier = SourceField::Missing;
+        let mut index = SourceField::Missing;
+        let mut conflict = SourceField::Missing;
+        while let Some(field) = map.next_key()? {
+            match field {
+                Field::Git => map.next_value_seed(&mut git)?,
+                Field::Url => map.next_value_seed(&mut url)?,
+                Field::Subdirectory => map.next_value_seed(&mut subdirectory)?,
+                Field::Path => map.next_value_seed(&mut path)?,
+                Field::Directory => map.next_value_seed(&mut directory)?,
+                Field::Editable => map.next_value_seed(&mut editable)?,
+                Field::Virtual => map.next_value_seed(&mut virtual_directory)?,
+                Field::Specifier => map.next_value_seed(&mut specifier)?,
+                Field::Index => map.next_value_seed(&mut index)?,
+                // Buffer this structured field so a malformed conflict can fall through.
+                Field::Conflict => conflict.record(map.next_value()?),
+                Field::Other => {
+                    map.next_value::<IgnoredAny>()?;
                 }
             }
         }
 
-        impl<'de> Deserialize<'de> for Value {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                struct StringVisitor;
-
-                impl<'de> Visitor<'de> for StringVisitor {
-                    type Value = Value;
-
-                    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-                        formatter.write_str("a string")
-                    }
-
-                    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-                        Ok(Value::String(value.to_owned()))
-                    }
-
-                    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-                        Ok(Value::String(value))
-                    }
-
-                    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-                        Ok(Value::Null)
-                    }
-
-                    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-                        Ok(Value::Invalid)
-                    }
-
-                    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-                        Ok(Value::Invalid)
-                    }
-
-                    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-                        Ok(Value::Invalid)
-                    }
-
-                    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-                        Ok(Value::Invalid)
-                    }
-
-                    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-                    where
-                        A: MapAccess<'de>,
-                    {
-                        IgnoredAny::deserialize(MapAccessDeserializer::new(map))
-                            .map(|_| Value::Invalid)
-                    }
-
-                    fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
-                    where
-                        A: SeqAccess<'de>,
-                    {
-                        IgnoredAny::deserialize(SeqAccessDeserializer::new(sequence))
-                            .map(|_| Value::Invalid)
-                    }
-                }
-
-                deserializer.deserialize_any(StringVisitor)
-            }
+        // The first valid representation wins, including when fields for another
+        // representation are malformed or duplicated.
+        if let SourceField::Valid(git) = git {
+            return Ok(RequirementSourceWire::Git { git });
         }
-
-        // Buffer the structured conflict so a failed parse can fall through to another source.
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Conflict {
-            Valid(Option<ConflictItem>),
-            Invalid(IgnoredAny),
+        if let (SourceField::Valid(url), Ok(subdirectory)) = (url, subdirectory.optional()) {
+            return Ok(RequirementSourceWire::Direct { url, subdirectory });
         }
-
-        struct SourceVisitor;
-
-        impl<'de> Visitor<'de> for SourceVisitor {
-            type Value = RequirementSourceWire;
-
-            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a requirement source")
-            }
-
-            // Scalar URLs can contain credentials or signed query parameters.
-            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Err(E::custom("invalid requirement source"))
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut git = Value::Missing;
-                let mut url = Value::Missing;
-                let mut subdirectory = Value::Missing;
-                let mut path = Value::Missing;
-                let mut directory = Value::Missing;
-                let mut editable = Value::Missing;
-                let mut virtual_directory = Value::Missing;
-                let mut specifier = Value::Missing;
-                let mut index = Value::Missing;
-                let mut conflict = None;
-                while let Some(field) = map.next_key()? {
-                    match field {
-                        Field::Git => git.read(&mut map)?,
-                        Field::Url => url.read(&mut map)?,
-                        Field::Subdirectory => subdirectory.read(&mut map)?,
-                        Field::Path => path.read(&mut map)?,
-                        Field::Directory => directory.read(&mut map)?,
-                        Field::Editable => editable.read(&mut map)?,
-                        Field::Virtual => virtual_directory.read(&mut map)?,
-                        Field::Specifier => specifier.read(&mut map)?,
-                        Field::Index => index.read(&mut map)?,
-                        Field::Conflict => {
-                            let value = map.next_value()?;
-                            conflict = Some(if conflict.is_none() {
-                                value
-                            } else {
-                                Conflict::Invalid(IgnoredAny)
-                            });
-                        }
-                        Field::Other => {
-                            map.next_value::<IgnoredAny>()?;
-                        }
-                    }
-                }
-
-                // The first valid representation wins, including when fields for another
-                // representation are malformed or duplicated.
-                if let Ok(git) = git.required() {
-                    return Ok(RequirementSourceWire::Git { git });
-                }
-                if let (Ok(url), Ok(subdirectory)) = (url.required(), subdirectory.optional()) {
-                    return Ok(RequirementSourceWire::Direct { url, subdirectory });
-                }
-                if let Ok(path) = path.required() {
-                    return Ok(RequirementSourceWire::Path { path });
-                }
-                if let Ok(directory) = directory.required() {
-                    return Ok(RequirementSourceWire::Directory { directory });
-                }
-                if let Ok(editable) = editable.required() {
-                    return Ok(RequirementSourceWire::Editable { editable });
-                }
-                if let Ok(r#virtual) = virtual_directory.required() {
-                    return Ok(RequirementSourceWire::Virtual { r#virtual });
-                }
-                let specifier = match specifier {
-                    Value::Missing => Ok(VersionSpecifiers::empty()),
-                    Value::String(value) => Value::String(value).required(),
-                    Value::Null | Value::Invalid => Err(()),
-                };
-                let conflict = match conflict {
-                    None => Ok(None),
-                    Some(Conflict::Valid(value)) => Ok(value),
-                    Some(Conflict::Invalid(_)) => Err(()),
-                };
-                if let (Ok(specifier), Ok(index), Ok(conflict)) =
-                    (specifier, index.optional(), conflict)
-                {
-                    return Ok(RequirementSourceWire::Registry {
-                        specifier,
-                        index,
-                        conflict,
-                    });
-                }
-                Err(serde::de::Error::custom("invalid requirement source"))
-            }
+        if let SourceField::Valid(path) = path {
+            return Ok(RequirementSourceWire::Path { path });
         }
-
-        deserializer.deserialize_any(SourceVisitor)
+        if let SourceField::Valid(directory) = directory {
+            return Ok(RequirementSourceWire::Directory { directory });
+        }
+        if let SourceField::Valid(editable) = editable {
+            return Ok(RequirementSourceWire::Editable { editable });
+        }
+        if let SourceField::Valid(r#virtual) = virtual_directory {
+            return Ok(RequirementSourceWire::Virtual { r#virtual });
+        }
+        let specifier = match specifier {
+            SourceField::Missing => Some(VersionSpecifiers::empty()),
+            SourceField::Valid(value) => Some(value),
+            SourceField::Null | SourceField::Invalid(_) => None,
+        };
+        if let (Some(specifier), Ok(index), Ok(conflict)) =
+            (specifier, index.optional(), conflict.optional())
+        {
+            return Ok(RequirementSourceWire::Registry {
+                specifier,
+                index,
+                conflict,
+            });
+        }
+        Err(serde::de::Error::custom("invalid requirement source"))
     }
 }
 
@@ -1555,6 +1527,20 @@ mod tests {
         let source: RequirementSourceWire = serde_json::from_str(
             r#"{"git":3,"url":"not a URL","path":"first.whl","path":"second.whl","directory":"package","specifier":null}"#,
         )?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "directory": "package"
+        }
+        "#);
+        Ok(())
+    }
+
+    /// An unrelated array may be deeper than the JSON value deserializer's recursion limit.
+    #[test]
+    fn source_skips_nested_invalid_field() -> Result<(), Box<dyn Error>> {
+        let nested = format!("{}0{}", "[".repeat(150), "]".repeat(150));
+        let input = format!(r#"{{"path":{nested},"directory":"package"}}"#);
+        let source: RequirementSourceWire = serde_json::from_str(&input)?;
         insta::assert_json_snapshot!(source, @r#"
         {
           "directory": "package"
