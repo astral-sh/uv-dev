@@ -1,3 +1,4 @@
+use crate::common::options_with_receipt;
 use std::fmt::Write as _;
 use std::io;
 
@@ -14,7 +15,7 @@ use uv_lock::{Lock, LockParseError};
 use uv_normalize::{DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::SafeUrl;
-use uv_settings::{Combine, ResolverInstallerOptions};
+use uv_settings::ResolverInstallerOptions;
 use uv_tool::InstalledTools;
 use uv_warnings::warn_user;
 
@@ -198,9 +199,10 @@ pub async fn audit(
             }
         };
 
-        let settings = ResolverInstallerSettings::try_from(
-            ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
-        )?;
+        let settings = ResolverInstallerSettings::try_from(options_with_receipt(
+            tool.options(),
+            filesystem.clone(),
+        ))?;
         let outcome = audit_lock(
             &lock,
             &root,
