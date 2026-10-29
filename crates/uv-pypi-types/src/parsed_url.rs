@@ -5,7 +5,7 @@ use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 
 use uv_distribution_filename::{DistExtension, ExtensionError};
-use uv_git_types::{GitUrl, GitUrlParseError};
+use uv_git_types::{GitReference, GitUrl, GitUrlParseError};
 use uv_macros::DebugNoInline;
 use uv_pep508::{
     Pep508Url, UnnamedRequirementUrl, VerbatimUrl, VerbatimUrlError, looks_like_git_repository,
@@ -13,7 +13,7 @@ use uv_pep508::{
 use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
-use crate::{ArchiveInfo, DirInfo, DirectUrl, HashDigest, VcsUrl};
+use crate::{ArchiveInfo, DirInfo, DirectUrl, HashDigest, VcsKind, VcsUrl};
 
 #[derive(DebugNoInline, Error)]
 pub enum ParsedUrlError {
@@ -25,6 +25,8 @@ pub enum ParsedUrlError {
     },
     #[error("Expected a subdirectory within the local archive, found `{}`", .0.display())]
     InvalidArchiveSubdirectory(Box<Path>),
+    #[error("Expected a subdirectory within the local directory, found `{}`", .0.display())]
+    InvalidDirectorySubdirectory(Box<Path>),
     #[error("Invalid path in file URL: {0}")]
     InvalidFileUrl(String),
     #[error(transparent)]
@@ -81,6 +83,19 @@ impl VerbatimParsedUrl {
         Ok(Self {
             parsed_url,
             verbatim,
+        })
+    }
+
+    /// Recover an installed direct source for an upgrade with its recorded origin.
+    pub fn for_upgrade(source: &DirectUrl) -> Result<Self, ParsedUrlError> {
+        let parsed_url = ParsedUrl::try_from(source)?;
+        let url = match &parsed_url {
+            ParsedUrl::Directory(directory) => directory.url.clone(),
+            _ => source.to_requirement_url(),
+        };
+        Ok(Self {
+            parsed_url,
+            verbatim: VerbatimUrl::from_url(url),
         })
     }
 
@@ -489,10 +504,7 @@ impl ParsedUrl {
                 .components()
                 .any(|part| part != Component::CurDir)
         {
-            if subdirectory
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
-            {
+            if !is_relative_subdirectory(&subdirectory) {
                 return Err(ParsedUrlError::InvalidArchiveSubdirectory(subdirectory));
             }
             url.set_fragment(None);
@@ -509,6 +521,11 @@ impl ParsedUrl {
             )))
         }
     }
+}
+
+fn is_relative_subdirectory(path: &Path) -> bool {
+    path.components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 impl TryFrom<SafeUrl> for ParsedUrl {
@@ -557,6 +574,111 @@ impl TryFrom<SafeUrl> for ParsedUrl {
             Self::from_file_path(url, path)
         } else {
             Ok(Self::Archive(ParsedArchiveUrl::try_from(url)?))
+        }
+    }
+}
+
+impl TryFrom<&DirectUrl> for ParsedUrl {
+    type Error = ParsedUrlError;
+
+    /// Reconstruct an installed source without reparsing structured fields as URL fragments.
+    /// Git sources select the recorded commit when available.
+    fn try_from(value: &DirectUrl) -> Result<Self, Self::Error> {
+        match value {
+            DirectUrl::LocalDirectory {
+                url,
+                dir_info,
+                subdirectory,
+            } => {
+                let mut install_path = url
+                    .to_file_path()
+                    .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?;
+                let url = if let Some(subdirectory) = subdirectory {
+                    if !is_relative_subdirectory(subdirectory) {
+                        return Err(ParsedUrlError::InvalidDirectorySubdirectory(
+                            subdirectory.clone(),
+                        ));
+                    }
+                    install_path.push(subdirectory);
+                    SafeUrl::from_file_path(&install_path)
+                        .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?
+                } else {
+                    url.as_url().clone()
+                };
+                Ok(Self::Directory(ParsedDirectoryUrl {
+                    url,
+                    install_path: install_path.into_boxed_path(),
+                    editable: dir_info.editable,
+                    r#virtual: None,
+                }))
+            }
+            DirectUrl::ArchiveUrl {
+                url,
+                subdirectory,
+                archive_info: _,
+            } => {
+                let mut url = url.as_url().clone();
+                url.set_fragment(None);
+                if url.scheme().eq_ignore_ascii_case("file") {
+                    let install_path = url
+                        .to_file_path()
+                        .map_err(|()| ParsedUrlError::InvalidFileUrl(url.to_string()))?;
+                    Self::from_file_archive(url, install_path, subdirectory.clone())
+                } else {
+                    let ext = DistExtension::from_path(url.path())
+                        .map_err(|err| ParsedUrlError::MissingExtensionUrl(url.to_string(), err))?;
+                    Ok(Self::Archive(ParsedArchiveUrl::from_source(
+                        url,
+                        subdirectory.clone(),
+                        ext,
+                    )))
+                }
+            }
+            DirectUrl::VcsUrl {
+                url,
+                subdirectory,
+                path,
+            } => {
+                match url.vcs_info().vcs {
+                    VcsKind::Git => {}
+                    VcsKind::Hg | VcsKind::Bzr | VcsKind::Svn => {
+                        return Self::try_from(SafeUrl::from(value));
+                    }
+                }
+                let repository = url.url().as_str();
+                let repository = repository.strip_prefix("git+").unwrap_or(repository);
+                // The metadata URL has already passed credential validation with its VCS prefix.
+                let repository = SafeUrl::parse_relaxed(repository)
+                    .map_err(|err| ParsedUrlError::UrlParse(repository.to_string(), err.into()))?;
+                let revision = url
+                    .vcs_info()
+                    .commit_id
+                    .as_ref()
+                    .or(url.vcs_info().requested_revision.as_ref());
+                let reference = revision
+                    .cloned()
+                    .map_or(GitReference::DefaultBranch, GitReference::from_rev);
+                let git = GitUrl::from_fields(
+                    repository,
+                    reference,
+                    None,
+                    url.vcs_info().git_lfs.unwrap_or_default().into(),
+                )?;
+                if let Some(path) = path {
+                    let ext = DistExtension::from_path(path)
+                        .map_err(|err| ParsedUrlError::MissingExtensionPath(path.clone(), err))?;
+                    Ok(Self::GitPath(ParsedGitPathUrl::from_source(
+                        git,
+                        path.clone(),
+                        ext,
+                    )))
+                } else {
+                    Ok(Self::GitDirectory(ParsedGitDirectoryUrl::from_source(
+                        git,
+                        subdirectory.clone(),
+                    )))
+                }
+            }
         }
     }
 }
@@ -721,7 +843,7 @@ impl From<ParsedGitDirectoryUrl> for SafeUrl {
 mod tests {
     use anyhow::Result;
 
-    use crate::{DirectUrl, ParsedGitDirectoryUrl, parsed_url::ParsedUrl};
+    use crate::{DirectUrl, ParsedGitDirectoryUrl, parsed_url::ParsedUrl, read_direct_url_json};
     use uv_git_types::{GitLfs, GitReference, GitUrl};
     use uv_redacted::SafeUrl;
 
@@ -759,6 +881,16 @@ mod tests {
         let actual = SafeUrl::from(ParsedUrl::try_from(expected.clone())?);
         assert_ne!(expected, actual);
 
+        Ok(())
+    }
+
+    /// Archive metadata must not be reclassified as a Git source based on the URL's spelling.
+    #[test]
+    fn direct_url_archive_with_git_suffix() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            r#"{"url":"https://example.com/archive.git","archive_info":{}}"#.as_bytes(),
+        )?;
+        assert!(ParsedUrl::try_from(&metadata).is_err());
         Ok(())
     }
 
@@ -819,6 +951,7 @@ mod tests {
             SafeUrl::from(&metadata).as_str(),
             "git+https://user:password@example.com/project@team.git@v1?sig=signature#subdirectory=src&lfs=true"
         );
+        assert_eq!(DirectUrl::from(&ParsedUrl::try_from(&metadata)?), metadata);
         Ok(())
     }
 

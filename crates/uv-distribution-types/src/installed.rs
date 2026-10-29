@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use fs_err as fs;
 use thiserror::Error;
@@ -14,7 +14,11 @@ use uv_fs::Simplified;
 use uv_install_wheel::WheelFile;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pypi_types::{DirectUrl, DirectUrlError, MetadataError, read_direct_url_json};
+use uv_pep508::VerbatimUrl;
+use uv_pypi_types::{
+    DirectUrl, DirectUrlError, MetadataError, ParsedDirectoryUrl, ParsedUrl, ParsedUrlError,
+    VerbatimParsedUrl, read_direct_url_json,
+};
 use uv_redacted::SafeUrl;
 
 use crate::{
@@ -25,6 +29,9 @@ use crate::{
 pub enum InstalledDistError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    DirectUrl(#[from] DirectUrlError),
 
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
@@ -68,9 +75,23 @@ pub enum InstalledDistError {
     },
 }
 
+#[derive(Debug, Error)]
+pub enum InstalledSourceError {
+    #[error("Failed to read the recorded origin in `{}`", path.user_display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        err: Arc<InstalledDistError>,
+    },
+    #[error(transparent)]
+    Parse(#[from] ParsedUrlError),
+}
+
 #[derive(Debug, Clone)]
 pub struct InstalledDist {
     pub kind: InstalledDistKind,
+    // Bulk upgrades defer this failure until an installed distribution is used as a root.
+    origin_error: Option<Arc<InstalledDistError>>,
     // Cache data that must be read from the `.dist-info` directory. These are safe to cache as
     // the `InstalledDist` is immutable after creation.
     metadata_cache: OnceLock<uv_pypi_types::ResolutionMetadata>,
@@ -81,6 +102,7 @@ impl From<InstalledDistKind> for InstalledDist {
     fn from(kind: InstalledDistKind) -> Self {
         Self {
             kind,
+            origin_error: None,
             metadata_cache: OnceLock::new(),
             tags_cache: OnceLock::new(),
         }
@@ -166,6 +188,19 @@ impl InstalledDist {
     ///
     /// See: <https://packaging.python.org/en/latest/specifications/recording-installed-packages/#recording-installed-packages>
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        Self::try_from_path_with_origin(path, false)
+    }
+
+    /// Read an installed distribution for an upgrade. An unusable origin is checked when
+    /// constructing the root requirement, after applying exclusions and overrides.
+    pub fn try_from_path_for_upgrade(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        Self::try_from_path_with_origin(path, true)
+    }
+
+    fn try_from_path_with_origin(
+        path: &Path,
+        defer_invalid_origin: bool,
+    ) -> Result<Option<Self>, InstalledDistError> {
         // Ex) `cffi-1.16.0.dist-info`
         if path.extension().is_some_and(|ext| ext == "dist-info") {
             let Some(file_stem) = path.file_stem() else {
@@ -183,30 +218,40 @@ impl InstalledDist {
             let cache_info = Self::read_cache_info(path)?;
             let build_info = Self::read_build_info(path)?;
 
-            return if let Some((direct_url, url)) = Self::read_direct_url(path)? {
-                Ok(Some(Self::from(InstalledDistKind::Url(
-                    InstalledDirectUrlDist {
-                        name,
-                        version,
-                        editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
-                        direct_url: Box::new(direct_url),
-                        url,
-                        path: path.to_path_buf().into_boxed_path(),
-                        cache_info,
-                        build_info,
-                    },
-                ))))
-            } else {
-                Ok(Some(Self::from(InstalledDistKind::Registry(
-                    InstalledRegistryDist {
-                        name,
-                        version,
-                        path: path.to_path_buf().into_boxed_path(),
-                        cache_info,
-                        build_info,
-                    },
-                ))))
+            let origin_error = match Self::read_direct_url(path, defer_invalid_origin) {
+                Ok(Some((direct_url, url))) => {
+                    return Ok(Some(Self::from(InstalledDistKind::Url(
+                        InstalledDirectUrlDist {
+                            name,
+                            version,
+                            editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
+                            direct_url: Box::new(direct_url),
+                            url,
+                            path: path.to_path_buf().into_boxed_path(),
+                            cache_info,
+                            build_info,
+                        },
+                    ))));
+                }
+                Ok(None) => None,
+                Err(err) if defer_invalid_origin => Some(Arc::new(err)),
+                Err(InstalledDistError::DirectUrl(DirectUrlError::Url(err))) => {
+                    warn!("Failed to parse direct URL: {err}");
+                    None
+                }
+                Err(err) => return Err(err),
             };
+            let kind = InstalledDistKind::Registry(InstalledRegistryDist {
+                name,
+                version,
+                path: path.to_path_buf().into_boxed_path(),
+                cache_info,
+                build_info,
+            });
+            return Ok(Some(Self {
+                origin_error,
+                ..Self::from(kind)
+            }));
         }
 
         // Ex) `zstandard-0.22.0-py3.12.egg-info` or `vtk-9.2.6.egg-info`
@@ -364,22 +409,56 @@ impl InstalledDist {
         }
     }
 
+    /// Reconstruct the source of an installed package for an upgrade.
+    ///
+    /// A registry distribution has no direct source. Unreadable origins must not be treated
+    /// as registry installations.
+    pub fn upgrade_source(&self) -> Result<Option<VerbatimParsedUrl>, InstalledSourceError> {
+        if let Some(err) = &self.origin_error {
+            return Err(InstalledSourceError::Read {
+                path: self.install_path().join("direct_url.json"),
+                err: Arc::clone(err),
+            });
+        }
+        Ok(match &self.kind {
+            InstalledDistKind::Registry(_)
+            | InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_) => None,
+            InstalledDistKind::Url(dist) => Some(VerbatimParsedUrl::for_upgrade(&dist.direct_url)?),
+            InstalledDistKind::LegacyEditable(dist) => Some(VerbatimParsedUrl {
+                parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl {
+                    install_path: dist.target.clone(),
+                    url: dist.target_url.clone(),
+                    editable: Some(true),
+                    r#virtual: None,
+                }),
+                verbatim: VerbatimUrl::from_url(dist.target_url.clone()),
+            }),
+        })
+    }
+
     /// Read the `direct_url.json` file from a `.dist-info` directory.
-    fn read_direct_url(path: &Path) -> Result<Option<(DirectUrl, SafeUrl)>, InstalledDistError> {
-        let path = path.join("direct_url.json");
+    fn read_direct_url(
+        dist_info: &Path,
+        check_dangling: bool,
+    ) -> Result<Option<(DirectUrl, SafeUrl)>, InstalledDistError> {
+        let path = dist_info.join("direct_url.json");
         let file = match fs_err::File::open(&path) {
             Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // A dangling origin is not evidence of a registry installation.
+                if check_dangling {
+                    match fs_err::symlink_metadata(&path) {
+                        Ok(_) => return Err(err.into()),
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                return Ok(None);
+            }
             Err(err) => return Err(err.into()),
         };
-        match read_direct_url_json(BufReader::new(file)) {
-            Ok(direct_url) => Ok(Some(direct_url)),
-            Err(DirectUrlError::Url(err)) => {
-                warn!("Failed to parse direct URL: {err}");
-                Ok(None)
-            }
-            Err(DirectUrlError::Json(err)) => Err(err.into()),
-        }
+        Ok(Some(read_direct_url_json(BufReader::new(file))?))
     }
 
     /// Read the `uv_cache.json` file from a `.dist-info` directory.

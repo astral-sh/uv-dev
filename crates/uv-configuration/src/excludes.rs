@@ -126,7 +126,7 @@ impl Excludes {
     }
 
     /// Check if a package is excluded.
-    pub(crate) fn contains(&self, name: &PackageName) -> bool {
+    pub fn contains(&self, name: &PackageName) -> bool {
         if let Some(recorder) = &self.recorder {
             recorder.exclusion(name);
         }

@@ -60,18 +60,36 @@ impl SitePackages {
         package_names: impl IntoIterator<Item = &'a PackageName>,
     ) -> Result<Self> {
         let package_names = package_names.into_iter().collect::<FxHashSet<_>>();
-        Self::from_interpreter_with_filter(environment.interpreter(), Some(&package_names))
+        Self::from_interpreter_with_filter(
+            environment.interpreter(),
+            Some(&|name| package_names.contains(name)),
+            InstalledDist::try_from_path,
+        )
+    }
+
+    /// Index the installed roots of a bulk upgrade. Excluded packages need no metadata,
+    /// and unusable origins can still be replaced by an explicit override.
+    pub fn from_environment_for_upgrade(
+        environment: &PythonEnvironment,
+        excludes: &Excludes,
+    ) -> Result<Self> {
+        Self::from_interpreter_with_filter(
+            environment.interpreter(),
+            Some(&|name| !excludes.contains(name)),
+            InstalledDist::try_from_path_for_upgrade,
+        )
     }
 
     /// Build an index of installed packages from the given Python executable.
     pub fn from_interpreter(interpreter: &Interpreter) -> Result<Self> {
-        Self::from_interpreter_with_filter(interpreter, None)
+        Self::from_interpreter_with_filter(interpreter, None, InstalledDist::try_from_path)
     }
 
     /// Build an index of installed packages from the given Python executable.
     fn from_interpreter_with_filter(
         interpreter: &Interpreter,
-        package_names: Option<&FxHashSet<&PackageName>>,
+        include: Option<&dyn Fn(&PackageName) -> bool>,
+        read: impl Fn(&Path) -> Result<Option<InstalledDist>, uv_distribution_types::InstalledDistError>,
     ) -> Result<Self> {
         let mut distributions: Vec<Option<InstalledDist>> = Vec::new();
         let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
@@ -94,14 +112,14 @@ impl SitePackages {
 
             // Index all installed packages by name.
             for path in site_packages {
-                if let Some(package_names) = package_names
+                if let Some(include) = include
                     && let Some(package_name) = installed_dist_name(&path)
-                    && !package_names.contains(&package_name)
+                    && !include(&package_name)
                 {
                     continue;
                 }
 
-                let dist_info = match InstalledDist::try_from_path(&path) {
+                let dist_info = match read(&path) {
                     Ok(Some(dist_info)) => dist_info,
                     Ok(None) => continue,
                     Err(_)
@@ -123,8 +141,8 @@ impl SitePackages {
                     }
                 };
 
-                if let Some(package_names) = package_names
-                    && !package_names.contains(dist_info.name())
+                if let Some(include) = include
+                    && !include(dist_info.name())
                 {
                     continue;
                 }
