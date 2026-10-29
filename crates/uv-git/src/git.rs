@@ -165,6 +165,18 @@ impl GitRepository {
         result.with_context(|| format!("failed to find {} `{reference}`", reference.kind_str()))
     }
 
+    /// Point a local reference at a commit already present in the repository.
+    fn update_ref(&self, destination: &str, commit: GitOid) -> Result<()> {
+        GIT.as_ref()
+            .cloned()?
+            .arg("update-ref")
+            .arg(destination)
+            .arg(commit.to_string())
+            .cwd(&self.path)
+            .exec_with_output()?;
+        Ok(())
+    }
+
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
         let result = GIT
@@ -633,6 +645,7 @@ fn fetch(
     let mut refspecs = Vec::new();
     let mut tags = false;
     let mut refspec_strategy = RefspecStrategy::All;
+    let mut fallback = None;
     // The `+` symbol on the refspec means to allow a forced (fast-forward)
     // update which is needed if there is ever a force push that requires a
     // fast-forward.
@@ -663,7 +676,7 @@ fn fetch(
             let destination = format!("refs/uv/installed/{rev}");
             refspecs.push(format!("+refs/heads/{rev}:{destination}"));
             refspecs.push(format!("+refs/tags/{rev}:{destination}"));
-            refspecs.push(format!("+{commit}:{destination}"));
+            fallback = Some((**commit, destination));
             refspec_strategy = RefspecStrategy::First;
         }
 
@@ -735,6 +748,29 @@ fn fetch(
                 Ok(())
             }
         }
+    };
+    // A missing branch or tag falls back to the installed commit. Replace any earlier
+    // resolution of the name, even when the commit can be reused without a network fetch.
+    let result = if result.is_err()
+        && let Some((commit, destination)) = fallback
+    {
+        if repo
+            .resolve(&GitReference::Commit(commit))
+            .is_ok_and(|local| local == commit)
+        {
+            repo.update_ref(&destination, commit)
+        } else {
+            fetch_with_cli(
+                repo,
+                remote_url,
+                &[format!("+{commit}:{destination}")],
+                false,
+                disable_ssl,
+                offline,
+            )
+        }
+    } else {
+        result
     };
     match reference {
         // With the default branch, adding context is confusing

@@ -1569,6 +1569,17 @@ fn git_annotated_tag_object_metadata() -> Result<()> {
         .args(["tag", "--force", "release", "HEAD"])
         .assert()
         .success();
+    // A warm cache already contains the commit, even if the remote is no longer reachable.
+    let unavailable = context.temp_dir.child("unavailable");
+    fs_err::rename(repo.path(), unavailable.path())?;
+    uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+    fs_err::rename(unavailable.path(), repo.path())?;
+
     let context = context.with_cache_dir("cold-cache");
     uv_snapshot!(context.filters(), context.pip_upgrade().args(["--all", "--no-index"]), @"
     exit_code: 0 (success)
