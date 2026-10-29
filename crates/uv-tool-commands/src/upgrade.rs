@@ -1,4 +1,4 @@
-use crate::common::finalize_tool_install;
+use crate::common::{finalize_tool_install, options_with_receipt};
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
@@ -8,14 +8,13 @@ use std::str::FromStr;
 use tracing::{debug, trace};
 
 use uv_cache::Cache;
-use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{ExtraBuildRequires, Name, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -326,29 +325,11 @@ async fn upgrade_tool(
         }
     };
 
-    // Restore credentials from user configuration when the receipt refers to the same index.
-    // Receipts intentionally omit credentials, including usernames needed for keyring lookups.
-    let mut receipt = ResolverInstallerOptions::from(existing_tool_receipt.options().clone());
-    if let (Some(stored), Some(configured)) = (
-        receipt.indexes.index_url.as_ref(),
-        filesystem.indexes.index_url.as_ref(),
-    ) {
-        let stored = Index::from(stored.clone());
-        let configured = Index::from(configured.clone());
-
-        if stored.raw_url().username().is_empty()
-            && stored.raw_url().password().is_none()
-            && (!configured.raw_url().username().is_empty()
-                || configured.raw_url().password().is_some())
-            && CanonicalUrl::new(stored.raw_url().clone())
-                == CanonicalUrl::new(configured.raw_url().clone())
-        {
-            receipt.indexes.index_url = Some(configured.into());
-        }
-    }
-
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
-    let options = args.clone().combine(receipt.combine(filesystem.clone()));
+    let options = args.clone().combine(options_with_receipt(
+        existing_tool_receipt.options(),
+        filesystem.clone(),
+    ));
     let settings = ResolverInstallerSettings::try_from(options.clone())?;
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
