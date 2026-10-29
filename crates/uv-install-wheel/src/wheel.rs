@@ -269,20 +269,7 @@ impl<'wheel> ValidatedWheel<'wheel> {
                 let relative = relative_to(entry.path(), &source)?;
                 let target = destination.join(relative);
                 validate_data_script_destination(&target, &layout.scheme.scripts)?;
-                if target.file_name().is_some_and(is_installer_metadata)
-                    && let Some(parent) = target.parent()
-                    && parent
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("dist-info"))
-                    && parent.parent().is_some_and(|root| {
-                        root == layout.scheme.purelib || root == layout.scheme.platlib
-                    })
-                {
-                    return Err(Error::InvalidWheel(format!(
-                        "Wheel data cannot install metadata at `{}`",
-                        target.simplified_display()
-                    )));
-                }
+                validate_data_metadata_destination(&target, layout)?;
             }
         }
 
@@ -292,6 +279,39 @@ impl<'wheel> ValidatedWheel<'wheel> {
     pub(crate) fn as_path(&self) -> &Path {
         self.path
     }
+}
+
+/// Wheel data must not place installer-owned files into an installed distribution,
+/// including through a symlink to a library or its `.dist-info` directory.
+fn validate_data_metadata_destination(target: &Path, layout: &Layout) -> Result<(), Error> {
+    if !target.file_name().is_some_and(is_installer_metadata) {
+        return Ok(());
+    }
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    let in_dist_info = |dir: &Path| {
+        dir.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dist-info"))
+            && dir.parent().is_some_and(|root| {
+                [&layout.scheme.purelib, &layout.scheme.platlib]
+                    .iter()
+                    .any(|lib| uv_fs::is_same_file_allow_missing(root, lib) == Some(true))
+            })
+    };
+    if in_dist_info(parent)
+        || match fs::canonicalize(parent) {
+            Ok(dir) => in_dist_info(&dir),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        }
+    {
+        return Err(Error::InvalidWheel(format!(
+            "Wheel data cannot install metadata at `{}`",
+            target.simplified_display()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_data_script_destination(target: &Path, scripts: &Path) -> Result<(), Error> {
@@ -971,7 +991,7 @@ pub(crate) fn discard_wheel_installer_metadata(
         return Ok(());
     }
     record.retain(|entry| {
-        let path = Path::new(&entry.path);
+        let path = uv_fs::normalize_path(Path::new(&entry.path));
         !(path.parent() == Some(&dist_info) && path.file_name().is_some_and(is_installer_metadata))
     });
     Ok(())
