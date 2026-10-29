@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 4345,
+        "title": "Elide interpreter path from debug logs when using managed toolchain",
+        "url": "https://github.com/astral-sh/uv/issues/4345",
+        "state": "closed",
+        "reason": "Closest path-elision precedent. Despite its title, the closing discussion demonstrates omission of managed-interpreter paths from routine output while verbose logs still contain full paths. It does not cover home-prefix replacement across configuration, workspace, and other diagnostics."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5311,
+        "title": "Omit interpreter path during `uv venv` with managed Python",
+        "url": "https://github.com/astral-sh/uv/pull/5311",
+        "state": "merged",
+        "reason": "Implemented the narrower managed-Python display change for uv venv. A maintainer's verbose-output example explicitly retains absolute home paths in DEBUG messages; this is adjacent precedent, not a home-directory scrubbing fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5313,
+        "title": "Omit interpreter path from output when using managed Python",
+        "url": "https://github.com/astral-sh/uv/pull/5313",
+        "state": "merged",
+        "reason": "Extended astral-sh/uv#5311 to project commands. The maintainer explicitly states that interpreter paths should remain in DEBUG logs, distinguishing that change from the requested default home-path abbreviation."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Separately searched home-path scrubbing, default/optional redaction, and symlink/canonical-home handling. Literal searches included the two debug messages, home directory/output, scrub, redact, and tilde; conceptual searches included privacy, personal information, anonymization, sanitization, abbreviation, elision, and area:cli/area:tracing vocabulary. Fix-oriented searches covered merged home/path changes and closed redaction work; followed astral-sh/uv#4345 through astral-sh/uv#5311, astral-sh/uv#5313, and astral-sh/uv#6166, inspecting comments and release context. Ruled out astral-sh/uv#16288 (tilde expansion in configuration inputs), astral-sh/uv#5308 (displaying interpreter symlink targets), astral-sh/uv#5440 and astral-sh/uv#5446 (Windows executable canonicalization), and astral-sh/uv#6840 (root-directory path rendering). The reporter-linked astral-sh/uv#22985 concerns advisory duplication and fix versions, not path scrubbing. A transient search rate limit was resolved before the final targeted searches. No matching duplicate or historical home-scrubbing fix was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The report requests a new default privacy-oriented display policy: abbreviate home-directory prefixes, recognize symlinked and resolved home paths, and possibly provide an opt-out. Source inspection confirms that the reported debug messages currently render paths without home abbreviation. Earlier managed-Python changes deliberately retained paths in debug logs, so they do not establish a regression or duplicate; no incorrect path value or broken existing scrubbing behavior is established.",
+  "summary": "No duplicate found. astral-sh/uv#4345 and merged astral-sh/uv#5311 and astral-sh/uv#5313 cover narrower managed-interpreter path omission while retaining full paths in verbose logs.",
+  "draft_response": "Your configuration and workspace examples match the current behavior: those debug messages print paths without abbreviating the home directory. The managed-Python changes in astral-sh/uv#5311 and astral-sh/uv#5313 intentionally kept paths in debug logs, so they do not cover this request. This is an enhancement. Before implementation, we need to settle which output should abbreviate home paths, how to recognize both the symlinked and resolved home directory, and whether an opt-out is needed."
+}

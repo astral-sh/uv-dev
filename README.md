@@ -1,21 +1,62 @@
-# Issue context
+# Scrub home directory path from `uv` output
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#22986
 
-Classification: bug, enhancement, duplicate, or question
+Classification: enhancement
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+The reporter wants uv to replace the current user's home-directory prefix with `~` in output by default, reducing personal information exposed when verbose logs are shared in bug reports. An opt-out flag is suggested, not required. The motivating command is `uv audit --verbose`, but the requested capability applies broadly to uv output.
+
+The concrete examples are `DEBUG Found user configuration in: /home/jdoe/.config/uv/uv.toml`, which should display `~/.config/uv/uv.toml`, and `DEBUG Found workspace root: /var/home/jdoe/rust-lang/fls`, which should display `~/rust-lang/fls`. The latter describes an atomic-distribution setup where the home directory has both symlinked and resolved spellings. Supporting both spellings is part of the request.
+
+No duplicate found. astral-sh/uv#4345 and merged astral-sh/uv#5311 and astral-sh/uv#5313 cover narrower managed-interpreter path omission while retaining full paths in verbose logs.
 
 ## Draft response
 
-Draft a proposed reply for maintainer review.
+Your configuration and workspace examples match the current behavior: those debug messages print paths without abbreviating the home directory. The managed-Python changes in astral-sh/uv#5311 and astral-sh/uv#5313 intentionally kept paths in debug logs, so they do not cover this request. This is an enhancement. Before implementation, we need to settle which output should abbreviate home paths, how to recognize both the symlinked and resolved home directory, and whether an opt-out is needed.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+The report requests a new default privacy-oriented display policy: abbreviate home-directory prefixes, recognize symlinked and resolved home paths, and possibly provide an opt-out. Source inspection confirms that the reported debug messages currently render paths without home abbreviation. Earlier managed-Python changes deliberately retained paths in debug logs, so they do not establish a regression or duplicate; no incorrect path value or broken existing scrubbing behavior is established.
+
+The source evidence establishes the absence of home abbreviation at the reported logging sites. The symlink layout is reporter-provided context; it was not independently reproduced. The linked audit report identifies uv 0.13.6 on Fedora 44 Kinoite, but this issue does not claim a version regression.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- astral-sh/uv#4345 — Elide interpreter path from debug logs when using managed toolchain (issue, closed). Closest path-elision precedent. Despite its title, the closing discussion demonstrates omission of managed-interpreter paths from routine output while verbose logs still contain full paths. It does not cover home-prefix replacement across configuration, workspace, and other diagnostics.
+- astral-sh/uv#5311 — Omit interpreter path during `uv venv` with managed Python (pull request, merged). Implemented the narrower managed-Python display change for uv venv. A maintainer's verbose-output example explicitly retains absolute home paths in DEBUG messages; this is adjacent precedent, not a home-directory scrubbing fix.
+- astral-sh/uv#5313 — Omit interpreter path from output when using managed Python (pull request, merged). Extended astral-sh/uv#5311 to project commands. The maintainer explicitly states that interpreter paths should remain in DEBUG logs, distinguishing that change from the requested default home-path abbreviation.
+
+## Supporting evidence
+
+Source inspected at checkout commit `c76ff10bab78a44da9cd26f81d15c1e5ad018e03`:
+
+- `crates/uv-settings/src/lib.rs:59`: user configuration discovery constructs the configuration path; the searching and found debug messages at lines 66 and 69 use `file.display()` directly.
+- `crates/uv-workspace/src/workspace.rs:554` and line 1880: workspace-root debug messages use `workspace_root.simplified_display()`.
+- `crates/uv-fs/src/path.rs:55`: `simplified_display()` uses `dunce::simplified(...).display()`, which handles Windows path prefixes without substituting the user's home directory. `user_display()` at line 63 can strip the current working directory, but contains no home-prefix abbreviation.
+- `crates/uv-logging/src/lib.rs:63`: field formatting strips ANSI escape sequences and writes the formatted value; it does not scrub home paths.
+
+Historical discussion provides the decisive scope distinction:
+
+- astral-sh/uv#5311 merged on July 23, 2024. The maintainer's verbose example retains absolute home paths in managed-Python discovery messages, even though the routine `Using Python ...` line omits the interpreter path.
+- astral-sh/uv#5313 merged on July 24, 2024. Its maintainer comment explicitly says, “Note we should still show the interpreter path in DEBUG logs.”
+- astral-sh/uv#4345 was closed on May 18, 2026 with examples comparing uv 0.2.37 and 0.3.0. Those examples still contain home-directory paths in verbose output. The closing comment also points to astral-sh/uv#6166, merged August 19, 2024, which enabled preview behavior by default for uv 0.3.0; it did not add home-path redaction.
+
+## Search scope and excluded candidates
+
+Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Separately searched home-path scrubbing, default/optional redaction, and symlink/canonical-home handling. Literal searches included the two debug messages, home directory/output, scrub, redact, and tilde; conceptual searches included privacy, personal information, anonymization, sanitization, abbreviation, elision, and area:cli/area:tracing vocabulary. Fix-oriented searches covered merged home/path changes and closed redaction work; followed astral-sh/uv#4345 through astral-sh/uv#5311, astral-sh/uv#5313, and astral-sh/uv#6166, inspecting comments and release context. Ruled out astral-sh/uv#16288 (tilde expansion in configuration inputs), astral-sh/uv#5308 (displaying interpreter symlink targets), astral-sh/uv#5440 and astral-sh/uv#5446 (Windows executable canonicalization), and astral-sh/uv#6840 (root-directory path rendering). The reporter-linked astral-sh/uv#22985 concerns advisory duplication and fix versions, not path scrubbing. A transient search rate limit was resolved before the final targeted searches. No matching duplicate or historical home-scrubbing fix was found.
+
+The closest-looking excluded issues were inspected with their comments:
+
+- astral-sh/uv#16288 requests expanding `~` when reading configuration values. Its discussion concerns portable cache configuration and filesystem placement; this is input interpretation rather than output abbreviation.
+- astral-sh/uv#5308 requests displaying interpreter symlink targets in `uv python list`. Maintainer comments discuss `read_link` and a possible canonical-paths option to clarify interpreter identity, not hiding home-directory prefixes.
+- astral-sh/uv#5440 and its merged fix astral-sh/uv#5446 address Windows UNC executable canonicalization causing virtual-environment failures. The fix avoids canonicalizing executables on Windows; it does not implement privacy-oriented display formatting.
+- astral-sh/uv#6840 concerns retaining the leading slash when displaying paths from the filesystem root. It has no comments and does not request home abbreviation.
+- astral-sh/uv#22985 supplied the motivating verbose transcript, already manually scrubbed by the reporter. Its subject is duplicate vulnerability advisories and incorrect fix versions, so it is not a canonical discussion for this enhancement.
+
+## Maintainer next step
+
+Agree on the scope of home abbreviation before implementation: which human-readable diagnostics should use it, whether path-valued command output needs separate treatment, how both the configured home path and its resolved target should be recognized, and whether users need an opt-out. Any implementation should account for both direct path formatting and existing shared display helpers; changing only `user_display()` would not affect the two reported logging sites.
+
+This handoff is based on read-only GitHub and source inspection. No reproduction, build, or tests were run. Only this temporary README was updated; no checkout files or GitHub objects were changed.
