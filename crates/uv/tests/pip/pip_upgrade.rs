@@ -1417,22 +1417,29 @@ fn git_hex_branch_dependency() -> Result<()> {
         build-backend = "uv_build"
     "#})?;
     repo.child("src/example/__init__.py").touch()?;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .current_dir(repo.path())
-            .args([
-                "-c",
-                "user.name=ferris",
-                "-c",
-                "user.email=ferris@example.com",
-            ])
-            .args(args)
-            .assert()
-            .success();
-    };
-    git(&["init", "--initial-branch", "20240222"]);
-    git(&["add", "."]);
-    git(&["commit", "-m", "initial"]);
+    Command::new("git")
+        .current_dir(repo.path())
+        .args(["init", "--initial-branch", "20240222"])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repo.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ])
+        .assert()
+        .success();
 
     let url = SafeUrl::from_file_path(repo.path()).expect("absolute repository path");
     let requirement = format!("example @ git+{url}@20240222");
