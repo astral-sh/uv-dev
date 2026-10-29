@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with installed uv 0.13.5 on Ubuntu 24.04.5 x86_64 and Python 3.12.3. In a fresh temporary project with requires-python >=3.10 and dependency certifi==2024.12.14, ran `uv audit --no-config --no-build --no-python-downloads` with an isolated cache. It exited 1, displayed PYSEC-2026-4320 twice with fixed versions 2026.10.18 and 2026.10.19, and counted two vulnerabilities. Live OSV records contain those conflicting versions; GitHub's advisory identifies 2026.10.18 as first patched. Thus duplicate reporting is reproduced, while the version discrepancy exists upstream. The reported uv 0.13.6 environment was not tested. Updated $RUNNER_TEMP/issue-context/README.md; no checkout or GitHub changes."
+}

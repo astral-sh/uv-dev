@@ -14,11 +14,16 @@ fixed versions of 2026.10.18 and 2026.10.19. Similar duplicates appear for anyio
 h11, idna, jinja2, pygments, requests, starlette, and urllib3. The overall output
 reports 48 known vulnerabilities in 34 packages.
 
-Source inspection confirms that findings are not merged across advisory aliases.
-Live OSV and GitHub advisory responses confirm the two certifi records have
-conflicting fixed-version metadata. These are separate concerns: uv should not
-present aliased records as distinct vulnerabilities, and the incorrect upstream
-fixed event also needs correction.
+Reproduced on 2026-10-29 with the installed uv 0.13.5 on Ubuntu 24.04.5,
+x86_64 Linux, and CPython 3.12.3. A fresh project containing only
+`certifi==2024.12.14` produces the same two PYSEC-2026-4320 entries, conflicting
+fixed versions, and count of two vulnerabilities. The reported uv 0.13.6 and
+Fedora/Python combination were not run.
+
+Fresh OSV and GitHub advisory reads confirm that the fixed-version conflict is
+already present upstream: PYSEC specifies 2026.10.19, while GHSA and GitHub's
+advisory specify 2026.10.18. The duplicate presentation/counting and inconsistent
+upstream fixed events are separate concerns.
 
 No matching duplicate or historical deduplication fix found. astral-sh/uv#22292 explains the identical display IDs; astral-sh/uv#20399 addresses a different fix-version bug; astral-sh/uv#19492 provides upstream data-quality guidance.
 
@@ -30,13 +35,117 @@ The fix-version mismatch is present upstream: OSV's PYSEC-2026-4320 record speci
 
 ## Classification
 
-Source confirms that alias-linked OSV records remain separate findings and are counted as separate vulnerabilities, producing misleading output. Live OSV records also confirm the reported fixed-version conflict: PYSEC says 2026.10.19 while GHSA and GitHub's advisory say 2026.10.18. No existing item tracks the same problem, and the earlier display-ID and package-scoping fixes did not implement alias deduplication; this is not an established regression of those fixes.
+Bug: the executed audit counts two mutually aliased records for the same
+package/version as two vulnerabilities and displays the same preferred PYSEC
+identifier twice. This is misleading even though the audit command is
+experimental. The reproducer and inspected implementation support treating
+alias deduplication/counting as a uv reporting issue.
 
-The report is a correctness issue even though the audit command is experimental.
-Counting multiple records for the same vulnerability overstates the number of
-vulnerabilities. The upstream data problem does not make that count correct.
-There is no evidence that a previously implemented alias-deduplication fix has
-regressed. The earlier changes below address different behavior.
+The conflicting fix versions are present in OSV's source data, and uv displays
+those values. GitHub's advisory and the upstream YAML's prose identify
+2026.10.18 as removing the affected roots, while the PYSEC fixed event specifies
+2026.10.19. Correcting that event is an upstream data concern; no evidence shows
+uv inventing the later version.
+
+The prior related-item search found no existing item tracking this same problem.
+There is no demonstrated regression of a previous alias-deduplication fix;
+the related display-ID and package-scoping changes address different behavior.
+The reproduction on 0.13.5 also establishes that the symptom is not exclusive
+to the reported 0.13.6 release.
+
+## Reproduction
+
+Outcome: **reproducible**, observed on 2026-10-29 against the live default PyPI
+index and OSV service. No mocked advisory responses were used.
+
+### Inputs and environment
+
+- Reported commands: `uv audit` and `uv audit --verbose` from the root of
+  rust-lang/fls at `2f683b0678541a1900e8b6fa2877c4eeff27344a`.
+- Reported environment: uv 0.13.6, Fedora 44 Kinoite,
+  Linux 7.2.13-200.fc44.x86_64, Python 3.11.18.
+- The public project metadata at that commit has `requires-python = ">= 3.10"`
+  and dependencies `sphinx ~= 8.0` and `sphinx-autobuild >= 0`, with no
+  `[tool]` section. The report's lock resolves certifi to 2024.12.14.
+  The report also mentions user configuration without providing its contents;
+  the minimal reproduction succeeds with configuration discovery disabled.
+- Executed environment: installed `uv 0.13.5 (x86_64-unknown-linux-gnu)` at
+  `/opt/hostedtoolcache/uv/0.13.5/x86_64/uv`, Ubuntu 24.04.5 LTS,
+  Linux 7.0.0-1017-azure x86_64, `/usr/bin/python3` (CPython 3.12.3).
+- Fresh standalone project, no dependency groups or workspace members, no
+  existing lockfile or environment. The audit creates a two-package lockfile
+  and audits its sole registry dependency, certifi. No package build or
+  installation is needed.
+
+### Minimal commands
+
+```sh
+repro=$(mktemp -d /tmp/uv-22985-XXXXXX)
+mkdir "$repro/project"
+cd "$repro/project"
+cat > pyproject.toml <<'TOML'
+[project]
+name = "audit-certifi-repro"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["certifi==2024.12.14"]
+TOML
+UV_CACHE_DIR="$repro/cache" UV_PYTHON=/usr/bin/python3 \
+  uv audit --no-config --no-build --no-python-downloads
+```
+
+The actual invocation used a clean subprocess environment, with temporary,
+initially empty uv cache/configuration/data directories and Python-download
+storage. The executable was the installed `uv` on PATH. Reproduction files,
+raw stdout/stderr, exit status, and downloaded public advisory records are
+retained under `/tmp/uv-22985-j9462k1n`.
+
+### Observed result
+
+Exit status: **1**. Stdout contains:
+
+```text
+certifi 2024.12.14 has 2 known vulnerabilities:
+
+- PYSEC-2026-4320: certifi bundles emSign root CAs with compromised intermediate CA keys
+
+  Fixed in: 2026.10.18
+
+  Advisory information: https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2
+
+- PYSEC-2026-4320: certifi bundles emSign root CAs with compromised intermediate CA keys
+
+  Fixed in: 2026.10.19
+
+  Advisory information: https://github.com/advisories/GHSA-6q48-6c7w-9gw2
+```
+
+Stderr reports `Resolved 2 packages` and
+`Found 2 known vulnerabilities and no adverse project statuses in 1 package`.
+This reproduces both the duplicate entry/count and conflicting fix versions.
+The expected distinct-vulnerability count for these mutually aliased records
+is one; GitHub's advisory identifies 2026.10.18 as the first patched version.
+The fresh upstream record checks are detailed below.
+
+### Existing test coverage
+
+Read the setup, mock responses, command invocations, and snapshots in
+`crates/uv/tests/build/audit.rs`:
+
+- `audit_best_id_selection`: one CVE record with GHSA and PYSEC aliases displays
+  the PYSEC identifier and counts one vulnerability. It does not return two
+  records linked by aliases.
+- `audit_multiple_vulnerabilities_same_package`: two distinct records,
+  VULN-A and VULN-B, with no alias relationship, display separate fix versions
+  and count two vulnerabilities. This does not test duplicate identities.
+- `audit_ignore_until_fixed_with_fix_for_other_package`: a matching package
+  without a fix is ignored even when another package or a package-less affected
+  entry has fixed events. This covers package scoping, not conflicting records
+  for the same package.
+
+Searches of `crates/uv/tests/`, `crates/uv-client/tests/it/`, and the audit
+implementation/tests found no existing test for deduplicating alias-linked
+records. No checkout tests were added or run.
 
 ## Related
 
@@ -81,10 +190,6 @@ Inspected checkout commit `c76ff10bab78a44da9cd26f81d15c1e5ad018e03`:
   matching PyPI package ranges. `crates/uv-audit-operations/src/lib.rs:286`
   prints those versions. The advisory web page is not consulted to determine
   the fixed version.
-- `crates/uv/tests/build/audit.rs:467` tests preferred ID selection within a
-  single record. The nearby `audit_multiple_vulnerabilities_same_package`
-  tests two distinct vulnerabilities. Neither scenario tests two records that
-  alias the same vulnerability.
 
 ### Live advisory data checked on 2026-10-29
 
@@ -147,14 +252,25 @@ for the same package/version that alias each other; the existing single-record
 ID-preference test does not cover this. Any policy for conflicting metadata
 must avoid silently choosing an arbitrary fix version.
 
-Separately, request correction of the PYSEC fixed event upstream. The live
-records and upstream YAML already provide specific evidence; another full
-project reproduction is not needed to classify the report.
+Separately, request correction of the PYSEC fixed event upstream. The minimal
+executed reproduction, live records, and upstream YAML provide specific
+evidence for the two concerns.
 
 ## Verification limits
 
-The conclusions use the supplied output, repository source and test inspection,
-GitHub issue/PR discussions and diffs, and live advisory API/source reads.
-The full rust-lang/fls audit was not executed, and no builds or tests were run.
-Only this temporary handoff README was updated; no checkout files or GitHub
-objects were changed.
+The certifi symptom was observed by executing the installed uv 0.13.5 in a
+fresh temporary project. The full rust-lang/fls audit, its other duplicate
+advisories and total of 48 findings, uv 0.13.6, Fedora, and Python 3.11.18 were
+not independently exercised. The minimal reproduction is sufficient to
+establish the reported certifi behavior without that project's unrelated
+dependencies or omitted user configuration.
+
+Source and test inspection used checkout commit
+`c76ff10bab78a44da9cd26f81d15c1e5ad018e03`; no checkout binary was built.
+Advisory data can change after this observation. No Rust builds or repository
+tests were run. Related-issue/PR history and search coverage above are retained
+from the existing context; this reproduction pass made fresh public API/source
+reads for the certifi records and project metadata.
+
+Only this issue-context README and temporary reproduction artifacts were
+written. No checkout files, existing user state, or GitHub objects were changed.
