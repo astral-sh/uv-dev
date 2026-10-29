@@ -27,6 +27,14 @@ upstream fixed events are separate concerns.
 
 No matching duplicate or historical deduplication fix found. astral-sh/uv#22292 explains the identical display IDs; astral-sh/uv#20399 addresses a different fix-version bug; astral-sh/uv#19492 provides upstream data-quality guidance.
 
+
+The fix investigation confirmed the parent regression passes with the duplicate
+output and fails when changed to expect one finding. No production fix was
+retained: reconciling conflicting advisory metadata needs an explicit policy.
+The parent fixture also assigns the two fix versions to the opposite sources
+from the live records, so choosing the preferred display-ID source would not
+establish a correct fix. See the Fix section for validation and limitations.
+
 ## Draft response
 
 You're seeing two OSV records for the same vulnerability. uv currently keeps both findings and displays their preferred PYSEC identifier, so it also counts the vulnerability twice. That is a reporting bug; this issue can track deduplicating aliased findings and correcting the counts.
@@ -143,11 +151,20 @@ Read the setup, mock responses, command invocations, and snapshots in
   entry has fixed events. This covers package scoping, not conflicting records
   for the same package.
 
-Searches of `crates/uv/tests/`, `crates/uv-client/tests/it/`, and the audit
-implementation/tests found no existing test for deduplicating alias-linked
-records. No checkout tests were added or run.
+The initial reproduction search found no test for deduplicating alias-linked
+records. The checkout now includes
+`crates/uv/tests/build/audit.rs::audit_duplicate_vulnerability_aliases` from
+astral-sh/uv-dev#3028. This test uses mutually aliased PYSEC and GHSA records
+with conflicting fix versions and snapshots the undesirable duplicate output.
+Its baseline and temporary desired-behavior assertion were executed during the
+fix investigation, as detailed below. The module already has the
+`test-python` and `test-pypi` feature gates in `crates/uv/tests/build/main.rs`.
 
 ## Related
+
+- astral-sh/uv-dev#3028 — Parent regression pull request. Checkout commit
+  `cc087ffaf16f2089004930961c1d2cb4466c7046` adds
+  `audit_duplicate_vulnerability_aliases`, which asserts the duplicate output.
 
 - astral-sh/uv#22292 — Honor advisory ID preference in `uv audit` (merged pull request). Merged October 7, before the reported uv 0.13.6 release. It makes PYSEC aliases take precedence over GHSA/CVE display IDs, explaining why separate OSV records now display the same PYSEC identifier. It changes display selection only; it does not deduplicate findings or reconcile fix versions.
 
@@ -244,17 +261,80 @@ all-state PR listing was used to identify candidates across the audit
 implementation's history. This handoff does not treat those empty keyword
 results alone as evidence that no related PR exists.
 
+## Fix
+
+Outcome: **not_fixed**. The checkout is unchanged after the investigation;
+no production patch or modified regression was retained.
+
+### Confirmed cause and scope
+
+`Osv::query_batch` deduplicates fetches by exact advisory ID but creates a
+finding for each dependency/advisory-ID pair. `Vulnerability::best_id` only
+selects the displayed identifier. Consequently, two mutually aliased records
+remain two findings with the same displayed PYSEC ID. Text output counts and
+prints both, as demonstrated by the integration test.
+
+Reviewed the adjacent ID-selection, distinct-vulnerability, ignore-by-alias,
+and package-scoped fix tests in `crates/uv/tests/build/audit.rs`, plus the
+vulnerability fixture and assertions in `crates/uv/tests/tool/tool_audit.rs`.
+The neighboring fixtures do not contain a second aliased record or prescribe
+how conflicting metadata should be reconciled. Both project and tool commands
+call `uv_audit_operations::audit_lock`; additional command tests would reuse
+the same affected path. JSON serializes the same findings and SARIF emits a
+result per finding, with source IDs, aliases, and fix versions exposed to
+consumers. These paths were inspected, not independently claimed as newly
+demonstrated failures. No speculative variant tests were added.
+
+### Limitation requiring a decision
+
+The parent fixture assigns fixed version 2026.10.18 to the PYSEC record and
+2026.10.19 to GHSA. The live records captured during reproduction assign those
+versions the other way around. Both fixture records also have the same
+modification timestamp. Thus a patch preferring the PYSEC record could satisfy
+the fixture while selecting the incorrect 2026.10.19 value in the real case.
+
+The existing PYSEC/GHSA/CVE preference concerns identifier presentation, not
+metadata authority. Neither the implementation nor the inspected tests define
+a source-precedence or reconciliation policy for conflicting fix versions,
+links, summaries, and timestamps. Keeping an arbitrary first record would lose
+information; taking the earliest fixed event or combining versions would
+introduce a new interpretation of contradictory upstream data. The flattened
+`fix_versions` report field does not retain each record's affected ranges and
+provenance. Resolving this without silently choosing a security recommendation
+requires an explicit metadata policy or a report representation for conflicts.
+That decision is outside the authorized scope of this fix attempt.
+
+The discrepancy in the upstream PYSEC fixed event remains a separate data
+correction. No GitHub or upstream database changes were made.
+
+### Focused validation
+
+- Ran `cargo test -p uv --test build audit::audit_duplicate_vulnerability_aliases -- --exact`
+  on the original parent regression in the debug/test profile: **1 passed**,
+  230 filtered out. Its snapshot asserts two entries and two vulnerabilities.
+- Temporarily updated that original test's snapshot to expect one entry,
+  fixed in 2026.10.18, and counts of one. Ran
+  `INSTA_UPDATE=no cargo test -p uv --test build audit::audit_duplicate_vulnerability_aliases -- --exact`:
+  **failed for the reported reason**, showing the extra 2026.10.19 entry and
+  both counts remaining two. No production code had been changed.
+- Restored the original regression byte-for-byte. `git diff --exit-code`
+  succeeded and `git status --short` was empty. No Rust source changes remain,
+  so no formatting changes were needed or retained.
+
+The temporary desired-behavior diff and original test backup are under
+`/tmp/uv-22985-fix-lucbfdts`. The passing check establishes the parent test's
+baseline, not a successful production fix. No entire test suite, release build,
+or additional command matrix was run.
+
 ## Recommended next steps
 
-Track deduplication of alias-linked records and accurate per-package and total
-counts in this issue. A future regression test should supply two OSV records
-for the same package/version that alias each other; the existing single-record
-ID-preference test does not cover this. Any policy for conflicting metadata
-must avoid silently choosing an arbitrary fix version.
-
-Separately, request correction of the PYSEC fixed event upstream. The minimal
-executed reproduction, live records, and upstream YAML provide specific
-evidence for the two concerns.
+Decide how a single vulnerability should retain or select metadata from
+conflicting alias-linked records, including what to expose in text, JSON, and
+SARIF. Correct the regression fixture's source/version association to match
+the captured live records before relying on it to validate metadata selection.
+Retain a regression asserting a single vulnerability and accurate counts under
+the agreed policy. Separately request correction of the PYSEC fixed event
+upstream.
 
 ## Verification limits
 
@@ -265,12 +345,16 @@ not independently exercised. The minimal reproduction is sufficient to
 establish the reported certifi behavior without that project's unrelated
 dependencies or omitted user configuration.
 
-Source and test inspection used checkout commit
-`c76ff10bab78a44da9cd26f81d15c1e5ad018e03`; no checkout binary was built.
-Advisory data can change after this observation. No Rust builds or repository
-tests were run. Related-issue/PR history and search coverage above are retained
-from the existing context; this reproduction pass made fresh public API/source
-reads for the certifi records and project metadata.
+The original reproduction inspected checkout commit
+`c76ff10bab78a44da9cd26f81d15c1e5ad018e03`. The fix investigation used the
+parent regression checkout at `cc087ffaf16f2089004930961c1d2cb4466c7046` and
+built and exercised its uv 0.13.6 debug binary against the mocked OSV service
+in the parent integration test. This does not constitute a fresh full-project
+or live-service reproduction on 0.13.6. Advisory data can change after the
+recorded live observations.
 
-Only this issue-context README and temporary reproduction artifacts were
-written. No checkout files, existing user state, or GitHub objects were changed.
+Related-issue/PR search history is retained from the existing investigation.
+No GitHub objects, Git configuration, or dependency manifests/lockfiles were
+changed. The temporary test edit was restored, leaving no checkout changes.
+Only this issue-context README was updated within the issue-context directory;
+build artifacts and temporary diagnostic files were produced separately.

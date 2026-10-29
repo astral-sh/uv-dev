@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Deduplicating aliased advisories requires a policy for reconciling conflicting fix versions and metadata; the existing identifier preference does not establish source authority. The parent fixture also reverses the live records’ fix-version assignments. Confirmed the baseline passes and the single-finding expectation fails, then restored the test and left the checkout unchanged. Documented the limitation in the issue-context README.",
+  "validation": [],
+  "pull_request": null
+}
