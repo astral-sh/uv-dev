@@ -18,6 +18,12 @@ In astral-sh/uv#22986, zanieb (identified as a repository member in the supplied
 
 This establishes a concern about the value and privacy expectations of the proposed feature. It does not record a final acceptance or rejection. Home-prefix abbreviation would address the reporter's examples, but should not be presented as making verbose logs de-identified. The enhancement classification and existing source findings remain applicable.
 
+## Reporter impact and priority
+
+The reporter says they limited the transcript in astral-sh/uv#22985 to `-v` because reviewing the additional information in `-vv` or `-vvv` output for sharing implications would take too much time. This is a reported barrier to supplying more detailed diagnostics; it does not establish what sensitive information the omitted logs contained. They describe the enhancement as low priority and would like the issue kept open for a potential community contribution. That preference is not maintainer approval to implement it.
+
+The reporter cites astral-sh/uv#9452 as encouraging log sharing. Inspection confirms that its “What information to include” section requests command output with `--verbose` and suggests repeated `-v` flags for additional logs. The inspected issue body contains no warning about personal or sensitive information in those logs. The reporter interprets that encouragement as implying some degree of safety; the maintainer's stated position remains that verbose logs are not designed for de-identified sharing.
+
 ## Classification
 
 The report requests a new default privacy-oriented display policy: abbreviate home-directory prefixes, recognize symlinked and resolved home paths, and possibly provide an opt-out. Source inspection confirms that the reported debug messages currently render paths without home abbreviation. Earlier managed-Python changes deliberately retained paths in debug logs, so they do not establish a regression or duplicate; no incorrect path value or broken existing scrubbing behavior is established.
@@ -29,6 +35,8 @@ The source evidence establishes the absence of home abbreviation at the reported
 - astral-sh/uv#4345 — Elide interpreter path from debug logs when using managed toolchain (issue, closed). Closest path-elision precedent. Despite its title, the closing discussion demonstrates omission of managed-interpreter paths from routine output while verbose logs still contain full paths. It does not cover home-prefix replacement across configuration, workspace, and other diagnostics.
 - astral-sh/uv#5311 — Omit interpreter path during `uv venv` with managed Python (pull request, merged). Implemented the narrower managed-Python display change for uv venv. A maintainer's verbose-output example explicitly retains absolute home paths in DEBUG messages; this is adjacent precedent, not a home-directory scrubbing fix.
 - astral-sh/uv#5313 — Omit interpreter path from output when using managed Python (pull request, merged). Extended astral-sh/uv#5311 to project commands. The maintainer explicitly states that interpreter paths should remain in DEBUG logs, distinguishing that change from the requested default home-path abbreviation.
+
+- astral-sh/uv#9452 — Before posting in the issue tracker (issue, open). Reporting guidance explicitly requests `--verbose` output and describes repeated `-v` flags, without a privacy warning in the inspected body. This supports the reporter's concern about sharing expectations and the effort needed to review logs; it is guidance context, not a duplicate feature request.
 
 ## Supporting evidence
 
@@ -59,7 +67,7 @@ The closest-looking excluded issues were inspected with their comments:
 
 ## Maintainer next step
 
-First determine whether the limited reduction in exposed personal information from home-prefix abbreviation justifies the feature, given the maintainer's concern that verbose logs contain other personal information and are not designed for de-identified sharing. Acceptance remains unresolved.
+First determine whether the limited reduction in exposed personal information from home-prefix abbreviation justifies the feature, weighing the reporter's decision to withhold more verbose diagnostics against the maintainer's concern that logs contain other personal information and are not designed for de-identified sharing. Acceptance remains unresolved. Separately, consider whether the log-sharing guidance in astral-sh/uv#9452 should clarify those expectations; no documentation change has been agreed in the supplied discussion.
 
 If maintainers agree to pursue it, settle which human-readable diagnostics should use abbreviation, whether path-valued command output needs separate treatment, how both the configured home path and its resolved target should be recognized, and whether users need an opt-out. Any implementation should account for both direct path formatting and existing shared display helpers; changing only `user_display()` would not affect the two reported logging sites.
 
