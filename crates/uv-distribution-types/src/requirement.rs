@@ -3,6 +3,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_distribution_filename::DistExtension;
@@ -915,7 +917,7 @@ impl Display for RequirementSource {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(untagged)]
 enum RequirementSourceWire {
     /// Ex) `source = { git = "<https://github.com/astral-test/uv-public-pypackage?rev=0.0.1#0dacfd662c64cb4ceb16e6cf65a157a8b715b979>" }`
@@ -940,6 +942,146 @@ enum RequirementSourceWire {
         index: Option<SafeUrl<Stripped>>,
         conflict: Option<ConflictItem>,
     },
+}
+
+/// A duplicate or a type mismatch disqualifies only the variants that use this field.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SourceField<T> {
+    #[serde(skip)]
+    Missing,
+    Valid(T),
+    Invalid(IgnoredAny),
+}
+
+impl<T> SourceField<T> {
+    fn record(&mut self, value: Self) {
+        *self = match self {
+            Self::Missing => value,
+            Self::Valid(_) | Self::Invalid(_) => Self::Invalid(IgnoredAny),
+        };
+    }
+
+    fn or_default(self) -> Option<T>
+    where
+        T: Default,
+    {
+        match self {
+            Self::Missing => Some(T::default()),
+            Self::Valid(value) => Some(value),
+            Self::Invalid(_) => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RequirementSourceWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(SourceVisitor)
+    }
+}
+
+struct SourceVisitor;
+
+impl<'de> Visitor<'de> for SourceVisitor {
+    type Value = RequirementSourceWire;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a requirement source")
+    }
+
+    // Scalar URLs can contain credentials or signed query parameters.
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Err(E::custom("invalid requirement source"))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Git,
+            Url,
+            Subdirectory,
+            Path,
+            Directory,
+            Editable,
+            Virtual,
+            Specifier,
+            Index,
+            Conflict,
+            #[serde(other)]
+            Other,
+        }
+
+        let mut git = SourceField::Missing;
+        let mut url = SourceField::Missing;
+        let mut subdirectory = SourceField::Missing;
+        let mut path = SourceField::Missing;
+        let mut directory = SourceField::Missing;
+        let mut editable = SourceField::Missing;
+        let mut virtual_directory = SourceField::Missing;
+        let mut specifier = SourceField::Missing;
+        let mut index = SourceField::Missing;
+        let mut conflict = SourceField::Missing;
+        while let Some(field) = map.next_key()? {
+            match field {
+                Field::Git => git.record(map.next_value()?),
+                Field::Url => url.record(map.next_value()?),
+                Field::Subdirectory => subdirectory.record(map.next_value()?),
+                Field::Path => path.record(map.next_value()?),
+                Field::Directory => directory.record(map.next_value()?),
+                Field::Editable => editable.record(map.next_value()?),
+                Field::Virtual => virtual_directory.record(map.next_value()?),
+                Field::Specifier => specifier.record(map.next_value()?),
+                Field::Index => index.record(map.next_value()?),
+                Field::Conflict => conflict.record(map.next_value()?),
+                Field::Other => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+
+        // The first valid representation wins, including when fields for another
+        // representation are malformed or duplicated.
+        if let SourceField::Valid(git) = git {
+            return Ok(RequirementSourceWire::Git { git });
+        }
+        if let (SourceField::Valid(url), Some(subdirectory)) = (url, subdirectory.or_default()) {
+            return Ok(RequirementSourceWire::Direct { url, subdirectory });
+        }
+        if let SourceField::Valid(path) = path {
+            return Ok(RequirementSourceWire::Path { path });
+        }
+        if let SourceField::Valid(directory) = directory {
+            return Ok(RequirementSourceWire::Directory { directory });
+        }
+        if let SourceField::Valid(editable) = editable {
+            return Ok(RequirementSourceWire::Editable { editable });
+        }
+        if let SourceField::Valid(r#virtual) = virtual_directory {
+            return Ok(RequirementSourceWire::Virtual { r#virtual });
+        }
+        if let (Some(specifier), Some(index), Some(conflict)) = (
+            specifier.or_default(),
+            index.or_default(),
+            conflict.or_default(),
+        ) {
+            return Ok(RequirementSourceWire::Registry {
+                specifier,
+                index,
+                conflict,
+            });
+        }
+        Err(serde::de::Error::custom("invalid requirement source"))
+    }
 }
 
 impl From<RequirementSource> for RequirementSourceWire {
@@ -1264,11 +1406,97 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::io::{self, Read};
     use std::path::PathBuf;
 
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
+    use super::RequirementSourceWire;
     use crate::{Requirement, RequirementScope, RequirementSource};
+
+    #[test]
+    fn source_retains_read_error() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"git":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, RequirementSource>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+    }
+
+    #[test]
+    fn source_scalar_metadata_error() {
+        let error = serde_json::from_str::<RequirementSource>(
+            r#""https://user:secret@example.com/project?token=secret""#,
+        )
+        .unwrap_err();
+        insta::assert_snapshot!(error, @"invalid requirement source at line 1 column 54");
+    }
+
+    #[test]
+    fn source_variant_precedence() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(
+            r#"{"path":"package.whl","git":"https://example.com/repo","url":42,"conflict":{"package":false}}"#,
+        )?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "git": "https://example.com/repo"
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_falls_back_after_invalid_and_duplicate_fields() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(
+            r#"{"git":3,"url":"not a URL","path":"first.whl","path":"second.whl","directory":"package","specifier":null}"#,
+        )?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "directory": "package"
+        }
+        "#);
+        Ok(())
+    }
+
+    /// A recognized field must fit within the recursion limit even when another source is valid.
+    #[test]
+    fn source_rejects_field_beyond_recursion_limit() {
+        let nested = format!("{}0{}", "[".repeat(150), "]".repeat(150));
+        let input = format!(r#"{{"path":{nested},"directory":"package"}}"#);
+        let error = serde_json::from_str::<RequirementSourceWire>(&input).unwrap_err();
+        insta::assert_snapshot!(error, @"recursion limit exceeded at line 1 column 135");
+    }
+
+    #[test]
+    fn source_registry_default() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(r#"{"git":false}"#)?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "index": null,
+          "conflict": null
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_rejects_sequence_representation() {
+        assert!(
+            serde_json::from_str::<RequirementSourceWire>(
+                r#"["https://example.com/package.tar.gz", "src"]"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn roundtrip() {
