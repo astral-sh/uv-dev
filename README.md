@@ -6,11 +6,13 @@ Classification: bug
 
 ## Summary
 
-On uv 0.13.6 (Homebrew, macOS/aarch64), the reporter passes the full 40-character object ID of an annotated Git tag as the revision in a Git dependency URL used by `uvx --no-cache --from`. Git resolves that object to its target commit, after which uv rejects the differing IDs with “Exact Git revision ... does not match precise commit ...”. Pinning the target commit succeeds according to the report.
+The reported behavior is reproducible with the installed uv 0.13.5 on Linux x86_64 and Python 3.12.3. In a minimal local Git repository, passing an annotated tag's full 40-character object ID to `uv tool run --no-cache --from` fails with the exact reported “Exact Git revision ... does not match precise commit ...” diagnostic. Passing the peeled commit ID or the tag name instead succeeds and imports the package. `uv tool run` is the command behind `uvx`.
 
-The report requests either accepting and peeling annotated-tag object IDs or explaining their rejection with a commit-pin workaround, plus documentation of the distinction. The rejection is intentional and has an existing integration test, including in 0.13.6. The remaining correctness issue is the misleading diagnostic. No duplicate tracking that correction was identified.
+The reporter used uv 0.13.6 (Homebrew build dated 2026-10-26, aarch64-apple-darwin) on macOS 26 / Darwin 27.0.0, with the annotated `v2.32.3` tag of `psf/requests`. Their Python version was not specified. That exact platform/version combination and the public-package installation were not executed during reproduction; the local fixture isolates the same tag-object-versus-commit distinction.
 
-astral-sh/uv#22466 explicitly tests the reported rejection, building on exact-commit validation from astral-sh/uv#21224. Neither addresses the requested annotated-tag explanation; no duplicate was found.
+The rejection is deliberate in the existing integration tests, including the test previously verified in 0.13.6. Reproducing it does not establish that accepting tag-object IDs is the intended behavior. The report asks either to accept and peel them or to explain the rejection and document how to obtain a commit pin. Diagnostic clarity and documentation remain actionable concerns; changing acceptance requires a separate policy decision.
+
+astral-sh/uv#22466 explicitly tests this rejection, building on exact-commit validation from astral-sh/uv#21224. Neither addresses the requested annotated-tag explanation; the existing related-item investigation found no duplicate tracking that correction.
 
 ## Draft response
 
@@ -20,16 +22,90 @@ The error should explain that distinction and suggest the commit ID. For now, us
 
 ## Classification
 
-The rejection is intentional and already tested, but the diagnostic misleadingly presents a tag-object-versus-commit distinction as a generic revision mismatch without explaining the object type or remedy. This is a diagnostic correctness bug; accepting tag-object IDs would separately change the exact-commit policy. The related PRs establish current behavior rather than track this correction, and no previously fixed annotated-tag bug was found to have regressed.
+Retain the bug classification for the reported diagnostic clarity concern, with documentation as a related improvement. The observed rejection itself is intentional and already tested: full hexadecimal revisions are treated as exact commit pins. The generic mismatch error does not explain that the requested object is an annotated tag or identify a workaround.
 
-The existence of a test expecting rejection does not resolve the diagnostic complaint. The source confirms the object-ID classification, peeling, and equality check; it does not establish that annotated-tag IDs should become accepted commit pins. Keep the diagnostic correction separate from that policy decision.
-
-The two related changes predate the reported release and deliberately establish the current rule. There is no evidence here of a previously fixed annotated-tag bug returning.
+Accepting tag-object IDs would separately change the exact-commit policy. The related PRs establish current behavior rather than track the requested diagnostic correction. The report does not identify a last known-good version, and there is no evidence of a previously fixed annotated-tag bug returning. Both related changes predate the reported release.
 
 ## Related
 
 - astral-sh/uv#22466 — Represent full Git revisions as commit references (merged). Parses full hexadecimal revisions as GitReference::Commit and adds install_git_full_commit_rejects_tag_object, which snapshots the exact reported error for fresh and cached annotated-tag objects. Merged October 14, 2026; the test is present in 0.13.6. Establishes intentional rejection, but does not address the requested explanatory diagnostic or documentation.
 - astral-sh/uv#21224 — Ensure full Git commit pins resolve to the requested commit (merged). Introduced exact-object resolution and requested-versus-resolved commit validation to prevent SHA-shaped branches from overriding commit pins. Merged August 19, 2026 and referenced by astral-sh/uv#22466. Explains the validation constraint; its branch-substitution fix does not resolve annotated-tag diagnostic clarity.
+
+## Reproduction
+
+**Outcome: reproducible.** A fresh, local annotated tag reproduces the exact error without relying on GitHub or third-party package source. The peeled-commit and named-tag controls both succeed.
+
+### Environment and isolation
+
+- Installed executable: `/opt/hostedtoolcache/uv/0.13.5/x86_64/uv`, reporting `uv 0.13.5 (x86_64-unknown-linux-gnu)`.
+- Linux x86_64, kernel `7.0.0-1017-azure`; `/usr/bin/python3` reports Python 3.12.3; Git 2.56.0.
+- Fixture and per-command result logs: `/tmp/uv-23018-gmh6g8ic/`. `tag-object.json`, `peeled-commit.json`, and `named-tag.json` retain command arguments, stdout, stderr, and exit codes.
+- Commands ran outside the checkout with a clean subprocess environment. Temporary files, uv cache/tool/Python locations, and XDG directories were redirected under that temporary root. Configuration discovery and Python downloads were disabled; Git global/system configuration and interactive authentication were disabled. No existing credentials or user configuration were used.
+- The package has static metadata, no runtime dependencies, and the same `uv_build` requirement used by nearby integration tests. No project, workspace, dependency groups, or lockfile are involved.
+
+### Minimal fixture and commands
+
+Create an isolated temporary repository with this `pyproject.toml` and `src/example/__init__.py` containing `__version__ = "0.1.0"`:
+
+```toml
+[project]
+name = "example"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["uv_build>=0.7,<10000"]
+build-backend = "uv_build"
+```
+
+From its temporary parent directory, create the commit and annotated tag. These are the fixture's Git operations; the fixed dates make the observed object IDs repeatable with the same file contents:
+
+```sh
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+export GIT_AUTHOR_DATE=2000-01-01T00:00:00Z
+export GIT_COMMITTER_DATE=2000-01-01T00:00:00Z
+git -C repository init --initial-branch=main
+git -C repository add .
+git -C repository -c user.name=Reproduction -c user.email=reproduction@example.invalid commit -m 'Minimal package'
+git -C repository -c user.name=Reproduction -c user.email=reproduction@example.invalid tag -a v1 -m 'Annotated tag'
+tag_object=$(git -C repository rev-parse v1)
+peeled_commit=$(git -C repository rev-parse 'v1^{commit}')
+git -C repository cat-file -t "$tag_object"
+git -C repository cat-file -t "$peeled_commit"
+```
+
+The object types were `tag` and `commit`, respectively. Run these explicit commands with the temporary environment described above (`repository` is the absolute path to that repository):
+
+```sh
+repository="$PWD/repository"
+uv tool run --no-cache --no-config --no-python-downloads --python /usr/bin/python3 \
+  --from "git+file://$repository@$tag_object" python -c 'import example; print(example.__version__)'
+uv tool run --no-cache --no-config --no-python-downloads --python /usr/bin/python3 \
+  --from "git+file://$repository@$peeled_commit" python -c 'import example; print(example.__version__)'
+uv tool run --no-cache --no-config --no-python-downloads --python /usr/bin/python3 \
+  --from "git+file://$repository@v1" python -c 'import example; print(example.__version__)'
+```
+
+### Observed results
+
+The tag-object command exited with code **1** and stderr:
+
+```text
+   Updating file:///tmp/uv-23018-gmh6g8ic/repository (b8dc0af5eb3a24d9c52c56dc26e12e9f8edec28a)
+error: Failed to resolve `--with` requirement
+  cause: Git operation failed
+  cause: Exact Git revision `b8dc0af5eb3a24d9c52c56dc26e12e9f8edec28a` does not match precise commit `fc661dceae525947ba6c8038920124d940938c0f` for `file:///tmp/uv-23018-gmh6g8ic/repository`
+```
+
+The peeled-commit command and the `@v1` command each exited with code **0**, built and installed `example`, and printed `0.1.0`. Both resolved to commit `fc661dceae525947ba6c8038920124d940938c0f`. The failure therefore depends on supplying the annotated tag object's full ID, despite its target being the same installable commit.
+
+The reporter's requested outcome is either successful peeling or a diagnostic that identifies the tag object and suggests its peeled commit, plus documentation. The observed error provides neither that explanation nor the workaround. The successful controls verify the workaround for this fixture, without deciding whether tag-object pins should become accepted.
+
+### Existing test coverage
+
+`crates/uv/tests/pip_install/pip_install.rs::install_git_full_commit_rejects_tag_object` (line 3386, gated by `#[cfg(feature = "test-git")]`) creates a local repository with an empty commit and an annotated `v1` tag. It obtains both object IDs, invokes `pip install` with the tag object's full ID, and snapshots exit code 1 and this exact mismatch error. A second explicit invocation checks the same rejection after the object is cached. The test's full setup and assertions were read; it directly covers the reported trigger, though through `pip install` rather than the tool command. The reproduction above independently observes the tool-command behavior and successful alternatives.
+
+The related `install_git_full_commit_ignores_same_named_branch` test in that file checks that a full commit pin cannot be redirected by a same-named branch; it provides relevant context for the strict validation. No new tests were added or existing tests executed.
 
 ## Supporting evidence
 
@@ -63,4 +139,6 @@ If accepting tag-object IDs is considered instead, explicitly evaluate it agains
 
 ## Validation and limits
 
-Findings are based on source inspection, existing test snapshots, PR history, and independent verification of the public tag object. The reporter's uv command was not executed, and no build or test suite was run. No checkout files or GitHub objects were changed; this handoff is the only authored artifact.
+The reproduction outcome is based on three executed commands with the installed uv executable: tag-object failure, peeled-commit success, and named-tag success. Source and existing snapshot inspection corroborate these observations. The exact reported uv 0.13.6/macOS environment was not available and was not tested; no claim of a regression or of behavior on every platform is made.
+
+The existing GitHub-related findings and search scope above are retained from the earlier issue-context investigation. This reproduction used local Git data and made no GitHub changes. No build of uv or repository test suite was run. The checkout was left unchanged, including its pre-existing modified `agents/codex/config.toml` and untracked `.issue-triage-event.json`; only this handoff and temporary reproduction artifacts were authored.
