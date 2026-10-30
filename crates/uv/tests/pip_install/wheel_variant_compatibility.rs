@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
 use serde_json::{Map, Value, json};
 use uv_distribution_types::PEP_850_SCHEMA;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
@@ -17,6 +18,147 @@ fn null_variant() -> Value {
         "default-priorities": { "namespace": ["x86_64"] },
         "variants": { "null": {} },
     })
+}
+
+/// Reject an installed local variant after host properties change, then backtrack to an older
+/// parent that does not require it.
+#[test]
+fn backtrack_from_incompatible_installed_local_variant_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, wheel) = WheelBuilder::new(&"parent".parse()?, &"1.0.0".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"parent".parse()?, &"2.0.0".parse()?)
+        .requires(&["ok".parse()?])
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+
+    let variant = json!({
+        "$schema": PEP_850_SCHEMA,
+        "default-priorities": { "namespace": ["nvidia"] },
+        "providers": {
+            "nvidia": {
+                "requires": ["nvidia-variant-provider==0.0.1"],
+                "plugin-api": "nvidia_variant_provider.plugin:NvidiaVariantPlugin"
+            }
+        },
+        "variants": {
+            "gpu": {
+                "nvidia": {
+                    "cuda_version_lower_bound": ["12"]
+                }
+            }
+        }
+    })
+    .to_string();
+    let (_, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
+        .files(&[("ok-1.0.0.dist-info/variant.json", &variant)])
+        .build();
+    let wheel_path = context.temp_dir.child("ok-1.0.0-py3-none-any-gpu.whl");
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url =
+        SafeUrl::from_file_path(wheel_path.path()).map_err(|()| anyhow!("invalid wheel path"))?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str(&format!("ok @ {wheel_url}"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "12")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("--constraint")
+        .arg("constraints.txt")
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("parent"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0-py3-none-any-gpu.whl)
+     + parent==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "12")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("ok"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("ok"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because ok was not found in the provided package locations and you require ok, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_CUDA_DRIVER_VERSION, "11")
+        .env(EnvVars::NV_VARIANT_PROVIDER_FORCE_SM_ARCH, "8.9")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("--constraint")
+        .arg("constraints.txt")
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("parent"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - parent==2.0.0
+     + parent==1.0.0
+    ");
+    Ok(())
+}
+
+/// Resolving a local variant wheel requires compatible platform tags.
+#[test]
+fn resolve_incompatible_local_variant_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let variant = null_variant().to_string();
+    let (_, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?)
+        .tag("py3-none-win_amd64")
+        .files(&[("ok-1.0.0.dist-info/variant.json", &variant)])
+        .build();
+    let wheel_path = context
+        .temp_dir
+        .child("ok-1.0.0-py3-none-win_amd64-null.whl");
+    wheel_path.write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview-features")
+        .arg("wheel-variants")
+        .arg("--python-platform")
+        .arg("linux")
+        .arg(wheel_path.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only ok==1.0.0 is available and ok==1.0.0 has no wheels with a matching platform tag (e.g., `manylinux_2_28_x86_64`), we can conclude that all versions of ok cannot be used.
+             And because you require ok, we can conclude that your requirements are unsatisfiable.
+    ");
+    Ok(())
 }
 
 /// Sync keeps an installed variant even when wheel variants are no longer enabled.

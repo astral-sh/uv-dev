@@ -47,7 +47,7 @@ pub type VariantProperties =
     BTreeMap<VariantNamespace, BTreeMap<VariantFeature, Vec<VariantValue>>>;
 
 /// Required variant properties unsupported by the target system.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct UnsupportedVariantProperties(VariantProperties);
 
 impl fmt::Display for UnsupportedVariantProperties {

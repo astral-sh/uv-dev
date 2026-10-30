@@ -7,6 +7,7 @@ use smallvec::SmallVec;
 use tracing::{debug, trace};
 
 use uv_configuration::IndexStrategy;
+use uv_distribution::check_installed_local_wheel_variant_compatibility;
 use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolutionRecorder};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -293,14 +294,20 @@ impl CandidateSelector {
                                 continue;
                             }
 
-                            return Some(Candidate {
-                                name: package_name,
-                                version,
-                                dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
-                                    dist,
-                                )),
-                                choice_kind: VersionChoiceKind::Preference,
-                            });
+                            if let Err(error) =
+                                check_installed_local_wheel_variant_compatibility(dist)
+                            {
+                                debug!("Installed local wheel variant is incompatible: {error}");
+                            } else {
+                                return Some(Candidate {
+                                    name: package_name,
+                                    version,
+                                    dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
+                                        dist,
+                                    )),
+                                    choice_kind: VersionChoiceKind::Preference,
+                                });
+                            }
                         }
                     }
                     // We do not consider installed distributions with multiple versions because
@@ -402,6 +409,11 @@ impl CandidateSelector {
                     !wheel_tags.is_compatible(tags)
                 }) {
                     debug!("Platform tags mismatch for installed `{dist}`");
+                    return None;
+                }
+
+                if let Err(error) = check_installed_local_wheel_variant_compatibility(dist) {
+                    debug!("Installed local wheel variant is incompatible: {error}");
                     return None;
                 }
 
