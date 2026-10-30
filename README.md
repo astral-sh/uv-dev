@@ -10,21 +10,21 @@ The reported behavior is reproducible with the installed uv 0.13.5 on Linux x86_
 
 The reporter used uv 0.13.6 (Homebrew build dated 2026-10-26, aarch64-apple-darwin) on macOS 26 / Darwin 27.0.0, with the annotated `v2.32.3` tag of `psf/requests`. Their Python version was not specified. That exact platform/version combination and the public-package installation were not executed during reproduction; the local fixture isolates the same tag-object-versus-commit distinction.
 
-The rejection is deliberate in the existing integration tests, including the test previously verified in 0.13.6. Reproducing it does not establish that accepting tag-object IDs is the intended behavior. The report asks either to accept and peel them or to explain the rejection and document how to obtain a commit pin. Diagnostic clarity and documentation remain actionable concerns; changing acceptance requires a separate policy decision.
+The rejection is deliberate in the existing integration tests, including the test previously verified in 0.13.6. The report asks either to accept and peel annotated-tag object IDs or to explain the rejection and document how to obtain a commit pin. Maintainer woodruffw explicitly supports accepting and peeling them to their underlying commits. This supplies a direction for changing the current behavior; it does not indicate that a fix has been implemented or released. Diagnostic clarity and documentation remain related concerns.
 
 astral-sh/uv#22466 explicitly tests this rejection, building on exact-commit validation from astral-sh/uv#21224. Neither addresses the requested annotated-tag explanation; the existing related-item investigation found no duplicate tracking that correction.
 
-## Draft response
+## Maintainer direction
 
-A full SHA revision currently has to identify a commit. astral-sh/uv#21224 added that validation, and astral-sh/uv#22466 explicitly tests rejection of annotated-tag object IDs. The two IDs you show identify the tag object and its target commit, respectively.
+In the discussion of astral-sh/uv#23018, woodruffw (author association: MEMBER) explicitly endorsed the reporter's option to peel an annotated-tag object to its commit. The comment was posted on 2026-10-30 at 21:35:19 UTC (comment ID 6533950651). The stated rationale is that users commonly copy an annotated tag's SHA without realizing it identifies an indirection rather than the underlying commit; this frequency assessment is the maintainer's observation, not a measured reproduction result.
 
-The error should explain that distinction and suggest the commit ID. For now, use the SHA returned by `git rev-parse 'v2.32.3^{commit}'` in a clone, or reference the tag by name with `@v2.32.3`. A focused next step is an annotated-tag-specific diagnostic and a documentation example; accepting tag-object IDs would require revisiting the exact-commit policy.
+The endorsed direction is to support the tag object's ID, rather than limiting the fix to explaining its rejection. The comment does not specify an implementation, assign an owner, give a release target, or establish broader support for other Git object types. The existing exact-commit validation remains relevant to the design.
 
 ## Classification
 
-Retain the bug classification for the reported diagnostic clarity concern, with documentation as a related improvement. The observed rejection itself is intentional and already tested: full hexadecimal revisions are treated as exact commit pins. The generic mismatch error does not explain that the requested object is an annotated tag or identify a workaround.
+Retain the bug classification. The failure and misleading diagnostic are reproduced, and the maintainer now supports resolving annotated-tag object IDs to their commits. The current rejection tests describe implemented behavior; they are not a reason to limit this issue to diagnostic clarity after that endorsement.
 
-Accepting tag-object IDs would separately change the exact-commit policy. The related PRs establish current behavior rather than track the requested diagnostic correction. The report does not identify a last known-good version, and there is no evidence of a previously fixed annotated-tag bug returning. Both related changes predate the reported release.
+Supporting tag-object IDs changes the current exact-commit policy and needs to retain the protection against SHA-shaped branches redirecting commit pins. The related PRs establish current behavior rather than implement this requested change. The report does not identify a last known-good version, and there is no evidence of a previously fixed annotated-tag bug returning. Both related changes predate the reported release.
 
 ## Related
 
@@ -99,7 +99,7 @@ error: Failed to resolve `--with` requirement
 
 The peeled-commit command and the `@v1` command each exited with code **0**, built and installed `example`, and printed `0.1.0`. Both resolved to commit `fc661dceae525947ba6c8038920124d940938c0f`. The failure therefore depends on supplying the annotated tag object's full ID, despite its target being the same installable commit.
 
-The reporter's requested outcome is either successful peeling or a diagnostic that identifies the tag object and suggests its peeled commit, plus documentation. The observed error provides neither that explanation nor the workaround. The successful controls verify the workaround for this fixture, without deciding whether tag-object pins should become accepted.
+The reporter's requested outcome is either successful peeling or a diagnostic that identifies the tag object and suggests its peeled commit, plus documentation. The observed error provides neither that explanation nor the workaround. The successful controls verify the workaround for this fixture. Separately from these reproduction results, the maintainer has endorsed successful peeling as the desired direction.
 
 ### Existing test coverage
 
@@ -113,11 +113,11 @@ The related `install_git_full_commit_ignores_same_named_branch` test in that fil
 - `crates/uv-git/src/git.rs:145`: the Git reference resolver runs `rev-parse <object>^0` for a commit reference. The source comment explains that `^0` peels tags and verifies a commit target.
 - `crates/uv-git/src/source.rs:125`: the fetched revision is passed to `GitUrl::with_precise` before checkout.
 - `crates/uv-git-types/src/lib.rs:171`: `with_precise` rejects a commit reference whose ID differs from the resolved ID; the error definition at line 88 contains neither an annotated-tag explanation nor a workaround.
-- `crates/uv/tests/pip_install/pip_install.rs:3386`: `install_git_full_commit_rejects_tag_object` creates an annotated tag and expects this exact error on both the first fetch and the subsequent cached attempt. It is gated by `test-git`. The test already covers the reported trigger, so a diagnostic change should update this focused coverage rather than duplicate it.
+- `crates/uv/tests/pip_install/pip_install.rs:3386`: `install_git_full_commit_rejects_tag_object` creates an annotated tag and expects this exact error on both the first fetch and the subsequent cached attempt. It is gated by `test-git`. The test already covers the reported trigger for fresh and cached objects. Supporting tag-object IDs requires revising its rejection expectations and ensuring that the fixture can successfully install the target commit.
 - The GitHub contents API confirms that the same test exists in the `0.13.6` tag. astral-sh/uv#22466 merged on 2026-10-14 and astral-sh/uv#21224 merged on 2026-08-19, before the reporter's October 26 build.
 - The public GitHub Git-data API confirms that `psf/requests` object `61e2240f283f15780ac2d0e2cfefb0fd6fdab627` is annotated tag `v2.32.3`, pointing to a commit object with ID `0e322af87745eff34caffe4df68456ebc20d9068`. The mismatch is between different object types for the same tagged revision.
 - `docs/concepts/projects/dependencies.md:281` documents named tags and revisions (“commit”), but its Git section does not explain the annotated-tag object distinction or `git rev-parse '<tag>^{commit}'`.
-- The new issue has no comments. Related PR bodies, issue comments, PR discussion comments, and review summaries were inspected. Neither related PR proposes the explanatory diagnostic requested here.
+- The supplied full discussion and new-comment artifact both record woodruffw's endorsement of peeling annotated-tag object IDs in astral-sh/uv#23018 (comment ID 6533950651, 2026-10-30T21:35:19Z). This is maintainer direction, separate from the source and runtime evidence above. Related PR bodies, issue comments, PR discussion comments, and review summaries were inspected in the earlier investigation; neither related PR implements the requested acceptance behavior.
 
 ## Search scope and excluded candidates
 
@@ -133,12 +133,16 @@ GitHub search briefly hit its search-rate limit; later searches succeeded. PR te
 
 ## Recommended follow-up
 
-Improve the diagnostic for a verified annotated-tag object and show how to obtain and pin its target commit. Do not describe every requested/resolved-ID mismatch as an annotated tag: genuine mismatched commits must remain distinguishable. Add a short Git dependency documentation example using `git rev-parse '<tag>^{commit}'`.
+Investigate support for a full annotated-tag object ID by resolving that exact object and peeling it to its target commit, following the maintainer-endorsed direction. Retain the protection introduced by astral-sh/uv#21224 against a branch or tag name that resembles a full SHA overriding the requested object. Do not simply remove requested/resolved-ID validation for every mismatch; distinguish verified tag peeling from genuinely different commits.
 
-If accepting tag-object IDs is considered instead, explicitly evaluate it against the exact-commit validation introduced by astral-sh/uv#21224. Update the existing annotated-tag integration snapshots and retain checks for mismatched commits and SHA-shaped branch names.
+Adapt the existing annotated-tag integration coverage to verify successful installation of the target commit for both fresh and cached objects. Its current empty-commit fixture has no installable package, so successful-install coverage needs a focused package fixture such as the one in the reproduction. Retain the tests for mismatched commits and SHA-shaped branch names, and the `test-git` gate.
+
+Document the distinction between a tag object and its target commit, including `git rev-parse '<tag>^{commit}'` as the current workaround. Any remaining rejection diagnostic should explain the actual object-type or revision problem. The endorsement does not establish a delivery timeline.
 
 ## Validation and limits
 
 The reproduction outcome is based on three executed commands with the installed uv executable: tag-object failure, peeled-commit success, and named-tag success. Source and existing snapshot inspection corroborate these observations. The exact reported uv 0.13.6/macOS environment was not available and was not tested; no claim of a regression or of behavior on every platform is made.
 
 The existing GitHub-related findings and search scope above are retained from the earlier issue-context investigation. This reproduction used local Git data and made no GitHub changes. No build of uv or repository test suite was run. The checkout was left unchanged, including its pre-existing modified `agents/codex/config.toml` and untracked `.issue-triage-event.json`; only this handoff and temporary reproduction artifacts were authored.
+
+The supplied comment and full discussion were reviewed for this context update. No new reproduction or GitHub search was performed. Only this README was updated; the structured triage and reproduction files retain their earlier findings and predate the maintainer endorsement.
