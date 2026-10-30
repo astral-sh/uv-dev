@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22466,
+        "title": "Represent full Git revisions as commit references",
+        "url": "https://github.com/astral-sh/uv/pull/22466",
+        "state": "merged",
+        "reason": "Adds an integration test explicitly rejecting annotated-tag object IDs with the reported error, for both fresh and cached fetches. Merged October 14, 2026; the test exists in 0.13.6. Establishes intentional rejection but does not address the requested diagnostic or documentation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21224,
+        "title": "Ensure full Git commit pins resolve to the requested commit",
+        "url": "https://github.com/astral-sh/uv/pull/21224",
+        "state": "merged",
+        "reason": "Introduced exact-object resolution and commit-mismatch validation to prevent SHA-shaped branches from overriding commit pins. Referenced by astral-sh/uv#22466. Explains the validation constraint, but its branch-substitution fix does not address annotated-tag diagnostic clarity."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered the exact error, annotated tags, tag objects, the reported object ID, rev-parse, and the existing test identifier. Conceptual searches covered peeling, commit-ish references, full SHA pins, tag/hash ambiguity, Git diagnostics, and documentation. Inspected related PRs, comments, reviews, source history, and the 0.13.6 test. PR text searches omitted known relevant PRs, so coverage was supplemented by listing the latest 1,500 PRs across all states and following file history. Ruled out astral-sh/uv#10779 (hexadecimal tag names), astral-sh/uv#8050 (inconsistent lockfile commits), astral-sh/uv#16303 and astral-sh/uv#9045 (missing Git failure details), and astral-sh/uv#8490 (basic rev syntax). No existing item was found tracking this diagnostic correction."
+  },
+  "type": "bug",
+  "type_reason": "The rejection is intentional and tested, but the diagnostic misleadingly presents the tag-object-versus-commit distinction as a generic revision mismatch without explaining the object type or remedy. This is a diagnostic correctness bug; accepting tag-object IDs would separately change the exact-commit policy. The related PRs establish current behavior rather than track this correction. No previously fixed annotated-tag bug was found to have regressed.",
+  "summary": "astral-sh/uv#22466 explicitly tests the reported rejection, building on validation from astral-sh/uv#21224. Neither addresses the requested annotated-tag explanation; no duplicate was found.",
+  "draft_response": "A full SHA revision currently has to identify a commit. astral-sh/uv#21224 added that validation, and astral-sh/uv#22466 explicitly tests rejection of annotated-tag object IDs. The two IDs you show identify the tag object and its target commit, respectively.\n\nThe error should explain that distinction and suggest the commit ID. For now, use the SHA returned by `git rev-parse 'v2.32.3^{commit}'` in a clone, or reference the tag by name with `@v2.32.3`. A focused next step is an annotated-tag-specific diagnostic and a documentation example; accepting tag-object IDs would require revisiting the exact-commit policy."
+}
