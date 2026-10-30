@@ -60,6 +60,9 @@ jobs:
   plan:
     needs: check-vet
     uses: $/.github/workflows/plan.yml
+    permissions:
+      contents: read
+      pull-requests: read
 
   check-fmt:
     needs: plan
@@ -296,6 +299,17 @@ jobs:
     uses: $/.github/workflows/build-release-binaries.yml
     secrets: inherit
 
+  build-binary-size:
+    needs: plan
+    if: ${{ needs.plan.outputs.build-binary-size == 'true' }}
+    uses: $/.github/workflows/binary-size.yml
+    with:
+      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
   build-docker:
     needs: plan
     if: ${{ needs.plan.outputs.build-docker == 'true' }}
@@ -461,6 +475,7 @@ jobs:
       - test-system
       - build-dev-binaries
       - build-release-artifacts
+      - build-binary-size
       - build-docker
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     steps:
