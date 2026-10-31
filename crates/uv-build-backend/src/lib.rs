@@ -39,11 +39,11 @@ pub enum Error {
     #[error("Failed to persist temporary file to `{}`", _0.user_display())]
     Persist(PathBuf, #[source] io::Error),
     #[error("Invalid metadata format in: {}", _0.user_display())]
-    Toml(PathBuf, #[source] toml::de::Error),
+    Toml(PathBuf, #[source] Box<toml::de::Error>),
     #[error("Failed to serialize `pyproject.toml`")]
     TomlSerialize(#[source] toml::ser::Error),
     #[error("Invalid project metadata")]
-    Validation(#[from] ValidationError),
+    Validation(#[source] Box<ValidationError>),
     #[error("Invalid module name: {0}")]
     InvalidModuleName(String, #[source] IdentifierParseError),
     #[error("Unsupported glob expression in: {field}")]
@@ -96,6 +96,12 @@ pub enum Error {
     ),
     #[error("Failed to finish gzip stream for `{}`", _0.user_display())]
     GzipWrite(PathBuf, #[source] io::Error),
+}
+
+impl From<ValidationError> for Error {
+    fn from(error: ValidationError) -> Self {
+        Self::Validation(Box::new(error))
+    }
 }
 
 impl uv_errors::Hinted for Error {
