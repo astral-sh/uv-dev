@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23038,
+        "title": "universal-lock: dependency without wheels for a matrix environment fails the whole resolution (marked per-dependency override works but undocumented)",
+        "url": "https://github.com/astral-sh/uv/issues/23038",
+        "state": "open",
+        "reason": "Identical title and body, including versions, configuration, error, workaround, and requested capabilities. Opened 17 seconds after astral-sh/uv#23037; neither has comments. Retain the earlier report for discussion."
+      },
+      {
+        "kind": "issue",
+        "number": 17642,
+        "title": "Add platform dependence to `exclude-dependencies`",
+        "url": "https://github.com/astral-sh/uv/issues/17642",
+        "state": "closed",
+        "reason": "A maintainer explicitly confirms that marked overrides replace incoming requirements and omit the dependency where the marker is false. This supports the workaround, although that report concerns externally supplied GDAL rather than automatic omission based on wheel availability."
+      },
+      {
+        "kind": "issue",
+        "number": 14974,
+        "title": "`required-environments`: only require that some extras build in some environments",
+        "url": "https://github.com/astral-sh/uv/issues/14974",
+        "state": "closed",
+        "reason": "An optional dependency lacking wheels for another requested platform caused resolution failure with the same environment-limiting hint. Platform markers resolved it. Unlike this report, it used extra-qualified required-environments and direct optional dependencies."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21672,
+        "title": "Scope required-environment checks to the current fork",
+        "url": "https://github.com/astral-sh/uv/pull/21672",
+        "state": "merged",
+        "reason": "Makes artifact compatibility checks specific to the current resolver branch. Source confirms configured environments also enter these checks. Relevant mechanism, not a confirmed cause: the report also names uv 0.12.3, predating this change."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues for sqlite-vec, compatible-wheels errors, the exact non-current-environment hint, and override-dependencies/markers. Conceptual searches covered optional platform dependencies, inferred wheel markers, best-effort resolution, skipping unavailable dependencies, and per-package environments. Searched open, closed, merged, and all-state PRs; dedicated keyword searches returned no matches, so inspected referenced merged PRs directly. Followed astral-sh/uv#9174 to astral-sh/uv#4422 and astral-sh/uv#8492 to astral-sh/uv#9827. Ruled out astral-sh/uv#22805 and astral-sh/uv#22806 as an established duplicate or regression: they concern existing Android wheels being unrecognized, fixed in uv 0.13.5, whereas this report describes absent wheels and includes that release. Also distinguished extra-scoped overrides in astral-sh/uv#11153 and conflicting override URLs in astral-sh/uv#9803. REST searches eventually encountered an installation rate limit; GraphQL reads, source, tests, and release notes supplemented the investigation."
+  },
+  "type": "duplicate",
+  "type_reason": "The open astral-sh/uv#23038 repeats this report exactly, so duplicate classification takes precedence. Because astral-sh/uv#23037 was opened first, consolidate the later copy into this discussion. Marked overrides are supported; the abbreviated error does not establish a regression of a previously fixed bug.",
+  "summary": "astral-sh/uv#23038 is an exact duplicate. astral-sh/uv#17642 confirms conditional override semantics, astral-sh/uv#14974 shows a similar marker-based resolution, and astral-sh/uv#21672 explains relevant branch-specific wheel checks.",
+  "draft_response": "astral-sh/uv#23038 contains the identical report. Since astral-sh/uv#23037 was opened first, please keep follow-up details here so the reports can be consolidated.\n\nYour marked overrides are supported in the workspace root's `tool.uv.override-dependencies`. They replace dependency environment markers, as explained in astral-sh/uv#17642 and https://docs.astral.sh/uv/concepts/resolution/#dependency-overrides. They explicitly omit those dependencies outside the selected platforms; wheel availability alone does not establish that the parent package works without them.\n\nUniversal locking does not generally require wheels for every platform, but configured `environments` participate in artifact checks within each resolver branch. To understand this failure, please provide a minimal root/member `pyproject.toml` pair, the exact command, and the complete error including the `split (markers: ...)` line, with the overrides removed."
+}
