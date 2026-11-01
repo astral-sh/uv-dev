@@ -5136,6 +5136,22 @@ pub struct AuditArgs {
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub script: Option<PathBuf>,
 
+    /// The Python interpreter to use for locking and evaluating audit targets.
+    ///
+    /// Use `--python-version` or `--python-platform` to restrict the audited dependencies.
+    /// Without either target option, auditing includes all environments.
+    ///
+    /// See `uv help python` for details on Python discovery and supported request formats.
+    #[arg(
+        long,
+        short,
+        env = EnvVars::UV_PYTHON,
+        verbatim_doc_comment,
+        help_heading = "Python options",
+        value_hint = ValueHint::Other,
+    )]
+    pub python: Option<Maybe<String>>,
+
     /// The Python version to use when auditing.
     ///
     /// For example, pass `--python-version 3.10` to audit the dependencies that would be included
