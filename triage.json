@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18506,
+        "title": "Roadmap: `uv audit`",
+        "url": "https://github.com/astral-sh/uv/issues/18506",
+        "state": "open",
+        "reason": "Maintainer comments explain that audit normally locks first and recommend --frozen to avoid interpreter downloads. This explains the workaround, but does not track ignored UV_PYTHON or ineffective target filters."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18185,
+        "title": "Make universal the default for `uv audit`",
+        "url": "https://github.com/astral-sh/uv/pull/18185",
+        "state": "merged",
+        "reason": "Introduced the exact condition that skips interpreter discovery only for frozen audits without --python-version or --python-platform. It establishes the historical behavior, not a fix for interpreter overrides or target filtering."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18511,
+        "title": "Evaluate extras and groups when determining auditable packages",
+        "url": "https://github.com/astral-sh/uv/pull/18511",
+        "state": "merged",
+        "reason": "Introduced lockfile traversal filtered by extras and dependency groups. Maintainer discussion supports auditing everything by default with explicit subset selection; the implementation does not supply Python/platform markers to that traversal."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and all PR states using audit, UV_PYTHON, --python, python-version, python-platform, frozen, and unexpected argument; separately searched interpreter/download behavior and marker/filtering concepts without package or platform restrictions. Reviewed audit-area issues, comments, referenced PRs, historical diffs, and audit-titled entries from the latest 4,000 PRs. Ruled out astral-sh/uv#18968 (UV_CONFIG_FILE precedence), astral-sh/uv#22089 and its merged fix astral-sh/uv#22090 (dependency-group selection), and astral-sh/uv#18970 (script handling and extras traversal). Additional targeted searches hit GitHub's rate limit; no exact duplicate or previous fix for these gaps was found in the retrieved evidence."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that audit supplies no explicit interpreter request, exposes no --python/UV_PYTHON binding, and computes but discards the markers from --python-version and --python-platform. The documented filtering behavior is therefore incorrect, independently of whether adding --python is viewed as an enhancement. Historical PRs concern universal defaults and group/extra filtering; no previously fixed target-filtering bug or exact duplicate was established.",
+  "summary": "No exact duplicate found. astral-sh/uv#18506 and astral-sh/uv#18185 explain interpreter downloads and the frozen workaround; astral-sh/uv#18511 provides related subset-filtering history.",
+  "draft_response": "Your examples match the current implementation: audit has no --python/UV_PYTHON override, and the markers computed from --python-version and --python-platform are not used to select audited packages. The latter contradicts the documented behavior.\n\nFor now, your `uv audit --frozen --preview-features audit-command` workaround avoids interpreter discovery when neither target flag is supplied, but it does not provide a Python-specific audit. The normal locking/download behavior is explained in astral-sh/uv#18506.\n\nThe next step is to wire interpreter selection and target-marker filtering through audit, with regression coverage for both. Your reproductions already provide the necessary cases."
+}
