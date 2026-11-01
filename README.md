@@ -6,31 +6,122 @@ Classification: bug
 
 ## Summary
 
-The reporter uses uv 0.13.6 on Linux aarch64 with Python 3.13.18. In a CI matrix, `UV_PYTHON=3.13` overrides a project's `.python-version` pin of 3.11 for `uv lock`, but `uv audit` selects and downloads Python 3.11. Audit also rejects `--python 3.13`.
+The behavior reported in astral-sh/uv#23034 is **reproducible** with the installed uv 0.13.5 on Ubuntu 24.04.5, Linux x86_64. The report used uv 0.13.6 on Linux aarch64 with Python 3.13.18; that exact binary/container was not run. The reproduction used managed CPython 3.13.17 and downloaded CPython 3.11.17.
 
-The report contains three distinct claims:
+With `UV_PYTHON=3.13` and `.python-version` set to 3.11, `uv lock` uses Python 3.13, but `uv audit` selects and downloads Python 3.11. Audit rejects `--python 3.13`. Plain `--frozen` avoids interpreter discovery; adding `--python-version 3.13` restores discovery and the 3.11 download.
 
-1. Interpreter selection ignores `UV_PYTHON`, and audit lacks the corresponding `--python` option.
-2. Plain `--frozen` avoids interpreter discovery, but adding `--python-version` or `--python-platform` restores it. The target version does not override the interpreter selected from `.python-version`.
-3. The advertised target filters do not narrow the audited dependency graph. A requirement on `requests==2.32.5; python_version < '3.12'` remains audited with `--python-version 3.13`, even after changing the version file to 3.13. The reporter compares this with correctly filtered `uv tree` output.
+The target-filtering claim also reproduces. A Python-version-gated dependency is excluded by `uv tree` for Python 3.13 but remains audited with `uv audit --frozen --python-version 3.13`, including after repinning the interpreter to 3.13. A separate Windows-only dependency fixture likewise remains audited with an explicit Linux target, while `uv tree` excludes it.
 
-No exact duplicate found. astral-sh/uv#18506 and astral-sh/uv#18185 explain interpreter downloads and the frozen workaround; astral-sh/uv#18511 provides related subset-filtering history.
+No exact duplicate was found in the prior issue/history search. astral-sh/uv#18506 and astral-sh/uv#18185 explain interpreter downloads and the frozen workaround; astral-sh/uv#18511 provides related subset-filtering history.
 
 ## Draft response
 
-Your examples match the current implementation: audit has no --python/UV_PYTHON override, and the markers computed from --python-version and --python-platform are not used to select audited packages. The latter contradicts the documented behavior.
+Reproduced with uv 0.13.5 on Linux x86_64: audit ignores `UV_PYTHON=3.13`, selects the 3.11 project pin, and rejects `--python`. The target flags also fail to filter dependencies: both a Python <3.12 requirement audited for Python 3.13 and a Windows-only requirement audited for Linux remain included.
 
-For now, your `uv audit --frozen --preview-features audit-command` workaround avoids interpreter discovery when neither target flag is supplied, but it does not provide a Python-specific audit. The normal locking/download behavior is explained in astral-sh/uv#18506.
-
-The next step is to wire interpreter selection and target-marker filtering through audit, with regression coverage for both. Your reproductions already provide the necessary cases.
+`uv audit --frozen --preview-features audit-command` avoids interpreter discovery when neither target flag is supplied, but it still performs a universal audit. Interpreter selection and audit-target filtering are separate concerns. Normal locking/download behavior is explained in astral-sh/uv#18506; downloading an interpreter alone does not establish a bug.
 
 ## Classification
 
-Source confirms that audit supplies no explicit interpreter request, exposes no --python/UV_PYTHON binding, and computes but discards the markers from --python-version and --python-platform. The documented filtering behavior is therefore incorrect, independently of whether adding --python is viewed as an enhancement. Historical PRs concern universal defaults and group/extra filtering; no previously fixed target-filtering bug or exact duplicate was established.
+Observed commands confirm the interpreter-selection omission, rejected --python option, and ineffective target filters. Source inspection additionally shows that audit supplies no explicit interpreter request, exposes no --python/UV_PYTHON binding, and computes but discards the markers from --python-version and --python-platform. The documented filtering behavior is therefore incorrect, independently of whether adding --python is viewed as an enhancement. Historical PRs concern universal defaults and group/extra filtering; no previously fixed target-filtering bug or exact duplicate was established.
 
 An interpreter download during a normal audit is not by itself a bug: audit may update or validate the lockfile. Selecting the interpreter used for locking is also distinct from selecting the target environment whose dependencies should be audited. The established correctness problem is that explicit target flags promise filtering but do not apply it. The missing interpreter override is a separate omission.
 
 There is no evidence that a previously released fix for either omission has regressed. The historical universal/frozen condition predates the reported version. The dependency-group fix discussed below addressed a different filter.
+
+## Reproduction
+
+**Outcome: reproducible.** Commands used `/opt/hostedtoolcache/uv/0.13.5/x86_64/uv`, the executable already on `PATH`, reporting `uv 0.13.5 (x86_64-unknown-linux-gnu)`. No checkout binary was built. The host is Ubuntu 24.04.5 LTS, Linux x86_64. The reporter's uv 0.13.6/aarch64 container and Python 3.13.18 were not tested, so this does not establish an exact-version or architecture comparison. The issue does not identify a last known-good release.
+
+All fixtures, Python installations, configuration/data locations, and caches were isolated under `/tmp/uv-23034-l7la8aaw`. Subprocesses used a clean environment with `UV_PYTHON=3.13`, `UV_PYTHON_PREFERENCE=only-managed`, and temporary `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_PYTHON_BIN_DIR`, XDG directories, home, and temporary-file directory. Managed-only discovery models the report's missing-3.11 container without using host interpreters. Configuration discovery remained enabled so `.python-version` was respected; `--no-config` would suppress that file. Each download scenario started with only CPython 3.13.17 available in its temporary managed-install directory. No workspace members, extras, dependency groups, or existing virtual environment were involved.
+
+### Interpreter selection and missing option
+
+In an otherwise empty temporary project, install Python 3.13 into the isolated installation directory and use this configuration:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.11"
+```
+
+Set `.python-version` to `3.11`, with `UV_PYTHON=3.13` for every invocation:
+
+```sh
+uv python install 3.13
+uv lock -v
+uv audit -v --preview-features audit-command --frozen
+uv audit --preview-features audit-command --python 3.13
+uv audit -v --preview-features audit-command
+```
+
+Observed results:
+
+- Installation provided CPython 3.13.17. `uv lock -v` exited 0 and logged ``Using Python request `3.13` from explicit request`` and `Using CPython 3.13.17`.
+- Plain frozen audit exited 0 and reported zero auditable packages, with no interpreter lookup or download in the debug log.
+- `--python 3.13` exited 2 with `error: unexpected argument '--python' found` and the suggestion `--python-fetch`.
+- Non-frozen audit exited 0, logged ``Using Python request `3.11` from version file at `.python-version` ``, downloaded `cpython-3.11.17-linux-x86_64-gnu` (29.1 MiB), and printed `Using CPython 3.11.17`.
+
+Raw output and exit codes are in `minimal-lock`, `minimal-frozen`, `missing-python-option`, and `minimal-audit` `.log`/`.exit` files beneath the reproduction directory.
+
+### Python target and frozen behavior
+
+A separate project used the same project metadata plus:
+
+```toml
+dependencies = ["requests==2.32.5; python_version < '3.12'"]
+```
+
+Its version file initially contained `3.11`; `UV_PYTHON` remained `3.13`. A separate temporary managed-install directory initially exposed only Python 3.13.17. Run:
+
+```sh
+uv lock
+uv tree --frozen --python-version 3.11 --depth 1
+uv tree --frozen --python-version 3.13 --depth 1
+uv audit -v --preview-features audit-command --frozen
+uv audit -v --preview-features audit-command --frozen --python-version 3.13
+printf '3.13\n' > .python-version
+uv audit -v --preview-features audit-command --frozen --python-version 3.13
+```
+
+`uv lock` used Python 3.13.17 and resolved six packages including the root. Both tree commands exited 0: the 3.11 tree included `requests v2.32.5`, while the 3.13 tree contained only `repro v0.1.0`.
+
+All three audits exited 1 and reported exactly:
+
+```text
+Found 2 known vulnerabilities and no adverse project statuses in 5 packages
+```
+
+The findings were for `requests 2.32.5`. The audited dependency set comprised requests, certifi, charset-normalizer, idna, and urllib3. Plain frozen audit performed no interpreter discovery. Adding `--python-version 3.13` selected and downloaded CPython 3.11.17 from the version-file request, despite `UV_PYTHON=3.13`. After repinning `.python-version` to 3.13, audit used CPython 3.13.17 but still audited the same five packages and reported the same findings. Thus the filtering failure persists independently of the interpreter mismatch. Advisory counts are service-dependent; the decisive observation is inclusion of dependencies that the target excludes.
+
+Raw output and exit codes are in the `markers-*` `.log`/`.exit` files beneath the reproduction directory.
+
+### Platform target
+
+A third isolated project used the same metadata, a 3.11 version-file pin, `UV_PYTHON=3.13`, and:
+
+```toml
+dependencies = ["requests==2.32.5; sys_platform == 'win32'"]
+```
+
+```sh
+uv lock
+uv tree --frozen --python-platform x86_64-pc-windows-msvc --depth 1
+uv tree --frozen --python-platform x86_64-unknown-linux-gnu --depth 1
+uv audit -v --preview-features audit-command --frozen --python-platform x86_64-unknown-linux-gnu
+```
+
+The Windows tree included requests; the Linux tree contained only the root. Audit for Linux nevertheless selected the already-installed CPython 3.11.17, audited five packages, and reported the same two vulnerability findings (exit 1). This directly confirms both interpreter discovery with a frozen platform target and ineffective platform filtering. A fresh platform-triggered Python download was not separately tested. Raw output is in the `platform-*` `.log`/`.exit` files.
+
+### Existing test coverage
+
+Searched `crates/uv/tests/it/`, `crates/uv-client/tests/it/`, and the relevant command module, `crates/uv/tests/build/audit.rs`. No direct audit coverage of `UV_PYTHON`, `--python-version`, or `--python-platform` was found. These nearby tests were read through their setup and assertions:
+
+- `audit_no_dependencies` locks an empty project and snapshots a successful audit of zero packages; it has no conflicting interpreter requests.
+- `audit_json_no_vulnerabilities` uses a one-package lockfile and mock audit service, then checks frozen JSON output with one audited package. It does not test interpreter discovery or target filtering.
+- `audit_dependency_groups` checks all-groups, no-dev, no-group, and only-group package counts. `audit_no_default_groups` checks three packages by default versus one with the flag, despite `default-groups = ["dev"]`. Neither exercises environment markers.
+
+The audit module is gated by both `test-python` and `test-pypi` in `crates/uv/tests/build/main.rs`. No repository tests were added or run; validation used the installed CLI. No checkout files or GitHub state were changed.
 
 ## Related
 
@@ -77,4 +168,4 @@ Wire the explicit interpreter request through audit's CLI, settings, and discove
 
 Add focused regressions for the supplied interpreter-precedence case and target-specific dependency exclusion, including the frozen path. The existing module is `crates/uv/tests/build/audit.rs`; its parent module gates it on both `test-python` and `test-pypi`. Inspection found no explicit `UV_PYTHON`, `--python-version`, or `--python-platform` coverage in that module. Follow its explicit fixtures, mock audit service, and `uv_snapshot!` patterns, and check shared coverage before adding tests.
 
-This handoff is based on source inspection and GitHub history. The Docker reproduction was not executed, and no build or tests were run. The reporter's exact vulnerability counts depend on the advisory service; the source-confirmed filtering defect does not depend on those counts. No checkout files or GitHub state were changed.
+This handoff combines observed CLI reproductions with source inspection and the previously collected GitHub history. The installed uv 0.13.5 reproduced all core claims, including both target filters; the exact reported uv 0.13.6 Docker environment was not executed. No build or repository test suite was run. The vulnerability counts depend on the advisory service, while the observed dependency-filtering failure does not. Only temporary reproduction artifacts and this issue-context README were written; no checkout files or GitHub state were changed.
