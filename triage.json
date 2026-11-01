@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23037,
+        "title": "universal-lock: dependency without wheels for a matrix environment fails the whole resolution (marked per-dependency override works but undocumented)",
+        "url": "https://github.com/astral-sh/uv/issues/23037",
+        "state": "open",
+        "reason": "Exact duplicate: identical title, body, reported uv versions, workspace, error, marked overrides, and requested capabilities. Opened 17 seconds before this issue; neither thread has comments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 144162,
+        "title": "fix(pm): a plugin workspace stops resolving the Android split on desktop hosts",
+        "url": "https://github.com/NousResearch/hermes-agent/pull/144162",
+        "state": "closed",
+        "reason": "Same hermes-agent/mnemosyne workspace and uv 0.13.5. Supplies a full onnxruntime failure in an Android resolver split and proposes excluding Android from generated desktop workspaces. Closed without merging. Strong application-side context, but it does not establish the cause of the reported sqlite-vec failure."
+      },
+      {
+        "kind": "issue",
+        "number": 17642,
+        "title": "Add platform dependence to `exclude-dependencies`",
+        "url": "https://github.com/astral-sh/uv/issues/17642",
+        "state": "closed",
+        "reason": "Maintainer explicitly explains that a marked override can omit a transitive dependency on an excluded platform. Directly supports the reported workaround; the original example concerns GDAL supplied outside uv, rather than missing wheels during universal locking."
+      },
+      {
+        "kind": "issue",
+        "number": 9711,
+        "title": "Tracking issue: package without source distribution gets an \"incomplete\" resolution",
+        "url": "https://github.com/astral-sh/uv/issues/9711",
+        "state": "open",
+        "reason": "Canonical broader discussion of inferring platform coverage from available wheels and forking/backtracking accordingly. Its symptom is successful locking followed by installation failure, unlike this report's lock-time failure; it is related to the requested automatic availability handling."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9928,
+        "title": "Fork when wheels are missing platform support",
+        "url": "https://github.com/astral-sh/uv/pull/9928",
+        "state": "closed",
+        "reason": "Attempted general wheel-platform-based forking for astral-sh/uv#9711. Closed without merging in favor of astral-sh/uv#10046, whose merged implementation only falls back from local versions to their base versions. Neither implements silently omitting unavailable dependencies."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered sqlite-vec, onnxruntime, compatible wheels, python_full_version, and override-dependencies; conceptual searches covered universal wheel availability, optional/best-effort resolution, automatic markers, and platform-specific overrides/documentation. Inspected candidate comments and followed references to closed proposals, merged fixes, and NousResearch/hermes-agent#144162. PR keyword searches returned no results; several REST searches were rate-limited, so GraphQL searches and direct linked-PR inspection supplemented them. Reviewed astral-sh/uv#21672, astral-sh/uv#10046, and astral-sh/uv#9827 for historical fixes. Ruled out astral-sh/uv#22805 as an established duplicate: it rejected existing Android wheels and was fixed by astral-sh/uv#22806 in uv 0.13.5; this report alleges absent wheels and supplies no complete failing split. Also ruled out astral-sh/uv#5921, which concerns metadata-fetch preference, and astral-sh/uv#8492, whose Python-version selection issue was fixed by astral-sh/uv#9827."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#23037 already contains the identical report and both requested capabilities, so discussion can be centralized there. This classification does not assume the proposed missing-wheel mechanism is correct. No regression of a historical fix is established; the same current report already has an open issue.",
+  "summary": "Exact duplicate of astral-sh/uv#23037. Related discussions explain marked overrides and wheel-based platform forking; an application-side PR documents a closely matching workspace failure.",
+  "draft_response": "This duplicates astral-sh/uv#23037; please continue there so we can keep the investigation together.\n\nMarked `override-dependencies` can restrict transitive dependencies to selected platforms, as explained in astral-sh/uv#17642. The dependency-overrides documentation also describes marker replacement. To investigate the lock failure, please add a minimal workspace configuration and the complete resolver error, including the failing split, to astral-sh/uv#23037. The excerpt alone does not establish which platform lacks coverage."
+}
