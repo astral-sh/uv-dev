@@ -3,7 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -192,7 +192,7 @@ async fn audit_no_vulnerabilities() {
     ");
 }
 
-/// Audit ignores the Python override, including when a target re-enables frozen discovery.
+/// An explicit interpreter overrides the project pin, including for a frozen target audit.
 #[test]
 fn audit_python_request() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.13"]).with_filtered_python_sources();
@@ -217,17 +217,15 @@ fn audit_python_request() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // Unlike lock, audit ignores UV_PYTHON and requires the unavailable pinned interpreter.
-    // This can cause an unnecessary download: astral-sh/uv#23034.
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
         .env(EnvVars::UV_PYTHON, "3.13"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No interpreter found for Python 3.11 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 1 package in [TIME]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
     ");
 
     uv_snapshot!(context.filters(), context.audit()
@@ -240,7 +238,7 @@ fn audit_python_request() -> Result<()> {
     Found no known vulnerabilities and no adverse project statuses in 0 packages
     ");
 
-    // Specifying a target makes frozen audit look for the pinned Python again.
+    // A target requires discovery even with --frozen, but still uses the explicit interpreter.
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
@@ -248,39 +246,50 @@ fn audit_python_request() -> Result<()> {
         .arg("--python-version")
         .arg("3.13")
         .env(EnvVars::UV_PYTHON, "3.13"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No interpreter found for Python 3.11 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
     ");
 
     Ok(())
 }
 
+/// The command-line interpreter overrides both the environment and the project pin.
 #[test]
-fn audit_python_argument() {
-    let context = uv_test::test_context!("3.13");
+fn audit_python_argument() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"]).with_filtered_python_sources();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#})?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11")?;
 
-    // Audit has no --python override for interpreter discovery: astral-sh/uv#23034.
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
         .arg("--python")
-        .arg("3.13"), @"
-    exit_code: 2 (failure)
+        .arg("3.13")
+        .env(EnvVars::UV_PYTHON, "3.11"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: unexpected argument '--python' found
-
-      tip: a similar argument exists: '--python-fetch'
-
-    Usage: uv audit --cache-dir [CACHE_DIR]
-
-    For more information, try '--help'.
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 1 package in [TIME]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
     ");
+
+    Ok(())
 }
 
-/// A dependency excluded by the target Python version is still audited.
+/// Audit filters dependencies using the target version rather than the interpreter version.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn audit_python_version() -> Result<()> {
@@ -311,8 +320,6 @@ async fn audit_python_version() -> Result<()> {
         .mount(&server)
         .await;
 
-    // The Python 3.13 target should exclude iniconfig, but audit ignores the marker:
-    // astral-sh/uv#23034.
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
@@ -324,13 +331,28 @@ async fn audit_python_version() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
+    ");
+
+    // The target can differ from the interpreter used to read the lockfile.
+    uv_snapshot!(context.filters(), context.audit()
+        .arg("--preview-features")
+        .arg("audit-command")
+        .arg("--frozen")
+        .arg("--python-version")
+        .arg("3.11")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
 
     Ok(())
 }
 
-/// A dependency excluded by the target platform is still audited.
+/// Audit excludes dependencies that do not apply to the target platform.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn audit_python_platform() -> Result<()> {
@@ -357,7 +379,60 @@ async fn audit_python_platform() -> Result<()> {
         .mount(&server)
         .await;
 
-    // The Linux target should exclude the Windows-only dependency: astral-sh/uv#23034.
+    uv_snapshot!(context.filters(), context.audit()
+        .arg("--preview-features")
+        .arg("audit-command")
+        .arg("--frozen")
+        .arg("--python-platform")
+        .arg("linux")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
+    ");
+
+    Ok(())
+}
+
+/// Project-less workspace groups seed the audit from manifest requirements, including forks.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn audit_python_platform_workspace_groups() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = []
+
+        [dependency-groups]
+        dev = [
+            "iniconfig==1.1.1; sys_platform == 'win32'",
+            "iniconfig==2.0.0; sys_platform != 'win32'",
+            "sniffio==1.3.1; sys_platform == 'win32'",
+        ]
+    "#})?;
+
+    context.lock().assert().success();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .and(body_json(json!({
+            "queries": [{
+                "package": {"name": "iniconfig", "ecosystem": "PyPI"},
+                "version": "2.0.0",
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .mount(&server)
+        .await;
+
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
@@ -2135,7 +2210,45 @@ async fn audit_script_no_vulnerabilities() {
     ");
 }
 
-/// Script requirements stored in the lock manifest also ignore the audit target.
+/// Script discovery must receive the interpreter override as well as project discovery.
+#[test]
+fn audit_script_python_request() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"]).with_filtered_python_sources();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11")?;
+
+    context
+        .lock()
+        .arg("--script")
+        .arg("script.py")
+        .env(EnvVars::UV_PYTHON, "3.13")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.audit()
+        .arg("--preview-features")
+        .arg("audit-command")
+        .arg("--script")
+        .arg("script.py")
+        .env(EnvVars::UV_PYTHON, "3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
+    ");
+
+    Ok(())
+}
+
+/// Audit applies the target to script requirements stored in the lock manifest.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn audit_script_python_version() -> Result<()> {
@@ -2163,8 +2276,6 @@ async fn audit_script_python_version() -> Result<()> {
         .mount(&server)
         .await;
 
-    // The script's conditional requirement should be excluded on Python 3.13:
-    // astral-sh/uv#23034.
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
         .arg("audit-command")
@@ -2177,7 +2288,7 @@ async fn audit_script_python_version() -> Result<()> {
         .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Found no known vulnerabilities and no adverse project statuses in 1 package
+    Found no known vulnerabilities and no adverse project statuses in 0 packages
     ");
 
     Ok(())
