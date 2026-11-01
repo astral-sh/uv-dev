@@ -6,6 +6,7 @@ use tracing::{debug, trace};
 
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
+use uv_distribution::check_installed_local_wheel_variant_compatibility;
 use uv_distribution_filename::ExpandedTags;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires,
@@ -454,8 +455,12 @@ impl RequirementSatisfaction {
             }
         }
 
-        // TODO(konsti): Check the installed wheel's variant against the current system properties.
-        // Those can change even when the wheel and its platform tags stay the same.
+        if let Err(error) = check_installed_local_wheel_variant_compatibility(distribution) {
+            debug!("Installed local wheel variant is incompatible: {error}");
+            return Self::Mismatch;
+        }
+
+        // TODO(konsti): Check installed registry wheel variants against the current system.
 
         // If a resolved version is provided, check that it matches the installed version.
         // This is needed for sources that don't include explicit version specifiers (e.g.,

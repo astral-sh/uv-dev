@@ -6,7 +6,8 @@ use std::sync::Arc;
 use reqwest::StatusCode;
 
 use uv_distribution::Error as DistributionError;
-use uv_distribution_types::{Requirement, RequirementSource};
+use uv_distribution_filename::VariantLabel;
+use uv_distribution_types::{Requirement, RequirementSource, UnsupportedVariantProperties};
 use uv_metadata::Error as WheelMetadataError;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
@@ -104,6 +105,11 @@ pub enum UnavailableVersion {
     UnsatisfiableDependency(UnsatisfiableRequirement),
     /// Version is incompatible because it has no usable distributions
     IncompatibleDist(IncompatibleDist),
+    /// The wheel variant requires properties unsupported by the target system.
+    IncompatibleWheelVariant {
+        label: VariantLabel,
+        properties: Arc<UnsupportedVariantProperties>,
+    },
     /// The wheel metadata was found, but could not be parsed.
     InvalidMetadata,
     /// The wheel metadata was found, but the metadata was inconsistent.
@@ -124,6 +130,9 @@ impl UnavailableVersion {
         match self {
             Self::UnsatisfiableDependency(requirement) => Cow::Owned(requirement.to_string()),
             Self::IncompatibleDist(invalid_dist) => Cow::Owned(format!("{invalid_dist}")),
+            Self::IncompatibleWheelVariant { label, properties } => Cow::Owned(format!(
+                "a wheel variant `{label}` that requires unsupported properties: {properties}"
+            )),
             Self::InvalidMetadata => Cow::Borrowed("invalid metadata"),
             Self::InconsistentMetadata => Cow::Borrowed("inconsistent metadata"),
             Self::InvalidStructure => Cow::Borrowed("an invalid package format"),
@@ -141,6 +150,7 @@ impl UnavailableVersion {
                 format!("depends on {requirement}")
             }
             Self::IncompatibleDist(invalid_dist) => invalid_dist.singular_message(),
+            Self::IncompatibleWheelVariant { .. } => format!("has {self}"),
             Self::InvalidMetadata => format!("has {self}"),
             Self::InconsistentMetadata => format!("has {self}"),
             Self::InvalidStructure => format!("has {self}"),
@@ -154,6 +164,7 @@ impl UnavailableVersion {
         match self {
             Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
             Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
+            Self::IncompatibleWheelVariant { .. } => format!("have {self}"),
             Self::InvalidMetadata => format!("have {self}"),
             Self::InconsistentMetadata => format!("have {self}"),
             Self::InvalidStructure => format!("have {self}"),
@@ -173,6 +184,7 @@ impl UnavailableVersion {
             Self::IncompatibleDist(invalid_dist) => {
                 invalid_dist.context_message(tags, requires_python)
             }
+            Self::IncompatibleWheelVariant { .. } => None,
             Self::InvalidMetadata => None,
             Self::InconsistentMetadata => None,
             Self::InvalidStructure => None,
