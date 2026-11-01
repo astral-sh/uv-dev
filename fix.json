@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Audit now honors --python and UV_PYTHON for projects and scripts, and filters dependencies by the requested Python version or platform. Updated parent regressions verify the corrected behavior, with additional coverage for script interpreter selection and workspace group resolution forks. Universal audits retain their existing behavior.",
+  "validation": [
+    "Debug-profile audit integration tests: 49 passed.",
+    "Tool installation-to-audit round trip: passed.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check: passed.",
+    "git diff --check: passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3060"
+}

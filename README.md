@@ -6,6 +6,8 @@ Classification: bug
 
 ## Summary
 
+A focused fix is implemented in the checkout: audit now honors `--python` and `UV_PYTHON`, and applies explicit Python/platform targets when selecting dependencies. All five regressions from astral-sh/uv-dev#3059 now assert the corrected behavior. Two additional integration tests cover script interpreter discovery and project-less workspace group requirements. The 49-test audit module and an existing tool-install/audit round trip pass in the debug profile. See **Fix** for implementation and validation details.
+
 The behavior reported in astral-sh/uv#23034 is **reproducible** with the installed uv 0.13.5 on Ubuntu 24.04.5, Linux x86_64. The report used uv 0.13.6 on Linux aarch64 with Python 3.13.18; that exact binary/container was not run. The reproduction used managed CPython 3.13.17 and downloaded CPython 3.11.17.
 
 With `UV_PYTHON=3.13` and `.python-version` set to 3.11, `uv lock` uses Python 3.13, but `uv audit` selects and downloads Python 3.11. Audit rejects `--python 3.13`. Plain `--frozen` avoids interpreter discovery; adding `--python-version 3.13` restores discovery and the 3.11 download.
@@ -16,15 +18,15 @@ No exact duplicate was found in the prior issue/history search. astral-sh/uv#185
 
 ## Draft response
 
-Reproduced with uv 0.13.5 on Linux x86_64: audit ignores `UV_PYTHON=3.13`, selects the 3.11 project pin, and rejects `--python`. The target flags also fail to filter dependencies: both a Python <3.12 requirement audited for Python 3.13 and a Windows-only requirement audited for Linux remain included.
+The reported behavior was reproduced, and the checkout now includes a fix. Audit accepts `--python` and honors `UV_PYTHON` when discovering an interpreter for either a project or a script. Explicit Python-version and platform targets filter the audited dependency graph, including requirements stored directly in script and project-less workspace lock manifests.
 
-`uv audit --frozen --preview-features audit-command` avoids interpreter discovery when neither target flag is supplied, but it still performs a universal audit. Interpreter selection and audit-target filtering are separate concerns. Normal locking/download behavior is explained in astral-sh/uv#18506; downloading an interpreter alone does not establish a bug.
+Plain `--frozen` without either target flag still avoids interpreter discovery and performs a universal audit. A target flag still requires an interpreter for the remaining environment markers, but an explicit interpreter request overrides the version-file pin. Interpreter selection and audit-target filtering remain separate concerns.
 
 ## Classification
 
-Observed commands confirm the interpreter-selection omission, rejected --python option, and ineffective target filters. Source inspection additionally shows that audit supplies no explicit interpreter request, exposes no --python/UV_PYTHON binding, and computes but discards the markers from --python-version and --python-platform. The documented filtering behavior is therefore incorrect, independently of whether adding --python is viewed as an enhancement. Historical PRs concern universal defaults and group/extra filtering; no previously fixed target-filtering bug or exact duplicate was established.
+Pre-fix commands confirmed the interpreter-selection omission, rejected --python option, and ineffective target filters. The baseline implementation supplied no explicit interpreter request, exposed no --python/UV_PYTHON binding, and computed but discarded the markers from --python-version and --python-platform. The fix connects those inputs to discovery and dependency traversal. The pre-fix target-filtering behavior contradicted the documentation, independently of whether adding --python is viewed as an enhancement. Historical PRs concern universal defaults and group/extra filtering; no previously fixed target-filtering bug or exact duplicate was established.
 
-An interpreter download during a normal audit is not by itself a bug: audit may update or validate the lockfile. Selecting the interpreter used for locking is also distinct from selecting the target environment whose dependencies should be audited. The established correctness problem is that explicit target flags promise filtering but do not apply it. The missing interpreter override is a separate omission.
+An interpreter download during a normal audit is not by itself a bug: audit may update or validate the lockfile. Selecting the interpreter used for locking is also distinct from selecting the target environment whose dependencies should be audited. The confirmed correctness problem was that explicit target flags promised filtering but did not apply it. The missing interpreter override was a separate omission; both are corrected in the checkout.
 
 There is no evidence that a previously released fix for either omission has regressed. The historical universal/frozen condition predates the reported version. The dependency-group fix discussed below addressed a different filter.
 
@@ -115,23 +117,24 @@ The Windows tree included requests; the Linux tree contained only the root. Audi
 
 ### Existing test coverage
 
-Searched `crates/uv/tests/it/`, `crates/uv-client/tests/it/`, and the relevant command module, `crates/uv/tests/build/audit.rs`. No direct audit coverage of `UV_PYTHON`, `--python-version`, or `--python-platform` was found. These nearby tests were read through their setup and assertions:
+At the initial reproduction baseline, searches of `crates/uv/tests/it/`, `crates/uv-client/tests/it/`, and `crates/uv/tests/build/audit.rs` found no direct audit coverage of `UV_PYTHON`, `--python-version`, or `--python-platform`. The parent regression PR subsequently added five cases; those are retained and corrected by this fix. These nearby tests were read through their setup and assertions:
 
 - `audit_no_dependencies` locks an empty project and snapshots a successful audit of zero packages; it has no conflicting interpreter requests.
 - `audit_json_no_vulnerabilities` uses a one-package lockfile and mock audit service, then checks frozen JSON output with one audited package. It does not test interpreter discovery or target filtering.
 - `audit_dependency_groups` checks all-groups, no-dev, no-group, and only-group package counts. `audit_no_default_groups` checks three packages by default versus one with the flag, despite `default-groups = ["dev"]`. Neither exercises environment markers.
 
-The audit module is gated by both `test-python` and `test-pypi` in `crates/uv/tests/build/main.rs`. No repository tests were added or run; validation used the installed CLI. No checkout files or GitHub state were changed.
+The audit module is gated by both `test-python` and `test-pypi` in `crates/uv/tests/build/main.rs`. The initial reproduction used the installed CLI without changing checkout files or GitHub state. Subsequent debug-profile regression validation is recorded under **Fix**.
 
 ## Related
 
+- astral-sh/uv-dev#3059 — Parent regression pull request. Adds five integration tests in `crates/uv/tests/build/audit.rs` asserting the reported undesirable behavior; all five are updated by this fix.
 - astral-sh/uv#18506 — Roadmap: `uv audit` (issue, open). Maintainer comments explain that audit normally locks first and recommend --frozen to avoid interpreter downloads. This explains the workaround, but does not track ignored UV_PYTHON or ineffective target filters.
 - astral-sh/uv#18185 — Make universal the default for `uv audit` (pull request, merged). Introduced the exact condition that skips interpreter discovery only for frozen audits without --python-version or --python-platform. It establishes the historical behavior, not a fix for interpreter overrides or target filtering.
 - astral-sh/uv#18511 — Evaluate extras and groups when determining auditable packages (pull request, merged). Introduced lockfile traversal filtered by extras and dependency groups. Maintainer discussion supports auditing everything by default with explicit subset selection; the implementation does not supply Python/platform markers to that traversal.
 
 ## Supporting evidence
 
-Evidence was inspected in checkout commit `564a2074b02eb9de5aaaa9491ed74357ade0332f`.
+The following source evidence describes the pre-fix baseline at commit `564a2074b02eb9de5aaaa9491ed74357ade0332f`. The production changes described under **Fix** correct these missing connections; the line numbers below refer to that baseline.
 
 - `crates/uv-cli/src/lib.rs:5056`: `AuditArgs` exposes target version/platform options, but no interpreter request or `UV_PYTHON` binding. Its target-option documentation explicitly promises dependencies for the requested environment.
 - `crates/uv-cli/src/settings.rs:3182`: `AuditSettings` carries `python_version` and `python_platform`, with no interpreter override.
@@ -162,10 +165,44 @@ The initial decomposition kept observable behavior separate from implementation 
 
 Some PR search queries returned no results despite known PRs being accessible directly. To supplement those searches, the latest 4,000 PRs across all states were listed and audit-related titles reviewed, spanning the original audit scaffolding through current changes. Later targeted searches returned rate-limit errors. The duplicate assessment is based on the retrieved evidence, not a claim of exhaustive search coverage.
 
-## Maintainer next steps and validation
+## Fix
 
-Wire the explicit interpreter request through audit's CLI, settings, and discovery paths, and pass the target marker environment into auditable dependency selection. Keep the universal default and the meaning of interpreter versus target options distinct.
+**Outcome: fixed in the checkout.** No commits, pushes, Git configuration changes, or GitHub mutations were made. Changes are limited to affected production Rust files and `crates/uv/tests/build/audit.rs`; this README is the only modified issue-context file.
 
-Add focused regressions for the supplied interpreter-precedence case and target-specific dependency exclusion, including the frozen path. The existing module is `crates/uv/tests/build/audit.rs`; its parent module gates it on both `test-python` and `test-pypi`. Inspection found no explicit `UV_PYTHON`, `--python-version`, or `--python-platform` coverage in that module. Follow its explicit fixtures, mock audit service, and `uv_snapshot!` patterns, and check shared coverage before adding tests.
+### Confirmed cause and implementation
 
-This handoff combines observed CLI reproductions with source inspection and the previously collected GitHub history. The installed uv 0.13.5 reproduced all core claims, including both target filters; the exact reported uv 0.13.6 Docker environment was not executed. No build or repository test suite was run. The vulnerability counts depend on the advisory service, while the observed dependency-filtering failure does not. Only temporary reproduction artifacts and this issue-context README were written; no checkout files or GitHub state were changed.
+The CLI/settings/dispatch path did not provide an interpreter request to audit. Both project and script discovery received `None`, allowing `.python-version` to take precedence regardless of `UV_PYTHON`. Audit now exposes the standard `--python`/`-p` option with `UV_PYTHON` binding, resolves it through settings, and forwards the request to both discovery implementations. The CLI option overrides the environment value and project pin, matching neighboring project commands.
+
+Audit computed target markers but discarded them, and the auditable lockfile traversal had no target environment. It now accepts an optional marker environment and filters dependency edges before enqueueing their packages/extras. Script requirements and project-less workspace group requirements are filtered using their requirement markers intersected with the package's resolution forks. This excludes inapplicable packages and their transitive dependencies, and selects the correct version when a universal lock contains multiple versions of the same package.
+
+The shared audit operation consumes the selected `Auditable` graph, so vulnerability queries and project-status queries use the same selection without introducing crate dependencies. Tool audit and malware-check callers continue to request universal traversal. An audit without either target flag remains universal; plain frozen audit continues to skip interpreter discovery. An explicit target still uses discovery for the other environment markers, while honoring the requested interpreter.
+
+### Regression evidence and scope
+
+Before production changes, the four parent `audit_python*` tests and `audit_script_python_version` all passed while asserting the bug. After updating their expected behavior, all five failed for the reported reasons: missing Python 3.11 despite the 3.13 override, rejected `--python`, and one audited package where the target should exclude it.
+
+All five parent tests remain in `crates/uv/tests/build/audit.rs`:
+
+- `audit_python_request` checks the environment override with normal audit, plain frozen audit, and a frozen explicit target.
+- `audit_python_argument` now uses a minimal project and verifies the CLI request overrides both the environment and version-file pin.
+- `audit_python_version` excludes the conditional dependency for Python 3.13 and includes it for a Python 3.11 target while continuing to use the Python 3.13 interpreter.
+- `audit_python_platform` excludes a Windows-only dependency for Linux.
+- `audit_script_python_version` excludes a conditional requirement stored in the script lock manifest.
+
+Two distinct manifestations were demonstrated before fixing production code and are covered by separate tests:
+
+- `audit_script_python_request`: the separate script-discovery implementation also ignored `UV_PYTHON`. Before the fix it requested unavailable Python 3.11; after the fix, a script lock/audit round trip succeeds with Python 3.13.
+- `audit_python_platform_workspace_groups`: the separate manifest dependency-group traversal audited three packages for Linux, including a Windows-only requirement and both platform-specific versions of iniconfig. It now audits only iniconfig 2.0.0; the mock service checks the exact selected package/version.
+
+The audit module's existing `test-python`/`test-pypi` gates are retained, and the new platform-marker case also uses `test-universal`. Existing extras/group, script, JSON, SARIF, vulnerability, and project-status tests pass without snapshot changes. Related tree fixtures in `crates/uv/tests/project/tree.rs` already represent target-aware selection; no contradictory assumptions required edits there. The existing `crates/uv/tests/tool/tool_audit.rs::tool_audit_one_tool` fixture verifies that installing a tool with a lockfile and auditing that lockfile still works through the shared audit operation. No speculative command variants or unrelated fixtures were added.
+
+### Successful focused validation
+
+- `cargo test -p uv --test build --features test-python,test-pypi,test-universal audit::` — 49 passed in the debug/test profile, including all updated parent regressions and both additional cases.
+- `cargo test -p uv --test tool --features test-python,test-pypi,test-universal tool_audit::tool_audit_one_tool -- --exact` — 1 passed; tool installation produces the lockfile consumed by audit.
+- `RUSTUP_TOOLCHAIN=stable cargo fmt --all` and `RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check` — passed. The installed stable rustfmt was used because the pinned 1.99.0 toolchain lacks rustfmt and its installation directory is read-only.
+- `git diff --check` — passed; changed checkout paths are restricted to the permitted production and integration-test files.
+
+The full repository test suite and release-profile builds were not run. The initial installed-binary reproduction used uv 0.13.5; fix validation builds the current uv 0.13.6 checkout in the debug profile. Advisory-service counts from the initial reproduction remain service-dependent; the regression tests use mock audit responses and verify dependency selection directly.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3060
