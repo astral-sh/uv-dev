@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced astral-sh/uv#23056 using installed uv 0.13.6 on Ubuntu 24.04.5 x86_64 with CPython 3.12.3. In an isolated temporary directory: mkdir -p v/bin; printf 'SENTINEL\\n' > outside_file; ln -s \"$PWD/outside_file\" v/bin/activate; uv --no-config --offline venv --python /usr/bin/python3 --allow-existing v. uv exited 0, retained the symlink, and overwrote outside_file with the generated activation script. Separate cases confirmed external-target overwrites through .gitignore and pyvenv.cfg symlinks. Without --allow-existing, uv exited 2 and preserved the sentinel. Fedora and the Python-below-3.10 _virtualenv.py/.pth cases were not tested. Nearby tests in crates/uv/tests/python/venv.rs cover reuse and environment-root symlinks, but not this external-target overwrite. Updated $RUNNER_TEMP/issue-context/README.md; no checkout files or GitHub objects were changed."
+}

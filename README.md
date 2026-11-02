@@ -6,34 +6,155 @@ Classification: bug
 
 ## Summary
 
-The reporter demonstrates that uv 0.13.6 on Fedora Linux overwrites an external file when
-`uv venv --allow-existing v` encounters an existing `v/bin/activate` symlink pointing to that
-file. The report also identifies activation scripts, `.gitignore`, and `_virtualenv.py/.pth`
-as generated destinations with the same write pattern. Expected behavior is to generate the
-environment's files without changing the contents of an existing symlink's target.
+The reported behavior is reproducible with the installed uv 0.13.6 on Ubuntu 24.04.5 Linux
+x86_64 and CPython 3.12.3. Given an existing `v/bin/activate` symlink to a synthetic file
+outside `v`, `uv venv --allow-existing v` succeeds, leaves the symlink in place, and replaces
+the target's contents with the generated activation script. Separate executions also confirmed
+external-target overwrites through `v/.gitignore` and `v/pyvenv.cfg` symlinks.
 
-No confirmed duplicate. astral-sh/uv#23055 is the companion directory-symlink report; astral-sh/uv#5152 and astral-sh/uv#5165 provide the closest file-write precedent. astral-sh/uv#21857 and astral-sh/uv#21891 cover analogous truncation in Git checkout markers.
+The report specifies Fedora Linux, uv 0.13.6, and any Python version. Fedora itself was not
+tested. The implied expected behavior is that generating environment files leaves external
+symlink targets unchanged; the observed result establishes the overwrite, without deciding
+uv's intended overwrite policy or security classification. The report's broader reference to
+`_virtualenv.py` and `_virtualenv.pth` needs a version qualification: uv 0.13.6 generates
+those files only below Python 3.10. That branch was inspected but not executed here.
 
-## Draft response
-
-Your example matches the current source: `--allow-existing` retains existing entries, and the generated-file writes follow destination symlinks. This is a bug. The same write pattern also affects `pyvenv.cfg`; `_virtualenv.py` and `_virtualenv.pth` are generated only for Python below 3.10 in this version.
-
-This is related to astral-sh/uv#23055, which concerns linked parent directories. The next step here is to make generated-file replacement leave symlink targets unchanged and add regression coverage for the external file's contents. astral-sh/uv#5165 provides a precedent for atomic replacement in the wheel installer.
+No confirmed duplicate. astral-sh/uv#23055 is the companion directory-symlink report;
+astral-sh/uv#5152 and astral-sh/uv#5165 provide the closest file-write precedent.
+astral-sh/uv#21857 and astral-sh/uv#21891 cover analogous truncation in Git checkout markers.
 
 ## Classification
 
-The checked-out uv 0.13.6 source leaves existing entries in place for --allow-existing and directly writes activation scripts, .gitignore, pyvenv.cfg, and, for Python below 3.10, _virtualenv.py/.pth. Those writes follow destination-file symlinks and can modify files outside the environment, establishing a correctness bug. The companion directory-link report and historical installer/Git fixes concern distinct paths; there is no evidence that this is a regression of those fixes or a confirmed duplicate.
+Retain the bug classification for the reported generated-file overwrite. Reproduction confirms
+that destination-file symlinks can redirect writes outside the environment when existing entries
+are allowed. It does not independently establish whether that behavior violates uv's intended
+contract or qualifies as a vulnerability. No regression after an upgrade was alleged, and no
+comparison with an older uv version was necessary to reproduce the stated example.
 
 The distinction from astral-sh/uv#23055 matters: replacing a final file entry can prevent
-overwriting that file's symlink target while still following a linked parent directory.
-The two reports require separate coverage. The historical fixes predate the reported release,
-but changed different subsystems; their dates do not establish a regression here.
+changing that file's symlink target while still following a linked parent directory. These
+are separate cases. Historical installer and Git fixes concern different subsystems and do
+not establish either a duplicate or a regression here.
 
 The reporter cites CVE-2026-113721 and pypa/virtualenv commit
 `d25f28699eefb1fc34a251e5adf2b5de844c36cd`, and says Astral's security contact considered the
 scenario outside uv's threat model. These are reporter-provided context, not independently
-verified CVE applicability or a new security assessment. The source-backed correctness
-finding does not depend on that characterization.
+verified CVE applicability or a new security assessment.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+### Environment and isolation
+
+- Installed executable: `/opt/hostedtoolcache/uv/0.13.6/x86_64/uv` from `PATH`;
+  `uv --version` reports `uv 0.13.6 (x86_64-unknown-linux-gnu)`.
+- Host: Ubuntu 24.04.5 LTS, Linux `7.0.0-1017-azure`, x86_64.
+- Interpreter: `/usr/bin/python3`, CPython 3.12.3.
+- All fixtures, external sentinel files, temporary files, and caches were under
+  `/tmp/uv-23056-g4_p3027`. The external targets were outside each virtual environment but
+  inside this temporary reproduction directory.
+- uv ran with a fresh environment, `--no-config`, `--offline`, an explicit interpreter, and
+  Python downloads disabled. No project configuration or dependencies were needed.
+
+### Minimal activation-file case
+
+The following reconstructs the executed fixture and command with a fresh temporary path:
+
+```sh
+uv_executable=$(command -v uv)
+repro_dir=$(mktemp -d /tmp/uv-23056-XXXXXX)
+cd "$repro_dir"
+mkdir -p v/bin tmp
+printf 'SYNTHETIC_SENTINEL\n' > outside_file
+ln -s "$PWD/outside_file" v/bin/activate
+env -i PATH=/usr/bin:/bin \
+  TMPDIR="$repro_dir/tmp" \
+  UV_CACHE_DIR="$repro_dir/cache" \
+  UV_PYTHON_INSTALL_DIR="$repro_dir/python" \
+  XDG_CONFIG_HOME="$repro_dir/config" \
+  XDG_DATA_HOME="$repro_dir/data" \
+  XDG_CACHE_HOME="$repro_dir/xdg-cache" \
+  UV_PYTHON_DOWNLOADS=never UV_NO_PROGRESS=1 \
+  "$uv_executable" --no-config --offline venv \
+  --python /usr/bin/python3 --allow-existing v
+test -L v/bin/activate
+head -n 1 outside_file
+```
+
+Observed exit code: **0**. stderr:
+
+```text
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: v
+```
+
+The outside file changed from `SYNTHETIC_SENTINEL\n` to a 4,237-byte activation script in
+the executed fixture. Its first line was
+`# Copyright (c) 2020-202x The virtualenv developers`; its contents included the
+`VIRTUAL_ENV=` assignment and no longer contained the sentinel. The destination remained
+a symlink and the target's inode was unchanged. Script size depends on the temporary path.
+
+### Additional observed cases
+
+Each case used a separate directory, a new outside file containing the same sentinel, the
+same isolated environment, and the same uv/Python versions. These were explicit independent
+executions, not changes to repository tests.
+
+| Destination | Invocation after fixture setup | Observed result |
+| --- | --- | --- |
+| `v/.gitignore` symlink to `outside_file` | `uv --no-config --offline venv --python /usr/bin/python3 --allow-existing v` | Exit 0; outside file became exactly `*` with no newline; symlink remained. |
+| `v/pyvenv.cfg` symlink to `outside_file` | `uv --no-config --offline venv --python /usr/bin/python3 --allow-existing v` | Exit 0; outside file became the generated configuration shown below; symlink remained. |
+| `v/bin/activate` symlink, without permission to reuse the directory | `uv --no-config --offline venv --python /usr/bin/python3 v` | Exit 2, `A directory already exists at: v`; outside sentinel stayed unchanged and symlink remained. |
+
+For the `.gitignore` and `pyvenv.cfg` cases, setup consisted of `mkdir v`, writing the
+synthetic sentinel to `outside_file`, and creating the corresponding symlink with
+`ln -s "$PWD/outside_file" v/.gitignore` or
+`ln -s "$PWD/outside_file" v/pyvenv.cfg`. The control used the activation-file setup above.
+
+The external `pyvenv.cfg` target became exactly:
+
+```text
+home = /usr/bin
+implementation = CPython
+uv = 0.13.6
+version_info = 3.12.3
+include-system-site-packages = false
+```
+
+Neither `_virtualenv.py` nor `_virtualenv.pth` was generated in the Python 3.12 environment,
+consistent with the source's below-3.10 condition. Python 3.9 was not available on `PATH`,
+and no interpreter was downloaded. Overwrites through those two destinations are therefore
+source-supported expectations, not newly observed results. Other activation-script names,
+hardlinks, linked parent directories, and Windows were not exercised.
+
+Local evidence files: `/tmp/uv-23056-g4_p3027/activate-result.json` and
+`/tmp/uv-23056-g4_p3027/additional-results.json`.
+
+### Existing test coverage
+
+Read the relevant setup and assertions in `crates/uv/tests/python/venv.rs`:
+
+- `non_empty_dir_exists_allow_existing` creates a nonempty directory with a regular file,
+  checks rejection without `--allow-existing`, and checks successful creation and repeated
+  creation with that flag. It does not pre-plant a generated-file symlink or inspect an
+  external target.
+- `create_venv_then_allow_existing` checks successful creation followed by successful
+  recreation with `--allow-existing`; it has no external-target assertion.
+- `create_venv_symlink_clear_preservation` and `create_venv_nested_symlink_preservation`
+  check that environment-root symlinks survive creation and `--clear`. They cover a
+  different link position from a generated destination file.
+- `create_venv_skips_distutils_patch_on_py310` asserts the patch files are absent on Python
+  3.10; `create_venv_keeps_distutils_patch_on_py39` asserts they are files on Python 3.9.
+  `create_venv_preserves_existing_distutils_patch` places regular patch files in a Python
+  3.10 environment, checks their continued existence with `--allow-existing`, and their
+  absence after `--clear`. None checks writes through patch-file symlinks.
+
+Targeted searches under `crates/uv/tests/` and `crates/uv-client/tests/it/` found no test for
+this generated-file symlink/external-content scenario. The inspected coverage does not
+establish an intended policy for destination-file links. No repository tests or builds were
+run; validation used the installed uv executable. No checkout files or GitHub objects were
+changed by this reproduction work.
 
 ## Related
 
@@ -43,51 +164,41 @@ finding does not depend on that characterization.
 - astral-sh/uv#21857 — uv Git checkout marker follows a repository-controlled symlink (closed issue). Another confirmed external-file truncation through an existing destination symlink, but triggered by writing a Git checkout's .ok marker during dependency installation. Its canonical fix is astral-sh/uv#21891; it does not cover virtual-environment generation.
 - astral-sh/uv#21891 — Store Git checkout markers outside working trees (merged pull request). Merged September 23, 2026; fixes astral-sh/uv#21857 by moving checkout markers outside repository-controlled working trees. Maintainer comments on the closed alternative astral-sh/uv#21892 explicitly select this fix. It changes the Git/cache subsystem, not destination-file writes in uv-virtualenv.
 
-## Supporting evidence
+## Supporting implementation evidence
 
-The checkout is at commit `39a02a0`, with version `0.13.6` in `crates/uv/Cargo.toml:3`.
-The changelog dates that release to October 26, 2026. Both current reports were opened on
-November 2, 2026 and had no comments when inspected.
+The retained issue context identifies checkout commit `39a02a0` and uv version `0.13.6`;
+the relevant implementation was read during reproduction:
 
-- `crates/uv-virtualenv/src/virtualenv.rs:145`: `OnExisting::Allow` permits the existing
+- `crates/uv-virtualenv/src/virtualenv.rs:145`: `OnExisting::Allow` permits an existing
   directory without clearing its entries.
 - `crates/uv-virtualenv/src/virtualenv.rs:215`: `.gitignore` uses `fs_err::write`.
 - `crates/uv-virtualenv/src/virtualenv.rs:539`: activation templates use `fs_err::write`.
 - `crates/uv-virtualenv/src/virtualenv.rs:596`: `pyvenv.cfg` uses `File::create`.
 - `crates/uv-virtualenv/src/virtualenv.rs:621`: the distutils patch files use
   `fs_err::write`; the condition at line 50 limits their creation to Python below 3.10.
-- These ordinary create/truncate writes follow a destination symlink. There is no unlink or
-  atomic replacement at these call sites.
-- `crates/uv-install-wheel/src/wheel.rs:912` uses `uv_fs::write_atomic_sync` for recorded
-  generated files, consistent with the installer-specific precedent in astral-sh/uv#5165.
-  The helper at `crates/uv-fs/src/lib.rs:558` writes a temporary file and renames it.
-- The changed-file lists for astral-sh/uv#5165 and astral-sh/uv#21891 do not include
-  `uv-virtualenv`. Maintainers explicitly selected astral-sh/uv#21891 over the closed,
-  unmerged alternative astral-sh/uv#21892.
 
-This is source confirmation, not a newly executed reproduction. No build or test was run,
-and no checkout file or GitHub object was changed.
+The observed writes through the activation, `.gitignore`, and `pyvenv.cfg` links agree with
+these direct create/truncate call sites. The reproduction result is based on executed
+commands, not solely on source inspection.
 
-## Follow-up and existing coverage
+Prior triage identified atomic generated-file writes in
+`crates/uv-install-wheel/src/wheel.rs:912` and the temporary-file/rename helper in
+`crates/uv-fs/src/lib.rs:558`, consistent with astral-sh/uv#5165. The related changes in
+astral-sh/uv#5165 and astral-sh/uv#21891 do not cover `uv-virtualenv`.
 
-The implementation follow-up is to replace generated destination files without modifying
-their symlink targets, using the installer precedent where appropriate. Keep directory-link
-handling coordinated with astral-sh/uv#23055; atomic final-file replacement alone does not
-solve that separate case.
+## Follow-up
 
-Existing tests in `crates/uv/tests/python/venv.rs` cover repeated creation with
-`--allow-existing` (`non_empty_dir_exists_allow_existing` at line 1691 and
-`create_venv_then_allow_existing` at line 1747), root symlink preservation, and conditional
-distutils patch generation. The inspected cases do not pre-plant a generated-file symlink
-and verify that its external target remains unchanged.
-
-Add focused integration coverage in that existing module, using explicit setup and
-`uv_snapshot!` command output in the surrounding style. Check the external file's complete
-contents after creation. The module already requires `test-python`; Unix symlink cases
-need the appropriate platform gate, and a Python 3.9 patch-file case should follow the
-existing `test-python-eol` gate. No tests were added during this handoff.
+If maintainers choose to avoid modifying final-file symlink targets, add focused integration
+coverage in `crates/uv/tests/python/venv.rs` that explicitly constructs the link and checks
+the external file's complete contents. Follow the module's `uv_snapshot!` patterns and
+`test-python` feature gate; Unix symlink cases need a platform gate, and Python 3.9 patch-file
+coverage needs `test-python-eol`. Atomic final-file replacement is a relevant implementation
+precedent, but does not by itself address linked parent directories in astral-sh/uv#23055.
 
 ## Search scope and exclusions
+
+The following records the earlier related-issue triage; GitHub searches were not repeated
+for this reproduction pass.
 
 The report was decomposed before searching into the observable external-file overwrite;
 the `uv venv --allow-existing` trigger; each generated-file family; the existing
