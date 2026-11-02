@@ -1910,30 +1910,6 @@ fn verify_pyvenv_cfg_relocatable() {
     activate_xsh.assert(predicates::str::contains(
         r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\'\\new\n".decode("utf-8")"#,
     ));
-
-    // Bash still decodes backslash escapes when promptvars is disabled. Quotes and
-    // backslashes in the generated prompt must survive both sourcing and rendering.
-    // Omit the standard filters so backslashes are not normalized as path separators.
-    #[cfg(target_os = "linux")]
-    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command("bash")
-        .arg("--noprofile")
-        .arg("--norc")
-        .arg("-c")
-        .arg(indoc! {r#"
-            shopt -u promptvars
-            PS1='original>'
-            source .venv/bin/activate &&
-            printf 'prompt=<%s>\nrendered=<%s>\n' "$VIRTUAL_ENV_PROMPT" "${PS1@P}" &&
-            deactivate && printf 'deactivated=%s\n' "$PS1"
-        "#}), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    prompt=<résumé "quoted"'\new
-    >
-    rendered=<(résumé "quoted"'\new
-    ) original>>
-    deactivated=original>
-    "#);
 }
 
 /// With `UV_VENV_RELOCATABLE=1`, the virtual environment is relocatable.
@@ -2232,6 +2208,40 @@ fn activate_venv_bash_prompt_substitution() {
     rendered=(prompt-$(printf substituted)) original>
     deactivated=original>
     ");
+}
+
+/// Bash still decodes prompt backslash escapes when `promptvars` is disabled.
+#[test]
+#[cfg(target_os = "linux")]
+fn activate_venv_bash_promptvars_disabled() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let prompt = "résumé \"quoted\"'\\new\n";
+    context
+        .venv()
+        .args(["--python", "3.12", "--relocatable", "--prompt", prompt])
+        .assert()
+        .success();
+
+    // Omit the standard filters so backslashes are not normalized as path separators.
+    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(indoc! {r#"
+            shopt -u promptvars
+            PS1='original>'
+            source .venv/bin/activate &&
+            printf 'prompt=<%s>\nrendered=<%s>\n' "$VIRTUAL_ENV_PROMPT" "${PS1@P}" &&
+            deactivate && printf 'deactivated=%s\n' "$PS1"
+        "#}), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    prompt=<résumé "quoted"'\new
+    >
+    rendered=<(résumé "quoted"'\new
+    ) original>>
+    deactivated=original>
+    "#);
 }
 
 /// Without a venv path, the working directory's name is embedded as the default prompt.
