@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed with installed uv 0.13.6 and CPython 3.12.3 on Ubuntu 24.04.5 Linux x86_64. In an isolated temporary directory, ran: mkdir v outside_pkgs; ln -s \"$PWD/outside_pkgs\" v/bin; uv --no-config --offline venv --python /usr/bin/python3.12 --allow-existing v. uv exited 0, retained the symlink, and created outside_pkgs/activate plus other activation scripts and interpreter links. A separate linked v/lib redirected creation of python3.12/site-packages outside the environment. Without --allow-existing, uv exited 2 and left the external directory empty. Fedora was not separately tested. This confirms the reported behavior without deciding its compatibility or security classification. Updated $RUNNER_TEMP/issue-context/README.md with findings and existing test coverage; no checkout files or GitHub objects were changed."
+}
