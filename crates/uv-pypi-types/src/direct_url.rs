@@ -187,15 +187,15 @@ pub fn read_direct_url_json(reader: impl Read) -> Result<(DirectUrl, SafeUrl), D
 }
 
 mod unparsed {
+    use std::fmt;
     use std::path::{Path, PathBuf};
 
-    use serde::Deserialize;
+    use serde::de::{IgnoredAny, MapAccess, Visitor};
+    use serde::{Deserialize, Deserializer};
 
     use super::{ArchiveInfo, DirInfo, VcsInfo};
 
     /// Direct URL metadata with an unparsed URL, so schema and URL errors can be handled separately.
-    #[derive(Deserialize)]
-    #[serde(rename_all = "snake_case", untagged)]
     pub(super) enum DirectUrl {
         LocalDirectory {
             url: String,
@@ -213,6 +213,159 @@ mod unparsed {
             subdirectory: Option<Box<Path>>,
             path: Option<PathBuf>,
         },
+    }
+
+    impl<'de> Deserialize<'de> for DirectUrl {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            #[serde(field_identifier, rename_all = "snake_case")]
+            enum Field {
+                Url,
+                Subdirectory,
+                DirInfo,
+                ArchiveInfo,
+                VcsInfo,
+                Path,
+                #[serde(other)]
+                Other,
+            }
+
+            // A malformed nested field can belong to an unused alternative. Keep its parsing
+            // failure local so another variant can still match. Buffering these fields also
+            // keeps duplicate keys available to the derived struct deserializers.
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum Parsed<T> {
+                Valid(T),
+                Invalid(IgnoredAny),
+            }
+
+            enum Value<T> {
+                Missing,
+                Present(Parsed<T>),
+                Duplicate,
+            }
+
+            impl<T> Value<T> {
+                fn read<'de, A>(&mut self, map: &mut A) -> Result<(), A::Error>
+                where
+                    A: MapAccess<'de>,
+                    T: Deserialize<'de>,
+                {
+                    let value = map.next_value()?;
+                    *self = match self {
+                        Self::Missing => Self::Present(value),
+                        Self::Present(_) | Self::Duplicate => Self::Duplicate,
+                    };
+                    Ok(())
+                }
+
+                fn required(self) -> Result<T, ()> {
+                    match self {
+                        Self::Present(Parsed::Valid(value)) => Ok(value),
+                        Self::Missing | Self::Present(Parsed::Invalid(_)) | Self::Duplicate => {
+                            Err(())
+                        }
+                    }
+                }
+            }
+
+            impl<T> Value<Option<T>> {
+                fn optional(self) -> Result<Option<T>, ()> {
+                    match self {
+                        Self::Missing => Ok(None),
+                        Self::Present(Parsed::Valid(value)) => Ok(value),
+                        Self::Present(Parsed::Invalid(_)) | Self::Duplicate => Err(()),
+                    }
+                }
+            }
+
+            struct DirectUrlVisitor;
+
+            impl<'de> Visitor<'de> for DirectUrlVisitor {
+                type Value = DirectUrl;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    formatter.write_str("direct URL metadata")
+                }
+
+                // Scalar URLs can contain credentials or signed query parameters.
+                fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Err(E::custom("invalid direct URL metadata"))
+                }
+
+                fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+                where
+                    A: MapAccess<'de>,
+                {
+                    let mut url = None;
+                    let mut subdirectory = None;
+                    let mut dir_info = Value::Missing;
+                    let mut archive_info = Value::Missing;
+                    let mut vcs_info = Value::Missing;
+                    let mut path = Value::Missing;
+                    while let Some(field) = map.next_key()? {
+                        match field {
+                            Field::Url => {
+                                if url.is_some() {
+                                    return Err(serde::de::Error::duplicate_field("url"));
+                                }
+                                url = Some(map.next_value()?);
+                            }
+                            Field::Subdirectory => {
+                                if subdirectory.is_some() {
+                                    return Err(serde::de::Error::duplicate_field("subdirectory"));
+                                }
+                                subdirectory = Some(map.next_value()?);
+                            }
+                            Field::DirInfo => dir_info.read(&mut map)?,
+                            Field::ArchiveInfo => archive_info.read(&mut map)?,
+                            Field::VcsInfo => vcs_info.read(&mut map)?,
+                            Field::Path => path.read(&mut map)?,
+                            Field::Other => {
+                                map.next_value::<IgnoredAny>()?;
+                            }
+                        }
+                    }
+                    let url = url.ok_or_else(|| serde::de::Error::missing_field("url"))?;
+                    let subdirectory = subdirectory.flatten();
+
+                    // The first valid variant wins, including when another variant's nested
+                    // metadata is malformed or contains duplicate fields.
+                    if let Ok(dir_info) = dir_info.required() {
+                        return Ok(DirectUrl::LocalDirectory {
+                            url,
+                            dir_info,
+                            subdirectory,
+                        });
+                    }
+                    if let Ok(archive_info) = archive_info.required() {
+                        return Ok(DirectUrl::ArchiveUrl {
+                            url,
+                            archive_info,
+                            subdirectory,
+                        });
+                    }
+                    if let (Ok(vcs_info), Ok(path)) = (vcs_info.required(), path.optional()) {
+                        return Ok(DirectUrl::VcsUrl {
+                            url,
+                            vcs_info,
+                            subdirectory,
+                            path,
+                        });
+                    }
+                    Err(serde::de::Error::custom("invalid direct URL metadata"))
+                }
+            }
+
+            deserializer.deserialize_any(DirectUrlVisitor)
+        }
     }
 }
 
@@ -352,10 +505,94 @@ impl From<&DirectUrl> for SafeUrl {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Read};
+
     use anyhow::Result;
 
-    use super::{DirectUrl, VcsInfo, VcsKind, VcsUrl, read_direct_url_json};
+    use super::{DirectUrl, DirectUrlError, VcsInfo, VcsKind, VcsUrl, read_direct_url_json};
     use uv_redacted::SafeUrl;
+
+    #[test]
+    fn direct_url_retains_read_error() -> Result<()> {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"url":"https://example.com/repo","vcs_info":"#
+            .as_slice()
+            .chain(FailedRead);
+        match read_direct_url_json(reader).unwrap_err() {
+            DirectUrlError::Json(error) => assert!(error.is_io()),
+            DirectUrlError::Url(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_scalar_metadata_error() -> Result<()> {
+        let error = read_direct_url_json(
+            br#""https://user:secret@example.com/project?token=secret""#.as_slice(),
+        )
+        .unwrap_err();
+        match error {
+            DirectUrlError::Json(error) => {
+                insta::assert_snapshot!(error, @"invalid direct URL metadata at line 1 column 54");
+            }
+            DirectUrlError::Url(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_variant_precedence() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            br#"{"url":"file:///project","vcs_info":{"vcs":false},"archive_info":{},"dir_info":{},"path":42}"#.as_slice(),
+        )?;
+        insta::assert_json_snapshot!(metadata, @r#"
+        {
+          "url": "file:///project",
+          "dir_info": {}
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_falls_back_after_duplicate_nested_field() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            br#"{"url":"https://example.com/project.zip","dir_info":{"editable":true,"editable":false},"archive_info":{}}"#.as_slice(),
+        )?;
+        insta::assert_json_snapshot!(metadata, @r#"
+        {
+          "url": "https://example.com/project.zip",
+          "archive_info": {}
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_falls_back_after_duplicate_variant_field() -> Result<()> {
+        let (metadata, _) = read_direct_url_json(
+            br#"{"url":"https://example.com/project.zip","dir_info":{},"dir_info":{},"archive_info":{}}"#.as_slice(),
+        )?;
+        insta::assert_json_snapshot!(metadata, @r#"
+        {
+          "url": "https://example.com/project.zip",
+          "archive_info": {}
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_rejects_sequence_representation() {
+        assert!(read_direct_url_json(br#"["file:///project",{},null]"#.as_slice()).is_err());
+    }
 
     #[test]
     fn archive_serialization_strips_userinfo_and_retains_query() -> Result<()> {
