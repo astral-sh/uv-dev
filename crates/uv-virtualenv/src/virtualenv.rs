@@ -59,6 +59,31 @@ fn write_cfg(f: &mut impl Write, data: &[(String, String)]) -> io::Result<()> {
     Ok(())
 }
 
+/// Check existing ancestors before creating files or directories in a reused environment.
+fn validate_venv_directory(root: &Path, relative: &Path) -> io::Result<()> {
+    let mut directory = root.to_path_buf();
+    for component in relative {
+        directory.push(component);
+        let metadata = match fs_err::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => break,
+            Err(err) => return Err(err),
+        };
+        if metadata.is_symlink()
+            && !fs_err::canonicalize(&directory)?.starts_with(fs_err::canonicalize(root)?)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Directory link at {} points outside the virtual environment",
+                    directory.user_display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Create a [`VirtualEnvironment`] at the given location.
 pub(crate) fn create(
     location: &Path,
@@ -145,6 +170,8 @@ pub(crate) fn create(
             match on_existing {
                 OnExisting::Allow => {
                     debug!("Allowing existing {name} due to `--allow-existing`");
+                    validate_venv_directory(location, &interpreter.virtualenv().scripts)?;
+                    validate_venv_directory(location, &interpreter.virtualenv().purelib)?;
                 }
                 OnExisting::Remove(reason) => {
                     if !is_virtualenv

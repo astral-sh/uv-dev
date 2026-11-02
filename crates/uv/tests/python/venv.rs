@@ -1743,34 +1743,29 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
 }
 
 #[test]
-#[cfg(unix)]
 fn create_venv_allow_existing_symlink_bin() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_virtualenv_bin();
     context.venv.create_dir_all()?;
     let outside = context.temp_dir.child("outside");
     outside.create_dir_all()?;
-    symlink(&outside, context.venv.child("bin"))?;
+    let scripts = uv_test::venv_bin_path(&context.venv);
+    uv_fs::create_symlink(&outside, &scripts)?;
 
-    // This unexpectedly writes environment files outside the venv through the symlink.
-    // See astral-sh/uv#23055.
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 0 (success)
+    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.12"]), @"
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: Directory link at .venv/[BIN] points outside the virtual environment
     ");
 
-    assert_link_target(context.venv.child("bin"), &outside);
-    outside
-        .child("activate")
-        .assert(predicates::path::is_file());
-    assert!(outside.child("python").is_symlink());
-
+    assert_link_target(&scripts, &outside);
+    assert_eq!(fs_err::read_dir(outside.path())?.count(), 0);
+    context
+        .venv
+        .child("pyvenv.cfg")
+        .assert(predicate::path::missing());
     Ok(())
 }
 
@@ -1783,25 +1778,36 @@ fn create_venv_allow_existing_symlink_lib() -> Result<()> {
     outside.create_dir_all()?;
     symlink(&outside, context.venv.child("lib"))?;
 
-    // This unexpectedly creates site-packages outside the venv through the symlink.
-    // See astral-sh/uv#23055.
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 0 (success)
+    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.12"]), @"
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: Directory link at .venv/lib points outside the virtual environment
     ");
 
     assert_link_target(context.venv.child("lib"), &outside);
-    outside
-        .child("python3.12/site-packages")
-        .assert(predicates::path::is_dir());
+    assert_eq!(fs_err::read_dir(outside.path())?.count(), 0);
+    context.venv.child("bin").assert(predicate::path::missing());
+    Ok(())
+}
 
+#[test]
+fn create_venv_allow_existing_symlink_inside_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let target = context.venv.child("local-scripts");
+    target.create_dir_all()?;
+    let scripts = uv_test::venv_bin_path(&context.venv);
+    uv_fs::create_symlink(&target, &scripts)?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_link_target(&scripts, &target);
+    target.child("activate").assert(predicate::path::is_file());
     Ok(())
 }
 
