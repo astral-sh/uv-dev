@@ -2209,7 +2209,7 @@ fn activate_zsh_prompt_subst() {
         return;
     };
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let name = "env-$(touch dollar)-`touch backtick`-%n-!";
+    let name = r"env-$(touch dollar)-`touch backtick`-%n-!-\path";
     let venv = context.temp_dir.child(name);
     context
         .venv()
@@ -2218,27 +2218,30 @@ fn activate_zsh_prompt_subst() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.external_command(zsh)
+    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command(&zsh)
         .args(["-f", "-c", indoc! {r#"
             setopt promptbang
             unsetopt promptsubst
             psvar=(user)
-            PS1='original %1v'
+            PS1='original %1v>'
             source "$1" || exit 1
             print -Pr -- "$PS1"
             setopt promptsubst
             print -Pr -- "$PS1"
+            "$2" -f -c 'setopt promptsubst; psvar=(child); print -Pr -- "$PS1"' || exit 1
+            psvar=()
             deactivate
             print -Pr -- "$PS1"
             print -r -- "psvar entries: ${#psvar[@]}"
         "#}, "zsh"])
-        .arg(venv.child("bin/activate").path()), @r"
+        .arg(venv.child("bin/activate").path()).arg(zsh), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    (env-$(touch dollar)-`touch backtick`-%n-!) original user
-    (env-$(touch dollar)-`touch backtick`-%n-!) original user
-    original user
-    psvar entries: 1
+    (env-$(touch dollar)-`touch backtick`-%n-!-\path) original user>
+    (env-$(touch dollar)-`touch backtick`-%n-!-\path) original user>
+    (env-$(touch dollar)-`touch backtick`-%n-!-\path) original child>
+    original >
+    psvar entries: 0
     ");
     context
         .temp_dir

@@ -70,18 +70,6 @@ deactivate () {
         unset _OLD_VIRTUAL_PS1
     fi
 
-    if [ -n "${ZSH_VERSION-}" ] && [ -n "${_UV_VENV_PSVAR-}" ]; then
-        # A prompt theme can update psvar while the environment is active.
-        if [ "${psvar[@]:$((_UV_VENV_PSVAR - 1)):1}" = "${VIRTUAL_ENV_PROMPT-}" ]; then
-            if [ "${#psvar[@]}" = "$_UV_VENV_PSVAR" ]; then
-                shift -p psvar
-            else
-                # Keep later entries at their original prompt indices.
-                set -A psvar "${psvar[@]:0:$((_UV_VENV_PSVAR - 1))}" '' "${psvar[@]:$_UV_VENV_PSVAR}"
-            fi
-        fi
-        unset _UV_VENV_PSVAR
-    fi
     unset VIRTUAL_ENV
     unset VIRTUAL_ENV_PROMPT
     if [ ! "${1-}" = "nondestructive" ] ; then
@@ -139,24 +127,27 @@ if [ -z "${VIRTUAL_ENV_DISABLE_PROMPT-}" ] ; then
             # Without variable expansion, Bash still decodes backslash escapes.
             PS1="(${VIRTUAL_ENV_PROMPT//\\/\\\\}) ${PS1-}"
         fi
-    elif [ -n "${ZSH_VERSION-}" ] && [[ "$VIRTUAL_ENV_PROMPT" = *[![:alnum:]_.\ -]* ]]; then
+    elif [ -n "${ZSH_VERSION-}" ]; then
         if [[ -o promptpercent ]]; then
-            # %Nv inserts the Nth psvar value after shell and prompt expansion, even
-            # when PROMPT_SUBST is enabled after activation.
-            set -A psvar "${psvar[@]}" "$VIRTUAL_ENV_PROMPT"
-            _UV_VENV_PSVAR=${#psvar[@]}
-            PS1="(%${_UV_VENV_PSVAR}v) ${PS1-}"
+            # %1<< keeps the last column until %<< ends truncation. This displays
+            # the literal character whether or not PROMPT_SUBST consumes its
+            # quoting backslash, including in a child zsh that inherits PS1.
+            _UV_VENV_PREFIX=${VIRTUAL_ENV_PROMPT//\%/%%}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\\/'%1<<\\%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\$/'%1<<\$%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\`/'%1<<\`%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\!/'%1<<!!%<<'}
         else
-            # Without percent escapes, quote the characters interpreted by PROMPT_SUBST.
+            # Quote shell substitutions even when PROMPT_SUBST is enabled later.
             _UV_VENV_PREFIX="${VIRTUAL_ENV_PROMPT//\\/\\\\}"
             _UV_VENV_PREFIX="${_UV_VENV_PREFIX//\$/\\\$}"
             _UV_VENV_PREFIX="${_UV_VENV_PREFIX//\`/\\\`}"
             if [[ -o promptbang ]]; then
                 _UV_VENV_PREFIX="${_UV_VENV_PREFIX//!/!!}"
             fi
-            PS1="(${_UV_VENV_PREFIX}) ${PS1-}"
-            unset _UV_VENV_PREFIX
         fi
+        PS1="(${_UV_VENV_PREFIX}) ${PS1-}"
+        unset _UV_VENV_PREFIX
     else
         PS1="(${VIRTUAL_ENV_PROMPT}) ${PS1-}"
     fi
