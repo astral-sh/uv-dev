@@ -59,6 +59,15 @@ fn write_cfg(f: &mut impl Write, data: &[(String, String)]) -> io::Result<()> {
     Ok(())
 }
 
+/// Fish interprets escaped backslashes and apostrophes inside single quotes.
+fn escape_fish_for_single_quotes(value: &str) -> Cow<'_, str> {
+    if value.contains(['\\', '\'']) {
+        Cow::Owned(value.replace('\\', r"\\").replace('\'', r"\'"))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 /// Create a [`VirtualEnvironment`] at the given location.
 pub(crate) fn create(
     location: &Path,
@@ -499,6 +508,7 @@ pub(crate) fn create(
             (true, "activate.fish") => {
                 Cow::Borrowed(r"'(dirname -- (dirname -- (realpath -- (status -f))))'")
             }
+            (false, "activate.fish") => escape_fish_for_single_quotes(location_string),
             (true, "activate.nu") => Cow::Borrowed(r"(path self | path dirname | path dirname)"),
             (false, "activate.nu") => Cow::Owned(format!(
                 "'{}'",
@@ -510,6 +520,7 @@ pub(crate) fn create(
 
         let virtual_prompt = prompt.as_deref().unwrap_or_default();
         let virtual_prompt = match *name {
+            "activate.fish" => escape_fish_for_single_quotes(virtual_prompt),
             "activate.xsh" => Cow::Owned(format!(
                 r#"b"{}".decode("utf-8")"#,
                 virtual_prompt.as_bytes().escape_ascii(),
