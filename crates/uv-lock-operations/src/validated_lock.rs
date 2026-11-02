@@ -287,6 +287,7 @@ impl ValidatedLock {
                 workspace_default_groups,
                 dependency_metadata,
                 indexes,
+                &exclude_newer,
                 interpreter.tags()?,
                 interpreter.markers(),
                 &options.build_options,
@@ -447,6 +448,12 @@ impl ValidatedLock {
                 debug!(
                     "Resolving despite existing lockfile due to missing local index: `{name}` `{version}` from `{}`",
                     index.display()
+                );
+                Ok(Self::Preferable(lock))
+            }
+            SatisfiesResult::ExcludedNewerArtifact(name, version, timestamp) => {
+                debug!(
+                    "Resolving despite existing lockfile: no locked artifact for `{name}` `{version}` satisfies the effective cutoff `{timestamp}`"
                 );
                 Ok(Self::Preferable(lock))
             }
