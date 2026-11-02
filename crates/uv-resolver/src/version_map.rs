@@ -661,6 +661,7 @@ impl VersionMapLazy {
             )
             .expect("archived version files always deserializes");
             let mut priority_dist = init.cloned().unwrap_or_default();
+            let mut mapping_error = None;
             for (filename, file) in files.all_entries(&self.package_name) {
                 let filename =
                     match filename {
@@ -750,16 +751,12 @@ impl VersionMapLazy {
                 let file = match self.index_route.canonicalize_file(file) {
                     Ok(file) => file,
                     Err(error) => {
-                        // Files that cannot be selected do not need a valid proxy artifact URL.
-                        if !candidate.is_compatible() {
-                            continue;
+                        // Another file for this version may still be installable. Rank all
+                        // mapped candidates, including those from --find-links, before failing.
+                        if candidate.is_compatible() {
+                            mapping_error.get_or_insert(error);
                         }
-
-                        if let Some(flat) = init {
-                            return Ok(Some(flat.clone()));
-                        }
-
-                        return Err(Box::new(error));
+                        continue;
                     }
                 };
 
@@ -791,6 +788,9 @@ impl VersionMapLazy {
                         priority_dist.insert_source(dist, hashes, compatibility);
                     }
                 }
+            }
+            if let Some(error) = mapping_error {
+                priority_dist.record_mapping_error(error)?;
             }
             if priority_dist.is_empty() {
                 Ok(None)

@@ -1765,6 +1765,252 @@ async fn proxy_index_rejects_hashless_selected_source() -> Result<()> {
     Ok(())
 }
 
+/// A newer, excluded source archive does not hide a compatible variant from another source.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_checks_pending_variants_before_reporting_a_mapping_error() -> Result<()> {
+    use uv_test::packse::WheelBuilder;
+
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index", "wheel-variants"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    let mut excluded = advertised_file(
+        SOURCE_FILENAME,
+        &format!("{proxy_url}/files/{SOURCE_FILENAME}"),
+        None,
+    );
+    excluded["upload-time"] = json!("2025-01-01T00:00:00Z");
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{proxy_url}/files/{WHEEL_FILENAME}?download=1"),
+                Some(WHEEL_HASH),
+            ),
+            excluded,
+        ],
+        1,
+    )
+    .await;
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let metadata = json!({
+        "$schema": "https://variants-schema.wheelnext.dev/peps/825/v0.1.1.json",
+        "default-priorities": { "namespace": ["x86_64"] }, "variants": { "null": {} },
+    });
+    let variant = metadata.to_string();
+    let (_, wheel) = WheelBuilder::new(&"basic-package".parse()?, &"0.1.0".parse()?)
+        .files(&[("basic_package-0.1.0.dist-info/variant.json", &variant)])
+        .build();
+    links
+        .child("basic_package-0.1.0-py3-none-any-null.whl")
+        .write_binary(&wheel)?;
+    let variants_file = links.child("basic_package-0.1.0-variants.json");
+    variants_file.write_str(&variant)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg("--find-links").arg(links.path())
+        .arg("basic-package==0.1.0").args(["--exclude-newer", "2024-06-01"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    proxy.verify().await;
+    Ok(())
+}
+
+/// An unsupported variant does not hide the mapping error from an otherwise usable wheel.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_reports_mapping_error_when_variant_is_unsupported() -> Result<()> {
+    use uv_test::packse::WheelBuilder;
+
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index", "wheel-variants"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{proxy_url}/files/{WHEEL_FILENAME}?download=1"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let metadata = json!({
+        "$schema": "https://variants-schema.wheelnext.dev/peps/825/v0.1.1.json",
+        "default-priorities": { "namespace": ["x86_64"] }, "variants": {},
+    });
+    let variant = metadata.to_string();
+    let (_, wheel) = WheelBuilder::new(&"basic-package".parse()?, &"0.1.0".parse()?)
+        .files(&[("basic_package-0.1.0.dist-info/variant.json", &variant)])
+        .build();
+    links
+        .child("basic_package-0.1.0-py3-none-any-null.whl")
+        .write_binary(&wheel)?;
+    let variants_file = links.child("basic_package-0.1.0-variants.json");
+    variants_file.write_str(&variant)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--find-links").arg(links.path()).arg("basic-package==0.1.0")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Cannot map proxy artifact URL `http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl`: artifact URLs with query strings are not supported
+    ");
+    proxy.verify().await;
+    Ok(())
+}
+
+/// An unmappable file does not displace a better wheel from the same proxy.
+#[tokio::test]
+async fn proxy_index_ranks_mapped_wheels_alongside_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    let preferred = "basic_package-0.1.0-2-py3-none-any.whl";
+    let queried = "basic_package-0.1.0-1-py3-none-any.whl";
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![
+            advertised_file(
+                preferred,
+                &format!("{proxy_url}/files/{preferred}"),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                queried,
+                &format!("{proxy_url}/files/{queried}?download=1"),
+                Some(WHEEL_HASH),
+            ),
+        ],
+        1,
+    )
+    .await;
+    mount_artifact(&proxy, preferred, wheel.clone(), 1).await;
+    mount_artifact(&proxy, queried, wheel.clone(), 0).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="/files/{WHEEL_FILENAME}#sha256={WHEEL_HASH}">{WHEEL_FILENAME}</a>"#
+            ),
+            "text/html",
+        ))
+        .expect(1)
+        .mount(&flat)
+        .await;
+    mount_artifact(&flat, WHEEL_FILENAME, wheel, 0).await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("basic-package==0.1.0")
+        .arg("--no-deps").arg("--find-links").arg(format!("{}/links/", flat.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_rejects_artifact_queries_before_metadata_requests() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let index = MockServer::start().await;
+    let artifacts = MockServer::start().await;
+    let index_url = index.uri();
+    let artifacts_url = artifacts.uri();
+    mount_simple(
+        &index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{artifacts_url}/files/{WHEEL_FILENAME}?private-key=secret"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["basic-package==0.1.0"]
+
+        [tool.uv]
+        preview-features = ["proxy-index"]
+
+        [[tool.uv.index]]
+        name = "proxy"
+        url = "{index_url}/simple/"
+        artifact-base-url = "{artifacts_url}/files/"
+        proxy-for = "pypi"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Cannot map proxy artifact URL `http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl`: artifact URLs with query strings are not supported
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert_no_requests(&artifacts, "artifact host").await?;
+    index.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_rejects_unmapped_artifact_without_origin_fallback() -> Result<()> {
     let context = uv_test::test_context!("3.12");

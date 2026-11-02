@@ -7,8 +7,9 @@ use tracing::debug;
 use uv_distribution::supported_variant_properties;
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_distribution_types::{
-    File, IndexUrl, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, RequiresPython, VariantsJsonContent, VariantsJsonFilename, VerbatimFile,
+    File, IndexUrl, InstalledDist, MinimumLibcVersion, Name, ProxyIndexError, RegistryBuiltDist,
+    RegistryBuiltWheel, RegistrySourceDist, RequiresPython, VariantsJsonContent,
+    VariantsJsonFilename, VerbatimFile,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
@@ -45,6 +46,8 @@ struct PrioritizedDistInner {
     wheels: Vec<(RegistryBuiltWheel, WheelCompatibility)>,
     /// Variant metadata files from the indexes contributing files for this version.
     variants_json: Vec<RegistryVariantsJson>,
+    /// A mapping error for an ordinary file, pending wheel variant selection.
+    variant_mapping_error: Option<Box<ProxyIndexError>>,
     /// The hashes for each distribution.
     hashes: Vec<HashDigest>,
     /// Python coverage, unioned over compatible wheels independently of their platforms.
@@ -62,6 +65,7 @@ impl Default for PrioritizedDistInner {
             best_wheel_index: None,
             wheels: Vec::new(),
             variants_json: Vec::new(),
+            variant_mapping_error: None,
             hashes: Vec::new(),
             python_markers: MarkerTree::FALSE,
             markers: [MarkerTree::FALSE; 2],
@@ -417,6 +421,29 @@ impl PrioritizedDist {
 
     pub(crate) fn variants_json(&self) -> &[RegistryVariantsJson] {
         &self.0.variants_json
+    }
+
+    /// Report the mapping error if this version has no usable file and no variant left to check.
+    pub(crate) fn record_mapping_error(
+        &mut self,
+        error: ProxyIndexError,
+    ) -> Result<(), Box<ProxyIndexError>> {
+        if self.get().is_none() {
+            if !self.has_pending_variants() {
+                return Err(Box::new(error));
+            }
+            self.0.variant_mapping_error = Some(Box::new(error));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn variant_mapping_error(&self) -> Option<&ProxyIndexError> {
+        self.0.variant_mapping_error.as_deref()
+    }
+
+    /// Whether checking variant metadata could make a wheel compatible.
+    pub(crate) fn has_pending_variants(&self) -> bool {
+        self.variants_json_for_selection().next().is_some()
     }
 
     /// Return the `variants.json` files we need to check the candidate wheels.
