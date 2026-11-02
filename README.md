@@ -8,19 +8,19 @@ Classification: bug
 
 The explicit `uv venv --prompt` example is **reproducible** with the installed uv 0.13.6 executable. On Ubuntu 24.04.5, x86_64 Linux, CPython 3.12.3, and Bash 5.2.21, command substitution in the prompt runs while sourcing the generated activation script, before any interactive prompt is drawn. The same behavior occurs in ordinary Bash, Bash POSIX mode, and Bash with `compat42` enabled. Older compatibility settings are not necessary for the body's example.
 
-The body's claim about environment directory names needs a timing correction. With no explicit `--prompt`, a directory name containing `$(...)` remains literal during activation. Bash subsequently evaluates it during prompt expansion, confirmed with `${PS1@P}`. This distinction also holds in the tested POSIX and compatibility modes.
+The body's claim about environment directory names needs a timing correction. With an explicit environment path and no `--prompt`, its basename remains literal during activation, then Bash evaluates it during prompt expansion, confirmed with `${PS1@P}`. When the environment path is omitted, the CLI defaults to `--prompt .`, embedding the current directory name in the script; that case executes substitutions during activation just like an explicit prompt. The parent regression tests confirm all three paths. The checkout fix and validation are described below; the original uv 0.13.6 reproduction remains recorded here.
 
 The report specifies Fedora Linux and uv 0.13.6, with any Python version. Fedora, Zsh, and older Bash binaries were not exercised. The reporter associates the behavior with CVE-2026-113723 and says the security team considered it outside uv's vulnerability threat model; this reproduction does not establish CVE applicability.
 
 ## Classification
 
-Reproducible prompt-quoting correctness bug. The generated script embeds explicit prompt text directly into double-quoted shell source, and the CLI reproduction confirms its evaluation during activation. Directory-derived prompt text follows a separate path and is evaluated during Bash prompt expansion instead.
+Reproducible prompt-quoting correctness bug. The generated script embeds explicit prompt text directly into double-quoted shell source, and the CLI reproduction confirms its evaluation during activation. The basename-derived prompt for an explicit environment path follows a separate path and is evaluated during Bash prompt expansion instead.
 
 The title's compatibility-specific wording should not obscure the ordinary-Bash reproduction in the body. No upgrade regression or last known-good uv version is established. The historical environment-path quoting fix in astral-sh/uv#8984 does not cover explicit prompt interpolation. Prior related-issue research found no same-problem uv tracker or prompt fix.
 
 ## Reproduction
 
-Outcome: **reproducible** for the explicit-prompt Bash example, including POSIX and `compat42` modes. The default directory-derived case reproduces substitution at prompt expansion, not at source time.
+Outcome: **reproducible** for the explicit-prompt Bash example, including POSIX and `compat42` modes. The basename-derived case with an explicit environment path reproduces substitution at prompt expansion, not at source time. Omitting the environment path embeds the current directory name and reproduces source-time substitution.
 
 ### Environment and isolation
 
@@ -91,21 +91,23 @@ after_activation=x$(printf UV_DIRECTORY_SUBSTITUTED)y
 rendered_prompt=(xUV_DIRECTORY_SUBSTITUTEDy) 
 ```
 
-`${PS1@P}` explicitly applies Bash prompt expansion without requiring an interactive terminal. The same command was separately exercised with `--posix`, and with `shopt -s compat42` before activation; both produced the same output. The directory-derived value is literal after sourcing, so the body's generalization that both prompt sources execute immediately is not accurate for this case.
+`${PS1@P}` explicitly applies Bash prompt expansion without requiring an interactive terminal. The same command was separately exercised with `--posix`, and with `shopt -s compat42` before activation; both produced the same output. The directory-derived value is literal after sourcing, so the body's generalization that both prompt sources execute immediately is not accurate for this explicit-path case. The separate current-directory default embeds the name during generation and does execute substitutions at source time.
 
 ### Existing test coverage and limits
 
 Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for prompt substitution, `VIRTUAL_ENV_PROMPT`, `PS1`, `BASH_COMPAT`, and `promptvars`. Read the relevant setup and assertions in `crates/uv/tests/python/venv.rs`:
 
 - `create_venv_apostrophe`: creates `Testing's`, activates it, runs Python, and compares `sys.prefix` with the environment path. It covers apostrophe quoting in environment paths, not command substitution in prompts. Linux-only.
-- `verify_pyvenv_cfg_relocatable`: uses a prompt containing Unicode, quotes, a backslash, and a newline; checks relocatable boilerplate and the encoded Xonsh prompt. It does not source the Bash script or assert literal Bash prompt behavior.
+- `verify_pyvenv_cfg_relocatable`: originally checked relocatable boilerplate and Xonsh encoding for a prompt containing Unicode, quotes, a backslash, and a newline, without sourcing Bash. Reproducing that fixture showed that Bash stripped its double quotes. The updated fixture also includes an apostrophe and a literal `\n`; it now checks the Bash activation/rendering/deactivation round trip with `promptvars` disabled, while retaining the Xonsh serialization assertion.
 - `activate_non_relocatable_venv_ksh`: uses a POSIX shell with Bash/Zsh version variables unset and a synthetic `KSH_VERSION` to check activation with a read-only `SCRIPT_PATH`. It does not test prompt interpolation. Unix-only.
 
-The module is gated by `test-python` in `crates/uv/tests/python/main.rs`. No existing test covering the reported Bash substitution was found in these searches. No repository tests were added or run; verification used the installed CLI and its generated scripts.
+The module is gated by `test-python` in `crates/uv/tests/python/main.rs`. The initial search preceded the parent regression PR, astral-sh/uv-dev#3065, which added `activate_venv_bash_prompt_substitution`, `activate_venv_bash_current_directory_prompt_substitution`, and `activate_venv_bash_directory_prompt_substitution`. All three passed against the unfixed checkout while asserting the undesirable substitutions. They now assert literal values and rendered prompts; see Fix for focused debug-profile validation. The original CLI reproduction used the installed executable.
 
 Zsh was unavailable. These results do not verify Zsh behavior, the exact Fedora environment, an actual older Bash executable, every shell option combination, or a separate compatibility-only regression. They confirm the Bash example in the body with the reported uv version. The earlier template-only checks are superseded by this complete CLI reproduction.
 
 ## Related
+
+- astral-sh/uv-dev#3065 — Parent regression pull request. Adds three Bash activation tests that record the undesirable explicit-prompt, current-directory, and environment-basename behaviors. All three are retained and updated to require literal prompts.
 
 - astral-sh/uv#9424 — Please comment on CVE-2024-53899 and virtualenv activation scripts (issue, closed). Historical activation-script command-injection discussion. Maintainers pointed to astral-sh/uv#8984 for environment-path quoting and treated quoting defects as bugs. That fix did not escape prompt values, so this is related context rather than a duplicate or evidence of a regression.
 
@@ -116,7 +118,7 @@ Zsh was unavailable. These results do not verify Zsh behavior, the exact Fedora 
 - pypa/virtualenv#3418 — 🐛 fix(bash): preserve literal prompts in supported shells (pull request, merged). Upstream PR corresponding to the reporter's linked commit, merged on 2026-10-17. It addresses PS1 rendering under Bash compatibility levels, promptvars, and POSIX mode. It informs a rendering fix, but does not establish that uv's separate source-time prompt interpolation was fixed.
 
 
-## Supporting implementation evidence
+## Original implementation evidence
 
 Source inspected at checkout commit `39a02a0d9085f14dc3d5aa8655ac010a1fd377f8`:
 
@@ -126,9 +128,40 @@ Source inspected at checkout commit `39a02a0d9085f14dc3d5aa8655ac010a1fd377f8`:
 
 The installed executable's generated scripts match these relevant template fragments. The observations above establish the behavior independently of source inspection. The reporter's upstream commit `5f48d711731311428aebfae61d46957762155b22`, associated with pypa/virtualenv#3418, is context for prompt rendering; it does not modify uv's generator.
 
-## Suggested follow-up
+## Fix
 
-Handle both shell-source quoting for explicit prompts and literal prompt rendering for directory-derived values. Keep source-time evaluation separate from redraw behavior in focused integration coverage. Check shell-specific behavior and Bash compatibility/POSIX settings when choosing a rendering approach. Use the existing virtual-environment integration-test module with its `test-python` gate and appropriate shell/platform conditions.
+Outcome: **fixed** in the checkout. The production change is limited to `crates/uv-virtualenv/src/virtualenv.rs` and `crates/uv-virtualenv/src/activator/activate`; all test changes are in the original parent regression file, `crates/uv/tests/python/venv.rs`.
+
+The generator uses the existing POSIX single-quote escaping helper for the shared `activate` template. The template assigns the prompt once in single quotes, then selects the basename fallback only if it is empty. This keeps quotes and substitutions literal while sourcing, including for the current-directory default. Other activator serializers and `pyvenv.cfg` serialization are unchanged.
+
+For Bash with `promptvars` or POSIX mode enabled, `PS1` contains a deferred reference to `VIRTUAL_ENV_PROMPT`. Bash decodes its prompt escapes before expanding that reference, so the prompt value is not interpreted as shell source or backslash escapes. With both options disabled, the template doubles backslashes because Bash still decodes prompt escapes. These Bash-specific operations are guarded so other shells can source the shared script. The caller's existing prompt remains appended and is restored on deactivation.
+
+All three parent regressions passed with their original assertions, then failed for the reported substitutions when changed to require literal text, before production was modified. They now check rendered prompts as well as activation values. The current-directory test exercises POSIX mode with `compat42` and disabled `promptvars`, where POSIX mode still requires deferred expansion. The explicit-prompt test also checks deactivation.
+
+The existing relocatable fixture exposed stripped double quotes, and its extended backslash fixture demonstrated a literal `\n` becoming a newline during rendering. Its updated round trip checks Unicode, both quote types, a backslash escape, and a trailing newline with `promptvars` disabled. Standard snapshot filters are omitted for that output because their path-separator normalization would hide backslash corruption. The test remains under the module's `test-python` gate; Bash invocations are Linux-only. No new test functions were needed.
+
+The neighboring `create_venv_apostrophe` and `activate_non_relocatable_venv_ksh` tests confirm environment-path quoting and POSIX-shell activation. Inspection of `crates/uv/tests/sync/sync.rs::sync_environment_prompt` found a valid project-name fixture and a `pyvenv.cfg` assertion, not a contradictory Bash assumption; it was left unchanged. Explicit `--prompt .` and project commands reuse the same generator, so no redundant command coverage was added.
+
+Successful focused validation:
+
+```bash
+cargo test -p uv --test python -- \
+  venv::activate_venv_bash_prompt_substitution \
+  venv::activate_venv_bash_current_directory_prompt_substitution \
+  venv::activate_venv_bash_directory_prompt_substitution \
+  venv::verify_pyvenv_cfg_relocatable \
+  venv::create_venv_apostrophe \
+  venv::activate_non_relocatable_venv_ksh --exact
+RUSTUP_TOOLCHAIN=stable cargo fmt --all
+RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check
+bash -n crates/uv-virtualenv/src/activator/activate
+dash -n crates/uv-virtualenv/src/activator/activate
+git diff --check
+```
+
+All six integration tests passed in the unoptimized debug/test profile. Formatting used the installed stable rustfmt 1.10.0 because the pinned 1.99.0 toolchain lacks rustfmt and its installation directory is read-only. A ShellCheck comparison against the original template found no new diagnostics (13 remaining versus 14 originally); this is not a claim that the shared multi-shell template passes ShellCheck outright.
+
+Runtime validation used Linux and Bash 5.2.21. Zsh was unavailable; the shared source-time assignment is now quoted, but Zsh-specific prompt rendering was not changed or claimed as validated. The original Fedora environment, older Bash executables, and CVE applicability remain unverified.
 
 ## Search coverage and excluded candidates
 
@@ -143,4 +176,6 @@ Searches used both literal report terms and alternative terminology without rest
 
 ## Scope of changes
 
-Only this temporary issue-context README was updated; reproduction files and caches were created under `/tmp/uv-23058-ysiw1cc0`. No checkout files or existing user state were modified, and no GitHub issues, pull requests, comments, or labels were changed. The pre-existing checkout changes were left untouched.
+Only the two affected production files and the directly relevant parent integration-test file were modified in the checkout. This README is the only changed file in the issue-context directory. Reproduction and tooling artifacts are temporary. No commits, pushes, Git configuration changes, or GitHub changes were made.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3068

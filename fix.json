@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Activation scripts could execute substitutions in prompt values and reinterpret quotes or backslashes. Quote generated assignments and preserve literal text during Bash prompt rendering, with updated parent regressions and relocatable round-trip coverage for POSIX compatibility, disabled promptvars, and deactivation.",
+  "validation": [
+    "Six focused debug-profile integration tests passed, including all three updated parent regressions.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check passed.",
+    "Bash and dash syntax checks passed; ShellCheck comparison found no new diagnostics.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3068"
+}
