@@ -267,6 +267,118 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
+/// A short interpreter path containing a tab is written directly into a console script's shebang.
+#[test]
+#[cfg(target_os = "linux")]
+fn install_console_script_in_tab_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let (filename, wheel) = WheelBuilder::new(&"tab-probe".parse()?, &"1.0.0".parse()?)
+        .entry_points(&["tab-probe".to_string()])
+        .build();
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+
+    let venv = context.temp_dir.join("tab\tdir/venv");
+    context.venv().arg(&venv).assert().success();
+    let python = venv_bin_path(&venv).join("python");
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("--python").arg(&python).arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using Python 3.12.[X] environment at: tab\tdir/venv
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tab-probe==1.0.0 (from file://[TEMP_DIR]/tab_probe-1.0.0-py3-none-any.whl)
+    ");
+
+    let script = venv_bin_path(&venv).join("tab-probe");
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read(&script), @"
+        #![TEMP_DIR]/tab\tdir/venv/bin/python
+        # -*- coding: utf-8 -*-
+        import sys
+        from tab_probe.cli import main
+        if __name__ == \"__main__\":
+            if sys.argv[0].endswith(\"-script.pyw\"):
+                sys.argv[0] = sys.argv[0][:-11]
+            elif sys.argv[0].endswith(\".exe\"):
+                sys.argv[0] = sys.argv[0][:-4]
+            sys.exit(main())
+        ");
+    });
+
+    // The kernel splits the interpreter path at the tab, making the installed entry point
+    // unusable even though its Python code works: astral-sh/uv#23057.
+    let error = context
+        .external_command(&script)
+        .output()
+        .expect_err("the interpreter path is truncated at the tab");
+    insta::assert_debug_snapshot!(error.kind(), @"NotFound");
+
+    uv_snapshot!(context.external_command(&python).arg(&script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tab-probe!
+    ");
+
+    Ok(())
+}
+
+/// Rewriting a wheel's `#!python` script has the same tab-path limitation as generated entry points.
+#[test]
+#[cfg(target_os = "linux")]
+fn install_wheel_script_in_tab_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let (filename, wheel) = WheelBuilder::new(&"tab-probe".parse()?, &"1.0.0".parse()?)
+        .files(&[(
+            "tab_probe-1.0.0.data/scripts/tab-probe",
+            indoc! {"
+                #!python
+                print('Hello from tab-probe!')
+            "},
+        )])
+        .build();
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+
+    let venv = context.temp_dir.join("tab\tdir/venv");
+    context.venv().arg(&venv).assert().success();
+    let python = venv_bin_path(&venv).join("python");
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("--python").arg(&python).arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using Python 3.12.[X] environment at: tab\tdir/venv
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tab-probe==1.0.0 (from file://[TEMP_DIR]/tab_probe-1.0.0-py3-none-any.whl)
+    ");
+
+    let script = venv_bin_path(&venv).join("tab-probe");
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read(&script), @"
+        #![TEMP_DIR]/tab\tdir/venv/bin/python
+        print('Hello from tab-probe!')
+        ");
+    });
+
+    // The rewritten shebang makes an otherwise valid wheel script unlaunchable because
+    // the kernel splits the interpreter path at the tab: astral-sh/uv#23057.
+    let error = context
+        .external_command(&script)
+        .output()
+        .expect_err("the interpreter path is truncated at the tab");
+    insta::assert_debug_snapshot!(error.kind(), @"NotFound");
+
+    uv_snapshot!(context.external_command(&python).arg(&script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tab-probe!
+    ");
+
+    Ok(())
+}
+
 /// Hash the entire HTTP response even when extraction stops before trailing bytes.
 #[test]
 fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
