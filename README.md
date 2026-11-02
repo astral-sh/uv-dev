@@ -1,4 +1,4 @@
-# Concurrent Git fetches from one repository: cold-cache initialization failure
+# Cold-cache Git initialization failure after a preceding uv process exits
 
 Issue: astral-sh/uv#22975
 
@@ -8,19 +8,21 @@ Classification: bug (reported failure; not independently reproduced)
 
 The reporter describes intermittent failure of `uv sync --frozen` on uv 0.12.24 when three dependencies come from different subdirectories of one Git repository, with the same tag and locked commit. An empty workspace-local `UV_CACHE_DIR` reportedly produces `failed to remove directory <cache>/git-v1/db/<id>: Directory not empty (os error 39)`. The reported environment is GitHub-hosted Ubuntu 26.04 amd64, Git 2.56.0, and Python 3.14.9, with `maintenance.auto=false` and `gc.auto=0`.
 
-The report records two failures in ten cold-cache jobs and none in ten jobs with a restored repository database. Its Trace2 summary places a failing `git rev-parse` 14 ms after another process starts `git init` in the same database. The full trace, repository, and lockfile were not supplied. The report does not establish whether uv 0.13.x is affected.
+The original report records two failures in ten cold-cache jobs and none in ten warm-cache jobs. The reporter now identifies a missing trigger: a wrapper runs `uv sync --frozen --offline`, then `uv sync --frozen` on failure, using the same cache. The offline uv reportedly exits on an uncached wheel while its `git init` child remains alive. The online uv acquires the released repository lock, rejects the unfinished database, and attempts to remove it while the child is still writing. This corrects the initial interpretation of competing fetch tasks within one live uv process; the reporter says the repository lock itself works.
 
-Targeted reproduction did not reproduce the failure: all 20 sync invocations succeeded, ten on uv 0.12.24 and ten on the installed uv 0.13.5. Git and Python matched the report; the available OS was Ubuntu 24.04.5. Tests included three packages, isolated cold caches, local-file and HTTP transports, deliberately slower initialization, and concurrent uv processes sharing an initially empty cache. Traces showed repository-lock contention without overlapping initialization and validation. These results do not rule out an intermittent failure in the reporter's environment.
+The follow-up supplies a process-attributed timing summary on Ubuntu 26.04/ext4 and a reduced forced-termination reproducer reported to fail on macOS 26 with both uv 0.12.24 and 0.13.6 (5/5 fresh-cache attempts each, OS error 66). The CI failure follows an ordinary error exit; the reduced example deliberately kills only the parent uv to force the overlap. These are reporter-supplied observations, not independently verified results. Multiple subdirectory packages are not required by the reduced example.
+
+Earlier targeted reproduction succeeded in all 20 sync invocations, ten each on uv 0.12.24 and 0.13.5, on Ubuntu 24.04.5 with matching Git/Python versions. Those tests included cold caches, local-file and HTTP transports, slower initialization, and simultaneous uv processes, but did not exit or terminate the first uv during initialization and immediately retry. They therefore do not test the newly identified trigger. The contributor's 25 successful macOS runs on `main` likewise did not describe that trigger.
 
 No confirmed duplicate or fix was identified. astral-sh/uv#14894 and astral-sh/uv#5645 describe adjacent intermittent Git failures. astral-sh/uv#22829 and astral-sh/uv#22868 concern maintenance racing with checkout cloning, a different reported trigger and stage.
 
 ## Classification
 
-Retain the bug classification for the reported failure to sync valid dependencies. The reproduction outcome is `not_reproducible` in the tested configurations, not evidence that the reported error is expected behavior or that the issue is fixed. Neither concurrent initialization nor a root cause has been independently confirmed. There is no established upgrade regression or duplicate.
+Retain the bug classification. The reporter now supplies a concrete child-lifetime explanation and an executable reduced example, including reported failures on uv 0.13.6. Independent verification of the revised trigger and normal-error shutdown path remains outstanding. There is no established upgrade regression, duplicate, or confirmed fix. The retained `not_reproducible` result applies only to the earlier test configurations; it is not a verdict on the new reproducer.
 
 ## Reproduction
 
-**Outcome: `not_reproducible`.** Every attempted sync installed all three packages successfully. No run produced `Directory not empty`, a database-removal failure, or a `rev-parse` process starting during `git init`.
+**Earlier independent outcome: `not_reproducible` for the original test matrix.** Every attempted sync installed all three packages successfully. No run produced `Directory not empty`, a database-removal failure, or a `rev-parse` process starting during `git init`.
 
 ### Environment and fixture
 
@@ -101,24 +103,62 @@ These tests are gated by `#[cfg(feature = "test-git")]`. `TestContext::new_with_
 
 Contributor `nooscraft` reports in the discussion of astral-sh/uv#22975 that 25 runs on macOS using `main` all succeeded with a local repository, three subdirectory packages pinned to the same tag, and an empty cache for every run. The comment does not provide the tested commit, exact macOS/Git/Python versions, fixture, commands, or trace artifacts. Treat this as a contributor-reported result, separate from the 20 retained Ubuntu sync invocations above. It broadens the reported successful configurations but does not reproduce the Ubuntu 26.04 failure or establish a fix on `main`.
 
-The contributor describes subsequent fetches waiting for the repository lock and then using the existing Git source, consistent with the source inspection and retained traces. Early lock release or actors not sharing a lock remain investigative possibilities, not established causes. The failing process's identity, arguments, working directory, and lock events are still needed to explain the discrepancy.
+The contributor describes subsequent fetches waiting for the repository lock and then using the existing Git source, consistent with the source inspection and retained traces. The reporter now attributes the competing Git processes to successive uv invocations, with a child surviving its parent; the successful macOS runs did not describe testing that shutdown condition.
 
-### Limits and evidence needed
+### Reporter-supplied failure sequence
 
-The report's stated three-package shape was sufficient for a meaningful targeted attempt, including the affected uv version, matching Git/Python versions, and two concurrency stress variants. Nevertheless, Ubuntu 26.04 and the original GitHub repository, project, lockfile, Git configuration, and CI workflow were not available. This result does not establish a fix in 0.13.x or exclude a configuration-dependent failure.
+In the follow-up to astral-sh/uv#22975 (comment ID 6588691516), `jamestrousdale` reports uv 0.12.24, Git 2.56, GitHub-hosted Ubuntu 26.04, and a workspace cache on ext4. A Git wrapper reportedly recorded PID, parent command line, and working directory before executing real Git; Git Trace2 supplied exit statuses and `RUST_LOG=uv_git=debug,uv_fs::locked_file=trace` supplied lock events. The supplied evidence is a summarized timeline, not the raw logs:
 
-To reproduce the remaining discrepancy, the missing evidence is:
+| Time from first initialization | Reported event |
+| --- | --- |
+| 0 ms | Git process A, parent `uv sync --frozen --offline`, starts `git init` in `<cache>/git-v1/db/<id>`. |
+| Before 16 ms | Offline uv fails on an uncached wheel and exits; the wrapper starts the online sync. |
+| 19 ms | Online uv acquires the exclusive repository lock; its other tasks wait for that lock. |
+| 38 ms | Git process B, parent `uv sync --frozen`, runs `git rev-parse` in the same database and exits 128: not a Git repository. |
+| 59 ms | Online uv logs `Updating Git source`. |
+| 232 ms | Process A exits from SIGPIPE, which the reporter attributes to its parent having exited. |
+| 245 ms | Online uv releases the repository lock. |
+| 265 ms | Online uv reports directory removal failure, OS error 39. |
 
-- A minimal runnable repository with its exact `pyproject.toml` and `uv.lock`, plus the relevant CI steps.
-- Sanitized failing Git Trace2 and uv logs retaining process IDs and lock events. The contributor identifies `RUST_LOG=uv_git=debug,uv_fs::locked_file=trace` as a focused logging configuration for acquisition and release of `git-v1/locks/<digest>`; the broader `RUST_LOG=uv_git=trace,uv_fs=trace` configuration above also covers these events.
-- Process B's full arguments and working directory from the failing Trace2 output, to identify which repository check it performs and where it runs.
-- The filesystem type and mount configuration for `UV_CACHE_DIR`, and whether another uv step, background `uv run`, cache restoration, cleanup, custom Git template, or hook can access the same cache during the job.
+The reporter says no other processes used the cache and the two uv invocations ran sequentially. The reported failure rate is 1/50 in this case and approximately 2/10 in another repository, depending on whether offline sync starts initialization before its first error. This supports investigation of a Git child outliving the lock-owning uv process rather than failure of mutual exclusion between live lock holders. The exact shutdown behavior and causal interpretation remain to be verified from source and full traces.
 
-A fresh-cache comparison on uv 0.13.6 would help, but the installed 0.13.5 comparison already succeeded here. Neither those retained results nor the contributor's macOS result establish a fix in 0.13.x or on `main`.
+### Reduced reproducer supplied by the reporter
+
+Reported result: macOS 26, uv 0.12.24 and 0.13.6, five failures in five fresh-cache attempts for each version, with `Directory not empty (os error 66)`. Git/Python versions for these macOS attempts are not specified. The example uses one Git dependency and one registry dependency, without subdirectories:
+
+```toml
+[project]
+name = "repro"
+version = "0"
+requires-python = ">=3.12"
+dependencies = ["packaging", "idna"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+packaging = { git = "https://github.com/pypa/packaging", tag = "24.2" }
+```
+
+The supplied setup and orchestration are:
+
+1. Place this configuration in `project/pyproject.toml` and generate its lockfile using `uv lock --directory project`. The shown failing package resolves to commit `d8e3b31b734926ebbcaff654279f6855a73e052f`.
+2. Create a Git template containing 20 subdirectories under `template/info`, each with 1,000 small files, to lengthen initialization. Set `GIT_TEMPLATE_DIR` to its absolute path.
+3. Prepend an executable `bin/git` wrapper to `PATH`. When its first argument is `init` and `REPRO_INIT_MARK` is set, it creates that marker file, then executes `/usr/bin/git` with the original arguments.
+4. Use a fresh absolute cache path `CACHE`, with `UV_CACHE_DIR=CACHE`, `UV_PROJECT_ENVIRONMENT=CACHE.venv`, and `REPRO_INIT_MARK=CACHE.init-started`. Start `uv sync --frozen` in the project in the background, redirecting its output to `CACHE.first.log`.
+5. Once the initialization marker exists, send SIGKILL to only that uv PID and wait for it to exit. Leave its Git child running. Immediately run another `uv sync --frozen` against the same cache and environment.
+
+The comment contains the complete wrapper and orchestration scripts. They were reviewed as reproduction evidence and were not executed during this update. Forced parent termination makes the lifetime overlap deterministic in the reported tests; it does not independently demonstrate the ordinary offline-error shutdown behavior. The original CI case uses an error exit rather than SIGKILL, so both paths need separate verification. The reporter's suggestions to terminate/wait for children or treat unfinished databases as busy are proposed remedies, not validated fixes or maintainer decisions.
+
+### Limits and next investigation
+
+The retained independent tests and `reproduction.json` predate this reduced example. Preserve their results, but do not use them to dismiss the revised report or infer that uv 0.13.x is unaffected. The new comment supplies the previously missing two-command sequence, process roles, database working directory, filesystem type, and a minimal project configuration. The original project/lockfile, raw failing CI traces, and complete workflow remain unavailable.
+
+The next investigation should independently exercise the reduced example, then the normal `--offline` failure followed by online retry, and inspect shutdown/cancellation ownership of the Git child and repository lock. Full sanitized wrapper, Trace2, and lock logs with PIDs and timestamps would help verify the parent exit, child's continued writes, and lock transfer. A retained lockfile for the reduced fixture would make the generated dependency selection repeatable. No revised reproducer or additional source verification was performed in this context update.
 
 ## Implementation and release context
 
-In the uv 0.12.24 resolver, the initial fetch message precedes acquisition of an exclusive `LockedFile` at `git-v1/locks/<repository digest>`. The lock guard remains in scope while awaiting `GitSource::fetch`. `GitSource::fetch` checks the database with `git rev-parse`; unsuccessful checks can lead to deletion and reinitialization. The database and lock use the same repository digest. The checkout retains this structure. Source inspection explains the path but does not establish why the reporter observed overlapping access.
+In the uv 0.12.24 resolver, the initial fetch message precedes acquisition of an exclusive `LockedFile` at `git-v1/locks/<repository digest>`. The lock guard remains in scope while awaiting `GitSource::fetch`. `GitSource::fetch` checks the database with `git rev-parse`; unsuccessful checks can lead to deletion and reinitialization. The database and lock use the same repository digest. The checkout retains this structure. This source inspection describes the normal awaited path; it does not establish child cleanup on error exit or forced termination. The follow-up directs investigation to the lifetime of the Git child relative to the parent-held lock.
 
 The 0.13.0–0.13.6 release notes identify no fix for this specific initialization failure. Two nearby merged changes were reviewed:
 
@@ -134,13 +174,9 @@ The older astral-sh/uv#6790 addresses synchronous lock acquisition blocking the 
 - astral-sh/uv#22829 — Git dependency checkout can race with detached `git maintenance` started by uv's own fetch (Git 2.54+) (issue, open). The reporter's cited comparison concerns detached repacking overlapping a local clone, producing missing packfiles or multi-pack-index.lock. Here maintenance is reportedly disabled and the failure occurs while initializing/removing the database. These are distinct reported triggers and failure stages.
 - astral-sh/uv#22868 — Keep Git maintenance in the foreground during dependency fetches (pull request, open). Proposes fixing astral-sh/uv#22829 by keeping automatic maintenance in the foreground before cloning. Maintainer discussion confirms the repository lock is acquired before the cache check. The PR remains unmerged and does not establish a fix for concurrent database initialization with maintenance disabled.
 
-## Draft response
-
-I could not reproduce this with uv 0.12.24 or 0.13.5, Git 2.56.0, and Python 3.14.9 on Ubuntu 24.04. All 20 syncs succeeded across cold-cache, slower-initialization, and shared-cache concurrency scenarios. The traces showed the other fetches waiting for the repository lock, even with initialization taking over 400 ms.
-
-The three fetch messages and one update also occur in these successful runs. The failing overlap in your trace still needs investigation. Please share a minimal runnable repository and lockfile, sanitized failing Git Trace2 and uv Git/filesystem trace logs retaining process IDs and lock events, and the relevant CI steps. Please confirm whether another process or cache operation can access that cache. These results do not establish that the issue is fixed in 0.13.x.
-
 ## Search scope and exclusions
+
+The following records the earlier investigation; related-item states and searches were not refreshed for this comment update.
 
 Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Split searches into removal errors ("failed to remove directory", "Directory not empty", "git-v1/db", legacy "git-v0/db", "not a repository"), same-repository/subdirectory installs, cold-cache and frozen-sync failures, and possible concurrency/locking causes (race, concurrent, initialization, GitResolver, flock, area:cache). Removed package, platform, and version details for broader matches. Read candidate bodies/comments and followed timeline references. PR search/list queries returned no matches even for the independently verified maintenance PR, so coverage was supplemented with linked PRs and release notes. Inspected merged astral-sh/uv#6790 (runtime deadlock fix) and astral-sh/uv#22387 (cache-clean lock deletion fix); neither establishes a fix or regression of this failure. Ruled out astral-sh/uv#11949 (repeated update messages), astral-sh/uv#12036 and astral-sh/uv#18073 (NFS-specific behavior), and astral-sh/uv#13054 (unresolved Git-hook failure). Reviewed 0.12.24 source and 0.13.0–0.13.6 release notes; no confirmed matching fix found.
 
@@ -158,3 +194,5 @@ The broad PR search/list results were unexpectedly empty even for a PR found thr
 - The temporary uv 0.12.24 installation, Python 3.14.9 installation, source fixture, and all per-case caches are retained under this root.
 
 Only temporary reproduction files and this handoff were written. No checkout files were edited by the reproduction commands, no uv build was performed, and GitHub access was read-only.
+
+This context update changed only the README. The structured triage and reproduction files retain their earlier findings; no new reproduction commands were run and no public response was drafted or posted.
