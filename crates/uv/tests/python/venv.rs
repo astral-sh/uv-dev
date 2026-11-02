@@ -1943,6 +1943,32 @@ fn allow_existing_preserves_generated_file_modes() -> Result<()> {
     Ok(())
 }
 
+/// A file-size limit interrupts the activation script write before it replaces the original.
+#[test]
+#[cfg(target_os = "linux")]
+fn allow_existing_reports_generated_file_write_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.venv.child("bin/activate").write_str("keep")?;
+
+    let mut command = context.external_command("sh");
+    command
+        .args(["-c", r#"trap '' XFSZ && ulimit -f 1 && exec "$@""#, "sh"])
+        .arg(uv_test::get_bin!())
+        .args(["venv", "--allow-existing", "--python"])
+        .arg(&context.python_versions[0].1)
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path());
+    uv_snapshot!(context.filters(), command, @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: failed to write to file `[VENV]/bin/activate`: File too large (os error 27)
+    ");
+    assert_eq!(context.read(".venv/bin/activate"), "keep");
+    Ok(())
+}
+
 /// Run `uv venv` followed by `uv venv --allow-existing`.
 #[test]
 fn create_venv_then_allow_existing() {

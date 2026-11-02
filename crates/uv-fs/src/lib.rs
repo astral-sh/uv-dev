@@ -1,5 +1,6 @@
+#[cfg(unix)]
 use std::fs::Permissions;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -27,7 +28,7 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
 pub use crate::locked_file::*;
-use crate::named_temp_file::tempfile_in_with_permissions;
+use crate::named_temp_file::write_atomic_sync_with_permissions;
 pub use crate::named_temp_file::{NamedTempFile, PersistError, tempfile_in};
 pub use crate::path::*;
 pub use crate::read::ValidatedReader;
@@ -540,7 +541,7 @@ pub async fn write_atomic_preserve(
         }
     };
     let parent = path.parent().expect("Write path must have a parent");
-    let temp_file = tempfile_in_with_permissions(parent, permissions.clone())?;
+    let temp_file = named_temp_file::tempfile_in_with_permissions(parent, permissions.clone())?;
     // Write through the open handle: the umask may prevent reopening the temporary file.
     let mut file = fs_err::tokio::File::from_std(fs_err::File::from_parts(
         temp_file.as_file().try_clone()?,
@@ -575,20 +576,6 @@ pub fn write_atomic_sync_preserve_mode(
     #[cfg(not(unix))]
     let permissions = None;
     write_atomic_sync_with_permissions(path, data.as_ref(), permissions)
-}
-
-fn write_atomic_sync_with_permissions(
-    path: &Path,
-    data: &[u8],
-    permissions: Option<Permissions>,
-) -> io::Result<()> {
-    let parent = path.parent().expect("Write path must have a parent");
-    let mut temp_file = tempfile_in_with_permissions(parent, permissions.clone())?;
-    temp_file.write_all(data)?;
-    if let Some(permissions) = permissions {
-        temp_file.as_file().set_permissions(permissions)?;
-    }
-    persist_with_retry_sync(temp_file, path)
 }
 
 /// Copy `from` to `to` atomically using a temporary file and atomic rename.
