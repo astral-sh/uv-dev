@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 4936,
+        "title": "Do not use pager for root `uv help` and improve after help hint",
+        "url": "https://github.com/astral-sh/uv/pull/4936",
+        "state": "merged",
+        "reason": "Explicitly made bare `uv help` an unpaged, short-form overview. Its rationale describes the root help as a landing page; the current source retains the same exclusion. This directly explains the reported behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5511,
+        "title": "Respect `PAGER` env var when paging in `uv help` command",
+        "url": "https://github.com/astral-sh/uv/pull/5511",
+        "state": "merged",
+        "reason": "Added PAGER support. In its comments, another user reported the same difference with PAGER=less; a maintainer explained that bare `uv help` does not page, and the user confirmed `uv help run` does. Pager selection does not override the root-help exclusion."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using literal terms 'uv help', 'pager', 'paging', and 'no paging'; conceptual terms included help with scroll, root, top-level, pagination, and area:cli/page. Also searched the reported version and closed pager/less fixes. PR keyword searches returned no hits, so issue references and help.rs commit history were followed to inspect historical PRs, comments, reviews, and patches. Ruled out astral-sh/uv#16914 and astral-sh/uv#16015 (BusyBox option failures), astral-sh/uv#16878 (missing colors), and astral-sh/uv#16913 (pager prompt text). No matching unresolved defect or regression was found."
+  },
+  "type": "question",
+  "type_reason": "The reporter asks whether the difference is intentional. The explicit design rationale in astral-sh/uv#4936, the maintainer clarification in astral-sh/uv#5511, and the current `!is_root` paging condition establish intended behavior. No malfunction or regression is established, and the report does not explicitly request a behavior change. These historical PRs explain the design rather than track an outstanding problem or request to duplicate.",
+  "summary": "astral-sh/uv#4936 intentionally disabled paging for bare `uv help`; astral-sh/uv#5511 contains a maintainer answer to the same question about PAGER=less.",
+  "draft_response": "This is intentional: bare `uv help` prints the command overview without a pager, while `uv help <command>` pages the detailed help when stdout is a terminal. That distinction was introduced in astral-sh/uv#4936 and confirmed in the discussion on astral-sh/uv#5511. Your observation matches uv's behavior; `$PAGER=less` does not enable paging for the overview. To page it explicitly, use `uv help | less`."
+}
