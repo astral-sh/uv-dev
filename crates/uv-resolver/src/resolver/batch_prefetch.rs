@@ -11,7 +11,6 @@ use crate::candidate_selector::CandidateSelector;
 use crate::prioritized_distribution::CompatibleDist;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::requests::{MetadataRequest, MetadataRequests};
-use crate::version_map::VersionMap;
 use crate::{PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse};
 use uv_distribution_types::{IndexCapabilities, IndexMetadata};
 use uv_normalize::PackageName;
@@ -212,8 +211,14 @@ impl BatchPrefetcherRunner {
                     previous,
                 } => {
                     let candidate =
-                        selector.select_no_preference(name, &compatible, version_map, env);
-                    VersionMap::check_proxy_mapping_errors(version_map)?;
+                        match selector.select_no_preference(name, &compatible, version_map, env) {
+                            Ok(candidate) => candidate,
+                            Err(error) => {
+                                // Only selection of this version should report its mapping error.
+                                trace!("Stopping speculative prefetch for {name}: {error}");
+                                break;
+                            }
+                        };
 
                     if let Some(candidate) = candidate {
                         let compatible =
@@ -247,8 +252,14 @@ impl BatchPrefetcherRunner {
                             }
                         };
                     }
-                    let candidate = selector.select_no_preference(name, &range, version_map, env);
-                    VersionMap::check_proxy_mapping_errors(version_map)?;
+                    let candidate =
+                        match selector.select_no_preference(name, &range, version_map, env) {
+                            Ok(candidate) => candidate,
+                            Err(error) => {
+                                trace!("Stopping speculative prefetch for {name}: {error}");
+                                break;
+                            }
+                        };
 
                     if let Some(candidate) = candidate {
                         phase = BatchPrefetchStrategy::InOrder {
