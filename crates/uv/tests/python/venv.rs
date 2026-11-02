@@ -2638,24 +2638,21 @@ fn create_venv_validates_prompt_before_removing_centralized_reference() -> Resul
     Ok(())
 }
 
-/// A real interpreter reports a synthetic executable path containing a newline. An `os.py`
-/// landmark makes base discovery accept that path so the test reaches `home` validation.
-#[test]
+/// Run the real interpreter but report a synthetic executable. The `os.py` landmark
+/// lets base-interpreter discovery accept the supplied home so uv can validate it.
 #[cfg(unix)]
-fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
+fn python_reporting_home(context: &uv_test::TestContext, home: &str) -> Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
-    context.temp_dir.child(".venv/marker").write_str("keep")?;
-    let config = context.read(".venv/pyvenv.cfg");
+
     let python = context
         .python_command()
         .args(["-c", "import sys; print(sys._base_executable)"])
         .output()?;
     assert!(python.status.success());
     let python = String::from_utf8(python.stdout)?.trim().to_owned();
-    let invalid_home = context.temp_dir.child("bad\nhome");
-    invalid_home.child("lib/python3.12/os.py").write_str("")?;
-    let base = invalid_home.child("python");
+    let home = context.temp_dir.child(home);
+    home.child("lib/python3.12/os.py").write_str("")?;
+    let base = home.child("python");
     fs_err::copy(&python, base.path())?;
     let wrapper = context.temp_dir.child("python-wrapper");
     wrapper.write_str(&indoc::formatdoc! {r"
@@ -2667,7 +2664,18 @@ fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
         exec(sys.argv[sys.argv.index('-c') + 1])
     ", base = serde_json::to_string(&base.path())?})?;
     fs_err::set_permissions(wrapper.path(), std::fs::Permissions::from_mode(0o755))?;
-    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(wrapper.path()), @"
+    Ok(wrapper.path().to_owned())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_reporting_home(&context, "bad\nhome")?;
+    context.temp_dir.child(".venv/marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/python
@@ -2677,7 +2685,18 @@ fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
     ");
     assert_eq!(context.read(".venv/pyvenv.cfg"), config);
     assert_eq!(context.read(".venv/marker"), "keep");
-    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(wrapper.path()), @"
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_reporting_home(&context, "bad\nhome")?;
+    context.temp_dir.child(".venv/marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/python
@@ -2687,7 +2706,16 @@ fn create_venv_validates_home_before_modifying_destination() -> Result<()> {
     ");
     assert_eq!(context.read(".venv/pyvenv.cfg"), config);
     assert_eq!(context.read(".venv/marker"), "keep");
-    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(wrapper.path()), @"
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_creating_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_reporting_home(&context, "bad\nhome")?;
+
+    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/python
