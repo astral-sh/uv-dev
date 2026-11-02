@@ -1835,7 +1835,7 @@ fn verify_pyvenv_cfg() {
 #[test]
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
-    let prompt = "résumé \"quoted\"\\path\n";
+    let prompt = "résumé \"quoted\"'\\new\n";
 
     // Create a virtual environment at `.venv`.
     context
@@ -1908,8 +1908,32 @@ fn verify_pyvenv_cfg_relocatable() {
         r"dirname(dirname(realpath(__file__)))",
     ));
     activate_xsh.assert(predicates::str::contains(
-        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path\n".decode("utf-8")"#,
+        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\'\\new\n".decode("utf-8")"#,
     ));
+
+    // Bash still decodes backslash escapes when promptvars is disabled. Quotes and
+    // backslashes in the generated prompt must survive both sourcing and rendering.
+    // Omit the standard filters so backslashes are not normalized as path separators.
+    #[cfg(target_os = "linux")]
+    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(indoc! {r#"
+            shopt -u promptvars
+            PS1='original>'
+            source .venv/bin/activate &&
+            printf 'prompt=<%s>\nrendered=<%s>\n' "$VIRTUAL_ENV_PROMPT" "${PS1@P}" &&
+            deactivate && printf 'deactivated=%s\n' "$PS1"
+        "#}), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    prompt=<résumé "quoted"'\new
+    >
+    rendered=<(résumé "quoted"'\new
+    ) original>>
+    deactivated=original>
+    "#);
 }
 
 /// With `UV_VENV_RELOCATABLE=1`, the virtual environment is relocatable.
@@ -2177,7 +2201,7 @@ fn create_venv_apostrophe() {
     assert_eq!(stdout.trim(), venv_dir.to_string_lossy());
 }
 
-/// An explicit prompt is embedded in the activation script before Bash sources it.
+/// An explicit prompt must remain literal during both activation and Bash prompt expansion.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_prompt_substitution() {
@@ -2191,8 +2215,6 @@ fn activate_venv_bash_prompt_substitution() {
         .assert()
         .success();
 
-    // The prompt should remain literal, but sourcing executes its command substitution before
-    // any prompt is rendered. See astral-sh/uv#23058.
     uv_snapshot!(context.filters(), context.external_command("bash")
         .arg("--noprofile")
         .arg("--norc")
@@ -2200,16 +2222,20 @@ fn activate_venv_bash_prompt_substitution() {
         .arg(indoc! {r#"
             PS1='original>'
             source .venv/bin/activate &&
-            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1"
+            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}" &&
+            deactivate && printf 'deactivated=%s\n' "$PS1"
         "#}), @"
     exit_code: 0 (success)
     ----- stdout -----
-    VIRTUAL_ENV_PROMPT=prompt-substituted
-    PS1=(prompt-substituted) original>
+    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
+    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
+    rendered=(prompt-$(printf substituted)) original>
+    deactivated=original>
     ");
 }
 
 /// Without a venv path, the working directory's name is embedded as the default prompt.
+/// POSIX mode expands prompt variables even with promptvars disabled and an older compatibility level.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_current_directory_prompt_substitution() -> Result<()> {
@@ -2225,28 +2251,31 @@ fn activate_venv_bash_current_directory_prompt_substitution() -> Result<()> {
         .assert()
         .success();
 
-    // A directory name should remain literal, but the default prompt executes its command
-    // substitution during activation even without --prompt. See astral-sh/uv#23058.
     uv_snapshot!(context.filters(), context.external_command("bash")
         .current_dir(&project_dir)
         .arg("--noprofile")
         .arg("--norc")
         .arg("-c")
         .arg(indoc! {r#"
+            set -o posix
+            shopt -s compat42
+            shopt -u promptvars
             PS1='original>'
             source .venv/bin/activate &&
-            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1"
+            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}"
         "#}), @"
     exit_code: 0 (success)
     ----- stdout -----
-    VIRTUAL_ENV_PROMPT=prompt-substituted
-    PS1=(prompt-substituted) original>
+    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
+    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
+    rendered=(prompt-$(printf substituted)) original>
     ");
 
     Ok(())
 }
 
 /// With an explicit venv path, Bash derives the prompt from its basename during activation.
+/// The directory name must remain literal when the prompt is rendered.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_directory_prompt_substitution() {
@@ -2260,8 +2289,6 @@ fn activate_venv_bash_directory_prompt_substitution() {
         .assert()
         .success();
 
-    // Activation keeps the directory name literal, but rendering PS1 executes its command
-    // substitution instead of displaying it literally. See astral-sh/uv#23058.
     uv_snapshot!(context.filters(), context.external_command("bash")
         .arg("--noprofile")
         .arg("--norc")
@@ -2276,8 +2303,8 @@ fn activate_venv_bash_directory_prompt_substitution() {
     exit_code: 0 (success)
     ----- stdout -----
     VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
-    PS1=(prompt-$(printf substituted)) original>
-    rendered=(prompt-substituted) original>
+    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
+    rendered=(prompt-$(printf substituted)) original>
     ");
 }
 
