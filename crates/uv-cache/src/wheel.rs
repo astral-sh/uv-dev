@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use uv_cache_key::{CanonicalUrl, cache_digest};
@@ -9,6 +10,11 @@ use uv_redacted::SafeUrl;
 pub enum WheelCache<'a> {
     /// Either PyPI or an alternative index, which we key by index URL.
     Index(&'a IndexUrl),
+    /// A Simple API response whose freshness belongs to the selected proxy route.
+    ProxiedIndex {
+        upstream: &'a IndexUrl,
+        proxy: &'a IndexUrl,
+    },
     /// A direct URL dependency, which we key by URL.
     Url(&'a SafeUrl),
     /// A path dependency, which we key by URL.
@@ -30,6 +36,13 @@ impl WheelCache<'_> {
             Self::Index(url) => WheelCacheKind::Index
                 .root()
                 .join(cache_digest(&CanonicalUrl::new(url.url().clone()))),
+            Self::ProxiedIndex { upstream, proxy } => {
+                WheelCacheKind::Index.root().join(cache_digest(&(
+                    "proxy",
+                    index_directory_url(upstream).as_str(),
+                    index_directory_url(proxy).as_str(),
+                )))
+            }
             Self::Url(url) => WheelCacheKind::Url
                 .root()
                 .join(cache_digest(&CanonicalUrl::new((*url).clone()))),
@@ -50,6 +63,18 @@ impl WheelCache<'_> {
     pub fn wheel_dir(&self, package_name: impl AsRef<Path>) -> PathBuf {
         self.root().join(package_name)
     }
+}
+
+/// Simple API requests append the package name after one slash. Other path differences,
+/// including a `.git` suffix, can identify distinct package indexes.
+fn index_directory_url(index: &IndexUrl) -> Cow<'_, SafeUrl> {
+    let mut url = index.without_credentials();
+    if url.path().ends_with('/')
+        && let Ok(mut path) = url.to_mut().path_segments_mut()
+    {
+        path.pop_if_empty();
+    }
+    url
 }
 
 #[derive(Debug, Clone, Copy)]

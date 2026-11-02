@@ -69,6 +69,14 @@ impl<'a> RegistryArtifactRequest<'a> {
 }
 
 impl<'a> RegistryRequestContext<'a> {
+    pub(super) fn new(index: &'a IndexUrl, policy: &'a IndexRequestPolicy, is_proxy: bool) -> Self {
+        Self {
+            index,
+            policy,
+            is_proxy,
+        }
+    }
+
     /// The physical index used for cache partitioning and endpoint capabilities.
     pub fn index(self) -> &'a IndexUrl {
         self.index

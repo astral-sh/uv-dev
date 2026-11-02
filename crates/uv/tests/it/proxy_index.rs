@@ -603,6 +603,180 @@ async fn proxy_index_ignores_mapping_errors_from_speculative_candidates() -> Res
     Ok(())
 }
 
+#[tokio::test]
+async fn proxy_index_simple_cache_policy_follows_selected_route() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package")?;
+    let config = context.temp_dir.child("uv.toml");
+    let count = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(move |_: &wiremock::Request| {
+            let version = count.fetch_add(1, Ordering::Relaxed) + 1;
+            let filename = format!("basic_package-0.{version}.0-py3-none-any.whl");
+            ResponseTemplate::new(200).set_body_raw(json!({
+            "meta": {"api-version": "1.1"}, "name": "basic-package",
+            "files": [advertised_file(&filename, &format!("/files/{filename}"), Some(WHEEL_HASH))],
+        }).to_string(), "application/vnd.pypi.simple.v1+json")
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    config.write_str(&formatdoc! {r#"
+        [[index]]
+        name = "ordinary"
+        url = "{server_url}/simple/"
+        default = true
+        cache-control = {{ api = "max-age=3600" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--no-deps", "--no-header", "--no-annotate", "--index-strategy", "first-index"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--no-deps", "--no-header", "--no-annotate", "--index-strategy", "first-index"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    config.write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "ordinary"
+        url = "{server_url}/simple/"
+        explicit = true
+        cache-control = {{ api = "max-age=3600" }}
+
+        [[index]]
+        name = "proxy"
+        url = "{server_url}/simple/"
+        artifact-base-url = "{server_url}/files/"
+        proxy-for = "pypi"
+        cache-control = {{ api = "no-store" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--no-deps", "--no-header", "--no-annotate", "--index-strategy", "first-index"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.2.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--no-deps", "--no-header", "--no-annotate", "--index-strategy", "unsafe-best-match"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.3.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+/// The Simple API appends the package name to the index path with one separating slash.
+#[tokio::test]
+async fn proxy_index_reuses_simple_cache_with_equivalent_directory_urls() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let (upstream_url, proxy_url) = (upstream.uri(), proxy.uri());
+    let config = formatdoc! {r#"
+        preview-features = ["proxy-index"]
+        [[index]]
+        name = "upstream"
+        url = "{upstream_url}/simple"
+        artifact-base-url = "{upstream_url}/files/"
+        default = true
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "upstream"
+        cache-control = {{ api = "max-age=3600" }}
+    "#};
+    context.temp_dir.child("uv.toml").write_str(&config)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package")?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{proxy_url}/files/{WHEEL_FILENAME}"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--no-deps", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&config.replace("/simple\"", "/simple/\""))?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--offline", "--no-deps", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package==0.1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // A different upstream directory must not reuse this entry, even at the same proxy URL.
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&config.replace(
+            &format!("{upstream_url}/simple"),
+            &format!("{upstream_url}/simple.git/"),
+        ))?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--offline", "--no-deps", "--no-header", "--no-annotate"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because basic-package was not found in the cache and you require basic-package, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+    proxy.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
 /// A proxy's PEP 658 metadata uses its policy even when an earlier ordinary index shares its URL.
 #[tokio::test]
 async fn proxy_index_sidecar_cache_policy_uses_upstream_route() -> Result<()> {
@@ -625,14 +799,14 @@ async fn proxy_index_sidecar_cache_policy_uses_upstream_route() -> Result<()> {
         name = "ordinary"
         url = "{server_url}/simple/"
         explicit = true
-        cache-control = {{ api = "max-age=3600", files = "no-store" }}
+        cache-control = {{ api = "no-store", files = "no-store" }}
 
         [[tool.uv.index]]
         name = "proxy"
         url = "{server_url}/simple/"
         artifact-base-url = "{server_url}/files/"
         proxy-for = "pypi"
-        cache-control = {{ files = "max-age=3600" }}
+        cache-control = {{ api = "max-age=3600", files = "max-age=3600" }}
     "#})?;
     let wheel = advertised_file(
         WHEEL_FILENAME,
@@ -779,14 +953,14 @@ async fn proxy_index_wheel_metadata_cache_policy_uses_upstream_route() -> Result
         name = "ordinary"
         url = "{server_url}/simple/"
         explicit = true
-        cache-control = {{ api = "max-age=3600", files = "no-store" }}
+        cache-control = {{ api = "no-store", files = "no-store" }}
 
         [[tool.uv.index]]
         name = "proxy"
         url = "{server_url}/simple/"
         artifact-base-url = "{server_url}/files/"
         proxy-for = "pypi"
-        cache-control = {{ files = "max-age=3600" }}
+        cache-control = {{ api = "max-age=3600", files = "max-age=3600" }}
     "#})?;
     let mut wheel = advertised_file(
         WHEEL_FILENAME,
