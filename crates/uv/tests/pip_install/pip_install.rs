@@ -267,7 +267,7 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
-/// A short interpreter path containing a tab is written directly into a console script's shebang.
+/// Tabs split direct shebang interpreter paths, so console scripts need a shell launcher.
 #[test]
 #[cfg(target_os = "linux")]
 fn install_console_script_in_tab_path() -> Result<()> {
@@ -280,6 +280,9 @@ fn install_console_script_in_tab_path() -> Result<()> {
     let venv = context.temp_dir.join("tab\tdir/venv");
     context.venv().arg(&venv).assert().success();
     let python = venv_bin_path(&venv).join("python");
+    // Only the tab should trigger the shell launcher, not spaces or the length limit.
+    assert!(!python.as_os_str().as_encoded_bytes().contains(&b' '));
+    assert!(python.as_os_str().len() + 3 <= 127);
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--python").arg(&python).arg(&filename), @"
     exit_code: 0 (success)
@@ -292,9 +295,17 @@ fn install_console_script_in_tab_path() -> Result<()> {
     ");
 
     let script = venv_bin_path(&venv).join("tab-probe");
+    uv_snapshot!(context.external_command(&script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tab-probe!
+    ");
+
     insta::with_settings!({filters => context.filters()}, {
         assert_snapshot!(context.read(&script), @"
-        #![TEMP_DIR]/tab\tdir/venv/bin/python
+        #!/bin/sh
+        '''exec' '[TEMP_DIR]/tab\tdir/venv/bin/python' \"$0\" \"$@\"
+        ' '''
         # -*- coding: utf-8 -*-
         import sys
         from tab_probe.cli import main
@@ -307,14 +318,6 @@ fn install_console_script_in_tab_path() -> Result<()> {
         ");
     });
 
-    // The kernel splits the interpreter path at the tab, making the installed entry point
-    // unusable even though its Python code works: astral-sh/uv#23057.
-    let error = context
-        .external_command(&script)
-        .output()
-        .expect_err("the interpreter path is truncated at the tab");
-    insta::assert_debug_snapshot!(error.kind(), @"NotFound");
-
     uv_snapshot!(context.external_command(&python).arg(&script), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -324,7 +327,7 @@ fn install_console_script_in_tab_path() -> Result<()> {
     Ok(())
 }
 
-/// Rewriting a wheel's `#!python` script has the same tab-path limitation as generated entry points.
+/// Wheel data scripts also need a shell launcher when the interpreter path contains a tab.
 #[test]
 #[cfg(target_os = "linux")]
 fn install_wheel_script_in_tab_path() -> Result<()> {
@@ -343,6 +346,9 @@ fn install_wheel_script_in_tab_path() -> Result<()> {
     let venv = context.temp_dir.join("tab\tdir/venv");
     context.venv().arg(&venv).assert().success();
     let python = venv_bin_path(&venv).join("python");
+    // Only the tab should trigger the shell launcher, not spaces or the length limit.
+    assert!(!python.as_os_str().as_encoded_bytes().contains(&b' '));
+    assert!(python.as_os_str().len() + 3 <= 127);
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--python").arg(&python).arg(&filename), @"
     exit_code: 0 (success)
@@ -355,20 +361,20 @@ fn install_wheel_script_in_tab_path() -> Result<()> {
     ");
 
     let script = venv_bin_path(&venv).join("tab-probe");
+    uv_snapshot!(context.external_command(&script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tab-probe!
+    ");
+
     insta::with_settings!({filters => context.filters()}, {
         assert_snapshot!(context.read(&script), @"
-        #![TEMP_DIR]/tab\tdir/venv/bin/python
+        #!/bin/sh
+        '''exec' '[TEMP_DIR]/tab\tdir/venv/bin/python' \"$0\" \"$@\"
+        ' '''
         print('Hello from tab-probe!')
         ");
     });
-
-    // The rewritten shebang makes an otherwise valid wheel script unlaunchable because
-    // the kernel splits the interpreter path at the tab: astral-sh/uv#23057.
-    let error = context
-        .external_command(&script)
-        .output()
-        .expect_err("the interpreter path is truncated at the tab");
-    insta::assert_debug_snapshot!(error.kind(), @"NotFound");
 
     uv_snapshot!(context.external_command(&python).arg(&script), @"
     exit_code: 0 (success)
