@@ -1427,6 +1427,532 @@ async fn proxy_index_pip_compile_pylock_preserves_canonical_artifact_and_hash() 
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+struct PlatformWheelSources {
+    upstream: MockServer,
+    proxy: MockServer,
+    flat: MockServer,
+    linux_wheel: Vec<u8>,
+}
+
+#[cfg(feature = "test-universal")]
+async fn platform_wheel_sources(
+    context: &TestContext,
+    linux: &str,
+    windows: &str,
+) -> Result<PlatformWheelSources> {
+    use uv_test::packse::WheelBuilder;
+
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let (upstream_url, proxy_url) = (upstream.uri(), proxy.uri());
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index", "pylock"]
+
+        [[index]]
+        name = "upstream"
+        url = "{upstream_url}/simple/"
+        artifact-base-url = "{upstream_url}/files/"
+        default = true
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "upstream"
+    "#})?;
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let (linux_tag, windows_tag) = ("cp312-cp312-manylinux_2_17_x86_64", "cp312-cp312-win_amd64");
+    let (_, linux_wheel) = WheelBuilder::new(&name, &version).tag(linux_tag).build();
+    let (_, windows_wheel) = WheelBuilder::new(&name, &version).tag(windows_tag).build();
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            linux,
+            &format!("{proxy_url}/files/{linux}"),
+            Some(&sha256(&linux_wheel)),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="/files/{windows}#sha256={}">{windows}</a>"#,
+                sha256(&windows_wheel)
+            ),
+            "text/html",
+        ))
+        .expect(1)
+        .mount(&flat)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{linux}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .mount(&proxy)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{windows}")))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&flat)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{windows}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(windows_wheel))
+        .mount(&flat)
+        .await;
+
+    Ok(PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+        linux_wheel,
+    })
+}
+
+/// A universal lock built from proxy metadata installs each platform from its own source.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_installs_each_platform_from_its_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let linux = "basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows = "basic_package-0.1.0-1-cp312-cp312-win_amd64.whl";
+    let PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+
+        linux_wheel,
+    } = platform_wheel_sources(&context, linux, windows).await?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--universal", "--python-version", "3.12", "--find-links"])
+        .arg(format!("{}/links/", flat.uri()))
+        .args(["-o", "pylock.toml", "--quiet"]), @"exit_code: 0 (success)");
+    assert_requested_once(&proxy, &format!("/files/{linux}.metadata")).await?;
+    let context = context.with_cache_dir("install-cache");
+    uv_snapshot!(context.filters(), context.pip_sync().arg("pylock.toml")
+        .args(["--python-platform", "x86_64-pc-windows-msvc", "--target", "windows", "--quiet"]),
+        @"exit_code: 0 (success)");
+    assert_requested_once(&flat, &format!("/files/{windows}")).await?;
+    mount_artifact(&proxy, linux, linux_wheel, 1).await;
+    uv_snapshot!(context.filters(), context.pip_sync().arg("pylock.toml")
+        .args(["--python-platform", "x86_64-unknown-linux-gnu", "--target", "linux", "--quiet"]),
+        @"exit_code: 0 (success)");
+    proxy.verify().await;
+    flat.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
+/// Selecting metadata from a direct wheel does not let a different platform bypass proxy denial.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_keeps_proxy_denial_with_find_links_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let linux = "basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows = "basic_package-0.1.0-2-cp312-cp312-win_amd64.whl";
+    let PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+        ..
+    } = platform_wheel_sources(&context, linux, windows).await?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--universal", "--python-version", "3.12", "--find-links"])
+        .arg(format!("{}/links/", flat.uri()))
+        .args(["-o", "pylock.toml", "--quiet"]), @"exit_code: 0 (success)");
+    assert!(
+        flat.received_requests()
+            .await
+            .context("recorded direct wheel requests")?
+            .iter()
+            .any(|request| method("GET").matches(request)
+                && request.url.path() == format!("/files/{windows}"))
+    );
+
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{linux}")))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1..)
+        .mount(&proxy)
+        .await;
+    let context = context.with_cache_dir("install-cache");
+    uv_snapshot!(context.filters(), context.pip_sync().arg("pylock.toml")
+        .args(["--python-platform", "x86_64-unknown-linux-gnu", "--target", "linux", "--quiet"]),
+        @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package==0.1.0`
+      cause: Failed to fetch: http://[LOCALHOST]/files/basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/files/basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl)
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
+/// A marker that excludes the proxy wheel can leave multiple direct sources in one indexless entry.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_keeps_overlapping_direct_sources_after_filtering_the_proxy()
+-> Result<()> {
+    use uv_test::packse::WheelBuilder;
+
+    let context = uv_test::test_context!("3.12");
+
+    let linux = "basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows = "basic_package-0.1.0-2-cp312-cp312-win_amd64.whl";
+    let PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+        ..
+    } = platform_wheel_sources(&context, linux, windows).await?;
+    let links = context.temp_dir.child("local-links");
+    let tag = "cp312-cp312-win_amd64";
+    let (_, wheel) = WheelBuilder::new(&"basic-package".parse()?, &"0.1.0".parse()?)
+        .tag(tag)
+        .build();
+    let local = format!("basic_package-0.1.0-3-{tag}.whl");
+    links.child(&local).write_binary(&wheel)?;
+    let (upstream_url, direct_url) = (upstream.uri(), flat.uri());
+    let mut filters = vec![
+        (upstream_url.as_str(), "http://[UPSTREAM]"),
+        (direct_url.as_str(), "http://[DIRECT]"),
+    ];
+    filters.extend(context.filters());
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0 ; sys_platform == 'win32'")?;
+    uv_snapshot!(filters, context.pip_compile().arg("requirements.in")
+        .args(["--universal", "--python-version", "3.12", "--find-links"])
+        .arg(format!("{}/links/", flat.uri()))
+        .arg("--find-links").arg(links.path()).args(["--no-header", "-o", "pylock.toml"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    marker = "sys_platform == 'win32'"
+    wheels = [
+        { url = "http://[DIRECT]/files/basic_package-0.1.0-2-cp312-cp312-win_amd64.whl", hashes = { sha256 = "b7f01e85b1362d3d4341f094ab2ebd9322392655fe2e3f41ff16df27a743cff8" } },
+        { url = "file://[TEMP_DIR]/local-links/basic_package-0.1.0-3-cp312-cp312-win_amd64.whl", hashes = { sha256 = "b7f01e85b1362d3d4341f094ab2ebd9322392655fe2e3f41ff16df27a743cff8" } },
+    ]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    proxy.verify().await;
+    flat.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
+/// Two direct Windows wheels share one route while the Linux wheel retains its proxy.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_combines_direct_sources_for_the_same_platform() -> Result<()> {
+    use uv_test::packse::WheelBuilder;
+
+    let context = uv_test::test_context!("3.12");
+
+    let linux = "basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows = "basic_package-0.1.0-2-cp312-cp312-win_amd64.whl";
+    let PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+        ..
+    } = platform_wheel_sources(&context, linux, windows).await?;
+    let links = context.temp_dir.child("local-links");
+    let tag = "cp312-cp312-win_amd64";
+    let (_, wheel) = WheelBuilder::new(&"basic-package".parse()?, &"0.1.0".parse()?)
+        .tag(tag)
+        .build();
+    let local = format!("basic_package-0.1.0-3-{tag}.whl");
+    links.child(&local).write_binary(&wheel)?;
+    let (upstream_url, direct_url) = (upstream.uri(), flat.uri());
+    let mut filters = vec![
+        (upstream_url.as_str(), "http://[UPSTREAM]"),
+        (direct_url.as_str(), "http://[DIRECT]"),
+    ];
+    filters.extend(context.filters());
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(filters, context.pip_compile().arg("requirements.in")
+        .args(["--universal", "--python-version", "3.12", "--find-links"])
+        .arg(format!("{}/links/", flat.uri()))
+        .arg("--find-links").arg(links.path()).args(["--no-header", "-o", "pylock.toml"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    marker = "sys_platform == 'linux'"
+    index = "http://[UPSTREAM]/simple/"
+    wheels = [{ url = "http://[UPSTREAM]/files/basic_package-0.1.0-1-cp312-cp312-manylinux_2_17_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "df6556501fc633b844e0d074d933987ec54954904dfb25ba1d97640bd31becc3" } }]
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    marker = "sys_platform != 'linux'"
+    wheels = [
+        { url = "http://[DIRECT]/files/basic_package-0.1.0-2-cp312-cp312-win_amd64.whl", hashes = { sha256 = "b7f01e85b1362d3d4341f094ab2ebd9322392655fe2e3f41ff16df27a743cff8" } },
+        { url = "file://[TEMP_DIR]/local-links/basic_package-0.1.0-3-cp312-cp312-win_amd64.whl", hashes = { sha256 = "b7f01e85b1362d3d4341f094ab2ebd9322392655fe2e3f41ff16df27a743cff8" } },
+    ]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    proxy.verify().await;
+    flat.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
+/// A universal wheel overlaps the proxied Linux wheel, so a single artifact route would be ambiguous.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn proxy_index_pylock_rejects_overlapping_proxy_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let linux = "basic_package-0.1.0-2-cp312-cp312-manylinux_2_17_x86_64.whl";
+    let windows = "basic_package-0.1.0-1-cp312-cp312-win_amd64.whl";
+    let PlatformWheelSources {
+        upstream,
+        proxy,
+        flat,
+        ..
+    } = platform_wheel_sources(&context, linux, windows).await?;
+    let links = context.temp_dir.child("local-links");
+    links
+        .child(WHEEL_FILENAME)
+        .write_binary(&fixture(&context, WHEEL_FILENAME)?)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .args(["--universal", "--python-version", "3.12", "--find-links"])
+        .arg(format!("{}/links/", flat.uri())).arg("--find-links").arg(links.path())
+        .args(["-o", "pylock.toml", "--quiet"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot represent overlapping artifact sources for `basic-package` in a universal pylock.toml; compile for a specific platform
+    ");
+    assert!(!context.temp_dir.child("pylock.toml").exists());
+    proxy.verify().await;
+    flat.verify().await;
+    assert_no_requests(&upstream, "upstream").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_pylock_retains_selected_proxy_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    let flat_url = flat.uri();
+    let preferred_wheel = "basic_package-0.1.0-1-py3-none-any.whl";
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let source = fixture(&context, SOURCE_FILENAME)?;
+    let source_hash = sha256(&source);
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![advertised_file(
+            preferred_wheel,
+            &format!("{proxy_url}/files/{preferred_wheel}"),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    mount_artifact(&proxy, preferred_wheel, wheel.clone(), 1).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            r#"<a href="{flat_url}/files/{WHEEL_FILENAME}#sha256={WHEEL_HASH}">{WHEEL_FILENAME}</a>
+                <a href="{flat_url}/files/{SOURCE_FILENAME}#sha256={source_hash}">{SOURCE_FILENAME}</a>"#,
+        ), "text/html"))
+        .expect(1)
+        .mount(&flat).await;
+    mount_artifact(&flat, WHEEL_FILENAME, wheel, 0).await;
+    mount_artifact(&flat, SOURCE_FILENAME, source, 0).await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+
+        [[dependency-metadata]]
+        name = "basic-package"
+        version = "0.1.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.txt")
+        .arg("--find-links").arg(format!("{flat_url}/links/"))
+        .arg("--no-header").arg("-o").arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12.[X]"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    index = "https://pypi.org/simple"
+    wheels = [{ url = "https://files.pythonhosted.org/packages/basic_package-0.1.0-1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview-features").arg("pylock,proxy-index")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    Ok(())
+}
+
+/// Choosing a find-links wheel must not leave proxied alternatives without a package index.
+#[tokio::test]
+async fn proxy_index_pylock_retains_selected_find_links_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = MockServer::start().await;
+    let flat = MockServer::start().await;
+    let proxy_url = proxy.uri();
+    let flat_url = flat.uri();
+    let preferred_wheel = "basic_package-0.1.0-1-py3-none-any.whl";
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let source = fixture(&context, SOURCE_FILENAME)?;
+    mount_simple(
+        &proxy,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{proxy_url}/files/{WHEEL_FILENAME}"),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                SOURCE_FILENAME,
+                &format!("{proxy_url}/files/{SOURCE_FILENAME}"),
+                Some(&sha256(&source)),
+            ),
+        ],
+        1,
+    )
+    .await;
+    mount_artifact(&proxy, WHEEL_FILENAME, wheel.clone(), 0).await;
+    mount_artifact(&proxy, SOURCE_FILENAME, source, 0).await;
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            r#"<a href="{flat_url}/files/{preferred_wheel}#sha256={WHEEL_HASH}">{preferred_wheel}</a>"#,
+        ), "text/html"))
+        .expect(1)
+        .mount(&flat).await;
+    mount_artifact(&flat, preferred_wheel, wheel, 1).await;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        preview-features = ["proxy-index"]
+
+        [[index]]
+        name = "proxy"
+        url = "{proxy_url}/simple/"
+        artifact-base-url = "{proxy_url}/files/"
+        proxy-for = "pypi"
+
+        [[dependency-metadata]]
+        name = "basic-package"
+        version = "0.1.0"
+        requires-dist = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("basic-package==0.1.0")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.txt")
+        .arg("--find-links").arg(format!("{flat_url}/links/"))
+        .arg("--no-header").arg("-o").arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12.[X]"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    wheels = [{ url = "http://[LOCALHOST]/files/basic_package-0.1.0-1-py3-none-any.whl", hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview-features").arg("pylock,proxy-index")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    proxy.verify().await;
+    flat.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn proxy_index_pip_installs_hashless_live_artifact() -> Result<()> {
     let context = uv_test::test_context!("3.12");
