@@ -1742,6 +1742,135 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Ok(())
 }
 
+/// A pre-existing activation-script symlink can redirect generated content outside the environment.
+#[test]
+#[cfg(unix)]
+fn allow_existing_activate_symlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside_file = context.temp_dir.child("outside-activate");
+    outside_file.write_str("SENTINEL\n")?;
+    context.venv.child("bin").create_dir_all()?;
+    let activate = context.venv.child("bin/activate");
+    symlink(&outside_file, &activate)?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--offline")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: A directory already exists at: .venv
+
+    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
+    ");
+    outside_file.assert("SENTINEL\n");
+    assert_link_target(&activate, &outside_file);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--offline")
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_link_target(&activate, &outside_file);
+
+    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
+    // The target now contains a working activation script instead of the sentinel.
+    uv_snapshot!(context.filters(), context.external_command("sh")
+        .arg("-c")
+        .arg(". ./outside-activate && python -c 'import sys; print(sys.prefix)'"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_existing_gitignore_symlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside_file = context.temp_dir.child("outside-gitignore");
+    outside_file.write_str("SENTINEL\n")?;
+    context.venv.create_dir_all()?;
+    let gitignore = context.venv.child(".gitignore");
+    symlink(&outside_file, &gitignore)?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--offline")
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_link_target(&gitignore, &outside_file);
+
+    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
+    insta::assert_snapshot!(context.read("outside-gitignore"), @"*");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_pyvenv_cfg_filters();
+    let outside_file = context.temp_dir.child("outside-pyvenv.cfg");
+    outside_file.write_str("SENTINEL\n")?;
+    context.venv.create_dir_all()?;
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    symlink(&outside_file, &pyvenv_cfg)?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--offline")
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_link_target(&pyvenv_cfg, &outside_file);
+
+    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(context.read("outside-pyvenv.cfg"), @"
+        home = [PYTHON_HOME]
+        implementation = CPython
+        uv = [UV_VERSION]
+        version_info = 3.12.[X]
+        include-system-site-packages = false
+        prompt = temp
+        ");
+    });
+
+    // Python consumes the generated configuration through the retained symlink.
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg("import sys; print(sys.prefix)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/
+    ");
+
+    Ok(())
+}
+
 /// Run `uv venv` followed by `uv venv --allow-existing`.
 #[test]
 fn create_venv_then_allow_existing() {
