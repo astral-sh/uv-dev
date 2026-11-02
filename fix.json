@@ -1,0 +1,10 @@
+{
+  "outcome": "fixed",
+  "summary": "Generated virtual environment files now use atomic replacement, preventing existing destination symlinks from redirecting writes into external files. Updated parent regressions verify unchanged external targets and working generated files; extended Python 3.9 coverage verifies both distutils patch files and startup loading.",
+  "validation": [
+    "13 focused debug integration tests passed, including parent regressions and activation/Python startup checks.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3066"
+}
