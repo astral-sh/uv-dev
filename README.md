@@ -93,13 +93,45 @@ The relevant integration module is `crates/uv/tests/python/venv.rs`. Its followi
 
 The broader search of `crates/uv/tests/` and `crates/uv-client/tests/it/` also found `crates/uv/tests/pip_install/pip_install.rs::install_script_with_symlinked_lib`. It moves an already-created environment's `lib` to `usr/lib`, links `lib` to it, installs a local fixture, snapshots exit status 2, and asserts that the launcher is misplaced in `usr/bin` instead of `bin`. This covers the separate installer behavior in astral-sh/uv#21255, not builtin environment creation or writes outside the environment root.
 
-No direct coverage for the reported child-directory creation scenario was found in the inspected tests. Tests were inspected, not executed or modified; verification used the installed executable.
+The parent regression PR, astral-sh/uv-dev#3062, subsequently added `create_venv_allow_existing_symlink_bin` and `create_venv_allow_existing_symlink_lib` in this module. Both are Unix-only tests under the module's `test-python` gate. They snapshot successful creation and explicitly assert the undesirable external writes: an activation script and interpreter symlink for `bin`, and the `python3.12/site-packages` subtree for `lib`. Both passed during the fix investigation on the unchanged parent checkout, as detailed below.
 
 ### Limits and compatibility
 
 Fedora, Windows junctions, other Python versions, and a symlink directly at the final `site-packages` component were not separately tested. No older uv comparison was needed to confirm the reported version, and no regression boundary is established. The result does not independently establish a security vulnerability. Any change to child-directory handling needs a compatibility decision separate from supported symlinks at the environment root.
 
+## Fix
+
+**Outcome: not fixed; checkout unchanged.** A compatibility decision is required before selecting the desired assertions and production behavior. The report and parent regression PR establish that writes escape the environment, but do not specify whether `--allow-existing` should reject the affected directory layout or replace its child links. The documented option promises to write into existing contents without clearing them, and `OnExisting::Allow` explicitly retains other files. Replacing child directory links changes that retention behavior; rejecting escaping links introduces a new restriction on existing layouts. No such policy is established by the inspected report, parent PR, or implementation.
+
+### Confirmed cause and scope
+
+The reproduction and passing parent regressions agree with `crates/uv-virtualenv/src/virtualenv.rs`: `OnExisting::Allow` retains child directory symlinks, `create_dir_all(&scripts)` follows a linked executable directory, and subsequent interpreter-link and activation-file writes reach its target. Separately, `create_dir_all(&site_packages)` follows the linked library directory and creates its subtree outside the environment. These are the two concrete manifestations already covered by the parent regressions; no additional speculative scenarios were added.
+
+Neighboring creation tests confirm that nonempty-directory reuse and repeated `--allow-existing` invocations are supported. The root-symlink preservation tests explicitly require following and retaining single or chained environment-root links, including when clearing the environment; both still pass. The creator also intentionally generates `lib64 -> lib` on applicable Unix systems. A future containment rule must distinguish these supported links from whichever child links the chosen policy disallows.
+
+The creator's returned scheme is passed through `Interpreter::with_virtualenv`, and the command's optional seeding consumes the created environment. Neither provides a separate containment policy. The inspected `install_script_with_symlinked_lib` fixture in `crates/uv/tests/pip_install/pip_install.rs` redirects a launcher within an already-created environment during wheel installation. That separate relative-path problem does not establish another manifestation requiring a change to builtin creation, so its fixture and assertions were left intact. Individual output-file symlinks remain the separate companion report.
+
+### Focused validation
+
+The unchanged parent regression tests were first executed successfully in the debug test profile:
+
+```sh
+cargo test -p uv --test python --no-default-features --features test-python create_venv_allow_existing_symlink -- --nocapture
+```
+
+Result: **2 passed**, using CPython 3.12.16. Both snapshots report exit status 0 and their external-write assertions pass. This confirms the tests reproduce the reported behavior before any prospective fix.
+
+That reduced feature selection emitted an unused-import warning in `python_pin.rs`: its `EnvVars` use is gated by `test-python-managed` while its import is unconditional. The warning was traced to that feature combination, without modifying the unrelated file. A second focused run enabled the corresponding feature and included the supported root-link cases:
+
+```sh
+cargo test -p uv --test python --no-default-features --features test-python,test-python-managed -- --exact venv::create_venv_allow_existing_symlink_bin venv::create_venv_allow_existing_symlink_lib venv::create_venv_symlink_clear_preservation venv::create_venv_nested_symlink_preservation
+```
+
+Result: **4 passed**, 191 filtered out, with no compiler warning. These are baseline and compatibility checks, not validation of a fix. No desired-behavior snapshot was substituted: doing so would encode the unresolved reject-versus-replace policy. No production or test files were changed, and no formatting run was necessary. `git diff --exit-code` and `git status --short` confirmed the checkout remained clean.
+
 ## Related
+
+- astral-sh/uv-dev#3062 — Parent regression PR. Adds the linked `bin` and `lib` creation tests; the unchanged checkout contains both and both pass while asserting the reported behavior.
 
 - astral-sh/uv#23056 — Generated files can follow existing destination links (issue, open). Companion report for uv 0.13.6 and the same `uv venv --allow-existing` command: generated files overwrite targets of pre-existing file symlinks. This report instead follows directory symlinks such as `v/bin`; replacing individual output files atomically would not prevent that parent-directory traversal.
 - astral-sh/uv#21255 — uv sync and uv pip install fails for packages with console scripts when the venv contains a `lib` to `usr/lib` symlink (issue, open). Also demonstrates writes redirected by a linked directory inside a virtual environment. It concerns console-script paths during package installation and a subsequent metadata error, whereas this report concerns environment creation itself and writes outside the environment.
@@ -142,4 +174,4 @@ Additional inspected context included astral-sh/uv#1863, whose maintainer commen
 
 The reproduction ran three isolated invocations of the installed uv 0.13.6, confirming linked executable-directory writes, linked library-directory creation, and the rejection control without `--allow-existing`. The source and test review support the interpretation; related GitHub context and search history above are retained from the prior investigation and were not re-queried during reproduction.
 
-No build or repository test suite was run. No checkout files, existing user state, or GitHub objects were changed. Only this handoff README and isolated reproduction files and caches under `/tmp/uv-23055-aeptefi4` were written.
+The initial reproduction used the installed binary; the fix investigation subsequently built the checkout in the debug test profile and ran only the focused tests listed in the Fix section. No full suite or release build was run. No checkout source or test files, Git configuration, or GitHub objects were changed. The fix investigation updated only this handoff README and generated local build/test artifacts; the other issue-context files were left unchanged.

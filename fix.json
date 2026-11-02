@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Confirmed that --allow-existing follows linked bin and lib directories and writes outside the environment. Both parent regressions and both root-symlink compatibility tests pass. Choosing whether to reject escaping child links or replace them requires an unresolved compatibility decision. Left the checkout unchanged and documented the findings in the issue-context README.",
+  "validation": [],
+  "pull_request": null
+}
