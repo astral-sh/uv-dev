@@ -116,9 +116,10 @@ fn create_venv_skips_distutils_patch_on_py310() {
     assert!(!site_packages.join("_virtualenv.pth").exists());
 }
 
+/// Python 3.9 needs the distutils patch even when regenerating linked patch files.
 #[test]
 #[cfg(feature = "test-python-eol")]
-fn create_venv_keeps_distutils_patch_on_py39() {
+fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
@@ -137,6 +138,47 @@ fn create_venv_keeps_distutils_patch_on_py39() {
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
     assert!(site_packages.join("_virtualenv.pth").is_file());
+
+    // Regenerating the patch must replace destination links without changing their targets.
+    #[cfg(unix)]
+    {
+        let outside_module = context.temp_dir.child("outside-module");
+        outside_module.write_str("SENTINEL\n")?;
+        let outside_pth = context.temp_dir.child("outside-pth");
+        outside_pth.write_str("SENTINEL\n")?;
+        fs_err::remove_file(site_packages.join("_virtualenv.py"))?;
+        fs_err::remove_file(site_packages.join("_virtualenv.pth"))?;
+        symlink(&outside_module, site_packages.join("_virtualenv.py"))?;
+        symlink(&outside_pth, site_packages.join("_virtualenv.pth"))?;
+
+        uv_snapshot!(context.filters(), context.venv()
+            .arg("--offline")
+            .arg("--allow-existing")
+            .arg("--python")
+            .arg("3.9"), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+        Creating virtual environment at: .venv
+        Activate with: source .venv/[BIN]/activate
+        ");
+
+        outside_module.assert("SENTINEL\n");
+        outside_pth.assert("SENTINEL\n");
+        assert!(!site_packages.join("_virtualenv.py").is_symlink());
+        assert!(!site_packages.join("_virtualenv.pth").is_symlink());
+    }
+
+    // Python must load the generated module via the .pth file during startup.
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg("import sys; print('_virtualenv' in sys.modules)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    True
+    ");
+
+    Ok(())
 }
 
 #[test]
@@ -1742,7 +1784,7 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Ok(())
 }
 
-/// A pre-existing activation-script symlink can redirect generated content outside the environment.
+/// Regenerating an activation script must leave an existing symlink's target unchanged.
 #[test]
 #[cfg(unix)]
 fn allow_existing_activate_symlink() -> Result<()> {
@@ -1780,13 +1822,12 @@ fn allow_existing_activate_symlink() -> Result<()> {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
-    assert_link_target(&activate, &outside_file);
+    outside_file.assert("SENTINEL\n");
+    assert!(!activate.path().is_symlink());
 
-    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
-    // The target now contains a working activation script instead of the sentinel.
     uv_snapshot!(context.filters(), context.external_command("sh")
         .arg("-c")
-        .arg(". ./outside-activate && python -c 'import sys; print(sys.prefix)'"), @"
+        .arg(". .venv/bin/activate && python -c 'import sys; print(sys.prefix)'"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [VENV]/
@@ -1816,10 +1857,9 @@ fn allow_existing_gitignore_symlink() -> Result<()> {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
-    assert_link_target(&gitignore, &outside_file);
-
-    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
-    insta::assert_snapshot!(context.read("outside-gitignore"), @"*");
+    outside_file.assert("SENTINEL\n");
+    assert!(!gitignore.path().is_symlink());
+    insta::assert_snapshot!(context.read(".venv/.gitignore"), @"*");
 
     Ok(())
 }
@@ -1845,11 +1885,11 @@ fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
-    assert_link_target(&pyvenv_cfg, &outside_file);
+    outside_file.assert("SENTINEL\n");
+    assert!(!pyvenv_cfg.path().is_symlink());
 
-    // Overwriting a file outside the environment is undesirable (astral-sh/uv#23056).
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(context.read("outside-pyvenv.cfg"), @"
+        insta::assert_snapshot!(context.read(".venv/pyvenv.cfg"), @"
         home = [PYTHON_HOME]
         implementation = CPython
         uv = [UV_VERSION]
@@ -1859,7 +1899,7 @@ fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
         ");
     });
 
-    // Python consumes the generated configuration through the retained symlink.
+    // Python consumes the generated configuration inside the environment.
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
         .arg("import sys; print(sys.prefix)"), @"
