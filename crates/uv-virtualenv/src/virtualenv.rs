@@ -13,7 +13,7 @@ use owo_colors::OwoColorize;
 use tracing::{debug, trace};
 
 use crate::{Error, Prompt};
-use uv_fs::{CWD, PythonExt, Simplified, cachedir, write_atomic_sync};
+use uv_fs::{CWD, PythonExt, Simplified, cachedir, write_atomic_sync_preserve_mode};
 use uv_platform_tags::Os;
 use uv_pypi_types::Scheme;
 use uv_python_interpreter::{Interpreter, VirtualEnvironment};
@@ -211,7 +211,7 @@ pub(crate) fn create(
 
     // Create a `.gitignore` file to ignore all files in the venv.
     // Replace generated files atomically so destination links cannot redirect writes.
-    write_atomic_sync(location.join(".gitignore"), "*")?;
+    write_atomic_sync_preserve_mode(location.join(".gitignore"), "*")?;
 
     let minor_version_link = PythonMinorVersionLink::from_interpreter(interpreter, upgrade_policy);
     let using_minor_version_link = minor_version_link.is_some();
@@ -535,7 +535,7 @@ pub(crate) fn create(
             .replace("{{ VIRTUAL_PROMPT }}", &virtual_prompt)
             .replace("{{ PATH_SEP }}", path_sep)
             .replace("{{ RELATIVE_SITE_PACKAGES }}", &relative_site_packages);
-        write_atomic_sync(scripts.join(name), activator)?;
+        write_atomic_sync_preserve_mode(scripts.join(name), activator)?;
     }
 
     let mut pyvenv_cfg_data: Vec<(String, String)> = vec![
@@ -594,7 +594,7 @@ pub(crate) fn create(
 
     let mut pyvenv_cfg = Vec::new();
     write_cfg(&mut pyvenv_cfg, &pyvenv_cfg_data)?;
-    write_atomic_sync(location.join("pyvenv.cfg"), pyvenv_cfg)?;
+    write_atomic_sync_preserve_mode(location.join("pyvenv.cfg"), pyvenv_cfg)?;
 
     // Construct the path to the `site-packages` directory.
     let site_packages = location.join(&interpreter.virtualenv().purelib);
@@ -617,8 +617,11 @@ pub(crate) fn create(
     }
 
     if install_distutils_patch(interpreter) {
-        write_atomic_sync(site_packages.join("_virtualenv.py"), VIRTUALENV_PATCH)?;
-        write_atomic_sync(site_packages.join("_virtualenv.pth"), "import _virtualenv")?;
+        write_atomic_sync_preserve_mode(site_packages.join("_virtualenv.py"), VIRTUALENV_PATCH)?;
+        write_atomic_sync_preserve_mode(
+            site_packages.join("_virtualenv.pth"),
+            "import _virtualenv",
+        )?;
     }
 
     Ok(VirtualEnvironment {

@@ -13,7 +13,11 @@ use uv_static::EnvVars;
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::OsStr,
+    fs::Permissions,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -1911,6 +1915,31 @@ fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
     [VENV]/
     ");
 
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_existing_preserves_generated_file_modes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let config = context.venv.child("pyvenv.cfg");
+    let activate = context.venv.child("bin/activate");
+    fs_err::set_permissions(config.path(), Permissions::from_mode(0o600))?;
+    fs_err::set_permissions(activate.path(), Permissions::from_mode(0o750))?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--prompt", "private"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs_err::metadata(config.path())?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs_err::metadata(activate.path())?.permissions().mode() & 0o777,
+        0o750
+    );
     Ok(())
 }
 

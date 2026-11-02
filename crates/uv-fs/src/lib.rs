@@ -1,9 +1,10 @@
+use std::fs::Permissions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 
@@ -26,7 +27,6 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
 pub use crate::locked_file::*;
-#[cfg(feature = "tokio")]
 use crate::named_temp_file::tempfile_in_with_permissions;
 pub use crate::named_temp_file::{NamedTempFile, PersistError, tempfile_in};
 pub use crate::path::*;
@@ -556,13 +556,39 @@ pub async fn write_atomic_preserve(
 
 /// Write `data` to `path` atomically using a temporary file and atomic rename.
 pub fn write_atomic_sync(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> std::io::Result<()> {
-    let mut temp_file = tempfile_in(
-        path.as_ref()
-            .parent()
-            .expect("Write path must have a parent"),
-    )?;
-    temp_file.write_all(data.as_ref())?;
-    persist_with_retry_sync(temp_file, path.as_ref())
+    write_atomic_sync_with_permissions(path.as_ref(), data.as_ref(), None)
+}
+
+/// Replace the destination without following links, retaining an existing regular file's Unix access bits.
+pub fn write_atomic_sync_preserve_mode(
+    path: impl AsRef<Path>,
+    data: impl AsRef<[u8]>,
+) -> io::Result<()> {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    let permissions = match fs_err::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(Permissions::from_mode(metadata.mode() & 0o777)),
+        Ok(_) => None,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    #[cfg(not(unix))]
+    let permissions = None;
+    write_atomic_sync_with_permissions(path, data.as_ref(), permissions)
+}
+
+fn write_atomic_sync_with_permissions(
+    path: &Path,
+    data: &[u8],
+    permissions: Option<Permissions>,
+) -> io::Result<()> {
+    let parent = path.parent().expect("Write path must have a parent");
+    let mut temp_file = tempfile_in_with_permissions(parent, permissions.clone())?;
+    temp_file.write_all(data)?;
+    if let Some(permissions) = permissions {
+        temp_file.as_file().set_permissions(permissions)?;
+    }
+    persist_with_retry_sync(temp_file, path)
 }
 
 /// Copy `from` to `to` atomically using a temporary file and atomic rename.
