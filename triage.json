@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23058,
+        "title": "Bash prompt values can change meaning under older compatibility modes (POSIX)",
+        "url": "https://github.com/astral-sh/uv/issues/23058",
+        "state": "open",
+        "reason": "Canonical match: reports the same uv 0.13.6 --prompt command substitution executing when activate is sourced, explicitly in both bash and zsh. The new reproduction changes only the shell and does not enable PROMPT_SUBST or render a prompt. Source confirms the shared unescaped prompt substitution."
+      },
+      {
+        "kind": "issue",
+        "number": 9424,
+        "title": "Please comment on CVE-2024-53899 and virtualenv activation scripts",
+        "url": "https://github.com/astral-sh/uv/issues/9424",
+        "state": "closed",
+        "reason": "Historical activation-script command-injection discussion. Maintainer comments point to astral-sh/uv#8984 for environment-path quoting. Its single-quote path reproduction differs from this report's double-quoted prompt substitution; it does not establish that this prompt bug was previously fixed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8984,
+        "title": "Allow apostrophe in venv name",
+        "url": "https://github.com/astral-sh/uv/pull/8984",
+        "state": "merged",
+        "reason": "Merged November 15, 2024, fixing astral-sh/uv#8947. The diff escapes VIRTUAL_ENV_DIR using escape_posix_for_single_quotes and adds an apostrophe-path test; it leaves VIRTUAL_PROMPT replacement unchanged. Relevant historical fix, but not a fix for the reported prompt execution."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues using authenticated gh: literal PROMPT_SUBST and both reported CVE identifiers; separate source-time execution and prompt-rendering searches using activate/commands, command substitution, command execution/venv, prompt/injection, prompt/substitution, zsh/PS1, escaping, quoting, and area:environments/special characters, without Fedora or version restrictions. Searched PRs across all states with gh search prs and gh pr list --state all for prompt, activate, and escaping; those searches returned no candidates. Followed issue comments and timelines to inspect historical PRs directly, including the merged astral-sh/uv#8984 diff and reviews. Read the reporter-linked upstream zsh fix. Ruled out astral-sh/uv#12662 (SCRIPT_PATH leakage), astral-sh/uv#2668 (Powerlevel10k display behavior), and astral-sh/uv#8947 (apostrophe-path syntax failure) as duplicates; astral-sh/uv#9466 was an unmerged Windows batch-path proposal. GitHub rate limiting blocked final supplemental exact-identifier, security-label, and PR searches, so search coverage is not exhaustive."
+  },
+  "type": "duplicate",
+  "type_reason": "The incorrect behavior is already tracked by open astral-sh/uv#23058, which explicitly covers source-time command substitution in both bash and zsh using the same prompt and uv version. The supplied reproduction does not isolate a separate PROMPT_SUBST redraw bug. Duplicate takes precedence over bug; the historical path-quoting fix in astral-sh/uv#8984 did not fix prompt interpolation, so the available evidence does not establish a regression.",
+  "summary": "astral-sh/uv#23058 is the canonical match for the reported source-time execution. astral-sh/uv#9424 and merged astral-sh/uv#8984 provide historical path-quoting context, not a prior fix for this prompt bug.",
+  "draft_response": "Your reproducer hits the same prompt-escaping bug tracked in astral-sh/uv#23058, which already covers bash and zsh. The generated activation script inserts the prompt directly into double-quoted shell expressions, so command substitution runs while sourcing it, without requiring PROMPT_SUBST or a prompt redraw. Please keep the zsh reproduction and PROMPT_SUBST follow-up in astral-sh/uv#23058 so activation-time escaping and prompt rendering can be addressed together."
+}
