@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23056,
+        "title": "Generated files can follow existing destination links",
+        "url": "https://github.com/astral-sh/uv/issues/23056",
+        "state": "open",
+        "reason": "Companion report for uv 0.13.6 and the same `uv venv --allow-existing` command: generated files overwrite targets of pre-existing file symlinks. This report instead follows directory symlinks such as `v/bin`; replacing individual output files atomically would not prevent that parent-directory traversal."
+      },
+      {
+        "kind": "issue",
+        "number": 21255,
+        "title": "uv sync and uv pip install fails for packages with console scripts when the venv contains a `lib` to `usr/lib` symlink",
+        "url": "https://github.com/astral-sh/uv/issues/21255",
+        "state": "open",
+        "reason": "Also demonstrates writes redirected by a linked directory inside a virtual environment. It concerns console-script paths during package installation and a subsequent metadata error, whereas this report concerns environment creation itself and writes outside the environment."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21256,
+        "title": "normalize paths to avoid traversing symlinks when writing console scripts",
+        "url": "https://github.com/astral-sh/uv/pull/21256",
+        "state": "open",
+        "reason": "Proposes a fix for astral-sh/uv#21255 in wheel installation and uninstallation. Review discusses relative paths through linked library directories. It does not change the recursive directory creation or generated-file writes in uv-virtualenv."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14933,
+        "title": "Fix symlink preservation in virtual environment creation",
+        "url": "https://github.com/astral-sh/uv/pull/14933",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#14670 by preserving a symlink at the environment root when clearing or recreating it. Maintainer comments explicitly support following that root symlink. It did not validate linked child directories, so this report is not a regression of that fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21997,
+        "title": "Fix wheel file replacement and stale data handling",
+        "url": "https://github.com/astral-sh/uv/pull/21997",
+        "state": "open",
+        "reason": "Related filesystem-write work in the wheel installer. Its current description explicitly retains destination directory symlinks, and maintainer discussion explains compatibility with distribution-managed layouts. It follows the reverted guard in astral-sh/uv#21569 and concerns a different subsystem from builtin environment creation."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and attempted open, closed, and merged PR searches with authenticated gh. Literal queries included CVE-2026-113716, the upstream commit hash, the title, --allow-existing, pre-planted links, and create_dir_all. Conceptual queries covered venv/virtualenv creation, directory and symbolic links, redirected/outside writes, activation files, junctions, and area:environments/security labels, without Fedora or version restrictions. PR keyword searches returned no candidates even for directly retrievable relevant PRs; supplemented them with paginated open-PR listings, a recent closed-PR listing, and direct inspection of referenced PRs, comments, reviews, and patches. Followed astral-sh/uv#14670 to astral-sh/uv#14933 and astral-sh/uv#21692 through astral-sh/uv#21569, astral-sh/uv#21699, astral-sh/uv#21698, and astral-sh/uv#21997. Ruled out astral-sh/uv#14249 and astral-sh/uv#17963: their fixed --allow-existing regressions concern Windows executable-link creation failing with os error 80. Also ruled out astral-sh/uv#15800 (cross-platform directory aliases) and astral-sh/uv#20431 (build-backend source containment). No inspected item tracks the same child-directory traversal during builtin creation."
+  },
+  "type": "bug",
+  "type_reason": "The uv 0.13.6 source confirms that --allow-existing retains linked child directories, create_dir_all follows them, and subsequent environment-file writes reach their targets outside the requested environment. This is a correctness problem. The companion file-symlink report requires a different fix, and the historical environment-root and wheel-installation changes did not fix this creation path; no duplicate or regression of a prior fix was established.",
+  "summary": "No exact duplicate found. astral-sh/uv#23056 is the closest companion report, covering file symlinks. Other related work concerns console-script installation, intentional environment-root symlinks, and wheel-write compatibility.",
+  "draft_response": "The creation code matches your report: `--allow-existing` retains the existing directory contents, then recursive directory creation and subsequent writes follow a linked `bin` or library directory. This is related to astral-sh/uv#23056, but replacing individual output files would not prevent traversal through a linked parent directory.\n\nThe next step is focused regression coverage for linked executable and library directories, followed by deciding whether creation should reject or replace those child links before writing. That needs to retain support for intentional symlinked environment roots, established in astral-sh/uv#14933."
+}
