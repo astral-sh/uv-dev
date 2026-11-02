@@ -18,7 +18,8 @@ use uv_redacted::policy::{SerializationPolicy, Stripped};
 use uv_warnings::warn_user;
 
 use crate::{
-    ExcludeNewerOverride, Index, IndexRequestPolicy, ProxyIndexConfigError, ProxyRoute, Verbatim,
+    ExcludeNewerOverride, Index, IndexRequestPolicy, ProxyIndexConfigError, ProxyRoute,
+    RegistryRequestContext, Verbatim,
 };
 
 pub static PYPI_URL: LazyLock<SafeUrl> =
@@ -598,6 +599,20 @@ impl<'a> IndexLocations {
         }
         self.index_for_url(url)
             .map_or(&DEFAULT_REQUEST_POLICY, |index| &index.request_policy)
+    }
+
+    /// Select the Simple API endpoint and policy together, starting from a package's canonical index.
+    pub fn simple_request(&'a self, index: &'a IndexUrl) -> RegistryRequestContext<'a> {
+        if let Some(proxy) = self.proxy_route_for(index) {
+            RegistryRequestContext::new(proxy.effective_url(), proxy.request_policy(), true)
+        } else {
+            let policy = self
+                .indexes
+                .iter()
+                .find(|entry| entry.definition.url().is_same_index(index))
+                .map_or(&*DEFAULT_REQUEST_POLICY, |entry| &entry.request_policy);
+            RegistryRequestContext::new(index, policy, false)
+        }
     }
 
     /// Return the hash algorithm required for distributions resolved from a canonical index.

@@ -401,16 +401,12 @@ impl RegistryClient {
                     let _permit = download_concurrency.acquire().await;
                     match index.format {
                         IndexFormat::Simple => {
-                            let status_code_strategy = self
-                                .indexes
-                                .request_policy(index.url)
-                                .status_code_strategy();
                             match self
                                 .simple_detail_single_index(
                                     package_name,
-                                    self.indexes.effective_url(index.url),
+                                    index.url,
                                     capabilities,
-                                    status_code_strategy,
+                                    None,
                                 )
                                 .await?
                             {
@@ -457,9 +453,9 @@ impl RegistryClient {
                                 let metadata = match self
                                     .simple_detail_single_index(
                                         package_name,
-                                        self.indexes.effective_url(index.url),
+                                        index.url,
                                         capabilities,
-                                        &status_code_strategy,
+                                        Some(&status_code_strategy),
                                     )
                                     .await?
                                 {
@@ -572,11 +568,14 @@ impl RegistryClient {
     async fn simple_detail_single_index(
         &self,
         package_name: &PackageName,
-        index: &IndexUrl,
+        canonical: &IndexUrl,
         capabilities: &IndexCapabilities,
-        status_code_strategy: &IndexStatusCodeStrategy,
+        status_code_strategy: Option<&IndexStatusCodeStrategy>,
     ) -> Result<SimpleMetadataSearchOutcome, Error> {
-        // Format the URL for PyPI.
+        let route = self.indexes.simple_request(canonical);
+        let index = route.index();
+        let status_code_strategy =
+            status_code_strategy.unwrap_or_else(|| route.policy().status_code_strategy());
         let mut url = index.url().clone();
         url.path_segments_mut()
             .map_err(|()| ErrorKind::CannotBeABase(index.url().clone()))?
@@ -588,27 +587,12 @@ impl RegistryClient {
 
         trace!("Fetching metadata for `{package_name}` from `{url}`");
 
-        let cache_entry = self.cache.entry(
-            CacheBucket::Simple,
-            WheelCache::Index(index).root(),
+        let (cache_entry, cache_control) = self.simple_cache(
+            canonical,
+            route,
             format!("{package_name}.rkyv"),
-        );
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(header) = self
-                    .indexes
-                    .request_policy(index)
-                    .simple_api_cache_control() =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, Some(package_name), None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
+            Some(package_name),
+        )?;
 
         // Acquire an advisory lock, to guard against concurrent writes.
         #[cfg(windows)]
@@ -814,6 +798,40 @@ impl RegistryClient {
         OwnedArchive::from_unarchived(&metadata)
     }
 
+    /// Keep the stored response's freshness private to its route. A direct index and a
+    /// proxy can share a URL but apply different Cache-Control overrides to its responses.
+    fn simple_cache(
+        &self,
+        canonical: &IndexUrl,
+        route: RegistryRequestContext<'_>,
+        filename: impl AsRef<Path>,
+        package: Option<&PackageName>,
+    ) -> Result<(CacheEntry, CacheControl), Error> {
+        let root = if route.is_proxy() {
+            WheelCache::ProxiedIndex {
+                upstream: canonical,
+                proxy: route.index(),
+            }
+        } else {
+            WheelCache::Index(route.index())
+        };
+        let entry = self.cache.entry(CacheBucket::Simple, root.root(), filename);
+        let control = match self.connectivity {
+            Connectivity::Online
+                if let Some(header) = route.policy().simple_api_cache_control() =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(&entry, package, None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        };
+        Ok((entry, control))
+    }
+
     /// Fetch the list of projects from a Simple API index at a remote URL.
     ///
     /// This fetches the root of a Simple API index (e.g., `https://pypi.org/simple/`)
@@ -822,10 +840,10 @@ impl RegistryClient {
         &self,
         index_url: &IndexUrl,
     ) -> Result<SimpleIndexMetadata, Error> {
-        // Format the URL for PyPI.
-        let mut url = index_url.url().clone();
+        let route = self.indexes.simple_request(index_url);
+        let mut url = route.index().url().clone();
         url.path_segments_mut()
-            .map_err(|()| ErrorKind::CannotBeABase(index_url.url().clone()))?
+            .map_err(|()| ErrorKind::CannotBeABase(route.index().url().clone()))?
             .pop_if_empty()
             // The URL *must* end in a trailing slash for proper relative path behavior
             // ref https://github.com/servo/rust-url/issues/333
@@ -835,7 +853,9 @@ impl RegistryClient {
             let archived = self.fetch_local_simple_index(&url).await?;
             Ok(OwnedArchive::deserialize(&archived))
         } else {
-            let archived = self.fetch_remote_simple_index(&url, index_url).await?;
+            let archived = self
+                .fetch_remote_simple_index(&url, index_url, route)
+                .await?;
             Ok(OwnedArchive::deserialize(&archived))
         }
     }
@@ -844,29 +864,11 @@ impl RegistryClient {
     async fn fetch_remote_simple_index(
         &self,
         url: &SafeUrl,
-        index: &IndexUrl,
+        canonical: &IndexUrl,
+        route: RegistryRequestContext<'_>,
     ) -> Result<OwnedArchive<SimpleIndexMetadata>, Error> {
-        let cache_entry = self.cache.entry(
-            CacheBucket::Simple,
-            WheelCache::Index(index).root(),
-            "index.html.rkyv",
-        );
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(header) = self
-                    .indexes
-                    .request_policy(index)
-                    .simple_api_cache_control() =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, None, None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
+        let (cache_entry, cache_control) =
+            self.simple_cache(canonical, route, "index.html.rkyv", None)?;
 
         let parse_simple_response = |response: Response, _: &mut RetryState| {
             async {
