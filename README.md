@@ -11,7 +11,69 @@ The reporter uses uv 0.13.6 on Debian 13 with `PAGER=less`. Detailed help from
 They ask whether this is intended or indicates a problem with their system. There is no
 error message, report of a previously working version, or explicit request to change the behavior.
 
-astral-sh/uv#4936 intentionally disabled paging for bare `uv help`; astral-sh/uv#5511 contains a maintainer answer to the same question about PAGER=less. The checked-out source still explicitly excludes root help from paging.
+The reported difference was reproduced with the installed uv 0.13.6 in a pseudo-terminal: bare
+`uv help` printed directly and exited without input, while `uv help run` launched `less` and
+waited for `q`. The runtime check used Ubuntu 24.04.5 LTS on x86_64, rather than Debian 13.
+
+This is intended behavior. astral-sh/uv#4936 intentionally disabled paging for bare `uv help`;
+astral-sh/uv#5511 contains a maintainer answer to the same question about PAGER=less. The
+checked-out source still explicitly excludes root help from paging.
+
+## Reproduction
+
+**Outcome: reproducible (intended behavior; classification remains question).**
+
+The report specifies uv 0.13.6, Debian 13, and `PAGER=less`; it does not identify a particular
+subcommand or a Python version. It asks whether root help should page like subcommand help,
+without claiming a regression. `run` was selected as a representative subcommand with long help.
+
+The runtime environment was Ubuntu 24.04.5 LTS, Linux x86_64, with the installed executable
+`/opt/hostedtoolcache/uv/0.13.6/x86_64/uv` reporting
+`uv 0.13.6 (x86_64-unknown-linux-gnu)`, and `/usr/bin/less` version 590. Python 3.12.3 drove the
+pseudo-terminal harness; these help commands do not require a Python interpreter or project.
+Debian 13 was not tested directly.
+
+Minimal commands, run with stdout connected to an interactive terminal:
+
+```console
+$ PAGER=less uv help
+$ PAGER=less uv help run
+```
+
+The harness gave each command a separate controlling pseudo-terminal with 24 rows, 80 columns,
+and `TERM=xterm-256color`. It ran in `/tmp/uv-23053-7ffhgoet` with a clean child environment,
+`PAGER=less`, `LANG=C.UTF-8`, `UV_NO_CONFIG=1`, and `UV_OFFLINE=1`. The temporary directory held
+all reproduction files, `TMPDIR`, `UV_CACHE_DIR`, and the XDG cache/config/data/state directories.
+`LESSHISTFILE=-` disabled pager history; no `LESS` options were set. No project configuration
+or dependency fixture was needed.
+
+Observed results:
+
+- `PAGER=less uv help` printed the complete root overview, including its final command-help
+  hint, and exited with status 0 without any input. The terminal transcript contained 83 newline
+  characters, exceeding the 24-row screen, and did not enter the alternate screen. Thus the
+  lack of paging was not a consequence of the overview fitting on one screen.
+- `PAGER=less uv help run` entered the alternate screen and displayed the first page of detailed
+  help. A running child process named `less` was observed before input. The command remained
+  active until the harness sent `q`, then exited with status 0.
+
+The harness is `/tmp/uv-23053-7ffhgoet/reproduce.py`; adjacent `root-help.json`, `run-help.json`,
+`root-help.terminal.txt`, and `run-help.terminal.txt` retain the results and terminal transcripts.
+No checkout files were changed and no build or repository test suite was run.
+
+Existing coverage was inspected in `crates/uv/tests/it/help.rs`:
+
+- `help` uses an isolated context without Python versions and snapshots the successful root
+  overview, including the final `uv help <command>` hint.
+- `help_subcommand` uses the same kind of context and snapshots the expanded `uv help python`
+  output, including detailed interpreter discovery and option descriptions.
+- `help_with_no_pager` invokes root help with `--no-pager` and snapshots successful output. Its
+  comment explicitly states that the snapshot verifies option availability, not pager operation.
+
+These tests capture command output rather than attach stdout to a terminal, so they do not
+establish whether an interactive pager starts. Searching the relevant integration tests found no
+interactive paging test. The pseudo-terminal observations above provide the runtime evidence for
+this report. No additional information is needed to reproduce the reported distinction.
 
 ## Draft response
 
@@ -54,8 +116,8 @@ this does not establish a regression in uv 0.13.6.
   root-command exception. The historical design and current source supply that distinction.
 - `crates/uv/tests/it/help.rs:26` snapshots the root overview, and the same module contains
   subcommand and no-pager snapshots. Captured command-output snapshots do not by themselves
-  verify interactive pager startup. No runtime reproduction or build was needed for this
-  source- and history-backed clarification.
+  verify interactive pager startup. The pseudo-terminal reproduction above independently
+  confirmed the distinction using the installed uv 0.13.6 executable.
 
 ## Search scope and exclusions
 

@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.13.6 on Ubuntu 24.04.5 x86_64 with less 590 in a 24×80 pseudo-terminal, `PAGER=less uv help` printed the full overview and exited without input. `PAGER=less uv help run` launched less, waited for `q`, then exited successfully. Debian 13 was not tested directly. This matches intended behavior documented by astral-sh/uv#4936 and astral-sh/uv#5511; reproduction does not establish a bug. Existing help snapshots cover output but not interactive pager startup. Updated $RUNNER_TEMP/issue-context/README.md with runtime evidence and test coverage; no checkout files or GitHub state were changed."
+}
