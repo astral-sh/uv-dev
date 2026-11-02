@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 2076,
+        "title": "Support paths with spaces in launchers",
+        "url": "https://github.com/astral-sh/uv/issues/2076",
+        "state": "closed",
+        "reason": "Historical counterpart: POSIX console launchers failed because the kernel split interpreter paths containing spaces. Fixed by astral-sh/uv#2097, whose fallback did not include tabs."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2097,
+        "title": "Wrap unsafe script shebangs in `/bin/sh`",
+        "url": "https://github.com/astral-sh/uv/pull/2097",
+        "state": "merged",
+        "reason": "Merged on 2024-02-29. Its diff introduced the fallback for shebangs exceeding 127 bytes or containing a literal space. Tabs were never included, establishing an omitted case rather than a regression of tab support."
+      },
+      {
+        "kind": "issue",
+        "number": 22323,
+        "title": "`uv run --with` packages invisible to project entrypoints when the venv path forces the /bin/sh shebang wrapper",
+        "url": "https://github.com/astral-sh/uv/issues/22323",
+        "state": "open",
+        "reason": "Adjacent issue involving the same wrapper: valid wrappers for long or space-containing paths are skipped when copying entrypoints into ephemeral environments. Here, a short tab-containing path receives no wrapper and the launcher cannot start."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separately searched tab-path failures and shell interpretation using bad interpreter, shebang, console_scripts, tab/venv, CVE-2026-113722, format_shebang, format_shell_shebang, whitespace, special characters, quoting, escaping, and command substitution, including comments and installer/environment labels. Removed version and platform restrictions. PR keyword searches returned no hits, so also screened the latest 1,000 PRs across states and inspected referenced fixes directly. Followed astral-sh/uv#1466 to astral-sh/uv#2097. Ruled out astral-sh/uv#2744 and astral-sh/uv#8035 (setuptools build-interpreter paths), astral-sh/uv#8947 (activation quoting), astral-sh/uv#9348 (upstream bundled scripts), astral-sh/uv#16209 (BusyBox realpath), and astral-sh/uv#21276 with astral-sh/uv#22526 (data-script encoding). Inspected the reporter-linked virtualenv commit. No tab-specific uv fix or duplicate was found."
+  },
+  "type": "bug",
+  "type_reason": "The checked-in uv 0.13.6 source confirms that a non-relocatable POSIX interpreter path containing a tab, but no space and with a shebang line at most 127 bytes long, receives a direct shebang. The kernel splits that path at the tab, producing an unusable launcher. The historical space/length fix never covered tabs. This is incorrect launcher generation, without evidence that previously working tab support regressed.",
+  "summary": "astral-sh/uv#2076 and merged astral-sh/uv#2097 explain the existing fallback and its omission of tabs. Open astral-sh/uv#22323 concerns a separate wrapper-handling failure. No existing report or fix for the tab-specific failure was found.",
+  "draft_response": "The tab case is a bug: `format_shebang` only selects the POSIX shell wrapper for spaces, long shebangs, or relocatable environments. A short interpreter path containing a tab therefore gets a direct shebang that the kernel splits incorrectly. The earlier fix in astral-sh/uv#2097 covered spaces and long paths but omitted tabs.\n\nThe next step is to include tabs in the fallback condition and add a regression test that installs and runs a console entrypoint under a short path containing a literal tab and no spaces. The reproduction establishes a shebang-parsing failure; it does not establish shell execution of path contents."
+}
