@@ -341,9 +341,29 @@ pub struct Index {
     /// url = "https://internal.example.com/simple"
     /// exclude-newer = "7 days"
     /// ```
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_index_cutoff"
+    )]
     #[cfg_attr(feature = "schemars", schemars(with = "ExcludeNewerOverride"))]
     pub exclude_newer: Option<ExcludeNewerOverride>,
+}
+
+// An index declaration in a tool receipt is reused on later invocations. A relative cutoff
+// must stay relative, even though the resolved cutoff in a lockfile is a timestamp.
+#[expect(clippy::ref_option, reason = "serde passes a reference to the field")]
+fn serialize_index_cutoff<S: Serializer>(
+    cutoff: &Option<ExcludeNewerOverride>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    if let Some(ExcludeNewerOverride::Enabled(value)) = cutoff
+        && let Some(span) = value.span()
+    {
+        span.serialize(serializer)
+    } else {
+        cutoff.serialize(serializer)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1142,5 +1162,7 @@ mod tests {
         let index: Index = toml::from_str(toml_str).unwrap();
         assert_eq!(index.name.as_ref().unwrap().as_ref(), "internal");
         assert_matches!(index.exclude_newer, Some(ExcludeNewerOverride::Enabled(_)));
+        let round_trip: Index = toml::from_str(&toml::to_string(&index).unwrap()).unwrap();
+        assert_eq!(round_trip, index);
     }
 }
