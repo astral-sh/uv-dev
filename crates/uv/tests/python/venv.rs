@@ -1742,6 +1742,69 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(unix)]
+fn create_venv_allow_existing_symlink_bin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv.create_dir_all()?;
+    let outside = context.temp_dir.child("outside");
+    outside.create_dir_all()?;
+    symlink(&outside, context.venv.child("bin"))?;
+
+    // This unexpectedly writes environment files outside the venv through the symlink.
+    // See astral-sh/uv#23055.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(context.venv.as_os_str())
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    assert_link_target(context.venv.child("bin"), &outside);
+    outside
+        .child("activate")
+        .assert(predicates::path::is_file());
+    assert!(outside.child("python").is_symlink());
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_allow_existing_symlink_lib() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv.create_dir_all()?;
+    let outside = context.temp_dir.child("outside");
+    outside.create_dir_all()?;
+    symlink(&outside, context.venv.child("lib"))?;
+
+    // This unexpectedly creates site-packages outside the venv through the symlink.
+    // See astral-sh/uv#23055.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(context.venv.as_os_str())
+        .arg("--allow-existing")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    assert_link_target(context.venv.child("lib"), &outside);
+    outside
+        .child("python3.12/site-packages")
+        .assert(predicates::path::is_dir());
+
+    Ok(())
+}
+
 /// Run `uv venv` followed by `uv venv --allow-existing`.
 #[test]
 fn create_venv_then_allow_existing() {
