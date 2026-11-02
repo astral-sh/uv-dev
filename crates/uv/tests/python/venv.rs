@@ -137,7 +137,10 @@ fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
-    assert!(site_packages.join("_virtualenv.pth").is_file());
+    assert_eq!(
+        fs_err::read_to_string(site_packages.join("_virtualenv.pth"))?,
+        "import _virtualenv"
+    );
 
     // Regenerating the patch must replace destination links without changing their targets.
     #[cfg(unix)]
