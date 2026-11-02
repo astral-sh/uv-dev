@@ -2201,6 +2201,55 @@ fn create_venv_apostrophe() {
     assert_eq!(stdout.trim(), venv_dir.to_string_lossy());
 }
 
+/// Redrawing a zsh prompt can evaluate shell syntax from the environment's directory name.
+#[test]
+#[cfg(unix)]
+fn activate_zsh_prompt_subst() {
+    let Ok(zsh) = which::which("zsh") else {
+        return;
+    };
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let name = "env-$(touch dollar)-`touch backtick`-%n-!";
+    let venv = context.temp_dir.child(name);
+    context
+        .venv()
+        .args(["--python", "3.12"])
+        .arg(venv.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.external_command(zsh)
+        .args(["-f", "-c", indoc! {r#"
+            setopt promptbang
+            unsetopt promptsubst
+            psvar=(user)
+            PS1='original %1v'
+            source "$1" || exit 1
+            print -Pr -- "$PS1"
+            setopt promptsubst
+            print -Pr -- "$PS1"
+            deactivate
+            print -Pr -- "$PS1"
+            print -r -- "psvar entries: ${#psvar[@]}"
+        "#}, "zsh"])
+        .arg(venv.child("bin/activate").path()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (env-$(touch dollar)-`touch backtick`-%n-!) original user
+    (env-$(touch dollar)-`touch backtick`-%n-!) original user
+    original user
+    psvar entries: 1
+    ");
+    context
+        .temp_dir
+        .child("dollar")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("backtick")
+        .assert(predicate::path::missing());
+}
+
 /// An explicit prompt must remain literal during both activation and Bash prompt expansion.
 #[test]
 #[cfg(target_os = "linux")]
