@@ -2147,12 +2147,9 @@ fn activate_fish_quotes_path_and_prompt() {
     ));
 
     if let Ok(fish) = which::which("fish") {
-        context
-            .external_command(fish)
-            .args([
-                "--no-config",
-                "-c",
-                indoc! {r#"
+        // Keep backslashes in the rendered prompt instead of normalizing them as path separators.
+        uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command(fish)
+            .args(["--no-config", "-c", indoc! {r#"
                 function fish_prompt; printf original; end
                 source "$argv[1]"; or exit 1
                 test "$VIRTUAL_ENV" = "$argv[2]"; or exit 1
@@ -2160,14 +2157,15 @@ fn activate_fish_quotes_path_and_prompt() {
                 fish_prompt
                 deactivate
                 fish_prompt
-            "#},
-            ])
+            "#}])
             .arg(activate.path())
             .arg(venv.path())
-            .arg(prompt)
-            .assert()
-            .success()
-            .stdout(format!("({prompt}) original\noriginal"));
+            .arg(prompt), @r"
+        exit_code: 0 (success)
+        ----- stdout -----
+        (x'; touch from-prompt; set x '\\) original
+        original
+        ");
         context
             .temp_dir
             .child("from-path")
