@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23055,
+        "title": "Builtin creation follows linked environment directories",
+        "url": "https://github.com/astral-sh/uv/issues/23055",
+        "state": "open",
+        "reason": "Companion report for uv 0.13.6 and `uv venv --allow-existing`: a pre-existing directory symlink redirects generated subtrees outside the environment. This report instead concerns individual destination-file symlinks; replacing those files does not address traversal through linked parent directories."
+      },
+      {
+        "kind": "issue",
+        "number": 5152,
+        "title": "Uv script install into .venv overwrites python",
+        "url": "https://github.com/astral-sh/uv/issues/5152",
+        "state": "closed",
+        "reason": "Confirmed historical example of a generated script following an existing file symlink and overwriting its external target. It involved installing a console entry point named python during `uv sync`, rather than generating virtual-environment files, and was fixed by astral-sh/uv#5165."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5165,
+        "title": "Make entrypoint writes atomic to avoid overwriting symlinks",
+        "url": "https://github.com/astral-sh/uv/pull/5165",
+        "state": "merged",
+        "reason": "Merged July 17, 2024; replaced direct entry-point writes with atomic writes to fix astral-sh/uv#5152. Its changes were confined to the wheel installer, providing a relevant implementation precedent without fixing the uv-virtualenv writes reported here."
+      },
+      {
+        "kind": "issue",
+        "number": 21857,
+        "title": "uv Git checkout marker follows a repository-controlled symlink",
+        "url": "https://github.com/astral-sh/uv/issues/21857",
+        "state": "closed",
+        "reason": "Another confirmed external-file truncation through an existing destination symlink, but triggered by writing a Git checkout's .ok marker during dependency installation. Its canonical fix is astral-sh/uv#21891; it does not cover virtual-environment generation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21891,
+        "title": "Store Git checkout markers outside working trees",
+        "url": "https://github.com/astral-sh/uv/pull/21891",
+        "state": "merged",
+        "reason": "Merged September 23, 2026; fixes astral-sh/uv#21857 by moving checkout markers outside repository-controlled working trees. Maintainer comments on the closed alternative astral-sh/uv#21892 explicitly select this fix. It changes the Git/cache subsystem, not destination-file writes in uv-virtualenv."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search astral-sh/uv issues across open and closed states and pull requests without a state restriction, with additional explicit open, closed, and merged PR attempts. Literal searches covered CVE-2026-113721, destination links, --allow-existing with symlink, activate, .gitignore, and _virtualenv.py. Conceptual and fix-oriented searches covered symbolic links, overwrite, truncate, clobber, hardlinks, atomic writes, generated files, paths outside the environment, and area:environments. Inspected candidate bodies, comments, reviews, timelines, and changed-file lists; followed astral-sh/uv#5152 to astral-sh/uv#5165 and astral-sh/uv#21857 through astral-sh/uv#21892 to astral-sh/uv#21891. Ruled out astral-sh/uv#14670 and astral-sh/uv#14933 as duplicates: they preserve the environment-root symlink during recreation, not individual generated-file targets. PR search results were incomplete despite directly retrievable historical PRs, and later REST searches hit an installation rate limit; direct GraphQL PR inspection remained available. No exact duplicate or prior fix for this virtualenv-file path was confirmed."
+  },
+  "type": "bug",
+  "type_reason": "The checked-out uv 0.13.6 source leaves existing entries in place for --allow-existing and directly writes activation scripts, .gitignore, pyvenv.cfg, and, for Python below 3.10, _virtualenv.py/.pth. Those writes follow destination-file symlinks and can modify files outside the environment, establishing a correctness bug. The companion directory-link report and historical installer/Git fixes concern distinct paths; there is no evidence that this is a regression of those fixes or a confirmed duplicate.",
+  "summary": "No confirmed duplicate. astral-sh/uv#23055 is the companion directory-symlink report; astral-sh/uv#5152 and astral-sh/uv#5165 provide the closest file-write precedent. astral-sh/uv#21857 and astral-sh/uv#21891 cover analogous truncation in Git checkout markers.",
+  "draft_response": "Your example matches the current source: `--allow-existing` retains existing entries, and the generated-file writes follow destination symlinks. This is a bug. The same write pattern also affects `pyvenv.cfg`; `_virtualenv.py` and `_virtualenv.pth` are generated only for Python below 3.10 in this version.\n\nThis is related to astral-sh/uv#23055, which concerns linked parent directories. The next step here is to make generated-file replacement leave symlink targets unchanged and add regression coverage for the external file's contents. astral-sh/uv#5165 provides a precedent for atomic replacement in the wheel installer."
+}
