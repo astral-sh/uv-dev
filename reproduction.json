@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04.5 x86_64, downloaded and unpacked ghcr.io/astral-sh/uv:0.13.6 into a temporary directory. Running `unshare --user --map-root-user chroot \"$rootfs\" /uv --version` succeeded, reporting uv 0.13.6. Bypassing the entrypoint with `unshare --user --map-root-user chroot \"$rootfs\" sh -c '/uv --version'` exited 127: `failed to run command 'sh': No such file or directory`. Thus clearing the entrypoint does not supply GitLab's required shell, supporting the documentation correction. This reproduces shell startup failure, not a complete GitLab job. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, and limitations; no checkout or GitHub changes were made."
+}
