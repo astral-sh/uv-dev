@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19812,
+        "title": "Avoid evaluating virtual environment prompts",
+        "url": "https://github.com/astral-sh/uv/pull/19812",
+        "state": "open",
+        "reason": "Canonical match: this draft PR predates the report and explicitly addresses command execution when sourcing custom prompts. Its diff adds fish-specific backslash and single-quote escaping at both prompt substitutions. It remains unmerged and leaves environment-path escaping unchanged."
+      },
+      {
+        "kind": "issue",
+        "number": 9424,
+        "title": "Please comment on CVE-2024-53899 and virtualenv activation scripts",
+        "url": "https://github.com/astral-sh/uv/issues/9424",
+        "state": "closed",
+        "reason": "Historical activation-script command-injection discussion. A maintainer attributed fish protection to astral-sh/uv#8984, which escaped environment paths rather than custom prompts. This does not establish that the current prompt bug was previously fixed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8984,
+        "title": "Allow apostrophe in venv name",
+        "url": "https://github.com/astral-sh/uv/pull/8984",
+        "state": "merged",
+        "reason": "Released in uv 0.5.3, this applies POSIX apostrophe escaping to VIRTUAL_ENV_DIR and closes astral-sh/uv#8947. Its diff leaves VIRTUAL_PROMPT untouched and does not implement fish-specific backslash escaping."
+      },
+      {
+        "kind": "issue",
+        "number": 8947,
+        "title": "Uv fails to activate environment in folder with apostrophe",
+        "url": "https://github.com/astral-sh/uv/issues/8947",
+        "state": "closed",
+        "reason": "Earlier Fedora report involving an apostrophe in a directory name, resolved by astral-sh/uv#8984. Its reproduction sources the POSIX activator and does not exercise fish custom prompts or backslash-plus-quote paths."
+      },
+      {
+        "kind": "issue",
+        "number": 23058,
+        "title": "Bash prompt values can change meaning under older compatibility modes (POSIX)",
+        "url": "https://github.com/astral-sh/uv/issues/23058",
+        "state": "open",
+        "reason": "Companion uv 0.13.6 report of custom-prompt command execution when sourcing Bash/Zsh activation scripts. It shares unescaped prompt generation but involves POSIX double-quoted assignments. The older astral-sh/uv#19812 covers both prompt families."
+      }
+    ],
+    "search_scope": "Searched open/closed issues and open/closed/merged PRs for prompt execution and path quoting separately, using activate.fish, fish prompt/path, CVE-2026-113732, VIRTUAL_PROMPT, single quote, apostrophe, backslash, unescaped, command injection/execution, activation escaping/quoting, and area:environments. Removed platform/version constraints and checked historical fixes and release source. Supplemented empty PR keyword results with a paginated all-state PR listing. Inspected candidate comments and diffs, followed the astral-sh/uv#9424 → astral-sh/uv#8984 → astral-sh/uv#8947 chain, and inspected the cited upstream commit. Ruled out astral-sh/uv#19798 (printed activation-command quoting), astral-sh/uv#19631 and astral-sh/uv#19856 (relocatable cwd/syntax), and astral-sh/uv#10986 (wrong activation script)."
+  },
+  "type": "duplicate",
+  "type_reason": "The explicit --prompt reproduction matches open draft astral-sh/uv#19812, which predates this issue by several months and adds fish-specific literal quoting at the same interpolation sites. Duplicate takes precedence over the source-confirmed correctness bug. The broader path claim needs separate coverage because that PR leaves path escaping unchanged. Historical path fixes do not establish a regression of a previously fixed prompt bug.",
+  "summary": "Open draft astral-sh/uv#19812 already tracks the fish prompt bug. Historical path fixes and the companion Bash/Zsh report provide context; fish path handling needs separate verification.",
+  "draft_response": "Your --prompt example matches the bug already being addressed in the open draft astral-sh/uv#19812. The current generator inserts the prompt directly into fish single-quoted strings; that PR adds fish-specific escaping for quotes and backslashes, but has not merged. Please continue the discussion there with this reproduction and the upstream path case. The path case needs separate coverage because the PR currently leaves environment-path escaping unchanged."
+}
