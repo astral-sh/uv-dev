@@ -1760,7 +1760,7 @@ fn create_venv_allow_existing_symlink_bin() -> Result<()> {
       cause: Directory link at .venv/[BIN] points outside the virtual environment
     ");
 
-    assert_link_target(&scripts, &outside);
+    assert_link_target(&scripts, dunce::simplified(outside.path()));
     assert_eq!(fs_err::read_dir(outside.path())?.count(), 0);
     context
         .venv
@@ -1806,7 +1806,7 @@ fn create_venv_allow_existing_symlink_inside_environment() -> Result<()> {
         .args(["--allow-existing", "--python", "3.12"])
         .assert()
         .success();
-    assert_link_target(&scripts, &target);
+    assert_link_target(&scripts, dunce::simplified(target.path()));
     target.child("activate").assert(predicate::path::is_file());
     Ok(())
 }
