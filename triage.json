@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 3426,
+        "title": "🐛 fix(create): reject ambiguous venv paths",
+        "url": "https://github.com/pypa/virtualenv/pull/3426",
+        "state": "merged",
+        "reason": "The reporter-linked commit belongs to pypa/virtualenv#3426, merged on 2026-10-17. It fixes line boundaries in destination paths becoming pyvenv.cfg directives through stdlib configuration readback and merging. This is closely analogous, but uv writes prompt values directly and does not use that readback mechanism; the upstream fix does not fix uv."
+      },
+      {
+        "kind": "issue",
+        "number": 9424,
+        "title": "Please comment on CVE-2024-53899 and virtualenv activation scripts",
+        "url": "https://github.com/astral-sh/uv/issues/9424",
+        "state": "closed",
+        "reason": "Earlier discussion of virtualenv-derived injection behavior in uv. Maintainer comments identify activation-script path quoting and reference astral-sh/uv#8984 and astral-sh/uv#9466. Those shell-script problems differ from newline-created pyvenv.cfg directives, so this is historical context rather than a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8984,
+        "title": "Allow apostrophe in venv name",
+        "url": "https://github.com/astral-sh/uv/pull/8984",
+        "state": "merged",
+        "reason": "Merged on 2024-11-15 to fix astral-sh/uv#8947. Its diff escapes virtual-environment paths inserted into activation scripts and tests an apostrophe-containing path. It does not validate prompt values or change pyvenv.cfg serialization, so the reported behavior is not established as a regression of this fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separately investigated explicit --prompt newlines, directory-derived prompts, and unintended system/user-site visibility. Literal searches included pyvenv.cfg, include-system-site-packages, ENABLE_USER_SITE, newline, and CVE-2026-113715; conceptual searches included injection, escaping, sanitization, special characters, line breaks/boundaries, readback, and venv isolation, without Fedora or version restrictions. Fix-oriented checks included closed issues, merged-PR searches, configuration-writer commit history, and linked discussions and diffs. PR keyword searches returned no hits, so referenced PRs and file history were inspected directly. Ruled out astral-sh/uv#15627 and astral-sh/uv#12739 as duplicate evidence because their discussions concern external pip or unconfirmed isolation claims; astral-sh/uv#13456 concerns prompt formatting; astral-sh/uv#20445 validates UTF-8 paths, not line boundaries. Followed astral-sh/uv#9424 through astral-sh/uv#8947, astral-sh/uv#8984, and the closed, unmerged astral-sh/uv#9466. Also inspected prompt history in astral-sh/uv#1445 and astral-sh/uv#1570, newline-containing activation coverage in astral-sh/uv#19740, and the reporter-linked upstream commit and pypa/virtualenv#3426. No existing uv tracker or previous fix for the same configuration-writing defect was found."
+  },
+  "type": "bug",
+  "type_reason": "The checkout confirms a correctness defect: write_cfg emits values verbatim, prompt is appended after include-system-site-packages, and uv's configuration parser accepts a later duplicate directive. Explicit prompts and current-directory-derived prompts can therefore introduce configuration entries that were not requested. No same-problem uv tracker or previous fix was found. Earlier activation-script fixes and the upstream virtualenv readback fix address different mechanisms. Runtime reproduction was not performed; source evidence is sufficient for bug classification.",
+  "summary": "No uv duplicate found. pypa/virtualenv#3426 fixes analogous configuration injection through a different readback path; astral-sh/uv#9424 and astral-sh/uv#8984 concern earlier activation-script quoting bugs.",
+  "draft_response": "The source confirms the configuration-writing bug you describe: uv writes `prompt` verbatim after `include-system-site-packages = false`, allowing embedded newlines to introduce another directive. The activation-script fix in astral-sh/uv#8984 does not cover this file.\n\nOne detail about directory names: plain `uv venv` and `--prompt .` use the current directory's name as the configured prompt; an explicit destination without `--prompt` leaves that field unset.\n\nThe next step is to prevent configuration values from introducing extra directives and add regression coverage for explicit and directory-derived prompts, checking both the generated configuration and Python's site-package isolation."
+}
