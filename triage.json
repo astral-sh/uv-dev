@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18899,
+        "title": "Recompute relative `exclude-newer` values during `uv tree --outdated`",
+        "url": "https://github.com/astral-sh/uv/pull/18899",
+        "state": "merged",
+        "reason": "Fixed the same command using a stale cutoff from the lockfile by evaluating relative cooldowns against the current time. Merged April 7, 2026; it does not expose releases that remain inside the cooldown, so this report does not establish a regression of that fix."
+      },
+      {
+        "kind": "issue",
+        "number": 19864,
+        "title": "Structured bypasses for exclude-newer",
+        "url": "https://github.com/astral-sh/uv/issues/19864",
+        "state": "open",
+        "reason": "A commenter explicitly requests a warning when exclude-newer ignores a newer version. The main discussion concerns bypass policies for explicit upgrades and dependency constraints, rather than displaying excluded versions and eligibility dates in tree output."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18952,
+        "title": "Improve `--exclude-newer` hints",
+        "url": "https://github.com/astral-sh/uv/pull/18952",
+        "state": "merged",
+        "reason": "Merged April 15, 2026, adding resolver-failure hints with the latest excluded version satisfying a requirement and its publication date. This provides related diagnostic precedent, but does not annotate successful tree --outdated output or calculate cooldown expiry."
+      },
+      {
+        "kind": "issue",
+        "number": 18220,
+        "title": "Include earliest valid date in `exclude-newer` resolver hint",
+        "url": "https://github.com/astral-sh/uv/issues/18220",
+        "state": "closed",
+        "reason": "Requested upload-date information to help users adjust a cutoff that prevents resolution; closed by astral-sh/uv#18952. It shares the request for actionable timing information, but addresses unsatisfiable resolution rather than planning upgrades from a dependency tree."
+      },
+      {
+        "kind": "issue",
+        "number": 18819,
+        "title": "Should `uv tool list --outdated` also support the flag `--exclude-newer`",
+        "url": "https://github.com/astral-sh/uv/issues/18819",
+        "state": "closed",
+        "reason": "Requested that outdated-tool reporting honor cooldowns, which a maintainer supported and astral-sh/uv#18861 implemented. It concerns filtering unavailable upgrades in a different command, rather than additionally revealing filtered releases."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18861,
+        "title": "Respect `--exclude-newer` in `uv tool list --outdated`",
+        "url": "https://github.com/astral-sh/uv/pull/18861",
+        "state": "merged",
+        "reason": "Implemented astral-sh/uv#18819 on April 7, 2026. It establishes intentional cutoff-aware outdated reporting for tools, but adds neither excluded-version annotations nor eligibility dates."
+      }
+    ],
+    "search_scope": "Decomposed the report into missing excluded-release visibility and requested version/eligibility-date annotations. Used authenticated gh to search open and closed issues and open, closed, and merged PRs, combining tree/outdated/exclude-newer with cooldown, excluded, warning, ignored, installable, eligible, display, notification, latest, and date/hint; searches omitted incidental package names and versions. Followed reporter links, comments, timelines, and fixing-PR chains, and inspected current selection/rendering code and existing tests. PR keyword searches returned no matches despite known linked PRs, so PR discovery relied on those chains and is not exhaustive; several final expanded searches were rate-limited. Ruled out astral-sh/uv#16485 (debug logging for failed locking) and astral-sh/uv#22944 (audit policy for quarantined security fixes) as duplicates. The stale-cutoff discussion in astral-sh/uv#18708 leads to astral-sh/uv#18899, a different fixed behavior."
+  },
+  "type": "enhancement",
+  "type_reason": "The request adds visibility into releases intentionally excluded from the latest eligible-version lookup, plus cooldown timing information. Source and existing tests confirm cutoff-aware selection; the report does not establish an incorrect eligible version, stale cutoff, or regression. The related discussions cover different commands, resolver failures, or bypass policies, and none inspected tracks this tree annotation closely enough to centralize the request.",
+  "summary": "No duplicate found among the inspected items. astral-sh/uv#18899 covers relative-cutoff correctness; astral-sh/uv#19864 discusses exclusion warnings and bypasses; astral-sh/uv#18220 and astral-sh/uv#18952 cover dated resolver hints; astral-sh/uv#18819 and astral-sh/uv#18861 establish cooldown-aware tool reporting.",
+  "draft_response": "Your example matches the current behavior: `uv tree --outdated` filters releases through `exclude-newer` before choosing the version shown as `latest`, and does not retain excluded-release information for display. The relative-cutoff fix in astral-sh/uv#18899 addresses a different problem.\n\nShowing the newest excluded release and when it clears a relative cooldown would be an enhancement. The warning discussion in astral-sh/uv#19864 is related, but this tree-specific request can remain separate. The next step is to settle the annotation and its behavior for fixed cutoffs, which do not expire automatically. Any date should describe cooldown eligibility rather than guarantee that the full dependency graph can resolve."
+}
