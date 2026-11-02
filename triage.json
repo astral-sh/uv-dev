@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9424,
+        "title": "Please comment on CVE-2024-53899 and virtualenv activation scripts",
+        "url": "https://github.com/astral-sh/uv/issues/9424",
+        "state": "closed",
+        "reason": "Historical activation-script command-injection discussion. Maintainers identified environment-path quoting fixes and treated quoting defects as bugs. Those fixes did not escape prompt values, so this is related context rather than a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8984,
+        "title": "Allow apostrophe in venv name",
+        "url": "https://github.com/astral-sh/uv/pull/8984",
+        "state": "merged",
+        "reason": "Merged on 2024-11-15 to fix astral-sh/uv#8947. Its diff escapes VIRTUAL_ENV_DIR for single-quoted assignments but leaves VIRTUAL_PROMPT interpolation unchanged. The current prompt bug falls outside that fix."
+      },
+      {
+        "kind": "issue",
+        "number": 23054,
+        "title": "Venv configuration readback can reinterpret path boundaries",
+        "url": "https://github.com/astral-sh/uv/issues/23054",
+        "state": "open",
+        "reason": "Another uv 0.13.6 report involving --prompt and directory names. It concerns newlines injecting pyvenv.cfg directives and changing isolation; this report concerns shell evaluation. The output formats and required fixes differ."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3418,
+        "title": "🐛 fix(bash): preserve literal prompts in supported shells",
+        "url": "https://github.com/pypa/virtualenv/pull/3418",
+        "state": "merged",
+        "reason": "Upstream PR corresponding to the reporter's linked commit, merged on 2026-10-17. It addresses PS1 rendering under Bash compatibility levels, promptvars, and POSIX mode. It informs a rendering fix but does not fix uv's separate source-time interpolation."
+      }
+    ],
+    "search_scope": "Used authenticated gh searches across astral-sh/uv open and closed issues and open, closed, and merged PRs. Separately searched source-time substitution, directory-derived prompts, and compatibility modes using CVE-2026-113723, command substitution, PS1, VIRTUAL_ENV_PROMPT, BASH_COMPAT, promptvars, Bash/POSIX, backticks, dollars, and backslashes. Conceptual searches covered activation injection, command execution, prompt escaping, literal prompts, directory quoting, and special characters, including area:environments. Fix-oriented searches covered activation, prompt, and escaping PRs; inspected 1,000 recent PR titles and followed astral-sh/uv#9424 through astral-sh/uv#8947, astral-sh/uv#8984, and astral-sh/uv#9466, plus the upstream commit and pypa/virtualenv#3418. Inspected comments and ruled out astral-sh/uv#13456 (prompt formatting), astral-sh/uv#12662 (SCRIPT_PATH leakage), astral-sh/uv#10498 (unset OSTYPE), and astral-sh/uv#5950 (printed Windows activation paths). No same-problem uv tracker or prompt fix was found."
+  },
+  "type": "bug",
+  "type_reason": "The current generator inserts explicit prompt text unescaped into double-quoted activation code. A harmless check of the checkout's template in Bash 5.2 confirmed command substitution during activation; a separate check confirmed directory-derived text is evaluated when rendering PS1. These are correctness defects regardless of security classification. The historical path-quoting fix did not cover prompt interpolation, so this is not an established regression of that fix. No existing uv issue or PR was found that tracks the same problem.",
+  "summary": "No uv duplicate found. astral-sh/uv#9424 and astral-sh/uv#8984 document earlier path quoting; astral-sh/uv#23054 concerns a different prompt serialization defect. Upstream pypa/virtualenv#3418 addresses compatibility-sensitive prompt rendering.",
+  "draft_response": "Your `--prompt` example exposes a bug in the current activation template: the value is inserted unescaped into double-quoted shell code, allowing command substitution while sourcing it, including in ordinary Bash. The path-quoting fix in astral-sh/uv#8984, discussed in astral-sh/uv#9424, does not cover this value.\n\nDirectory-derived prompts differ: `basename` preserves the text during activation, but Bash can evaluate it when rendering `PS1`. The next step is to fix both script-generation quoting and prompt rendering, with regression coverage for explicit prompts, directory names, and Bash compatibility/POSIX settings. Upstream pypa/virtualenv#3418 is relevant to rendering, but does not by itself address uv's source-time interpolation."
+}
