@@ -6,6 +6,8 @@ Classification: bug
 
 ## Summary
 
+The checkout now contains a focused fix and updated regressions for both console entrypoints and rewritten wheel data scripts. Tabs select the existing POSIX shell wrapper; both launch paths pass focused debug-profile integration tests.
+
 The reported console-entrypoint launch failure is reproducible with the installed uv 0.13.6 on Ubuntu 24.04.5 LTS, Linux x86_64, and CPython 3.12.3. Creating a virtual environment under a short path containing a literal tab and installing a local wheel both succeed, but executing its generated console launcher fails with ENOENT. Bash reports `cannot execute: required file not found` and exits 127. The report describes the same failure on Fedora Linux with different shell diagnostic wording.
 
 The affected environment is non-relocatable, its interpreter path contains a tab but no space, and its complete shebang line is at most 127 bytes. The reproduced shebang was 48 bytes. The same launcher runs successfully when passed explicitly to the environment's Python. A plain-path environment works, and an environment whose path contains both a space and a tab receives a working `/bin/sh` wrapper.
@@ -16,11 +18,11 @@ The title suggests shell interpretation, while the supplied reproduction demonst
 
 Confirmed launcher-generation bug. A console entrypoint installed successfully into a valid environment should execute using that environment's Python. The observed failure is isolated to the generated direct shebang; the Python interpreter, installed module, and entrypoint body work.
 
-The implementation selects the POSIX shell wrapper for spaces, long shebangs, or relocatable environments, but omits tabs. The observed generated files and successful space-plus-tab control agree with this condition. The report does not identify a last known-good uv version or claim a regression after an upgrade. Historical astral-sh/uv#2097 addressed spaces and long paths; its omission of tabs does not establish that tab paths previously worked.
+Before the fix, the implementation selected the POSIX shell wrapper for spaces, long shebangs, or relocatable environments, but omitted tabs. The observed generated files and successful space-plus-tab control agree with this condition. The report does not identify a last known-good uv version or claim a regression after an upgrade. Historical astral-sh/uv#2097 addressed spaces and long paths; its omission of tabs does not establish that tab paths previously worked.
 
 ## Reproduction
 
-**Outcome: reproducible.** No additional project configuration is needed for the reported case.
+**Outcome: reproducible before the fix.** No additional project configuration is needed for the reported case. The following observations describe the original installed uv 0.13.6 reproduction; checkout validation is recorded under Fix.
 
 ### Environment and isolation
 
@@ -51,7 +53,7 @@ def main():
     return 0
 ```
 
-The complete fixture generator and explicit scenario invocations are retained in `/tmp/uv23057-aW1el1z4/reproduce.py`; captured command arguments, exit codes, stdout, and stderr are in `/tmp/uv23057-aW1el1z4/results.json`. The wheel and generated launchers are retained alongside them. To rerun the complete harness, copy `reproduce.py` into a fresh short temporary directory and execute it with `python3`; it discovers the installed uv on `PATH` and places its files beside the script.
+The original reproduction wrote its fixture generator, wheel, launchers, and results under `/tmp/uv23057-aW1el1z4`. Those temporary artifacts are not present in the fix environment. The commands and observations below preserve the findings; the two checked-in integration tests provide executable fixtures for the fix.
 
 With that wheel and the isolated environment described above, the minimal commands are equivalent to the following Bash invocations from the temporary directory. `$'\t'` denotes a literal tab; every path is passed as one argument.
 
@@ -96,17 +98,20 @@ The space-plus-tab control is relevant because the space independently selects t
 
 ### Existing test coverage
 
-The relevant test setup and assertions were read. No short, tab-only console-entrypoint regression case was found in the inspected installer integration tests or the shebang unit test. Searches also covered `crates/uv/tests/` and `crates/uv-client/tests/it/` for shebang and tab-path coverage.
+The initial investigation found no short, tab-only console-entrypoint regression case in the inspected tests. Searches covered `crates/uv/tests/` and `crates/uv-client/tests/it/`. Subsequently, astral-sh/uv-dev#3064 added two integration tests asserting the undesirable behavior. Both are retained and updated by this fix.
+
+- `crates/uv/tests/pip_install/pip_install.rs`, `install_console_script_in_tab_path` and `install_wheel_script_in_tab_path`: now snapshot successful direct execution and the generated shell wrapper, retain explicit-Python execution checks, and assert that spaces and excessive path length cannot mask the tab condition. Their Linux gates and the module's `test-python`/`test-pypi` gates remain intact.
 
 - `crates/uv-install-wheel/src/wheel.rs`, `test_shebang`: checks direct shebangs, space-containing paths, relocation, Windows, quotes, and long paths; no tab case.
 - `crates/uv/tests/pip_install/pip_install.rs`, `install_wheel_script_with_shell_launcher_preserves_encoding_cookie`: creates `venv with spaces`, installs a wheel data script with CRLF and a Latin-1 declaration, directly executes it, and snapshots successful `café` output. This tests an already-selected shell wrapper and a wheel data script, not a generated console entrypoint under a short tab-only path.
 - In the same integration module, `install_ascii_wheel_script_in_non_ascii_environment` executes an ASCII-declared wheel data script in `café env` and snapshots `ok`; the embedded space selects the wrapper.
 - In the same integration module, `install_relocatable` installs a console entrypoint, verifies `Hello world!` before and after moving the environment, and checks a Unix symlink. It explicitly enables relocation and does not test the missing tab trigger.
 
-These repository tests were inspected, not executed. The three targeted environments and direct-interpreter control above were executed using the installed uv. No builds or checkout modifications were required.
+During the original reproduction, these repository tests were inspected rather than executed, and the three targeted environments and direct-interpreter control used the installed uv. The subsequent fix validation uses the checkout's debug build, as detailed below.
 
 ## Related
 
+- astral-sh/uv-dev#3064 — Parent regression pull request. Adds the console-entrypoint and wheel-data-script tab-path tests; both originally asserted `NotFound` and now assert successful execution.
 - astral-sh/uv#2076 — Support paths with spaces in launchers (closed; issue). Historical counterpart: POSIX console launchers failed because the kernel split interpreter paths containing spaces. It requested the shell-wrapper fallback, implemented by astral-sh/uv#2097. Its space-path case was fixed; the newly reported tab condition remains outside that fix.
 - astral-sh/uv#2097 — Wrap unsafe script shebangs in `/bin/sh` (merged; pull request). Merged on 2024-02-29 and closed astral-sh/uv#2076. The diff introduced the same fallback predicate still present today: shebang length over 127 bytes or a literal space. Tabs were never included, establishing an omitted case rather than a regression of tab support.
 - astral-sh/uv#22323 — `uv run --with` packages invisible to project entrypoints when the venv path forces the /bin/sh shebang wrapper (open; issue). Adjacent issue involving the same generated wrapper. Its report and follow-up describe valid wrappers for long or space-containing paths being skipped when copying entrypoints into an ephemeral environment. Here, a short tab-containing path does not receive a wrapper at all and the launcher cannot start; these require different fixes.
@@ -114,7 +119,7 @@ These repository tests were inspected, not executed. The three targeted environm
 
 ## Supporting evidence
 
-- `crates/uv-install-wheel/src/wheel.rs:128`, `format_shebang`, computes the full shebang length as `2 + executable.len() + 1`. Its fallback condition at line 141 is `shebang_length > 127 || executable.contains(' ') || relocatable`. A tab alone does not select the wrapper. The observed launcher matches the direct-shebang branch.
+- `crates/uv-install-wheel/src/wheel.rs:128`, `format_shebang`, computes the full shebang length as `2 + executable.len() + 1`. Before the fix, its fallback condition was `shebang_length > 127 || executable.contains(' ') || relocatable`. A tab alone did not select the wrapper, matching the original observed launcher. The fix changes the character check to `executable.contains([' ', '\t'])`.
 - `crates/uv-install-wheel/src/wheel.rs:385` connects `format_shebang` to generated console entrypoints.
 - The wrapper branch single-quotes the interpreter and calls `escape_posix_for_single_quotes` from `crates/uv-shell/src/shlex.rs:33`. The working space-plus-tab control confirms that a tab can be represented correctly in this wrapper. It does not establish behavior for every possible destination string.
 - The historical diff of astral-sh/uv#2097 introduced the literal-space and length checks without a tab check. It merged on 2024-02-29 and was also identified as the fix for astral-sh/uv#1466.
@@ -135,9 +140,29 @@ The strongest excluded matches differ in the failure mechanism:
 
 Searches covered both the literal tab/error report and the title's broader shell-syntax claim. Conceptual searches used whitespace, special characters, launcher quoting, escaping, and command substitution; searches using source identifiers and historical fixes were assessed separately. Searches were not restricted to Fedora, a package name, or uv 0.13.6. PR keyword searches returned no results even for known historical fixes, so the handoff also relies on direct linked-PR inspection and screening the latest 1,000 PRs across states; this is not a claim that every historical PR was enumerated.
 
+## Fix
 
-## Suggested next step and verification limits
+**Outcome: fixed in the checkout.** Only `crates/uv-install-wheel/src/wheel.rs` and `crates/uv/tests/pip_install/pip_install.rs` are modified.
 
-Include literal tabs in POSIX wrapper selection and add a focused Unix console-entrypoint integration regression test in the existing pip-install module. Ensure the full interpreter path contains no spaces, stays below the length fallback threshold, and uses a non-relocatable environment. Execute the installed launcher and verify that it uses the intended environment interpreter. The existing module is gated by both `test-python` and `test-pypi` in `crates/uv/tests/pip_install/main.rs`; a Unix-specific case also needs an appropriate platform gate.
+### Implementation and scope
 
-The reproduction confirms the report's tab-path launch failure on uv 0.13.6 and Linux with Python 3.12.3. Other Python versions, Fedora specifically, and arbitrary shell-syntax execution were not tested. No last known-good version was supplied or compared. No repository tests or builds were run, and no checkout files or GitHub objects were changed. The maintainer handoff and all reproduction artifacts are in temporary directories.
+`format_shebang` now treats a literal tab like a space when selecting the POSIX `/bin/sh` launcher. The existing quoting implementation handles the tab-containing interpreter path. Length-based fallback, relocation, and non-POSIX behavior are unchanged. Both console-entrypoint generation and wheel data-script rewriting call this function, so the single predicate correction fixes both demonstrated manifestations.
+
+The two regressions from astral-sh/uv-dev#3064 retain their local wheel fixtures, installation snapshots, full launcher snapshots, and explicit-Python execution controls. They now require successful direct execution instead of `NotFound`, and expect the quoted shell wrapper. Fixture assertions ensure that the interpreter path has no spaces and its direct shebang would be at most 127 bytes, isolating the tab condition. No new test or feature gate was needed.
+
+Neighboring encoding-cookie, non-ASCII-path, source-decoding, relocation, and shebang-argument tests were inspected. The separate entrypoint producer/consumer in `crates/uv-project-commands/src/run.rs` and its `run_with_overlay_interpreter` integration test were also inspected. The latter covers installed entrypoints copied into an overlay, including relocatable launchers. Its absolute-shell-wrapper recognition limitation is the separate cause described by astral-sh/uv#22323; this change does not expand into that issue. No additional fixture or assertion contradicting this tab-selection fix was identified in that module.
+
+### Validation
+
+Validation used the checkout's unoptimized debug/test profile on Linux with CPython 3.12.16:
+
+1. Before any edits, `cargo test -p uv --test pip_install in_tab_path -- --nocapture` passed both original regressions, which asserted `NotFound`.
+2. After changing only the tests to require successful launch, the same command failed both tests with `Failed to spawn .../tab\tdir/venv/bin/tab-probe: No such file or directory (os error 2)`. Installation still succeeded. This established the expected failure before modifying production code.
+3. After the predicate correction, the same command passed both updated regressions, including generated-file snapshots and direct and explicit-Python execution.
+4. Six existing installer integration tests passed together: `install_crlf_wheel_script_preserves_encoding_cookie`, `install_wheel_script_with_shell_launcher_preserves_encoding_cookie`, `install_ascii_wheel_script_in_non_ascii_environment`, `install_wheel_script_does_not_execute_decoded_interpreter_path`, `install_relocatable`, and `strip_shebang_arguments`. Command: `cargo test -p uv --test pip_install -- pip_install::install_crlf_wheel_script_preserves_encoding_cookie pip_install::install_wheel_script_with_shell_launcher_preserves_encoding_cookie pip_install::install_ascii_wheel_script_in_non_ascii_environment pip_install::install_wheel_script_does_not_execute_decoded_interpreter_path pip_install::install_relocatable pip_install::strip_shebang_arguments --exact`.
+5. `cargo test -p uv --test project run::run_with_overlay_interpreter -- --exact` passed the existing producer/consumer round trip.
+6. `RUSTUP_HOME=/tmp/uv23057-rustup cargo fmt --all` and `git diff --check` succeeded. The supplied toolchain lacked rustfmt and was read-only, so Rust 1.99.0 with rustfmt was installed under a temporary directory for formatting.
+
+No full test suite or release build was run. Fedora and other platforms were not tested; the Linux regressions remain platform-gated. No arbitrary shell-syntax execution or security impact is claimed. No commits, Git configuration changes, or GitHub changes were made.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3067

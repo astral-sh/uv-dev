@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Select the existing POSIX shell wrapper when interpreter paths contain tabs, fixing console entrypoints and rewritten wheel scripts that previously failed to launch. Update both parent regressions to require successful execution and verify the quoted wrapper.",
+  "validation": [
+    "Both updated regressions failed before the production fix and passed afterward.",
+    "Six neighboring installer integration tests passed.",
+    "The overlay-interpreter producer/consumer integration test passed.",
+    "cargo fmt --all completed successfully.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3067"
+}
