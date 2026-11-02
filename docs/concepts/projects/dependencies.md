@@ -252,6 +252,10 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
 ```
 
+Indexes supplied through `UV_INDEX` or `UV_DEFAULT_INDEX` are used for the current resolution but
+are not added to the project or script metadata. Use `--index` or `--default-index` to persist an
+index explicitly.
+
 If the index is already configured, you can select it by name (this feature is in preview):
 
 ```console
