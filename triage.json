@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 9093,
+        "title": "Docs(GitLab): add entrypoint for distroless image",
+        "url": "https://github.com/astral-sh/uv/pull/9093",
+        "state": "merged",
+        "reason": "Added the exact misleading note on December 4, 2024. Its discussion explicitly states that GitLab cannot use the distroless image because it lacks sh. This introduced the documentation defect; it did not correct it."
+      },
+      {
+        "kind": "issue",
+        "number": 9361,
+        "title": "UV on gitlab CICD has some issue",
+        "url": "https://github.com/astral-sh/uv/issues/9361",
+        "state": "closed",
+        "reason": "Shows GitLab failing with a missing sh executable even after entrypoint: [\"\"] was configured. A maintainer recommended a non-distroless image, which resolved the reporter's problem. Closed before the misleading note was added, so it corroborates the failure without tracking this documentation correction."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7054,
+        "title": "ci(docker)!: adjust entrypoint and cmd for inherited images",
+        "url": "https://github.com/astral-sh/uv/pull/7054",
+        "state": "merged",
+        "reason": "Referenced by astral-sh/uv#9093; removed the custom entrypoint from derived images only. It neither supplied a shell in distroless images nor fixed the GitLab note, so this is not a regression of that change."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using GitLab, distroless, entrypoint, shell, the guide anchor, exact missing-executable and unrecognized-subcommand fragments, documentation terminology, and referenced issue numbers. Inspected comments, patches, reference chains, and the GitLab guide's commit history. PR keyword searches returned no results despite known matching merged PRs, so supplemented them with direct PR retrieval and all open PR listings. Ruled out astral-sh/uv#8635 (libc/Python discovery), astral-sh/uv#16432 (publishing documentation), and astral-sh/uv#22542 (unrelated wording corrections). No existing correction was identified."
+  },
+  "type": "bug",
+  "type_reason": "The guide incorrectly implies that clearing the entrypoint makes a distroless image usable by GitLab. Dockerfile builds that image FROM scratch with only uv and uvx, and historical reports confirm the missing-shell failure. This establishes a documentation correctness bug despite the question framing. astral-sh/uv#9361 resolved image-selection support before the note existed; astral-sh/uv#9093 introduced the note rather than fixing it. Neither tracks the requested correction, and no prior fix of this documentation defect was found.",
+  "summary": "astral-sh/uv#9093 introduced the misleading note; astral-sh/uv#9361 confirms that clearing the entrypoint still leaves GitLab without a shell. astral-sh/uv#7054 applies only to derived images.",
+  "draft_response": "You're right: clearing the entrypoint does not make the distroless image usable as a GitLab CI job image, because it contains only uv and uvx and has no shell. astral-sh/uv#9361 confirms the failure, and the discussion in astral-sh/uv#9093 states the same limitation. The note should be removed or replaced with an explicit requirement to use a non-distroless image. For your jobs, use the Python-based image shown immediately above the note."
+}
