@@ -134,6 +134,7 @@ Ok(
             group_requires_python: {},
             requirements: {},
             dependency_groups: {},
+            dependency_group_includes: {},
             constraints: {},
             overrides: {},
             excludes: {},
