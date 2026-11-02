@@ -7,12 +7,19 @@ Classification: question
 ## Summary
 
 The reporter uses uv 0.13.1 on Windows with `[tool.uv] preview = true` in
-`pyproject.toml` and says the setting silently has no effect. They infer that
+`pyproject.toml` and initially reported that the setting silently had no effect. They infer that
 `preview` was renamed to `preview-features` and ask for an error when using
 the old name. After deliberately adding `asdf = true`, `uv sync` warns
 about an unknown field and lists both preview settings as accepted fields.
 The report does not name the preview feature or show the expected and actual
 behavior that led to the original observation.
+
+The reporter now says the setting works after retrying (November 2, 2026,
+comment ID 6571335182). They do not know what caused the earlier observation
+and provide no retry version, platform, command, or configuration changes.
+This is a reporter-confirmed successful retry, not evidence of a particular
+fix or release resolving a bug. They leave the issue open for possible
+discussion of the setting's future and are otherwise comfortable with closure.
 
 Runtime reproduction with the installed uv 0.13.5 on Linux confirms that
 `uv sync` accepts `preview = true` without an error and that an invalid `asdf`
@@ -23,8 +30,8 @@ release, while the newer name is documented. In the runtime checks, both true
 settings enabled identical preview flags; `preview = false` enabled none.
 The legacy setting also suppressed the experimental `uv check` warning.
 
-The assertion that the setting silently does nothing is not established for
-the reporter's unspecified feature. Some preview features are consulted before
+The original no-effect observation remains unexplained, and the reporter
+no longer reproduces it on retry. Some preview features are consulted before
 configuration is loaded, but the report does not identify enough behavior to
 connect it to that known limitation. Local runtime checks covered Linux and
 uv 0.13.5, not Windows or uv 0.13.1. Maintainer EliteTK separately reports
@@ -63,13 +70,21 @@ also reports that parse failures discard other uv settings, but the recorded
 reproduction does not test that broader claim. The supplied discussion has
 no substantive maintainer decision on this warning-versus-error objection.
 
-## Draft response
+## Prior draft response (superseded by discussion)
+
+Retained from the earlier handoff. The reporter has since retried successfully;
+the request below is no longer an outstanding next step unless the symptom recurs.
 
 `preview = true` is still supported in uv 0.13.1 and resolves the same way as `preview-features = true`. astral-sh/uv#18437 added the newer setting while retaining the old one for compatibility, so both names in the parser's expected-field list are intentional. In a minimal project tested with uv 0.13.5 on Linux, `uv sync` accepted the legacy setting and `--show-settings` showed the same enabled preview flags for both spellings.
 
 Could you share which preview feature you expected to enable, along with a minimal configuration, command, and expected versus actual output? Some features take effect before configuration files are loaded; missing warnings for that case are tracked in astral-sh/uv#19825. A concrete example will let us determine whether that applies here.
 
 ## Classification
+
+Classification remains question. The reporter's successful retry further
+supports that there is no established active correctness defect. Remaining
+discussion concerns the legacy setting's future, without a concrete new
+feature request or confirmed regression.
 
 The premise that preview no longer exists is contradicted by uv 0.13.1 source and the historical discussion on astral-sh/uv#18437: it remains supported, intentionally appears in the schema, and resolves like preview-features = true. The report does not identify the feature or observable behavior behind 'silently doing nothing', and no separate correctness defect or regression is established. The related early-loading issues cannot be treated as duplicates without that information.
 
@@ -85,14 +100,19 @@ issue. No historical fix has been shown to have regressed.
 
 **Outcome: reproducible**, specifically the absence of an error for
 `preview = true` and the unknown-field diagnostic naming both settings.
-These are intentional compatibility behavior. The separate assertion that
-an unnamed preview feature has no effect remains unverified.
+These are intentional compatibility behavior. The original assertion that
+an unnamed preview feature has no effect was never independently reproduced;
+the reporter now reports that the setting works on retry. No additional local
+runtime checks were performed for this update.
 
 ### Environment and isolation
 
 - Reported: Windows, uv 0.13.1; Python version and affected preview feature
   were not supplied. No last known-good version or explicit upgrade sequence
   was provided.
+- Reporter retry: on November 2, 2026, the reporter says the setting works.
+  The retry environment, command, and any intervening changes are unspecified;
+  do not assume the retry used uv 0.13.1 or the original configuration.
 - Maintainer-reported: EliteTK tested `preview = true` successfully on uv
   0.13.1. Platform, Python version, fixture, and commands were not provided;
   this is separate corroboration, not an additional local reproduction.
@@ -179,7 +199,7 @@ The following diagnostic identified unknown field `asdf` and listed both
 The source and release history support intentional compatibility, rather than
 removal of the old field. The documented early-loading limitation remains a
 possible explanation only if the reporter supplies an affected feature.
-To investigate that claim, request the specific feature, minimal project and
+If that symptom recurs, request the specific feature, minimal project and
 configuration (including any `uv.toml`), exact command, expected versus actual
 output, and Python version. The observed Linux result does not establish
 Windows-specific behavior or a defect in uv 0.13.1.
@@ -280,23 +300,23 @@ listing supplied additional candidates.
 
 ## Maintainer next step
 
-EliteTK has clarified that the legacy setting works in tests on uv 0.13.1
-and that `preview-features` is the recommended setting. No further
-clarification is pending on that point; a future removal policy remains
-unspecified. The question classification remains supported by this report
-and the recorded source and runtime evidence. Changing to the recommended
-setting is not an established workaround for the reporter's unexplained
-no-effect observation.
+The reporter no longer reproduces the no-effect symptom and is comfortable
+with closure unless maintainers want to discuss the future of `preview`.
+Maintainers can consider closing the question as answered or retaining it
+for that policy discussion. This is the reporter's stated preference, not a
+recorded maintainer closure decision; no GitHub action was taken here.
 
-The reporter's objection about nonfatal warnings also has no substantive
-resolution in the supplied discussion. Consider diagnostic severity for
-genuinely invalid configuration with astral-sh/uv#22951, separately from the
-global preview option. The existing draft above predates these clarifications
-and is retained as context, not as a recommendation to repeat it.
+EliteTK's recommendation remains `preview-features`, while the legacy setting
+continues to work in the examined versions. No future removal policy or fix
+for the original observation has been established. Diagnostic severity for
+genuinely invalid configuration is a separate topic in astral-sh/uv#22951.
+The earlier draft is retained only as historical context and is superseded
+by the discussion.
 
-Further investigation of the no-effect claim depends on the reporter
-identifying the preview feature and supplying minimal configuration, the exact
-command, and expected versus actual behavior. Compare any such example with
-astral-sh/uv#19825 before assigning a duplicate or bug classification. The
-follow-up does not change the current question classification or the recorded
-reproduction findings.
+No further reproduction information is needed for the now-successful retry.
+If the no-effect symptom recurs, obtain the affected preview feature, exact
+version, minimal configuration, command, and expected versus actual output.
+Compare that evidence with astral-sh/uv#19825 before assigning a duplicate
+or bug classification. Preserve the existing local reproduction results as
+evidence of accepted settings and diagnostic behavior, not a reproduced
+failure of the legacy toggle.
