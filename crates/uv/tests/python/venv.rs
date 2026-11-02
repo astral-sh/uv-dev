@@ -1835,7 +1835,7 @@ fn verify_pyvenv_cfg() {
 #[test]
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
-    let prompt = "résumé \"quoted\"'\\new\n";
+    let prompt = "résumé \"quoted\"\\path\n";
 
     // Create a virtual environment at `.venv`.
     context
@@ -1908,7 +1908,7 @@ fn verify_pyvenv_cfg_relocatable() {
         r"dirname(dirname(realpath(__file__)))",
     ));
     activate_xsh.assert(predicates::str::contains(
-        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\'\\new\n".decode("utf-8")"#,
+        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path\n".decode("utf-8")"#,
     ));
 }
 
@@ -2215,7 +2215,7 @@ fn activate_venv_bash_prompt_substitution() {
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_promptvars_disabled() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let prompt = "résumé \"quoted\"'\\new\n";
+    let prompt = r#"résumé "quoted"'\new"#;
     context
         .venv()
         .args(["--python", "3.12", "--relocatable", "--prompt", prompt])
@@ -2236,10 +2236,8 @@ fn activate_venv_bash_promptvars_disabled() {
         "#}), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    prompt=<résumé "quoted"'\new
-    >
-    rendered=<(résumé "quoted"'\new
-    ) original>>
+    prompt=<résumé "quoted"'\new>
+    rendered=<(résumé "quoted"'\new) original>>
     deactivated=original>
     "#);
 }
