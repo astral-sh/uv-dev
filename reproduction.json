@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed using installed uv 0.13.6 on Ubuntu 24.04.5 x86_64, Bash 5.2.21, and Python 3.12.3. In an isolated temporary directory, ran `uv venv --offline --no-config --python /usr/bin/python3 --prompt 'x$(touch prompt-executed)y' marker`, then `bash --noprofile --norc -c 'source marker/bin/activate'`. The marker file was absent after creation and present after sourcing, confirming execution before prompt rendering. A harmless printf substitution also reproduced in POSIX mode and with compat42 enabled. Directory-derived prompts behaved differently: substitution remained literal during activation and executed during Bash prompt expansion via `${PS1@P}`. Fedora, Zsh, and older Bash binaries were not tested. Updated $RUNNER_TEMP/issue-context/README.md with commands, observations, test coverage, and limitations. No checkout or GitHub changes were made."
+}
