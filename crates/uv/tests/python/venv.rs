@@ -2177,6 +2177,110 @@ fn create_venv_apostrophe() {
     assert_eq!(stdout.trim(), venv_dir.to_string_lossy());
 }
 
+/// An explicit prompt is embedded in the activation script before Bash sources it.
+#[test]
+#[cfg(target_os = "linux")]
+fn activate_venv_bash_prompt_substitution() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--prompt")
+        .arg("prompt-$(printf substituted)")
+        .assert()
+        .success();
+
+    // The prompt should remain literal, but sourcing executes its command substitution before
+    // any prompt is rendered. See astral-sh/uv#23058.
+    uv_snapshot!(context.filters(), context.external_command("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(indoc! {r#"
+            PS1='original>'
+            source .venv/bin/activate &&
+            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1"
+        "#}), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    VIRTUAL_ENV_PROMPT=prompt-substituted
+    PS1=(prompt-substituted) original>
+    ");
+}
+
+/// Without a venv path, the working directory's name is embedded as the default prompt.
+#[test]
+#[cfg(target_os = "linux")]
+fn activate_venv_bash_current_directory_prompt_substitution() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let project_dir = context.temp_dir.child("prompt-$(printf substituted)");
+    project_dir.create_dir_all()?;
+
+    context
+        .venv()
+        .current_dir(&project_dir)
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+
+    // A directory name should remain literal, but the default prompt executes its command
+    // substitution during activation even without --prompt. See astral-sh/uv#23058.
+    uv_snapshot!(context.filters(), context.external_command("bash")
+        .current_dir(&project_dir)
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(indoc! {r#"
+            PS1='original>'
+            source .venv/bin/activate &&
+            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1"
+        "#}), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    VIRTUAL_ENV_PROMPT=prompt-substituted
+    PS1=(prompt-substituted) original>
+    ");
+
+    Ok(())
+}
+
+/// With an explicit venv path, Bash derives the prompt from its basename during activation.
+#[test]
+#[cfg(target_os = "linux")]
+fn activate_venv_bash_directory_prompt_substitution() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let venv_dir = context.temp_dir.child("prompt-$(printf substituted)");
+    context
+        .venv()
+        .arg(venv_dir.path())
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+
+    // Activation keeps the directory name literal, but rendering PS1 executes its command
+    // substitution instead of displaying it literally. See astral-sh/uv#23058.
+    uv_snapshot!(context.filters(), context.external_command("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(indoc! {r#"
+            PS1='original>'
+            source "$1/bin/activate" &&
+            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}"
+        "#})
+        .arg("bash")
+        .arg(venv_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
+    PS1=(prompt-$(printf substituted)) original>
+    rendered=(prompt-substituted) original>
+    ");
+}
+
 /// Emulate a ksh without ksh93's `${.sh.file}` parameter using a POSIX shell.
 #[test]
 #[cfg(unix)]
