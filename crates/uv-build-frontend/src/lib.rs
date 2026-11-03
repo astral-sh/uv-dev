@@ -31,7 +31,7 @@ use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
-use uv_distribution::BuildRequires;
+use uv_distribution::{BuildRequires, BuildSourceTree};
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
@@ -669,6 +669,31 @@ impl SourceBuild {
                     .map_err(|err| Error::RequirementsResolve(dependency_sources, err.into()))?
             },
         )
+    }
+
+    /// Read the requirements needed to load the backend without creating a build environment.
+    pub async fn static_requirements(
+        source: &BuildSourceTree,
+        package: &PackageName,
+        locations: &IndexLocations,
+        no_sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, Box<Error>> {
+        let (backend, _) = Self::extract_pep517_backend(
+            &source.project_root,
+            &source.project_root,
+            Some(package),
+            locations,
+            no_sources,
+            source.stop_discovery_at.as_deref(),
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await?;
+        Ok(backend.requirements)
     }
 
     /// Extract the PEP 517 backend from the `pyproject.toml` or `setup.py` file.

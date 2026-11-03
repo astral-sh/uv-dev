@@ -48,7 +48,7 @@ use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
-use crate::source::SourceDistributionBuilder;
+use crate::source::{BuildSourceTree, SourceDistributionBuilder};
 use crate::{
     Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist, check_supported_wheel_variant,
 };
@@ -208,6 +208,26 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             ));
         }
         Ok(computed_hashes)
+    }
+
+    /// Materialize the source tree for static build requirement discovery.
+    pub async fn build_source_tree(
+        &self,
+        dist: &SourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<BuildSourceTree, Error> {
+        // Validate the selected sdist's advertised digest on cache hits as well as downloads.
+        let hashes = match dist {
+            SourceDist::Registry(dist) => hashes.with_index_hashes(dist.file.hashes.as_slice()),
+            SourceDist::DirectUrl(_)
+            | SourceDist::Path(_)
+            | SourceDist::GitPath(_)
+            | SourceDist::Directory(_)
+            | SourceDist::GitDirectory(_) => hashes,
+        };
+        self.builder
+            .build_source_tree(dist, hashes, &self.client)
+            .await
     }
 
     /// Either fetch the wheel or fetch and build the source distribution

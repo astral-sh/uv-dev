@@ -10,7 +10,7 @@ pub use metadata::{
     SourcedDependencyGroups,
 };
 pub use reporter::Reporter;
-pub use source::{StaticMetadataDatabase, prune};
+pub use source::{BuildSourceTree, StaticMetadataDatabase, prune};
 pub use variant::supported_variant_properties;
 
 mod archive;

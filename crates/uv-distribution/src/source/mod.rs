@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -206,6 +206,27 @@ async fn fetch_git_source_tree(
     }
 
     Ok(fetch)
+}
+
+fn validate_revision(
+    source: &BuildableSource<'_>,
+    revision: &impl Hashed,
+    hashes: ArchiveHashPolicy<'_>,
+) -> Result<(), Error> {
+    if !revision.satisfies(hashes) {
+        return Err(Error::hash_mismatch(
+            source.to_string(),
+            hashes.digests(),
+            revision.hashes(),
+        ));
+    }
+    Ok(())
+}
+
+/// The source directory of the project and the boundary for looking up its workspace.
+pub struct BuildSourceTree {
+    pub project_root: PathBuf,
+    pub stop_discovery_at: Option<PathBuf>,
 }
 
 /// Fetch and build a source distribution from a remote source, or from a local cache.
@@ -427,6 +448,109 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
     }
 
+    /// Materialize the same source revision used for a build without invoking its backend.
+    pub(crate) async fn build_source_tree(
+        &self,
+        dist: &SourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+        client: &ManagedClient<'_>,
+    ) -> Result<BuildSourceTree, Error> {
+        let source = BuildableSource::Dist(dist);
+        let (project_root, stop_discovery_at) =
+            match SourceLocation::new(&source, self.build_context.cache())? {
+                SourceLocation::Remote {
+                    url,
+                    index,
+                    subdirectory,
+                    ext,
+                    shard,
+                } => {
+                    let _lock = shard.lock().await.map_err(Error::CacheLock)?;
+                    let revision = self
+                        .url_revision(&source, ext, &url, index, &shard, hashes, client)
+                        .await?;
+                    validate_revision(&source, &revision, hashes)?;
+                    let entry = shard.shard(revision.id()).entry(SOURCE);
+                    if !entry.path().is_dir() {
+                        self.heal_url_revision(
+                            &source, ext, &url, index, &entry, revision, hashes, client,
+                        )
+                        .await?;
+                    }
+                    let root = entry.into_path_buf();
+                    (
+                        subdirectory.map_or(root.clone(), |path| root.join(path)),
+                        Some(root),
+                    )
+                }
+                SourceLocation::Archive {
+                    url,
+                    path,
+                    ext,
+                    shard,
+                } => {
+                    let resource = PathSourceUrl {
+                        url: &url,
+                        path,
+                        ext,
+                    };
+                    let _lock = shard.lock().await.map_err(Error::CacheLock)?;
+                    let LocalRevisionPointer { revision, .. } = self
+                        .archive_revision(&source, &resource, &shard, hashes)
+                        .await?;
+                    validate_revision(&source, &revision, hashes)?;
+                    let entry = shard.shard(revision.id()).entry(SOURCE);
+                    if !entry.path().is_dir() {
+                        self.heal_archive_revision(&source, &resource, &entry, revision, hashes)
+                            .await?;
+                    }
+                    let root = entry.into_path_buf();
+                    (root.clone(), Some(root))
+                }
+                SourceLocation::GitArchive(resource) => {
+                    let (shard, _) = self
+                        .git_archive_cache(&source, &resource, hashes, client)
+                        .await?;
+                    let root = shard.entry(SOURCE).into_path_buf();
+                    (root.clone(), Some(root))
+                }
+                SourceLocation::GitDirectory(resource) => {
+                    if hashes.requires_validation() {
+                        return Err(Error::HashesNotSupportedGit(source.to_string()));
+                    }
+                    let fetch = fetch_git_source_tree(
+                        self.build_context.git(),
+                        resource.git,
+                        resource.url.to_url(),
+                        resource.subdirectory,
+                        client.unmanaged.git_http_settings(resource.git.url()),
+                        self.build_context.cache(),
+                        self.reporter
+                            .clone()
+                            .map(|reporter| reporter.into_git_reporter()),
+                    )
+                    .await?;
+                    let root = fetch.path();
+                    (
+                        resource
+                            .subdirectory
+                            .map_or_else(|| root.to_path_buf(), |subdir| root.join(subdir)),
+                        Some(root.to_path_buf()),
+                    )
+                }
+                SourceLocation::Directory(resource) => {
+                    if hashes.requires_validation() {
+                        return Err(Error::HashesNotSupportedSourceTree(source.to_string()));
+                    }
+                    (resource.install_path.to_path_buf(), None)
+                }
+            };
+        Ok(BuildSourceTree {
+            project_root,
+            stop_discovery_at,
+        })
+    }
+
     /// Determine the [`ConfigSettings`] for the given package name.
     fn config_settings_for(&self, name: Option<&PackageName>) -> Cow<'_, ConfigSettings> {
         if let Some(name) = name {
@@ -480,14 +604,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .url_revision(source, ext, url, index, cache_shard, hashes, client)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -613,14 +730,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .url_revision(source, ext, url, index, cache_shard, hashes, client)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -908,14 +1018,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .archive_revision(source, resource, cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -1013,14 +1116,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .archive_revision(source, resource, cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -1665,7 +1761,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // If the revision already exists, return it. There's no need to check for freshness, since
         // everything is scoped to a Git commit.
         if let Some(revision) = RevisionHashes::read_from(&revision_entry)? {
-            if revision.has_digests(hashes) {
+            if revision.has_digests(hashes) && cache_shard.entry(SOURCE).path().is_dir() {
                 return Ok(revision);
             }
         }
@@ -1691,15 +1787,14 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok(revision)
     }
 
-    /// Build a source distribution from a Git repository.
-    async fn git_archive(
+    /// Locate the unpacked archive and its verified hashes in the Git commit's cache shard.
+    async fn git_archive_cache(
         &self,
         source: &BuildableSource<'_>,
         resource: &GitPathSourceUrl<'_>,
-        tags: &Tags,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
-    ) -> Result<BuiltWheelMetadata, Error> {
+    ) -> Result<(CacheShard, RevisionHashes), Error> {
         // Fetch the Git repository.
         let fetch = self
             .build_context
@@ -1725,15 +1820,23 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
+        Ok((cache_shard, revision))
+    }
+
+    /// Build a source distribution from a Git repository.
+    async fn git_archive(
+        &self,
+        source: &BuildableSource<'_>,
+        resource: &GitPathSourceUrl<'_>,
+        tags: &Tags,
+        hashes: ArchiveHashPolicy<'_>,
+        client: &ManagedClient<'_>,
+    ) -> Result<BuiltWheelMetadata, Error> {
+        let (cache_shard, revision) = self
+            .git_archive_cache(source, resource, hashes, client)
+            .await?;
         let source_entry = cache_shard.entry(SOURCE);
 
         // If there are build settings or extra build dependencies, we need to scope to a cache shard.
@@ -1810,40 +1913,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        // Fetch the Git repository.
-        let fetch = self
-            .build_context
-            .git()
-            .fetch(
-                resource.git,
-                client.unmanaged.git_http_settings(resource.git.url()),
-                self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
-            )
+        let (cache_shard, revision) = self
+            .git_archive_cache(source, resource, hashes, client)
             .await?;
-
-        let git_sha = fetch.git().precise().expect("Exact commit after checkout");
-        let cache_shard = self.build_context.cache().shard(
-            CacheBucket::SourceDistributions,
-            WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
-        );
-
-        // Fetch the revision for the source distribution.
-        let revision = self
-            .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
-            .await?;
-
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
-
         let source_entry = cache_shard.entry(SOURCE);
 
         // If the metadata is static, return it.

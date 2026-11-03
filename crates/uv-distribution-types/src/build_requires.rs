@@ -66,6 +66,19 @@ pub struct ExtraBuildRequirement {
     pub match_runtime: bool,
 }
 
+impl ExtraBuildRequirement {
+    /// Check that a runtime-matched requirement leaves its version and source to the runtime resolver.
+    pub fn validate_runtime_source(&self) -> Result<(), ExtraBuildRequiresError> {
+        if self.match_runtime && !self.requirement.source.is_empty() {
+            return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
+                self.requirement.name.clone(),
+                Box::new(self.requirement.source.clone()),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl From<ExtraBuildRequirement> for Requirement {
     fn from(value: ExtraBuildRequirement) -> Self {
         value.requirement
@@ -88,47 +101,20 @@ impl ExtraBuildRequires {
             .map(|(name, requirements)| {
                 let requirements = requirements
                     .into_iter()
-                    .map(|requirement| match requirement {
-                        ExtraBuildRequirement {
-                            requirement,
-                            match_runtime: true,
-                        } => {
-                            // Reject requirements with `match-runtime = true` that include any form
-                            // of constraint.
-                            if let RequirementSource::Registry { specifier, .. } =
-                                &requirement.source
-                            {
-                                if !specifier.is_empty() {
-                                    return Err(
-                                        ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
-                                            requirement.name.clone(),
-                                            Box::new(requirement.source.clone()),
-                                        ),
-                                    );
-                                }
-                            } else {
-                                return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
-                                    requirement.name.clone(),
-                                    Box::new(requirement.source.clone()),
-                                ));
-                            }
-
+                    .map(|mut extra| {
+                        extra.validate_runtime_source()?;
+                        if extra.match_runtime {
                             let dist = resolution
                                 .distributions()
-                                .find(|dist| dist.name() == &requirement.name)
+                                .find(|dist| dist.name() == &extra.requirement.name)
                                 .ok_or_else(|| {
-                                    ExtraBuildRequiresError::NotFound(requirement.name.clone())
+                                    ExtraBuildRequiresError::NotFound(
+                                        extra.requirement.name.clone(),
+                                    )
                                 })?;
-                            let requirement = Requirement {
-                                source: RequirementSource::from(dist),
-                                ..requirement
-                            };
-                            Ok::<_, ExtraBuildRequiresError>(ExtraBuildRequirement {
-                                requirement,
-                                match_runtime: true,
-                            })
+                            extra.requirement.source = RequirementSource::from(dist);
                         }
-                        requirement => Ok(requirement),
+                        Ok::<_, ExtraBuildRequiresError>(extra)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok::<_, ExtraBuildRequiresError>((name, requirements))
