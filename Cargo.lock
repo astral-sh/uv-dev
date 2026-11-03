@@ -7013,6 +7013,7 @@ dependencies = [
  "uv-resolver",
  "uv-scripts",
  "uv-settings",
+ "uv-static",
  "uv-types",
  "uv-warnings",
  "uv-workspace",

@@ -18,6 +18,7 @@ use uv_resolver::{
     Exclusions, FlatIndex, InMemoryIndex, Manifest, Preference, Preferences, PythonRequirement,
     ResolveError, Resolver, ResolverEnvironment, ResolverOutput, UniversalMarker,
 };
+use uv_static::EnvVars;
 use uv_types::{EmptyInstalledPackages, HashStrategy};
 
 use crate::LockError;
@@ -30,7 +31,7 @@ pub(crate) enum BuildResolutionStrategy {
 
 impl BuildResolutionStrategy {
     pub(crate) fn from_env() -> Result<Self, LockError> {
-        match std::env::var("UV_INTERNAL__BUILD_RESOLUTION").as_deref() {
+        match std::env::var(EnvVars::UV_INTERNAL__BUILD_RESOLUTION).as_deref() {
             Ok("separate-grouped") | Err(std::env::VarError::NotPresent) => Ok(Self::Grouped),
             Ok("separate-per-package") => Ok(Self::PerPackage),
             Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(anyhow::anyhow!(
@@ -44,7 +45,7 @@ impl BuildResolutionStrategy {
 pub(crate) type BuildResolution = (Vec<SourceBuildRequirements>, ResolverOutput);
 
 pub(crate) fn build_encoding(existing: Option<BuildEncoding>) -> Result<BuildEncoding, LockError> {
-    match std::env::var("UV_INTERNAL__BUILD_LOCK_ENCODING").as_deref() {
+    match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING).as_deref() {
         Ok("dependency") => Ok(BuildEncoding::Dependency),
         Err(std::env::VarError::NotPresent) => Ok(existing.unwrap_or(BuildEncoding::Dependency)),
         Ok("package") => Ok(BuildEncoding::Package),
