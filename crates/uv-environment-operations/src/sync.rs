@@ -1,14 +1,13 @@
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
-use uv_cache_key::cache_digest;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
     ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
 };
-use uv_dispatch::{BuildDispatch, PlatformState};
+use uv_dispatch::{BuildDispatch, BuildLockReplay, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
@@ -16,7 +15,6 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
-use uv_normalize::ExtraName;
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
@@ -218,20 +216,15 @@ pub async fn sync_from_lock(
     let resolution = apply_editable_mode(resolution, editable);
 
     // Constrain any build requirements marked as `match-runtime = true`.
-    let mut extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
-    if target.lock().locks_builds() {
-        let lock = target.lock().to_toml().map_err(anyhow::Error::from)?;
-        let environment = format!(
-            "{:?} {tags} {build_options:?}",
-            venv.interpreter().markers()
-        );
-        let conflicts = resolution
-            .activated_conflicts()
-            .iter()
-            .map(ExtraName::as_str)
-            .collect::<Vec<_>>();
-        extra_build_requires.set_locked_environment(cache_digest(&(lock, environment, conflicts)));
-    }
+    let replay = BuildLockReplay::new(
+        target.lock(),
+        target.install_path(),
+        Some(&resolution),
+        venv.interpreter(),
+        &tags,
+        build_options,
+        extra_build_requires.match_runtime(&resolution)?,
+    )?;
 
     // Extract the hashes from the lockfile.
     let hasher = if target.lock().locks_builds() {
@@ -255,7 +248,7 @@ pub async fn sync_from_lock(
         index_locations,
         config_setting,
         config_settings_package,
-        &extra_build_requires,
+        replay.extra_build_requires(),
         extra_build_variables,
         cache,
         venv,
@@ -338,7 +331,7 @@ pub async fn sync_from_lock(
         config_setting,
         config_settings_package,
         build_isolation,
-        &extra_build_requires,
+        replay.extra_build_requires(),
         extra_build_variables,
         link_mode,
         build_options,
@@ -353,7 +346,7 @@ pub async fn sync_from_lock(
     .with_locked_build_dependencies(
         target.lock().locks_builds() || preview.is_enabled(PreviewFeature::BuildDependencyLocking),
     )
-    .with_build_lock(target.lock(), target.install_path(), Some(&resolution));
+    .with_build_lock(&replay);
 
     // Run a malware check against OSV before installing.
     maybe_check_malware(
