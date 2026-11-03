@@ -2211,19 +2211,19 @@ fn activate_zsh_prompt_subst() {
         "#}, "zsh"]).arg(venv.child("bin/activate").path()).arg(&zsh), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    (env-$(touch dollar)-`touch backtick`-user-0-\path) original user>
-    (env---user-0-\path) original user>
-    (env---child-!-\path) original child>
+    (env-$(touch dollar)-`touch backtick`-%1v-!-\path) original user>
+    (env-$(touch dollar)-`touch backtick`-%1v-!-\path) original user>
+    (env-$(touch dollar)-`touch backtick`-%1v-!-\path) original child>
     original >
     ");
     context
         .temp_dir
         .child("dollar")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
     context
         .temp_dir
         .child("backtick")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
 }
 
 /// An explicit prompt is inserted into the script that Bash sources.

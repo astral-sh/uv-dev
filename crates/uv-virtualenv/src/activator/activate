@@ -127,6 +127,27 @@ if [ -z "${VIRTUAL_ENV_DISABLE_PROMPT-}" ] ; then
             # Without variable expansion, Bash still decodes backslash escapes.
             PS1="(${VIRTUAL_ENV_PROMPT//\\/\\\\}) ${PS1-}"
         fi
+    elif [ -n "${ZSH_VERSION-}" ]; then
+        if [[ -o promptpercent ]]; then
+            # %1<< keeps the last column until %<< ends truncation. This displays
+            # the literal character whether or not PROMPT_SUBST consumes its
+            # quoting backslash, including in a child zsh that inherits PS1.
+            _UV_VENV_PREFIX=${VIRTUAL_ENV_PROMPT//\%/%%}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\\/'%1<<\\%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\$/'%1<<\$%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\`/'%1<<\`%<<'}
+            _UV_VENV_PREFIX=${_UV_VENV_PREFIX//\!/'%1<<!!%<<'}
+        else
+            # Quote shell substitutions even when PROMPT_SUBST is enabled later.
+            _UV_VENV_PREFIX="${VIRTUAL_ENV_PROMPT//\\/\\\\}"
+            _UV_VENV_PREFIX="${_UV_VENV_PREFIX//\$/\\\$}"
+            _UV_VENV_PREFIX="${_UV_VENV_PREFIX//\`/\\\`}"
+            if [[ -o promptbang ]]; then
+                _UV_VENV_PREFIX="${_UV_VENV_PREFIX//!/!!}"
+            fi
+        fi
+        PS1="(${_UV_VENV_PREFIX}) ${PS1-}"
+        unset _UV_VENV_PREFIX
     else
         PS1="(${VIRTUAL_ENV_PROMPT}) ${PS1-}"
     fi
