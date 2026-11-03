@@ -795,6 +795,22 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        if check_locked_builds
+            && !existing_lock
+                .satisfies_build_inputs(
+                    target.install_path(),
+                    &extra_build_requires,
+                    async |name, path| {
+                        build_dispatch
+                            .local_build_requirements(name, path)
+                            .await
+                            .map_err(LockError::from)
+                    },
+                )
+                .await?
+        {
+            return Err(LockError::StaleBuildLock);
+        }
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
         let validation_build_dispatch = match &snapshot {
@@ -1092,6 +1108,7 @@ async fn do_lock(
                     owners.iter().map(move |owner| BuildGraph {
                         owner: &owner.owner,
                         marker: owner.marker,
+                        backend_requirements: owner.backend_requirements(),
                         requirements: &owner.requirements,
                         resolution,
                     })
@@ -1101,6 +1118,7 @@ async fn do_lock(
                     graphs,
                     target.install_path(),
                     index_locations,
+                    &extra_build_requires,
                 )?;
                 lock.generate_missing_registry_hashes(
                     target.install_path(),

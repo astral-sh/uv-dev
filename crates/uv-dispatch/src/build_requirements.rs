@@ -1,16 +1,54 @@
 use std::borrow::Cow;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt, stream};
 use uv_build_frontend::SourceBuild;
 use uv_configuration::NoSources;
-use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{BuiltDist, Dist, ResolvedDist, SourceDist};
+use uv_distribution::{BuildSourceTree, DistributionDatabase};
+use uv_distribution_types::{BuiltDist, Dist, Requirement, ResolvedDist, SourceDist};
+use uv_normalize::PackageName;
 use uv_resolver::{ResolverOutput, UniversalMarker};
 
 use crate::{BuildDispatch, SourceBuildRequirements};
 
 impl BuildDispatch<'_> {
+    /// Read a mutable directory's declarations for a locked check, without fetching a distribution.
+    pub async fn local_build_requirements(
+        &self,
+        name: &PackageName,
+        path: &Path,
+    ) -> Result<Vec<Requirement>> {
+        self.static_build_requirements(
+            &BuildSourceTree {
+                project_root: path.to_path_buf(),
+                stop_discovery_at: None,
+            },
+            name,
+            &self.sources,
+        )
+        .await
+    }
+
+    async fn static_build_requirements(
+        &self,
+        tree: &BuildSourceTree,
+        name: &PackageName,
+        sources: &NoSources,
+    ) -> Result<Vec<Requirement>> {
+        SourceBuild::static_requirements(
+            tree,
+            name,
+            self.index_locations,
+            sources,
+            self.cache,
+            &self.workspace_cache,
+            self.client.credentials_cache(),
+        )
+        .await
+        .with_context(|| format!("Failed to read build requirements for `{name}`"))
+    }
+
     /// Discover requirements for every installable source in `graph`, including releases where
     /// the resolver used a wheel for metadata. Match extra build requirements against `runtime`.
     /// For recursive discovery, pass the marker of the parent build and the original runtime graph.
@@ -62,17 +100,9 @@ impl BuildDispatch<'_> {
                         | SourceDist::Path(_)
                         | SourceDist::GitPath(_) => &NoSources::All,
                     };
-                    let backend = SourceBuild::static_requirements(
-                        &tree,
-                        &owner.name,
-                        self.index_locations,
-                        sources,
-                        self.cache,
-                        &self.workspace_cache,
-                        self.client.credentials_cache(),
-                    )
-                    .await
-                    .with_context(|| format!("Failed to read build requirements for `{owner}`"))?;
+                    let backend = self
+                        .static_build_requirements(&tree, &owner.name, sources)
+                        .await?;
                     runtime
                         .match_build_requirements(
                             &owner.dist,

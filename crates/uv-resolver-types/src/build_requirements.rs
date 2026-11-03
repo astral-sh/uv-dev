@@ -10,6 +10,15 @@ pub struct SourceBuildRequirements {
     pub owner: ResolvedDist,
     pub marker: UniversalMarker,
     pub requirements: Vec<Requirement>,
+    /// The backend declarations precede the configured extra requirements in every fork.
+    backend_requirements_len: usize,
+}
+
+impl SourceBuildRequirements {
+    /// The requirements declared by the source's build backend, before adding configured extras.
+    pub fn backend_requirements(&self) -> &[Requirement] {
+        &self.requirements[..self.backend_requirements_len]
+    }
 }
 
 impl ResolverOutput {
@@ -25,6 +34,7 @@ impl ResolverOutput {
         let mut sets = vec![SourceBuildRequirements {
             owner: owner.clone(),
             marker,
+            backend_requirements_len: backend.len(),
             requirements: backend,
         }];
         for extra in extras {
