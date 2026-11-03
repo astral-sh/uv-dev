@@ -49,8 +49,8 @@ pub enum ResolveError {
     #[error(transparent)]
     Distribution(#[from] uv_distribution::Error),
 
-    #[error("Failed to resolve build requirements for {0}")]
-    BuildDependencies(String, #[source] Box<Self>),
+    #[error("Failed to resolve build requirements for {}", .0.iter().map(|name| format!("`{name}`")).join(", "))]
+    BuildDependencies(Vec<PackageName>, #[source] Box<Self>),
 
     #[error(transparent)]
     Preference(#[from] PreferenceError),

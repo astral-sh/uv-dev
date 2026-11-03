@@ -238,8 +238,8 @@ fn is_cluster_conflict(error: &ResolveError) -> bool {
 fn build_error(owners: &[SourceBuildRequirements], error: ResolveError) -> ResolveError {
     let packages = owners
         .iter()
-        .map(|root| format!("`{}`", root.owner.name()))
-        .join(", ");
+        .map(|root| root.owner.name().clone())
+        .collect();
     ResolveError::BuildDependencies(packages, Box::new(error))
 }
 
