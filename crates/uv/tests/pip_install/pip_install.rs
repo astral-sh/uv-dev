@@ -295,24 +295,6 @@ fn install_scripts_in_tab_path() -> Result<()> {
     let entry_point = context.external_command(bin.join("tab-probe")).output();
     let wheel_script = context.external_command(bin.join("wheel-script")).output();
 
-    // Long paths and paths containing spaces already select the shell wrapper.
-    let python = bin.join("python");
-    if python.as_os_str().len() + 3 <= 127 && !python.as_os_str().as_encoded_bytes().contains(&b' ')
-    {
-        let shebang = format!("#!{}\n", python.display());
-        assert!(fs::read_to_string(bin.join("tab-probe"))?.starts_with(&shebang));
-        assert!(fs::read_to_string(bin.join("wheel-script"))?.starts_with(&shebang));
-        assert_eq!(
-            entry_point.unwrap_err().kind(),
-            std::io::ErrorKind::NotFound
-        );
-        assert_eq!(
-            wheel_script.unwrap_err().kind(),
-            std::io::ErrorKind::NotFound
-        );
-        return Ok(());
-    }
-
     entry_point?
         .assert()
         .success()
