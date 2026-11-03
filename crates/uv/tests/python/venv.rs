@@ -2621,7 +2621,7 @@ fn create_venv_validates_prompt_before_removing_centralized_reference() -> Resul
         .assert()
         .success();
     let reference = context.temp_dir.child(".venv");
-    let target = fs_err::read_link(reference.path())?;
+    let target = fs_err::canonicalize(reference.path())?;
     reference.child("marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
     uv_snapshot!(context.filters(), context.venv().args(["--prompt", "bad\nprompt"]), @r#"
@@ -2632,53 +2632,40 @@ fn create_venv_validates_prompt_before_removing_centralized_reference() -> Resul
         error: Failed to create virtual environment
           cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
         "#);
-    assert_eq!(fs_err::read_link(reference.path())?, target);
-    assert_eq!(context.read(".venv/marker"), "keep");
-    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
+    assert_eq!(fs_err::canonicalize(reference.path())?, target);
+    assert_eq!(fs_err::read_to_string(target.join("marker"))?, "keep");
+    assert_eq!(fs_err::read_to_string(target.join("pyvenv.cfg"))?, config);
     Ok(())
 }
 
-/// Run the real interpreter but report a synthetic executable. The `os.py` landmark
-/// lets base-interpreter discovery accept the supplied home so uv can validate it.
+/// Give CPython a real executable path containing a newline while sharing its standard library.
 #[cfg(unix)]
-fn python_reporting_home(context: &uv_test::TestContext, home: &str) -> Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let python = context
-        .python_command()
-        .args(["-c", "import sys; print(sys._base_executable)"])
-        .output()?;
-    assert!(python.status.success());
-    let python = String::from_utf8(python.stdout)?.trim().to_owned();
-    let home = context.temp_dir.child(home);
-    home.child("lib/python3.12/os.py").write_str("")?;
-    let base = home.child("python");
-    fs_err::copy(&python, base.path())?;
-    let wrapper = context.temp_dir.child("python-wrapper");
-    wrapper.write_str(&indoc::formatdoc! {r"
-        #!{python}
-        import sys
-
-        sys.executable = {base}
-        sys._base_executable = {base}
-        exec(sys.argv[sys.argv.index('-c') + 1])
-    ", base = serde_json::to_string(&base.path())?})?;
-    fs_err::set_permissions(wrapper.path(), std::fs::Permissions::from_mode(0o755))?;
-    Ok(wrapper.path().to_owned())
+fn python_with_newline_in_home(context: &uv_test::TestContext) -> Result<PathBuf> {
+    let python = fs_err::canonicalize(&context.python_versions[0].1)?;
+    let home = context.temp_dir.child("bad\nhome");
+    home.child("bin").create_dir_all()?;
+    let executable = home.child("bin/python3.12");
+    fs_err::copy(&python, executable.path())?;
+    let prefix = python
+        .ancestors()
+        .nth(2)
+        .expect("managed Python is installed in a bin directory");
+    symlink(prefix.join("lib"), home.child("lib"))?;
+    Ok(executable.path().to_owned())
 }
 
 #[test]
 #[cfg(unix)]
 fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
-    let python = python_reporting_home(&context, "bad\nhome")?;
+    let python = python_with_newline_in_home(&context)?;
     context.temp_dir.child(".venv/marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
 
     uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
@@ -2692,14 +2679,14 @@ fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
 #[cfg(unix)]
 fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
-    let python = python_reporting_home(&context, "bad\nhome")?;
+    let python = python_with_newline_in_home(&context)?;
     context.temp_dir.child(".venv/marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
@@ -2713,12 +2700,12 @@ fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
 #[cfg(unix)]
 fn create_venv_validates_home_before_creating_destination() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
-    let python = python_reporting_home(&context, "bad\nhome")?;
+    let python = python_with_newline_in_home(&context)?;
 
     uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: bad-home/python
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: new-venv
     error: Failed to create virtual environment
       cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
