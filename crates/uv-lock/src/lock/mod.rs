@@ -86,6 +86,7 @@ use self::requirements::{RequirementNormalizer, normalize_collection, normalize_
 use build::BuildEncoding;
 
 mod build;
+mod build_inputs;
 mod deserialize;
 pub(crate) mod export;
 mod inputs;

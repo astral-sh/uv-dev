@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use anyhow::Context;
 use rustc_hash::FxHashSet;
 use tracing::debug;
 
+use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
@@ -723,8 +725,7 @@ async fn do_lock(
     let groups = BTreeMap::new();
 
     // Resolve the flat indexes from `--find-links`.
-    let check_locked_builds = matches!(mode, LockMode::Locked(_, _))
-        && existing_lock.as_ref().is_some_and(Lock::locks_builds);
+    let check_locked_builds = existing_lock.as_ref().is_some_and(Lock::locks_builds);
     let flat_index = if check_locked_builds {
         FlatIndex::default()
     } else {
@@ -787,6 +788,31 @@ async fn do_lock(
         preview,
     )
     .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
+
+    if let Some(lock) = existing_lock.as_ref().filter(|lock| lock.locks_builds())
+        && !lock
+            .satisfies_build_inputs(
+                target.install_path(),
+                &extra_build_requires,
+                async |name, path| {
+                    SourceBuild::local_build_requirements(
+                        path,
+                        name,
+                        index_locations,
+                        sources,
+                        cache,
+                        workspace_cache,
+                        client.credentials_cache(),
+                    )
+                    .await
+                    .with_context(|| format!("Failed to read build requirements for `{name}`"))
+                },
+            )
+            .await?
+    {
+        // This reader cannot regenerate a stale build graph.
+        return Err(LockError::StaleBuildLock);
+    }
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {

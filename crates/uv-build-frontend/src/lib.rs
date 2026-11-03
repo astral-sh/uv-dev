@@ -688,6 +688,31 @@ impl SourceBuild {
         )
     }
 
+    /// Read the declared requirements of a mutable project with the same source policy as its build.
+    pub async fn local_build_requirements(
+        path: &Path,
+        package: &PackageName,
+        locations: &IndexLocations,
+        no_sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, Box<Error>> {
+        let (backend, _) = Self::extract_pep517_backend(
+            path,
+            path,
+            Some(package),
+            locations,
+            no_sources,
+            None,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await?;
+        Ok(backend.requirements)
+    }
+
     /// Extract the PEP 517 backend from the `pyproject.toml` or `setup.py` file.
     async fn extract_pep517_backend(
         source_tree: &Path,

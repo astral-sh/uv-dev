@@ -14,10 +14,14 @@ use uv_distribution_types::{
     SimplifiedMarkerTree, SourceDist,
 };
 use uv_normalize::{ExtraName, PackageName};
-use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra};
+use uv_pep508::{
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra,
+    MarkerValueVersion,
+};
 use uv_platform_tags::Tags;
 use uv_resolver_types::UniversalMarker;
 
+use super::build_inputs::BuildInput;
 use super::{
     Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind, LockWire, Package,
     PackageId, PackageWire, RegistrySource, Source, TagPolicy, absolute_path,
@@ -53,6 +57,7 @@ pub(super) struct Universe {
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
+    pub(super) inputs: Option<BTreeSet<BuildInput>>,
     packages: BTreeMap<PackageId, Package>,
 }
 
@@ -63,6 +68,7 @@ pub(super) struct UniverseWire {
     marker: MarkerTree,
     #[serde(default)]
     roots: Vec<DependencyWire>,
+    inputs: Option<BTreeSet<BuildInput>>,
 }
 
 fn error(reason: impl Into<String>) -> LockError {
@@ -70,6 +76,29 @@ fn error(reason: impl Into<String>) -> LockError {
 }
 
 impl Lock {
+    /// The supported environment, including exclusions within the Python range.
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
+        let mut project =
+            self.requires_python
+                .specifiers()
+                .iter()
+                .fold(MarkerTree::TRUE, |domain, specifier| {
+                    domain.and(MarkerTree::expression(MarkerExpression::Version {
+                        key: MarkerValueVersion::PythonFullVersion,
+                        specifier: specifier.clone(),
+                    }))
+                });
+        if !self.supported_environments.is_empty() {
+            let supported = self
+                .supported_environments
+                .iter()
+                .copied()
+                .fold(MarkerTree::FALSE, MarkerTree::or);
+            project = project.and(supported);
+        }
+        project
+    }
+
     /// Whether isolated builds must use the recorded build environments.
     pub fn locks_builds(&self) -> bool {
         self.builds.is_some()
@@ -517,6 +546,7 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
             )
         })?;
         universes.push(Universe {
+            inputs: descriptor.inputs,
             owner: descriptor.owner,
             marker: UniversalMarker::from_combined(descriptor.marker),
             roots,

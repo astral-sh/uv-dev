@@ -144,6 +144,9 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             if let Some(marker) = universe.marker.combined().try_to_string() {
                 writer.key_value("marker", &marker)?;
             }
+            if let Some(inputs) = &universe.inputs {
+                write_serialized_array(writer, "inputs", inputs)?;
+            }
             writer.key_multiline_array("roots", &universe.roots, |writer, dep| {
                 write_dependency_inline(writer, dep, MarkerTree::TRUE, &dist_count_by_name, None)
             })?;

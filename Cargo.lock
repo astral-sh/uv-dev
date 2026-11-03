@@ -6989,6 +6989,7 @@ dependencies = [
  "toml_parser",
  "tracing",
  "uv-auth",
+ "uv-build-frontend",
  "uv-cache",
  "uv-client",
  "uv-command-support",
