@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#22975
 
-Classification: bug (reported failure; not independently reproduced)
+Classification: bug (reproduced by another discussion participant; revised trigger not run locally)
 
 ## Summary
 
@@ -12,13 +12,15 @@ The original report records two failures in ten cold-cache jobs and none in ten 
 
 The follow-up supplies a process-attributed timing summary on Ubuntu 26.04/ext4 and a reduced forced-termination reproducer reported to fail on macOS 26 with both uv 0.12.24 and 0.13.6 (5/5 fresh-cache attempts each, OS error 66). The CI failure follows an ordinary error exit; the reduced example deliberately kills only the parent uv to force the overlap. These are reporter-supplied observations, not independently verified results. Multiple subdirectory packages are not required by the reduced example.
 
+Discussion participant `oshadha-dev` reports reproducing the forced-termination script on `main` on macOS, and also reproducing without forced termination: an offline sync fails on the uncached `idna` wheel, its `git init` survives reparented to PID 1, and the immediate online sync fails with `Directory not empty` in 5/5 attempts. The child reportedly dies from SIGPIPE about 2.5 seconds later. This is confirmation from another participant, not a reproduction performed during this handoff update; the tested commit and raw logs are not supplied. Source inspection supports the identified mismatch between the async lock lifetime and blocking Git work. A temporary database followed by rename into the shared path is proposed, with no accepted or implemented fix established.
+
 Earlier targeted reproduction succeeded in all 20 sync invocations, ten each on uv 0.12.24 and 0.13.5, on Ubuntu 24.04.5 with matching Git/Python versions. Those tests included cold caches, local-file and HTTP transports, slower initialization, and simultaneous uv processes, but did not exit or terminate the first uv during initialization and immediately retry. They therefore do not test the newly identified trigger. The contributor's 25 successful macOS runs on `main` likewise did not describe that trigger.
 
 No confirmed duplicate or fix was identified. astral-sh/uv#14894 and astral-sh/uv#5645 describe adjacent intermittent Git failures. astral-sh/uv#22829 and astral-sh/uv#22868 concern maintenance racing with checkout cloning, a different reported trigger and stage.
 
 ## Classification
 
-Retain the bug classification. The reporter now supplies a concrete child-lifetime explanation and an executable reduced example, including reported failures on uv 0.13.6. Independent verification of the revised trigger and normal-error shutdown path remains outstanding. There is no established upgrade regression, duplicate, or confirmed fix. The retained `not_reproducible` result applies only to the earlier test configurations; it is not a verdict on the new reproducer.
+Retain the bug classification. The reporter now supplies a concrete child-lifetime explanation and an executable reduced example, including reported failures on uv 0.13.6. Another participant now reports reproducing both the forced-termination example and the normal offline-error retry on `main`. Local verification of the revised trigger remains outstanding. There is no established upgrade regression, duplicate, or confirmed fix. The retained `not_reproducible` result applies only to the earlier test configurations; it is not a verdict on the new reproducer.
 
 ## Reproduction
 
@@ -120,7 +122,7 @@ In the follow-up to astral-sh/uv#22975 (comment ID 6588691516), `jamestrousdale`
 | 245 ms | Online uv releases the repository lock. |
 | 265 ms | Online uv reports directory removal failure, OS error 39. |
 
-The reporter says no other processes used the cache and the two uv invocations ran sequentially. The reported failure rate is 1/50 in this case and approximately 2/10 in another repository, depending on whether offline sync starts initialization before its first error. This supports investigation of a Git child outliving the lock-owning uv process rather than failure of mutual exclusion between live lock holders. The exact shutdown behavior and causal interpretation remain to be verified from source and full traces.
+The reporter says no other processes used the cache and the two uv invocations ran sequentially. The reported failure rate is 1/50 in this case and approximately 2/10 in another repository, depending on whether offline sync starts initialization before its first error. This supports investigation of a Git child outliving the lock-owning uv process rather than failure of mutual exclusion between live lock holders. The later participant report and source inspection below support the shutdown explanation; full failing traces and a local run of the revised trigger remain outstanding.
 
 ### Reduced reproducer supplied by the reporter
 
@@ -148,7 +150,15 @@ The supplied setup and orchestration are:
 4. Use a fresh absolute cache path `CACHE`, with `UV_CACHE_DIR=CACHE`, `UV_PROJECT_ENVIRONMENT=CACHE.venv`, and `REPRO_INIT_MARK=CACHE.init-started`. Start `uv sync --frozen` in the project in the background, redirecting its output to `CACHE.first.log`.
 5. Once the initialization marker exists, send SIGKILL to only that uv PID and wait for it to exit. Leave its Git child running. Immediately run another `uv sync --frozen` against the same cache and environment.
 
-The comment contains the complete wrapper and orchestration scripts. They were reviewed as reproduction evidence and were not executed during this update. Forced parent termination makes the lifetime overlap deterministic in the reported tests; it does not independently demonstrate the ordinary offline-error shutdown behavior. The original CI case uses an error exit rather than SIGKILL, so both paths need separate verification. The reporter's suggestions to terminate/wait for children or treat unfinished databases as busy are proposed remedies, not validated fixes or maintainer decisions.
+The comment contains the complete wrapper and orchestration scripts. They were reviewed as reproduction evidence and were not executed during this update. Forced parent termination makes the lifetime overlap deterministic in the reported tests; it does not independently demonstrate the ordinary offline-error shutdown behavior. The original CI case uses an error exit rather than SIGKILL. Another participant now reports reproducing that ordinary-error path as well; both paths remain untested locally. The reporter's suggestions to terminate/wait for children or treat unfinished databases as busy are proposed remedies, not validated fixes or maintainer decisions.
+
+### Confirmation on main and proposed fix
+
+In the newly supplied comment (ID 6612036154), `oshadha-dev` reports the reporter's script failing every time on `main` on macOS. With the same project and large Git template, they also report `uv sync --frozen --offline` failing on the uncached `idna` wheel, followed immediately by `uv sync --frozen` failing with `Directory not empty` in 5/5 attempts. No explicit kill is needed for that variant. They observed `git init` reparented to PID 1 and exiting from SIGPIPE about 2.5 seconds later. Exact macOS/Git/Python versions, the `main` commit, and raw artifacts are unspecified. The supplied full-issue snapshot predates this comment; the new-comment payload is the evidence for this addition.
+
+The participant attributes early lock release to cancellation of the async fetch future while its blocking Git task continues, followed by background runtime shutdown. The inspected source supports the ownership and shutdown structure described below; cancellation caused by this specific download failure was not traced locally.
+
+Their proposed fix is to initialize a database in its own temporary directory and rename it into `db/<id>` only when ready, isolating writes by a surviving Git child from the shared database path. Waiting for or terminating children could address normal shutdown, but parent cleanup cannot run after SIGKILL. This is a participant proposal, not a maintainer decision, reviewed implementation, or confirmed fix. They also report that adding `--template=` makes the large-template example pass by shortening initialization; that observation does not demonstrate removal of the lifetime race.
 
 ### Downstream trigger and mitigation tracking
 
@@ -162,11 +172,17 @@ The linked issue also reports that terminating the first uv's whole process grou
 
 The retained independent tests and `reproduction.json` predate this reduced example. Preserve their results, but do not use them to dismiss the revised report or infer that uv 0.13.x is unaffected. The new comment supplies the previously missing two-command sequence, process roles, database working directory, filesystem type, and a minimal project configuration. The original project/lockfile, raw failing CI traces, and complete workflow remain unavailable.
 
-The next investigation should independently exercise the reduced example, then the normal `--offline` failure followed by online retry, and inspect shutdown/cancellation ownership of the Git child and repository lock. The uv-toolbox/mise invocation path and the reported whole-process-group comparison provide concrete additional cases to investigate. Full sanitized wrapper, Trace2, and lock logs with PIDs and timestamps would help verify the parent exit, child's continued writes, and lock transfer. A retained lockfile for the reduced fixture would make the generated dependency selection repeatable. No revised reproducer or additional source verification was performed in this context update.
+The next local investigation should exercise both the reduced forced-termination example and the ordinary `--offline` failure followed by online retry, using the additional participant report as confirmation of the latter trigger. Inspect cancellation ownership of the lock and blocking Git task, and assess temporary-directory publication against surviving writers and interrupted initialization. The uv-toolbox/mise invocation path and the reported whole-process-group comparison provide concrete additional cases to investigate. Full sanitized wrapper, Trace2, and lock logs with PIDs and timestamps would help verify the parent exit, child's continued writes, and lock transfer. A retained lockfile for the reduced fixture would make the generated dependency selection repeatable. No revised reproducer was run during this update. Targeted source inspection verified lock ownership, background runtime shutdown, and the Git init arguments, as detailed below.
 
 ## Implementation and release context
 
 In the uv 0.12.24 resolver, the initial fetch message precedes acquisition of an exclusive `LockedFile` at `git-v1/locks/<repository digest>`. The lock guard remains in scope while awaiting `GitSource::fetch`. `GitSource::fetch` checks the database with `git rev-parse`; unsuccessful checks can lead to deletion and reinitialization. The database and lock use the same repository digest. The checkout retains this structure. This source inspection describes the normal awaited path; it does not establish child cleanup on error exit or forced termination. The follow-up directs investigation to the lifetime of the Git child relative to the parent-held lock.
+
+Targeted source checks for the new comment establish:
+
+- `crates/uv-git/src/resolver.rs:236` acquires `_lock` in the async `fetch` future. At line 258, `spawn_blocking(move || source.fetch())` moves the source into the closure, but does not move the lock guard. The guard therefore belongs to the async future rather than the blocking operation. Cancellation can drop that guard independently of the already-running blocking work; the exact failing cancellation path has not been traced locally.
+- `crates/uv/src/lib.rs:3123` runs the main future with `runtime.block_on`, then calls `runtime.shutdown_background()` at line 3129. Its comment explicitly avoids waiting for unnecessary HTTP requests to prevent exit hangs. The merged astral-sh/uv#4793 confirms this rationale. This supports the shutdown explanation without establishing that removing background shutdown is an appropriate fix.
+- `crates/uv-git/src/git.rs:129` contains the template-skipping comment in `GitRepository::init`, but the command passes `init` without `--template=`. The code supports the participant's observation that templates are not explicitly disabled. Suppressing template copying could shorten the reproduction window, but would not by itself bind child lifetime to the repository lock.
 
 The 0.13.0–0.13.6 release notes identify no fix for this specific initialization failure. Two nearby merged changes were reviewed:
 
@@ -177,6 +193,7 @@ The older astral-sh/uv#6790 addresses synchronous lock acquisition blocking the 
 
 ## Related
 
+- astral-sh/uv#4793 — Avoid hangs before exiting CLI (pull request, merged 2024-07-04). Establishes the reason for background runtime shutdown: unnecessary pending HTTP requests, especially slow DNS, could delay CLI exit. It supplies relevant shutdown context, not a fix for the Git database race.
 - hotdog-werx/uv-toolbox#27 — `install` on a cold uv cache can fail with "Directory not empty" because its offline sync leaves a Git child running (issue, open). Tracks mitigation in the identified caller of uv: avoiding or cleaning up the offline-first attempt before retrying online. It links this uv issue and adds mise-hook and process-group observations. It is downstream mitigation tracking, not a duplicate or confirmed fix for uv's reported child-lifetime problem.
 - astral-sh/uv#14894 — Problems with git installs in CI via Github Actions (issue, open). Also reports intermittent Ubuntu CI failures installing commit-pinned subdirectory packages from one repository. Its error is an unknown revision from git rev-parse, however, with no observed initialization/removal overlap or confirmed cold-cache dependency; maintainers requested a smaller reproduction. A related symptom, not an established duplicate.
 - astral-sh/uv#5645 — Intermitent installation errors when install from a git ref (issue, open). Reports intermittent missing Git checkout directories and index.lock files during installation. This is adjacent cache-integrity evidence, but concerns git-v0/checkouts on uv 0.2.x, without a confirmed mechanism or the new report's git-v1/db initialization race.
@@ -185,7 +202,7 @@ The older astral-sh/uv#6790 addresses synchronous lock acquisition blocking the 
 
 ## Search scope and exclusions
 
-The following records the earlier uv investigation; uv related-item states and searches were not refreshed for this comment update. The newly linked hotdog-werx/uv-toolbox#27 was read directly, including its empty discussion, to establish the downstream context above.
+The following records the earlier uv investigation; previous uv related-item states and broad searches were not refreshed for this comment update. The newly cited astral-sh/uv#4793 was read directly and verified as merged. The newly linked hotdog-werx/uv-toolbox#27 was read directly, including its empty discussion, to establish the downstream context above.
 
 Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Split searches into removal errors ("failed to remove directory", "Directory not empty", "git-v1/db", legacy "git-v0/db", "not a repository"), same-repository/subdirectory installs, cold-cache and frozen-sync failures, and possible concurrency/locking causes (race, concurrent, initialization, GitResolver, flock, area:cache). Removed package, platform, and version details for broader matches. Read candidate bodies/comments and followed timeline references. PR search/list queries returned no matches even for the independently verified maintenance PR, so coverage was supplemented with linked PRs and release notes. Inspected merged astral-sh/uv#6790 (runtime deadlock fix) and astral-sh/uv#22387 (cache-clean lock deletion fix); neither establishes a fix or regression of this failure. Ruled out astral-sh/uv#11949 (repeated update messages), astral-sh/uv#12036 and astral-sh/uv#18073 (NFS-specific behavior), and astral-sh/uv#13054 (unresolved Git-hook failure). Reviewed 0.12.24 source and 0.13.0–0.13.6 release notes; no confirmed matching fix found.
 
