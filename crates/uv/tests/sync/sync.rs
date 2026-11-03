@@ -13,6 +13,7 @@ use wiremock::matchers::{basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
+use uv_lock::Lock;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
@@ -18963,6 +18964,207 @@ fn build_hash_project_in_subdirectory() -> Result<(TestContext, String)> {
         fs_err::rename(context.temp_dir.child(entry), package.child(entry))?;
     }
     Ok((context, hash))
+}
+
+/// Conflicting extras select different build roots for one source on the same Python version.
+#[test]
+fn locked_build_follows_runtime_conflict() -> Result<()> {
+    let (context, first_hash) = build_hash_project()?;
+    let (filename, wheel) =
+        WheelBuilder::new(&"build-dependency".parse()?, &"2.0.0".parse()?).build();
+    let second_hash = hex::encode(Sha256::digest(&wheel));
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        left = ["build-dependency==1.0.0"]
+        right = ["build-dependency==2.0.0"]
+
+        [build-system]
+        requires = ["build-dependency"]
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        conflicts = [[{ extra = "left" }, { extra = "right" }]]
+
+        [tool.uv.extra-build-dependencies]
+        project = [{ requirement = "build-dependency", match-runtime = true }]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import shutil
+        from importlib.metadata import version
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(__file__).with_name("build-version").write_text(version("build-dependency"))
+            wheel = Path(__file__).parent / "wheels" / "project-0.1.0-py3-none-any.whl"
+            shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+            return wheel.name
+    "#})?;
+    let input = formatdoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        build-encoding = "dependency"
+        conflicts = [[{{ package = "project", extra = "left" }}, {{ package = "project", extra = "right" }}]]
+
+        [[build-universes]]
+        owner = {{ name = "project", version = "0.1.0", source = {{ editable = "." }} }}
+        marker = "extra == 'extra-7-project-left'"
+        roots = [{{ name = "build-dependency", version = "1.0.0", source = {{ registry = "wheels" }} }}]
+
+        [[build-universes]]
+        owner = {{ name = "project", version = "0.1.0", source = {{ editable = "." }} }}
+        marker = "extra == 'extra-7-project-right'"
+        roots = [{{ name = "build-dependency", version = "2.0.0", source = {{ registry = "wheels" }} }}]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ editable = "." }}
+        [package.optional-dependencies]
+        left = [{{ name = "build-dependency", version = "1.0.0", source = {{ registry = "wheels" }} }}]
+        right = [{{ name = "build-dependency", version = "2.0.0", source = {{ registry = "wheels" }} }}]
+        [package.metadata]
+        provides-extras = ["left", "right"]
+
+        [[package]]
+        name = "build-dependency"
+        version = "1.0.0"
+        source = {{ registry = "wheels" }}
+        wheels = [{{ path = "build_dependency-1.0.0-py3-none-any.whl", hash = "sha256:{first_hash}" }}]
+
+        [[package]]
+        name = "build-dependency"
+        version = "2.0.0"
+        source = {{ registry = "wheels" }}
+        wheels = [{{ path = "build_dependency-2.0.0-py3-none-any.whl", hash = "sha256:{second_hash}" }}]
+    "#};
+    let lock = Lock::from_toml(&input)?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.to_toml()?)?;
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--frozen", "--no-editable", "--extra", "left"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    assert_eq!(context.read("build-version"), "1.0.0");
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--frozen", "--no-editable", "--extra", "right"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     - build-dependency==1.0.0
+     + build-dependency==2.0.0
+     ~ project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    assert_eq!(context.read("build-version"), "2.0.0");
+    Ok(())
+}
+
+/// A build must use its own locked roots, even when the requested wheel is pinned elsewhere.
+#[test]
+fn locked_build_rejects_package_outside_closure() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    let input = formatdoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        build-encoding = "dependency"
+
+        [[build-universes]]
+        owner = {{ name = "project", version = "0.1.0", source = {{ editable = "." }} }}
+        roots = []
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ editable = "." }}
+        dependencies = [{{ name = "build-dependency" }}]
+
+        [[package]]
+        name = "build-dependency"
+        version = "1.0.0"
+        source = {{ registry = "wheels" }}
+        wheels = [{{ path = "build_dependency-1.0.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
+    "#};
+    let path = context.temp_dir.child("uv.lock");
+    let with_root = input.replace("roots = []", r#"roots = [{ name = "build-dependency" }]"#);
+    path.write_str(&Lock::from_toml(&with_root)?.to_toml()?)?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--no-editable", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
+
+    path.write_str(&Lock::from_toml(&input)?.to_toml()?)?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--no-editable", "--offline", "--reinstall-package", "project"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: Build requirement `build-dependency==1.0.0` is not locked for `project==0.1.0 @ editable+.`
+    ");
+    assert!(!context.temp_dir.child("backend-executed").exists());
+    Ok(())
+}
+
+/// A backend cannot add a requirement to a locked build environment, even if a wheel is available.
+#[test]
+fn locked_build_dependency_from_hook() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-editable")
+        .arg("--preview-features=build-dependency-locking")
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["dynamic-dependency==1.0.0"]"#), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: `get_requires_for_build_wheel` requested `dynamic-dependency`, which was not declared in the build requirements
+    ");
+    Ok(())
+}
+
+#[test]
+fn locked_build_dependency_from_hook_with_compatible_bounds() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-editable")
+        .arg("--preview-features=build-dependency-locking")
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["build-dependency>=1"]"#), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    Ok(())
 }
 
 #[test]

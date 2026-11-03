@@ -71,6 +71,7 @@ impl RequirementSatisfaction {
                     config_settings.into_owned(),
                     extra_build_requires.to_vec(),
                     extra_build_variables.cloned(),
+                    build_settings.extra_build_requires.locked_environment(),
                 );
                 dist_build_info != &build_info
             })

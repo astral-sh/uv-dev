@@ -19,6 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 
 use uv_cache_key::RepositoryUrl;
+use uv_client::FileHashError;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, DependencyModifierScope,
     DependencyModifiers, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
@@ -83,6 +84,9 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
+pub use build::{BuildEncoding, BuildGraph};
+
+mod build;
 mod deserialize;
 pub(crate) mod export;
 mod inputs;
@@ -94,8 +98,20 @@ mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
 
-/// The current version of the lockfile format.
+/// The version of a runtime-only lockfile.
 const VERSION: u32 = 1;
+
+/// Older readers must reject build locks before running a source build with an unlocked backend.
+const BUILD_LOCK_VERSION: u32 = 2;
+
+fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
+    let supported = if locks_builds {
+        BUILD_LOCK_VERSION
+    } else {
+        VERSION
+    };
+    (version != supported).then_some(supported)
+}
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
@@ -338,6 +354,8 @@ pub struct Lock {
     requires_python: RequiresPython,
     /// We discard the lockfile if these options don't match.
     options: ResolverOptions,
+    /// Isolated build graphs, when the lock includes build dependencies.
+    builds: Option<build::BuildLocks>,
     /// The actual locked version and their metadata.
     packages: Vec<Package>,
     /// A map from package ID to index in `packages`.
@@ -2803,6 +2821,7 @@ impl Lock {
             }
         }
         let lock = Self {
+            builds: None,
             version,
             revision,
             fork_markers,
@@ -3783,11 +3802,12 @@ impl Lock {
                 Ok(lock) => lock,
                 Err(source) => {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
+                        && let Some(supported) =
+                            unsupported_version(lock.version, lock.build_encoding.is_some())
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
-                            version: lock.version(),
+                            supported,
+                            version: lock.version,
                             source,
                         });
                     }
@@ -3796,9 +3816,9 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION {
+        if let Some(supported) = unsupported_version(lock.version(), lock.locks_builds()) {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported,
                 version: lock.version(),
             });
         }
@@ -6487,6 +6507,9 @@ impl ResolverManifest {
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LockWire {
+    build_encoding: Option<BuildEncoding>,
+    #[serde(default)]
+    build_universes: Vec<build::UniverseWire>,
     version: u32,
     revision: Option<u32>,
     requires_python: RequiresPython,
@@ -6512,7 +6535,13 @@ struct LockWire {
 impl TryFrom<LockWire> for Lock {
     type Error = LockError;
 
-    fn try_from(wire: LockWire) -> Result<Self, LockError> {
+    fn try_from(mut wire: LockWire) -> Result<Self, LockError> {
+        if let Some(encoding) = wire.build_encoding.take() {
+            return build::decode(wire, encoding);
+        }
+        if !wire.build_universes.is_empty() {
+            return Err(LockErrorKind::BuildGraph("Missing build-encoding".into()).into());
+        }
         // Count the number of sources for each package name. When
         // there's only one source for a particular package name (the
         // overwhelmingly common case), we can omit some data (like source and
@@ -6594,20 +6623,12 @@ impl TryFrom<LockWire> for Lock {
     }
 }
 
-/// Like [`Lock`], but limited to the version field. Used for error reporting: by limiting parsing
-/// to the version field, we can verify compatibility for lockfiles that may otherwise be
-/// unparsable.
+/// Read the schema header to diagnose an otherwise unparsable lockfile.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LockVersion {
     version: u32,
-}
-
-impl LockVersion {
-    /// Returns the lockfile version.
-    fn version(&self) -> u32 {
-        self.version
-    }
+    build_encoding: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7407,6 +7428,10 @@ fn absolute_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, LockErro
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct PackageWire {
+    #[serde(default)]
+    universe: Vec<usize>,
+    #[serde(default)]
+    build_only: bool,
     #[serde(flatten)]
     id: PackageId,
     #[serde(default)]
@@ -9344,6 +9369,8 @@ impl Display for Dependency {
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct DependencyWire {
+    #[serde(default)]
+    universe: Vec<usize>,
     #[serde(flatten)]
     package_id: PackageIdForDependency,
     #[serde(default)]
@@ -9842,6 +9869,10 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
+    #[error("{0}")]
+    BuildGraph(String),
+    #[error(transparent)]
+    FileHash(#[from] FileHashError),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

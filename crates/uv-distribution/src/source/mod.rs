@@ -634,6 +634,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -769,6 +772,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1044,6 +1050,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1154,6 +1163,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1365,6 +1377,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1499,6 +1514,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1858,6 +1876,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -1949,6 +1970,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -2099,6 +2123,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()
@@ -2313,6 +2340,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             config_settings.into_owned(),
             extra_build_deps.to_vec(),
             extra_build_variables.cloned(),
+            self.build_context
+                .extra_build_requires()
+                .locked_environment(),
         );
         let cache_shard = build_info
             .cache_shard()

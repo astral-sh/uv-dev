@@ -7,9 +7,9 @@ use rustc_hash::FxHashMap;
 
 use uv_configuration::{Constraints, HashCheckingMode};
 use uv_distribution_types::{
-    ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, MetadataHashPolicy,
-    Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement, VersionId,
-    satisfies_require_hashes,
+    ArchiveHashPolicy, BuiltDist, Dist, DistributionMetadata, HashCollection, HashValidation,
+    MetadataHashPolicy, Name, Requirement, RequirementSource, Resolution, ResolvedDist, SourceDist,
+    UnresolvedRequirement, VersionId, satisfies_require_hashes,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -427,6 +427,35 @@ impl HashStrategy {
             marker_env,
             mode,
         )
+    }
+
+    /// Require a locked hash for every archive. Git sources are addressed by commit and source
+    /// directories are read locally. Callers install this resolution directly without lookups.
+    pub fn from_locked_resolution(resolution: &Resolution) -> Result<Self, HashStrategyError> {
+        for (resolved, hashes) in resolution.hashes() {
+            let ResolvedDist::Installable { dist, .. } = resolved else {
+                continue;
+            };
+            let archive = match dist.as_ref() {
+                Dist::Built(
+                    BuiltDist::Registry(_) | BuiltDist::DirectUrl(_) | BuiltDist::Path(_),
+                )
+                | Dist::Source(
+                    SourceDist::Registry(_) | SourceDist::DirectUrl(_) | SourceDist::Path(_),
+                ) => true,
+                Dist::Built(BuiltDist::GitPath(_))
+                | Dist::Source(
+                    SourceDist::GitDirectory(_) | SourceDist::GitPath(_) | SourceDist::Directory(_),
+                ) => false,
+            };
+            if archive && hashes.is_empty() {
+                return Err(HashStrategyError::MissingHashes(
+                    resolved.name().to_string(),
+                    HashCheckingMode::Require,
+                ));
+            }
+        }
+        Self::from_resolution(resolution, HashCheckingMode::Verify)
     }
 
     /// Read the required hashes from a [`Resolution`].

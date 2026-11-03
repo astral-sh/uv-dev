@@ -25,19 +25,22 @@ pub enum ExtraBuildRequiresError {
 
 /// Lowered extra build dependencies with source resolution applied.
 #[derive(Debug, Clone, Default)]
-pub struct ExtraBuildRequires(BTreeMap<PackageName, Vec<ExtraBuildRequirement>>);
+pub struct ExtraBuildRequires {
+    requirements: BTreeMap<PackageName, Vec<ExtraBuildRequirement>>,
+    locked_environment: Option<String>,
+}
 
 impl std::ops::Deref for ExtraBuildRequires {
     type Target = BTreeMap<PackageName, Vec<ExtraBuildRequirement>>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.requirements
     }
 }
 
 impl std::ops::DerefMut for ExtraBuildRequires {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.requirements
     }
 }
 
@@ -46,7 +49,7 @@ impl IntoIterator for ExtraBuildRequires {
     type IntoIter = std::collections::btree_map::IntoIter<PackageName, Vec<ExtraBuildRequirement>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.requirements.into_iter()
     }
 }
 
@@ -54,7 +57,10 @@ impl FromIterator<(PackageName, Vec<ExtraBuildRequirement>)> for ExtraBuildRequi
     fn from_iter<T: IntoIterator<Item = (PackageName, Vec<ExtraBuildRequirement>)>>(
         iter: T,
     ) -> Self {
-        Self(iter.into_iter().collect())
+        Self {
+            requirements: iter.into_iter().collect(),
+            locked_environment: None,
+        }
     }
 }
 
@@ -93,6 +99,15 @@ impl CacheKey for ExtraBuildRequirement {
 }
 
 impl ExtraBuildRequires {
+    /// Set the cache identity of the locked build environments for this interpreter.
+    pub fn set_locked_environment(&mut self, fingerprint: String) {
+        self.locked_environment = Some(fingerprint);
+    }
+
+    pub fn locked_environment(&self) -> Option<&str> {
+        self.locked_environment.as_deref()
+    }
+
     /// Apply runtime constraints from a resolution to the extra build requirements.
     pub fn match_runtime(self, resolution: &Resolution) -> Result<Self, ExtraBuildRequiresError> {
         self.into_iter()

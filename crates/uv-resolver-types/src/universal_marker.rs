@@ -100,6 +100,13 @@ pub struct UniversalMarker {
 pub struct ActivatedConflictItems(Vec<ExtraName>);
 
 impl ActivatedConflictItems {
+    /// Return the encoded selections in a stable order for use after graph traversal.
+    pub fn into_sorted_extras(mut self) -> Vec<ExtraName> {
+        self.0.sort_unstable();
+        self.0.dedup();
+        self.0
+    }
+
     /// Encodes the given activated projects, extras, and groups.
     ///
     /// Each extra and group must be scoped to the particular package that it's enabled for.

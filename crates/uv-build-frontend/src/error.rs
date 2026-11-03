@@ -8,7 +8,7 @@ use crate::PythonRunnerOutput;
 use owo_colors::OwoColorize;
 use regex::regex;
 use thiserror::Error;
-use uv_configuration::BuildOutput;
+use uv_configuration::{BuildKind, BuildOutput};
 use uv_distribution_types::IsBuildBackendError;
 use uv_errors::{Hinted, Hints};
 use uv_fs::Simplified;
@@ -38,6 +38,10 @@ pub enum Error {
     RequirementsResolve(&'static str, #[source] AnyErrorBuild),
     #[error("Failed to install requirements from {0}")]
     RequirementsInstall(&'static str, #[source] AnyErrorBuild),
+    #[error(
+        "`get_requires_for_build_{kind}` requested `{name}`, which was not declared in the build requirements"
+    )]
+    UndeclaredBuildRequirement { kind: BuildKind, name: PackageName },
     #[error("Failed to create temporary virtualenv")]
     Virtualenv(#[from] uv_virtualenv::Error),
     // Build backend errors
@@ -71,6 +75,7 @@ impl IsBuildBackendError for Error {
             | Self::BuildScriptPath(_)
             | Self::CyclicBuildDependency(_)
             | Self::UnmatchedRuntime(..)
+            | Self::UndeclaredBuildRequirement { .. }
             | Self::Lowering(_) => true,
             Self::RequirementsResolve(_, error) | Self::RequirementsInstall(_, error) => {
                 error.is_user_failure()
@@ -92,6 +97,7 @@ impl IsBuildBackendError for Error {
             | Self::RequirementsInstall(_, _)
             | Self::Virtualenv(_)
             | Self::CyclicBuildDependency(_)
+            | Self::UndeclaredBuildRequirement { .. }
             | Self::UnmatchedRuntime(_, _) => false,
             Self::CommandFailed(_, _)
             | Self::BuildBackend(_)
