@@ -18916,6 +18916,44 @@ fn build_hash_project() -> Result<(TestContext, String)> {
     Ok((context, build_hash))
 }
 
+/// A runtime-matched build requirement inherits the wheel selected by a path source.
+#[test]
+fn match_runtime_wheel_source() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["build-dependency"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.sources]
+        build-dependency = { path = "wheels/build_dependency-1.0.0-py3-none-any.whl" }
+
+        [tool.uv.extra-build-dependencies]
+        project = [{ requirement = "build-dependency", match-runtime = true }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-editable"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0 (from file://[TEMP_DIR]/wheels/build_dependency-1.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    Ok(())
+}
+
 /// A project with an in-tree backend in a subdirectory for `--with` tests.
 fn build_hash_project_in_subdirectory() -> Result<(TestContext, String)> {
     let (context, hash) = build_hash_project()?;
