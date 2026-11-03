@@ -39,6 +39,8 @@ def cause(result):
     # The pinned harness records the POSIX wait status from wait4.
     if summary["exit_code"] in (124, 124 << 8):
         return "timeout"
+    if summary.get("oom_kills") or summary.get("pids_limit_hits"):
+        return "resources"
     stderr = (directory / "stderr.txt").read_text(errors="replace").lower()
     if any(
         term in stderr for term in ("no space left", "out of memory", "os error 28")
@@ -153,6 +155,8 @@ def main():
         )
     baseline, left = read_results(args.baseline)
     candidate, right = read_results(args.candidate)
+    if baseline.get("excluded_root") != candidate.get("excluded_root"):
+        parser.error("incomparable excluded roots")
     for field in (
         "image",
         "input_sha256",

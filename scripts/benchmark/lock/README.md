@@ -120,3 +120,18 @@ docker image inspect uv-lock-transformers --format '{{.Id}}'
 Pass the resulting digest to `run.py transformers --image-id "$IMAGE_ID"`
 for both binaries. The runner verifies the image's Python minor and records
 its digest alongside the original fixture hash.
+
+## Measure an excluded corpus root
+
+For a separate bounded comparison of the five excluded roots present in the
+pinned CSV, supply one original CSV row and its project name, for example
+`--input "$SHARD" --excluded-root emmet-api`. The runner invokes the harness's
+lock command for that single name with the universal range `>=3.13` on
+CPython 3.14. Use an identical union cache for the baseline and candidate.
+Keep these results separate from the standard corpus series.
+
+Each run gets four CPUs, 8 GiB of memory, 512 PIDs, and ten minutes for the lock
+command with ten additional seconds for termination. On a cgroup v2 host the
+summary includes maximum RSS in KiB, OOM kills and PID-limit hits. If the
+whole container is killed, inspect the Docker state in `run.json` and the
+streamed stdout and stderr in the package directory.

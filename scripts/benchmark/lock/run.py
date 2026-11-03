@@ -71,6 +71,17 @@ def main():
         "--wheels", type=Path, help="locked tomli-w and tqdm harness wheels"
     )
     parser.add_argument("--input", type=Path, help="CSV shard of the pinned corpus")
+    parser.add_argument(
+        "--excluded-root",
+        choices=(
+            "emmet-api",
+            "edx-enterprise",
+            "tf-models-nightly",
+            "kcli",
+            "llm-dialog-manager",
+        ),
+        help="measure one excluded corpus root separately using its one-row input CSV",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
         "--workers",
@@ -92,6 +103,12 @@ def main():
     args = parser.parse_args()
     if os.getuid() == 0:
         parser.error("run as a non-root user")
+    if args.excluded_root and (
+        args.project != "corpus" or not args.input or args.limit is not None
+    ):
+        parser.error(
+            "--excluded-root requires corpus and a one-row --input without --limit"
+        )
     if args.network != "none":
         (network,) = json.loads(
             subprocess.check_output(["docker", "network", "inspect", args.network])
@@ -256,6 +273,11 @@ def main():
         ]
         if args.limit is not None:
             task += ["--limit", str(args.limit)]
+        if args.excluded_root:
+            # Read the cgroup OOM status before removing a stopped container.
+            command.remove("--rm")
+            command += mount(HERE / "excluded.py", "/excluded.py")
+            task = ["python", "/excluded.py", args.excluded_root]
         input_hash = file_hash(corpus)
     else:
         fixture = ROOT / PROJECTS[args.project]
@@ -280,9 +302,13 @@ def main():
         "settings": settings,
         "harness": HARNESS if args.project == "corpus" else None,
         "limit": args.limit,
-        "workers": args.workers if args.project == "corpus" else 1,
+        "workers": args.workers
+        if args.project == "corpus" and not args.excluded_root
+        else 1,
         "seed_sha256": file_hash(args.seed) if args.seed else None,
     }
+    if args.excluded_root:
+        receipt["excluded_root"] = args.excluded_root
     if not receipt["python"].startswith(f"Python {selector}."):
         parser.error(f"image must provide CPython {selector}")
     (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -310,6 +336,22 @@ def main():
         receipt["complete"] = True
         (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
     finally:
+        if args.excluded_root:
+            inspect = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .State}}", name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if inspect.returncode == 0:
+                state = json.loads(inspect.stdout)
+                receipt["container_state"] = {
+                    key: state[key]
+                    for key in ("OOMKilled", "ExitCode", "StartedAt", "FinishedAt")
+                }
+                (args.output / "run.json").write_text(
+                    json.dumps(receipt, indent=2) + "\n"
+                )
         subprocess.run(
             ["docker", "rm", "-f", name],
             stdout=subprocess.DEVNULL,
