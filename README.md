@@ -10,19 +10,26 @@ The reporter asks whether the individual SHA-256 sidecar for the uv 0.13.7
 Windows x86_64 ZIP is incorrect, while saying the corresponding entry in
 `sha256.sum` is fine. The report provides the sidecar URL, platform, and
 version, but no observed digest, verification command, or error output. The
-issue was opened on 2026-11-03 at 12:24:15 UTC and had no comments when inspected.
+issue was opened on 2026-11-03 at 12:24:15 UTC. The reporter subsequently
+confirmed that the checksum is correct and retracted the original claim.
 
 astral-sh/uv#18736 covers a WheelNext installer checksum mismatch, and astral-sh/uv#13074 covers installer verification support. Neither tracks this alleged release-sidecar discrepancy. A targeted reproduction is **not_reproducible**: an independent public download of the exact 0.13.7 ZIP passes verification against both checksum files.
 
-## Draft response
+## Resolution status
 
-I checked the published 0.13.7 Windows ZIP: its SHA-256 is `0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021`, matching both `uv-x86_64-pc-windows-msvc.zip.sha256` and the entry in `sha256.sum`. GitHub's recorded asset digest agrees too. Could you share the checksum value you received, the exact verification command or tool, and its full output? That would help explain the discrepancy you're seeing.
+The issue author, 0a5d8, confirmed on 2026-11-03 at 12:44:34 UTC that the
+checksum is correct and the initial report was mistaken. This agrees with the
+independent artifact verification below. The clarification resolves the
+reported discrepancy; it supplies no explanation of the original observation
+or verification tool. No release defect or code change is established.
+
+Source: https://github.com/astral-sh/uv/issues/23074#issuecomment-6604107425
 
 ## Classification
 
 Classification remains **question**; reproduction outcome is **not_reproducible**. The report identifies the exact release assets, so their consistency can be tested despite the missing verification command.
 
-The currently published 0.13.7 ZIP hashes to the value recorded in both its individual .sha256 file and sha256.sum, and GitHub's asset digest agrees. The checkout also validates archive bytes against sidecar checksums before publication. No incorrect checksum, source-confirmed correctness defect, or matching existing discussion was established. Clarification requires the value and verification output the reporter received; these checks do not establish what they received earlier.
+The currently published 0.13.7 ZIP hashes to the value recorded in both its individual .sha256 file and sha256.sum, and GitHub's asset digest agrees. The checkout also validates archive bytes against sidecar checksums before publication. No incorrect checksum, source-confirmed correctness defect, or matching existing discussion was established. The reporter now confirms the checksum is correct, resolving the original question. The checks do not establish what they received earlier, and the comment does not identify the source of their initial mistake.
 
 This classification reflects the checked artifacts, rather than the issue's
 question-mark title. An established incorrect checksum would be a bug. There
@@ -98,7 +105,7 @@ the checksum files themselves, distinct from the archive digest they record.
 
 Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for the archive name, `.zip.sha256`, `sha256.sum`, and release-checksum assembly references; no test directly covering agreement between the published release archive, sidecar, and combined checksum file was found. Read `crates/uv/tests/it/self_update.rs`: `check_self_update` installs and updates uv through `axoupdater::test::helpers::perform_runtest`, then asserts the resulting binary's `--version` succeeds. It does not compare these two published checksum files or pin release 0.13.7. The other tests there use offline errors or mocked update metadata and dry-run output, rather than validating these asset contents. No existing test is claimed to cover the reported discrepancy. The reproduction used direct artifact verification; no Rust tests were run or added.
 
-These checks establish consistency of the assets returned now, not what the reporter previously downloaded. To investigate their result, request the exact verification command or tool and version, its complete output, the expected and observed digests, and the precise ZIP/checksum URLs or downloaded files. No cause such as caching, signing, or tool behavior has been established.
+These checks establish consistency of the assets returned at verification time, not what the reporter previously downloaded. The reporter has since confirmed that the checksum is correct, so further reproduction details are no longer needed to resolve this report. No cause such as caching, signing, or tool behavior has been established.
 
 ## Related
 
@@ -161,7 +168,10 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 
 ## Next maintainer step
 
-Request the digest the reporter received, their exact verification command or
-tool, and its complete output. Compare that evidence with the currently
-matching files before assigning a cause or treating this as a release bug.
+The reporter has withdrawn the checksum concern, and independent verification
+found no discrepancy. The issue can be closed as resolved without a code
+change; no further reproduction request is needed unless new contradictory
+evidence is supplied. The supplied discussion does not establish whether the
+issue has already been closed.
+
 No GitHub changes were made, and no checkout files were modified.
