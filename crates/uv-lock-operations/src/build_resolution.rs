@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, trace};
 
 use uv_client::RegistryClient;
-use uv_configuration::{Concurrency, Constraints, DependencyModifiers};
+use uv_configuration::{Concurrency, Constraints, DependencyModifiers, HashCheckingMode};
 use uv_dispatch::{BuildDispatch, SourceBuildRequirements};
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DistributionMetadata, Requirement, ResolutionRecorder};
@@ -16,8 +16,9 @@ use uv_pypi_types::Conflicts;
 use uv_requirements::LookaheadResolver;
 use uv_resolve_operations::Error;
 use uv_resolver::{
-    Exclusions, FlatIndex, InMemoryIndex, Manifest, Preference, Preferences, PythonRequirement,
-    Resolver, ResolverEnvironment, ResolverOutput, RuntimePreferenceMode, UniversalMarker,
+    BuildConstraintHashes, Exclusions, FlatIndex, InMemoryIndex, Manifest, Preference, Preferences,
+    PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, RuntimePreferenceMode,
+    UniversalMarker,
 };
 use uv_static::EnvVars;
 use uv_types::{EmptyInstalledPackages, HashStrategy};
@@ -68,7 +69,7 @@ pub(crate) async fn resolve_builds(
     dispatch: &BuildDispatch<'_>,
     constraints: &Constraints,
     runtime_hasher: &HashStrategy,
-    build_hasher: &HashStrategy,
+    build_hash_checking: HashCheckingMode,
     root: &Path,
     project_domain: MarkerTree,
     previous: &BuildLockPins,
@@ -87,11 +88,14 @@ pub(crate) async fn resolve_builds(
         }
     };
     let preferences = Preference::from_runtime(runtime, mode);
+    let build_hashes =
+        BuildConstraintHashes::from_constraints(constraints, build_hash_checking, project_domain)?;
     let build_recorder = recorder.map(|_| ResolutionRecorder::default());
 
     let solve = async |owners: &[SourceBuildRequirements],
                        scope: UniversalMarker,
-                       pins: Option<&BuildPins>| {
+                       pins: Option<&BuildPins>,
+                       build_hasher: &HashStrategy| {
         // Each batch shares a scope. Seed the forks to respect runtime preferences and
         // narrow Requires-Python even when a build requirement has no Python marker.
         let forks = if runtime.fork_markers.is_empty() {
@@ -126,8 +130,10 @@ pub(crate) async fn resolve_builds(
         let index = InMemoryIndex::default();
         // The fetch policy above belongs to these owners. A distribution that needs a
         // metadata build has its own isolated build environment.
-        let database =
-            || DistributionDatabase::new(client, dispatch, concurrency.downloads_semaphore.clone());
+        let database = || {
+            DistributionDatabase::new(client, dispatch, concurrency.downloads_semaphore.clone())
+                .with_recorder(build_recorder.clone())
+        };
         let modifiers = DependencyModifiers::default();
         let (lookaheads, hasher) = LookaheadResolver::new(
             &requirements,
@@ -181,7 +187,7 @@ pub(crate) async fn resolve_builds(
         .discover_build_requirements(runtime, runtime, UniversalMarker::TRUE, runtime_hasher)
         .await?;
     while !pending.is_empty() {
-        let mut groups = BTreeMap::<_, Vec<_>>::new();
+        let mut groups = BTreeMap::new();
         for mut owner in std::mem::take(&mut pending) {
             let key = (owner.owner.version_id(), owner.owner.index().cloned());
             let covered = seen.entry(key).or_insert(UniversalMarker::FALSE);
@@ -195,18 +201,23 @@ pub(crate) async fn resolve_builds(
             for (scope, pins) in
                 previous.for_owner(&owner.owner, root, owner.marker, project_domain)?
             {
-                let mut owner = owner.clone();
-                owner.marker = scope;
-                groups.entry((scope, pins)).or_default().push(owner);
+                for (scope, hasher) in build_hashes.for_scope(scope) {
+                    let mut owner = owner.clone();
+                    owner.marker = scope;
+                    let (owners, _) = groups
+                        .entry((scope, pins))
+                        .or_insert_with(|| (Vec::new(), hasher));
+                    owners.push(owner);
+                }
             }
         }
 
-        for ((scope, pins), mut owners) in groups {
+        for ((scope, pins), (mut owners, hasher)) in groups {
             owners.sort_by_cached_key(|owner| {
                 (owner.owner.version_id(), owner.owner.index().cloned())
             });
             let batches = resolve_scope(owners, strategy, async |owners| {
-                solve(owners, scope, pins).await
+                solve(owners, scope, pins, hasher).await
             })
             .await
             .map_err(|error| error.with_resolution_context("build"))?;
@@ -226,7 +237,7 @@ pub(crate) async fn resolve_builds(
         }
     }
     if let (Some(recorder), Some(build_recorder)) = (recorder, build_recorder) {
-        recorder.record_build_cutoffs(build_recorder.take());
+        recorder.record_build_lookups(build_recorder.take());
     }
     Ok(builds)
 }

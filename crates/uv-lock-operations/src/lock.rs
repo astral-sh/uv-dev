@@ -1118,8 +1118,6 @@ async fn do_lock(
                     .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
                     .transpose()?
                     .unwrap_or_default();
-                let build_hasher = HashStrategy::collect(HashCollection::Url)
-                    .with_constraint_hashes(&build_hasher)?;
                 let builds = Box::pin(resolve_builds(
                     &resolution,
                     BuildResolutionStrategy::from_env()?,
@@ -1130,7 +1128,7 @@ async fn do_lock(
                     &build_dispatch,
                     &build_constraints,
                     &runtime_hasher,
-                    &build_hasher,
+                    *build_hash_checking,
                     target.install_path(),
                     lock.build_project_domain(),
                     &previous_pins,

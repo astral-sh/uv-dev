@@ -109,6 +109,173 @@ fn lock_build_inputs_exclude_newer() -> Result<()> {
     Ok(())
 }
 
+/// The Python used to run uv can see only one of the two trusted build constraints.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_hashes_conditional_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("links")
+        .copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12,<3.14"
+
+        [build-system]
+        requires = ["ok"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "build-dependency-hashes"]
+        no-index = true
+        find-links = ["links"]
+        require-build-hashes = true
+        build-constraint-dependencies = [
+            { requirement = "ok==1 ; python_version < '3.13'", hashes = ["sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f"] },
+            { requirement = "ok==2 ; python_version >= '3.13'", hashes = ["sha256:8163cd4f0477f8e93b856ac6a517fe5fa0f29339291fe2807d5376df685f6697"] },
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    let parsed = lock.parse::<toml_edit::DocumentMut>()?;
+    assert_snapshot!(parsed["build-universes"].to_string().trim(), @r#"
+    [{ owner = { name = "project", version = "1", source = { editable = "." } }, marker = "python_full_version != '3.13.*'", inputs = [{ kind = "backend", name = "ok" }], roots = [
+        { name = "ok", version = "1.0.0", source = { registry = "links" } },
+    ] }, { owner = { name = "project", version = "1", source = { editable = "." } }, marker = "python_full_version == '3.13.*'", inputs = [{ kind = "backend", name = "ok" }], roots = [
+        { name = "ok", version = "2.0.0", source = { registry = "links" } },
+    ] }]
+    "#);
+    Ok(())
+}
+
+/// A conditional hash for a version must not authorize that same version outside its marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_hashes_outside_constraint_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("links")
+        .copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12,<3.14"
+
+        [build-system]
+        requires = ["ok==1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "build-dependency-hashes"]
+        no-index = true
+        find-links = ["links"]
+        require-build-hashes = true
+        build-constraint-dependencies = [
+            { requirement = "ok==1 ; python_version < '3.13'", hashes = ["sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f"] },
+        ]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Hash-checking is required, but no trusted hash was provided for: `ok`
+    ");
+    Ok(())
+}
+
+/// A build-only direct wheel consumes static metadata during lookahead, before the solver
+/// requests its cached metadata. Its transitive dependencies belong to the locked build.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_direct_wheel_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"1".parse()?).build();
+    let backend = context.temp_dir.child(filename);
+    backend.write_binary(&wheel)?;
+    let url = SafeUrl::from_file_path(backend.path()).map_err(|()| anyhow!("invalid wheel URL"))?;
+    context
+        .temp_dir
+        .child("links")
+        .copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend @ {url}"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "resolution-inputs"]
+        no-index = true
+        find-links = ["links"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "backend"
+        version = "1"
+        requires-dist = ["ok==1"]
+    "#};
+    pyproject.write_str(&project)?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    let parsed = original.parse::<toml_edit::DocumentMut>()?;
+    assert_snapshot!(parsed["manifest"]["dependency-metadata"].to_string().trim(), @r#"[{ name = "backend", version = "1", requires-dist = ["ok==1"] }]"#);
+
+    pyproject.write_str(&project.replace("ok==1", "ok==2"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(diff_snapshot(&original, &context.read("uv.lock"), 1), @r#"
+        --- old
+        +++ new
+        @@ -11,3 +11,3 @@
+         version = "1"
+        -requires-dist = ["ok==1"]
+        +requires-dist = ["ok==2"]
+
+        @@ -33,3 +33,3 @@
+         [package.metadata]
+        -requires-dist = [{ name = "ok", specifier = "==1" }]
+        +requires-dist = [{ name = "ok", specifier = "==2" }]
+
+        @@ -38,6 +38,6 @@
+         name = "ok"
+        -version = "1.0.0"
+        +version = "2.0.0"
+         source = { registry = "links" }
+         wheels = [
+        -    { path = "ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" },
+        +    { path = "ok-2.0.0-py3-none-any.whl", hash = "sha256:8163cd4f0477f8e93b856ac6a517fe5fa0f29339291fe2807d5376df685f6697" },
+         ]
+        "#);
+    });
+    Ok(())
+}
+
 /// Re-encoding a lock must keep its audited build-only version when a newer wheel is available.
 #[cfg(feature = "test-universal")]
 #[test]
