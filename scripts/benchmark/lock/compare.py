@@ -42,6 +42,8 @@ def cause(result):
     if summary.get("oom_kills") or summary.get("pids_limit_hits"):
         return "resources"
     stderr = (directory / "stderr.txt").read_text(errors="replace").lower()
+    if "git executable not found" in stderr:
+        return "missing-tool"
     if any(
         term in stderr for term in ("no space left", "out of memory", "os error 28")
     ):
