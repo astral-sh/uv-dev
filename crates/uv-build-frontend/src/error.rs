@@ -109,7 +109,8 @@ impl Hinted for Error {
             ),
             Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
             Self::UnmatchedRuntime(requirement, package) => Hints::from(format!(
-                "If uv needs to build `{package}` for metadata before resolving `{requirement}`, provide static metadata or pin the build requirement without `match-runtime`."
+                "If uv needs to build `{package}` for metadata before resolving `{requirement}`, \
+                 provide static metadata or pin the build requirement without `match-runtime`."
             )),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
