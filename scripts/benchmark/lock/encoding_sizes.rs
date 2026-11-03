@@ -33,6 +33,7 @@ fn sizes(path: &Path) -> Result<Value, Box<dyn Error>> {
             "encoding": name,
             "bytes": encoded.len(),
             "entries": encoded.lines().filter(|line| *line == "[[package]]").count(),
+            "build_universe_entries": encoded.lines().filter(|line| *line == "[[build-universes]]").count(),
             "serialize_ns": samples_ns,
             "median_serialize_ns": ordered_ns[1],
             "roundtrip_equal": decoded == expected,

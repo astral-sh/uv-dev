@@ -96,12 +96,14 @@ def cause(result):
 
 def lock_metrics(directory):
     data = (directory / "uv.lock").read_bytes()
-    packages = tomllib.loads(data.decode())["package"]
+    lock = tomllib.loads(data.decode())
+    packages = lock["package"]
     names = {p["name"] for p in packages}
     versions = {(p["name"], p["version"]) for p in packages if "version" in p}
     return {
         "lock_bytes": len(data),
         "entries": len(packages),
+        "build_universe_entries": len(lock.get("build-universes", [])),
         "distinct_names": len(names),
         "distinct_versions": len(versions),
         "extra_entries_for_same_name": len(packages) - len(names),

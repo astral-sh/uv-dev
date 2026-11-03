@@ -157,8 +157,8 @@ cargo build --locked --profile profiling -p uv-lock --example encoding_sizes
 
 In a network-disabled analysis container, mount the example binary and the
 measured locks read-only. Pass one or more lockfile paths to the example. Each
-JSON line records the byte and package-row counts for all three encodings and
-three timings of `Lock::to_toml` in nanoseconds. Parsing, encoding selection,
+JSON line records the byte count, package rows, explicit build-universe rows,
+and three timings of `Lock::to_toml` in nanoseconds for each encoding. Parsing, encoding selection,
 and graph comparison happen outside the timed section. To measure the writer's
 cost for a larger graph, pass the runtime-only and build-locked files to the
 same example binary and compare their dependency-encoding medians.
