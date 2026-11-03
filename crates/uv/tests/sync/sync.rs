@@ -19247,7 +19247,10 @@ fn locked_build_dependency_from_hook_with_compatible_bounds() -> Result<()> {
 fn locked_build_hashes_local_find_links() -> Result<()> {
     let (context, _) = build_hash_project()?;
     let pyproject = context.read("pyproject.toml");
-    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         {pyproject}
         [dependency-groups]
         dev = ["dynamic-dependency==1.0.0"]
