@@ -345,6 +345,15 @@ impl Lock {
         self.builds.as_ref().map(|builds| builds.encoding)
     }
 
+    /// Serialize the recorded environments in the selected encoding.
+    #[must_use]
+    pub fn with_build_encoding(mut self, encoding: BuildEncoding) -> Self {
+        if let Some(builds) = &mut self.builds {
+            builds.encoding = encoding;
+        }
+        self
+    }
+
     /// Whether isolated builds must use the recorded build environments.
     pub fn locks_builds(&self) -> bool {
         self.builds.is_some()

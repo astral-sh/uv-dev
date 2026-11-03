@@ -40,6 +40,56 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// Re-encoding a lock must keep its audited build-only version when a newer wheel is available.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_encoding_reuses_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok"]
+        build-backend = "ok"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#})?;
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    uv_snapshot!(context.filters(), context.lock().args(["--preview-features", "build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-2*.whl"])?;
+    uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING, "package").args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(diff_snapshot(&original, &context.read("uv.lock"), 1), @r#"
+        --- old
+        +++ new
+        @@ -3,3 +3,3 @@
+         requires-python = ">=3.12"
+        -build-encoding = "dependency"
+        +build-encoding = "package"
+        "#);
+    });
+    Ok(())
+}
+
 /// Runtime metadata is static, but an editable root's isolated build can still change.
 #[cfg(feature = "test-universal")]
 #[test]
