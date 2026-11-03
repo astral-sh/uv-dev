@@ -159,6 +159,243 @@ fn lock_build_encoding_reuses_versions() -> Result<()> {
     Ok(())
 }
 
+/// A dirty runtime solve can select a newer version of the owner's backend. Keep the
+/// compatible build pin until the user explicitly upgrades that package.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_relock_prefers_owner_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = ["ok>=1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    pyproject.write_str(project)?;
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features=build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-2*.whl"])?;
+    pyproject.write_str(&project.replace("dependencies = []", r#"dependencies = ["ok==2"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Added ok v2.0.0
+    "#);
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "ok", "--offline", "--no-cache"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(diff_snapshot(&locked, &context.read("uv.lock"), 1), @r#"
+        --- old
+        +++ new
+        @@ -8,18 +8,2 @@
+
+        -[[build-universes]]
+        -owner = { name = "project", version = "1", source = { editable = "." } }
+        -inputs = [{ kind = "backend", name = "ok", specifier = ">=1" }]
+        -roots = [
+        -    { name = "ok", version = "1.0.0", source = { registry = "links" } },
+        -]
+        -
+        -[[package]]
+        -build-only = true
+        -name = "ok"
+        -version = "1.0.0"
+        -source = { registry = "links" }
+        -wheels = [
+        -    { path = "ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" },
+        -]
+        -
+         [[package]]
+        @@ -36,4 +20,6 @@
+         source = { editable = "." }
+        +build-roots = [{ name = "ok" }]
+        +build-inputs = [{ kind = "backend", name = "ok", specifier = ">=1" }]
+         dependencies = [
+        -    { name = "ok", version = "2.0.0", source = { registry = "links" } },
+        +    { name = "ok" },
+         ]
+        "#);
+    });
+    Ok(())
+}
+
+/// Replacing a build-only wheel on a flat index must fail even when an unrelated runtime
+/// edit forces a solve and the index does not advertise a digest.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_relock_verifies_flat_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = ["ok==1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    pyproject.write_str(project)?;
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    let (filename, side) = WheelBuilder::new(&"side".parse()?, &"1".parse()?).build();
+    links.child(filename).write_binary(&side)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features=build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    let (filename, wheel) = WheelBuilder::new(&"ok".parse()?, &"1.0.0".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    pyproject.write_str(&project.replace("dependencies = []", r#"dependencies = ["side"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--upgrade-package", "side"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve build requirements for `project`
+      cause: Failed to download `ok==1.0.0`
+      cause: Hash mismatch for `ok==1.0.0`
+
+             Expected:
+               sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
+
+             Computed:
+               sha256:12eca69e4c9bc5a11b1e4510695c626547528d89e9e4d2ef5e41979bc95c0fa0
+    "#);
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache", "--upgrade-package", "ok"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Added side v1
+    "#);
+    Ok(())
+}
+
+/// Two owners select different wheels with the same name and version. The other owner's
+/// recorded digest cannot authorize replacement of the first wheel.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_relock_same_version_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "backend".parse()?;
+    let version = "1".parse()?;
+    let (filename, first) = WheelBuilder::new(&name, &version)
+        .files(&[("backend/data", "first")])
+        .build();
+    let (_, second) = WheelBuilder::new(&name, &version)
+        .files(&[("backend/data", "second")])
+        .build();
+    let context = context
+        .with_filter((hex::encode(Sha256::digest(&first)), "[FIRST_HASH]"))
+        .with_filter((hex::encode(Sha256::digest(&second)), "[SECOND_HASH]"));
+    let left = context.temp_dir.child("left").child(&filename);
+    let right = context.temp_dir.child("right").child(&filename);
+    left.write_binary(&first)?;
+    right.write_binary(&second)?;
+    let left_url =
+        SafeUrl::from_file_path(left.path()).map_err(|()| anyhow!("invalid file URL"))?;
+    let right_url =
+        SafeUrl::from_file_path(right.path()).map_err(|()| anyhow!("invalid file URL"))?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["first", "second"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#})?;
+    let first_manifest = context.temp_dir.child("first/pyproject.toml");
+    let project = formatdoc! {r#"
+        [project]
+        name = "first"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = ["backend @ {left_url}"]
+        build-backend = "unused"
+    "#};
+    first_manifest.write_str(&project)?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "second"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend @ {right_url}"]
+        build-backend = "unused"
+    "#})?;
+    let (filename, wheel) = WheelBuilder::new(&"side".parse()?, &version).build();
+    context
+        .temp_dir
+        .child("links")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features=build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    left.write_binary(&second)?;
+    first_manifest
+        .write_str(&project.replace("dependencies = []", r#"dependencies = ["side"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-cache", "--offline"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to read `backend @ file://[TEMP_DIR]/left/backend-1-py3-none-any.whl`
+      cause: Hash mismatch for `backend @ file://[TEMP_DIR]/left/backend-1-py3-none-any.whl`
+
+             Expected:
+               sha256:[FIRST_HASH]
+
+             Computed:
+               sha256:[SECOND_HASH]
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// Runtime metadata is static, but an editable root's isolated build can still change.
 #[cfg(feature = "test-universal")]
 #[test]

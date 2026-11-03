@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use owo_colors::OwoColorize;
@@ -19,8 +19,9 @@ use uv_distribution_types::{
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirementSpecification,
 };
 use uv_installer::SitePackages;
+use uv_lock::{BuildLockPins, BuildPins};
 use uv_normalize::PackageName;
-use uv_pep508::{MarkerEnvironment, RequirementOrigin};
+use uv_pep508::{MarkerEnvironment, MarkerTree, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
@@ -47,6 +48,14 @@ pub mod reporters;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+
+/// Existing owner-scoped selections for a project build dependency update.
+pub struct PreviousBuildLock<'a> {
+    pub pins: &'a BuildLockPins,
+    pub root: &'a Path,
+    pub project_domain: MarkerTree,
+    pub prefer_versions: bool,
+}
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
@@ -117,6 +126,7 @@ pub async fn resolve(
     flat_index: &FlatIndex,
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
+    previous_build: Option<PreviousBuildLock<'_>>,
     concurrency: &Concurrency,
     options: Options,
     recorder: Option<ResolutionRecorder>,
@@ -387,10 +397,12 @@ pub async fn resolve(
                 strategy,
                 runtime_preferences,
                 hasher,
-                async |requirements, env, index, hasher| {
-                    let hasher = hasher
-                        .clone()
-                        .augment_with_requirements(requirements.iter())?;
+                async |requirements, env, index, hasher, pins: Option<&BuildPins>| {
+                    let hasher = match pins {
+                        Some(pins) => pins.apply_hashes(hasher.clone()),
+                        None => hasher.clone(),
+                    };
+                    let hasher = hasher.augment_with_metadata_requirements(requirements.iter())?;
                     let (lookaheads, hasher) = LookaheadResolver::new(
                         &requirements,
                         constraints,
@@ -405,19 +417,55 @@ pub async fn resolve(
                     )
                     .resolve(env)
                     .await?;
-                    Ok((
+                    Ok::<_, Error>((
                         Manifest::simple(requirements)
                             .with_constraints(constraints.clone())
                             .with_lookaheads(lookaheads)
                             .with_recorder(build_recorder.clone()),
                         hasher,
+                        pins.filter(|_| {
+                            previous_build
+                                .as_ref()
+                                .is_some_and(|previous| previous.prefer_versions)
+                        })
+                        .into_iter()
+                        .flat_map(BuildPins::versions)
+                        .map(|(name, version, index)| {
+                            Preference::from_build_lock(
+                                name.clone(),
+                                version.clone(),
+                                index.cloned(),
+                            )
+                        })
+                        .collect(),
                     ))
                 },
                 async |graph, runtime, scope, owner_hasher| {
-                    build_dispatch
+                    let owners = build_dispatch
                         .discover_build_requirements(graph, runtime, scope, owner_hasher)
                         .await
-                        .map_err(Error::Anyhow)
+                        .map_err(Error::Anyhow)?;
+                    let Some(previous) = &previous_build else {
+                        return Ok(owners.into_iter().map(|owner| (owner, None)).collect());
+                    };
+                    let mut scoped = Vec::new();
+                    for owner in owners {
+                        for (marker, pins) in previous
+                            .pins
+                            .for_owner(
+                                &owner.owner,
+                                previous.root,
+                                owner.marker,
+                                previous.project_domain,
+                            )
+                            .map_err(anyhow::Error::from)?
+                        {
+                            let mut owner = owner.clone();
+                            owner.marker = marker;
+                            scoped.push((owner, pins));
+                        }
+                    }
+                    Ok(scoped)
                 },
             ))
             .await?;

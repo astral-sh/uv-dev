@@ -23,10 +23,10 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
-use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
+use uv_resolve_operations::{Error as ResolveError, PreviousBuildLock};
 use uv_resolver::{
     FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
 };
@@ -973,6 +973,7 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
+            let prefer_versions = versions_lock.is_some();
             let LockedRequirements { preferences, git } = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
@@ -1013,6 +1014,22 @@ async fn do_lock(
                             .unwrap_or_default()
                     }),
             );
+
+            let previous = existing_lock.map(ValidatedLock::into_lock);
+            let previous_pins = previous
+                .as_ref()
+                .filter(|_| build_encoding.is_some())
+                .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
+                .transpose()?;
+            let previous_build = previous_pins.as_ref().map(|pins| PreviousBuildLock {
+                pins,
+                root: target.install_path(),
+                project_domain: Lock::build_domain(
+                    &requires_python,
+                    lock_supported_environments.as_markers(),
+                ),
+                prefer_versions,
+            });
 
             // Expand the available extras for each workspace member.
             let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
@@ -1067,6 +1084,7 @@ async fn do_lock(
                 flat_index,
                 state.index(),
                 &build_dispatch,
+                previous_build,
                 concurrency,
                 options,
                 recorder.clone(),
@@ -1096,7 +1114,6 @@ async fn do_lock(
             )
             .relative_to(target.install_path())?;
 
-            let previous = existing_lock.map(ValidatedLock::into_lock);
             let lock = Lock::from_resolution(
                 &resolution,
                 manifest,
@@ -1124,20 +1141,28 @@ async fn do_lock(
             .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(encoding) = build_encoding {
-                lock.with_build_graphs(
-                    encoding,
-                    resolution
-                        .builds
-                        .iter()
-                        .map(|build| (build.owners.as_slice(), &build.graph)),
-                    target.install_path(),
-                    index_locations,
-                    &extra_build_requires,
-                )?
-                .with_missing_registry_hashes(&client, target.install_path(), concurrency.downloads)
-                .await?
-                .with_compacted_build_domains()?
-                .with_ordinary_build_roots()?
+                let lock = lock
+                    .with_build_graphs(
+                        encoding,
+                        resolution
+                            .builds
+                            .iter()
+                            .map(|build| (build.owners.as_slice(), &build.graph)),
+                        target.install_path(),
+                        index_locations,
+                        &extra_build_requires,
+                    )?
+                    .with_missing_registry_hashes(
+                        &client,
+                        target.install_path(),
+                        concurrency.downloads,
+                    )
+                    .await?;
+                if let Some(pins) = previous_pins {
+                    pins.verify(&lock)?;
+                }
+                lock.with_compacted_build_domains()?
+                    .with_ordinary_build_roots()?
             } else {
                 lock
             };

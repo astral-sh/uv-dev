@@ -31,7 +31,7 @@ use super::build_inputs::BuildInput;
 use super::{
     BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
     LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
-    SourceDist as LockedSourceDist, TagPolicy, absolute_path,
+    SourceDist as LockedSourceDist, TagPolicy, absolute_path, implicit_constraints_marker,
 };
 
 mod pins;
@@ -377,8 +377,16 @@ impl Lock {
 
     /// The supported environment, including exclusions within the Python range.
     pub fn build_project_domain(&self) -> MarkerTree {
-        let mut project =
-            self.requires_python
+        Self::build_domain(&self.requires_python, &self.supported_environments)
+    }
+
+    /// The marker domain for a build solve with the given project requirements.
+    pub fn build_domain(
+        requires_python: &RequiresPython,
+        environments: &[MarkerTree],
+    ) -> MarkerTree {
+        let python =
+            requires_python
                 .specifiers()
                 .iter()
                 .fold(MarkerTree::TRUE, |domain, specifier| {
@@ -387,15 +395,7 @@ impl Lock {
                         specifier: specifier.clone(),
                     }))
                 });
-        if !self.supported_environments.is_empty() {
-            let supported = self
-                .supported_environments
-                .iter()
-                .copied()
-                .fold(MarkerTree::FALSE, MarkerTree::or);
-            project = project.and(supported);
-        }
-        project
+        implicit_constraints_marker(python, environments)
     }
 
     /// Reuse ordinary packages only when reading the compact roots reconstructs the solved

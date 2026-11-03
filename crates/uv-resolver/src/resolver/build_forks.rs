@@ -60,7 +60,9 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
 {
     /// Solve runtime and build dependencies on sibling branches of one PubGrub root.
     /// Discovery sees the original runtime graph at every depth for `match-runtime`.
-    pub async fn resolve_with_build_forks<E: From<ResolveError>>(
+    /// Discovery splits owners at previous lock boundaries. Owners can share a build
+    /// fork when their markers and their locked selections agree.
+    pub async fn resolve_with_build_forks<'pins, P: Ord + 'pins, E: From<ResolveError>>(
         self,
         strategy: BuildForkStrategy,
         runtime_preferences: RuntimePreferenceMode,
@@ -70,13 +72,15 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             &ResolverEnvironment,
             &InMemoryIndex,
             &HashStrategy,
-        ) -> Result<(Manifest, HashStrategy), E>,
+            Option<&P>,
+        ) -> Result<(Manifest, HashStrategy, Vec<Preference>), E>,
         mut discover: impl AsyncFnMut(
             &ResolverOutput,
             &ResolverOutput,
             UniversalMarker,
             &HashStrategy,
-        ) -> Result<Vec<SourceBuildRequirements>, E>,
+        )
+            -> Result<Vec<(SourceBuildRequirements, Option<&'pins P>)>, E>,
     ) -> Result<ResolverOutput, E> {
         let state = Arc::new(self.state);
         let mut provider = self.provider;
@@ -95,26 +99,26 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
         let schedule = |fork| sender.send(fork).map_err(|_| ResolveError::ChannelClosed);
 
         let mut runtime = state.run(&provider, schedule).await?;
-        let preferences = Preferences::from_iter(
-            Preference::from_runtime(&runtime, runtime_preferences),
-            &state.env,
-        );
+        let runtime_preferences = Preference::from_runtime(&runtime, runtime_preferences);
+        let preferences = Preferences::from_iter(runtime_preferences.iter().cloned(), &state.env);
         let roots = discover(&runtime, &runtime, UniversalMarker::TRUE, &state.hasher).await?;
-        let mut pending = PendingBuilds::default();
+        let mut pending = PendingBuilds {
+            covered: FxHashMap::default(),
+            groups: Vec::new(),
+        };
         pending.enqueue(roots, strategy, &runtime.fork_markers);
         let mut builds = Vec::new();
         let hasher = HashStrategy::collect(HashCollection::Url)
             .with_verification(build_hasher.verification().clone());
 
-        let mut solve = async |owners: &[SourceBuildRequirements]| {
+        let mut solve = async |owners: &[SourceBuildRequirements], pins: Option<&P>| {
             let scope = owners[0].marker;
             let env = ResolverEnvironment::universal(vec![scope.combined()]);
             // A URL can be trusted by one root but carry different hashes in another.
-            let index = match hasher.verification() {
-                HashVerification::Unspecified => state.index.fork_versions(),
-                HashVerification::IfPresent(_) | HashVerification::Required(_) => {
-                    InMemoryIndex::default()
-                }
+            let index = match (hasher.verification(), pins) {
+                (HashVerification::Unspecified, None) => state.index.fork_versions(),
+                (HashVerification::IfPresent(_) | HashVerification::Required(_), _)
+                | (HashVerification::Unspecified, Some(_)) => InMemoryIndex::default(),
             };
             let requirements = owners
                 .iter()
@@ -122,10 +126,20 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
                 .filter(|requirement| !requirement.marker.is_disjoint(scope.pep508()))
                 .cloned()
                 .collect();
-            let (mut manifest, hasher) = prepare(requirements, &env, &index, &hasher).await?;
+            let (mut manifest, hasher, locked) =
+                prepare(requirements, &env, &index, &hasher, pins).await?;
             provider.set_hasher(hasher.clone());
 
-            manifest.preferences = preferences.clone();
+            manifest.preferences = if locked.is_empty() {
+                preferences.clone()
+            } else {
+                Preferences::from_iter(
+                    locked
+                        .into_iter()
+                        .chain(runtime_preferences.iter().cloned()),
+                    &env,
+                )
+            };
             provider.set_allowed_yanks(AllowedYanks::from_manifest(
                 &manifest,
                 &env,
@@ -155,8 +169,10 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             let graph = Arc::new(build).run(&provider, schedule).await;
             Ok::<_, E>(graph.map(|graph| (graph, hasher)))
         };
-        while let Some(owners) = pending.groups.pop() {
-            for (owners, (graph, hasher)) in resolve_cluster(owners, &mut solve).await? {
+        while let Some((pins, owners)) = pending.groups.pop() {
+            for (owners, (graph, hasher)) in
+                resolve_cluster(owners, &mut async |owners| solve(owners, pins).await).await?
+            {
                 let scope = owners[0].marker;
                 debug!(
                     owners = %owners.iter().map(|root| root.owner.name()).join(", "),
@@ -256,17 +272,16 @@ fn build_error(owners: &[SourceBuildRequirements], error: ResolveError) -> Resol
     ResolveError::BuildDependencies(packages, Box::new(error))
 }
 
-#[derive(Default)]
-struct PendingBuilds {
+struct PendingBuilds<'pins, P> {
     /// A source build can recur through another build dependency. Only visit new marker regions.
     covered: FxHashMap<(DistributionId, Option<Version>), UniversalMarker>,
-    groups: Vec<Vec<SourceBuildRequirements>>,
+    groups: Vec<(Option<&'pins P>, Vec<SourceBuildRequirements>)>,
 }
 
-impl PendingBuilds {
+impl<'pins, P: Ord> PendingBuilds<'pins, P> {
     fn enqueue(
         &mut self,
-        mut owners: Vec<SourceBuildRequirements>,
+        mut owners: Vec<(SourceBuildRequirements, Option<&'pins P>)>,
         strategy: BuildForkStrategy,
         runtime_forks: &[UniversalMarker],
     ) {
@@ -276,7 +291,7 @@ impl PendingBuilds {
         } else {
             runtime_forks
         };
-        owners.sort_by(|left, right| {
+        owners.sort_by(|(left, _), (right, _)| {
             left.owner
                 .name()
                 .cmp(right.owner.name())
@@ -287,7 +302,7 @@ impl PendingBuilds {
                         .cmp(&right.owner.distribution_id())
                 })
         });
-        for owner in owners {
+        for (owner, pins) in owners {
             let covered = self
                 .covered
                 .entry((
@@ -306,11 +321,14 @@ impl PendingBuilds {
                 let mut root = owner.clone();
                 root.marker = marker;
                 match strategy {
-                    BuildForkStrategy::Clustered => groups.entry(marker).or_default().push(root),
-                    BuildForkStrategy::PerPackage => self.groups.push(vec![root]),
+                    BuildForkStrategy::Clustered => {
+                        groups.entry((marker, pins)).or_default().push(root);
+                    }
+                    BuildForkStrategy::PerPackage => self.groups.push((pins, vec![root])),
                 }
             }
         }
-        self.groups.extend(groups.into_values());
+        self.groups
+            .extend(groups.into_iter().map(|((_, pins), owners)| (pins, owners)));
     }
 }
