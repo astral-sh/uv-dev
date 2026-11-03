@@ -80,7 +80,7 @@ impl BuildInput {
         Ok(Some(self))
     }
 
-    pub(super) fn collect(
+    fn collect(
         backend: &[Requirement],
         extras: &ExtraBuildRequires,
         owner: &PackageName,
@@ -114,7 +114,7 @@ impl BuildInput {
 }
 
 impl Source {
-    pub(super) fn mutable_build_directory(&self) -> Option<&Path> {
+    fn mutable_build_directory(&self) -> Option<&Path> {
         match self {
             Self::Directory(path) | Self::Editable(path) => Some(path),
             Self::Registry(_)
