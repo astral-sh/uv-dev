@@ -81,37 +81,33 @@ impl CacheKey for ExtraBuildRequirement {
 
 impl ExtraBuildRequires {
     /// Apply runtime constraints from a resolution to the extra build requirements.
-    pub fn match_runtime(self, resolution: &Resolution) -> Result<Self, ExtraBuildRequiresError> {
-        self.into_iter()
-            .filter(|(_, requirements)| !requirements.is_empty())
-            .filter(|(name, _)| resolution.distributions().any(|dist| dist.name() == name))
-            .map(|(name, requirements)| {
-                let requirements = requirements
-                    .into_iter()
-                    .map(|mut extra| {
-                        if extra.match_runtime {
-                            if !extra.requirement.source.is_empty() {
-                                return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
-                                    extra.requirement.name.clone(),
-                                    Box::new(extra.requirement.source),
-                                ));
-                            }
-                            let dist = resolution
-                                .distributions()
-                                .find(|dist| dist.name() == &extra.requirement.name)
-                                .ok_or_else(|| {
-                                    ExtraBuildRequiresError::NotFound(
-                                        extra.requirement.name.clone(),
-                                    )
-                                })?;
-                            extra.requirement.source = RequirementSource::from(dist);
-                        }
-                        Ok::<_, ExtraBuildRequiresError>(extra)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok::<_, ExtraBuildRequiresError>((name, requirements))
-            })
-            .collect::<Result<Self, _>>()
+    pub fn match_runtime(
+        mut self,
+        resolution: &Resolution,
+    ) -> Result<Self, ExtraBuildRequiresError> {
+        for (owner, requirements) in self.iter_mut() {
+            for extra in requirements.iter_mut().filter(|extra| extra.match_runtime) {
+                let requirement = &mut extra.requirement;
+                if !requirement.source.is_empty() {
+                    return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
+                        requirement.name.clone(),
+                        Box::new(requirement.source.clone()),
+                    ));
+                }
+
+                if let Some(dist) = resolution
+                    .distributions()
+                    .find(|dist| dist.name() == &requirement.name)
+                {
+                    requirement.source = RequirementSource::from(dist);
+                } else if resolution.distributions().any(|dist| dist.name() == owner) {
+                    return Err(ExtraBuildRequiresError::NotFound(requirement.name.clone()));
+                }
+                // An absent owner can still be built recursively. Leave a missing runtime pin
+                // unresolved so the frontend rejects it if that build is actually requested.
+            }
+        }
+        Ok(self)
     }
 }
 
