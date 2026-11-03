@@ -9,6 +9,7 @@ import re
 import subprocess
 import tomllib
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -43,6 +44,28 @@ def mount(source, destination, *, writable=False):
 def file_hash(path):
     with path.open("rb") as file:
         return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+@contextmanager
+def run_receipt(directory, receipt):
+    path = directory / "run.json"
+    with path.open("x") as initial:
+        initial.write(json.dumps(receipt, indent=2) + "\n")
+        initial.flush()
+        try:
+            yield
+        finally:
+            if receipt["complete"] or "container_state" in receipt:
+                identity = os.fstat(initial.fileno())
+                if identity.st_nlink != 1 or not os.path.samestat(
+                    identity, path.lstat()
+                ):
+                    raise RuntimeError("benchmark receipt changed during the run")
+                # Publish a complete document without opening the old path for writing.
+                final = directory / "run.json.tmp"
+                with final.open("x") as file:
+                    file.write(json.dumps(receipt, indent=2) + "\n")
+                final.replace(path)
 
 
 def main():
@@ -120,6 +143,17 @@ def main():
     )
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
+    args.cache = args.cache.resolve()
+    args.output = args.output.resolve()
+    outputs = [args.output]
+    if args.continue_seed_from:
+        args.continue_seed_from = args.continue_seed_from.resolve()
+        outputs.append(args.continue_seed_from)
+    if any(
+        output.is_relative_to(args.cache) or args.cache.is_relative_to(output)
+        for output in outputs
+    ):
+        parser.error("cache and run output directories must be disjoint")
     if args.source_pair and any(
         not re.fullmatch("[0-9a-f]{40}", commit) for commit in args.source_pair
     ):
@@ -397,53 +431,49 @@ def run(args, parser):
     results = args.output / "results"
     results.mkdir()
     command += mount(results, "/out", writable=True)
-    (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
     for key, value in env.items():
         command += ["--env", f"{key}={value}"]
-    if args.seed:
-        # Extract package-created cache files only inside a disposable container.
-        subprocess.run(
-            [
-                *offline,
-                *mount(args.seed, "/seed.tar"),
-                *mount(args.cache, "/cache", writable=True),
-                image,
-                "tar",
-                "--no-same-owner",
-                "-xf",
-                "/seed.tar",
-                "-C",
-                "/cache",
-            ],
-            check=True,
-        )
-    try:
-        subprocess.run([*command, image, *task], check=True, timeout=args.timeout)
-        receipt["complete"] = True
-        (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    finally:
-        if args.excluded_root:
-            inspect = subprocess.run(
-                ["docker", "inspect", "--format", "{{json .State}}", name],
-                capture_output=True,
-                text=True,
+    with run_receipt(args.output, receipt):
+        if args.seed:
+            # Extract package-created cache files only inside a disposable container.
+            subprocess.run(
+                [
+                    *offline,
+                    *mount(args.seed, "/seed.tar"),
+                    *mount(args.cache, "/cache", writable=True),
+                    image,
+                    "tar",
+                    "--no-same-owner",
+                    "-xf",
+                    "/seed.tar",
+                    "-C",
+                    "/cache",
+                ],
+                check=True,
+            )
+        try:
+            subprocess.run([*command, image, *task], check=True, timeout=args.timeout)
+            receipt["complete"] = True
+        finally:
+            if args.excluded_root:
+                inspect = subprocess.run(
+                    ["docker", "inspect", "--format", "{{json .State}}", name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if inspect.returncode == 0:
+                    state = json.loads(inspect.stdout)
+                    receipt["container_state"] = {
+                        key: state[key]
+                        for key in ("OOMKilled", "ExitCode", "StartedAt", "FinishedAt")
+                    }
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 check=False,
             )
-            if inspect.returncode == 0:
-                state = json.loads(inspect.stdout)
-                receipt["container_state"] = {
-                    key: state[key]
-                    for key in ("OOMKilled", "ExitCode", "StartedAt", "FinishedAt")
-                }
-                (args.output / "run.json").write_text(
-                    json.dumps(receipt, indent=2) + "\n"
-                )
-        subprocess.run(
-            ["docker", "rm", "-f", name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
 
 
 if __name__ == "__main__":

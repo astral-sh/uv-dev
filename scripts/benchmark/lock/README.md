@@ -14,7 +14,9 @@ revision. Use the same native image for both cases. Airflow uses the requirement
 Use a dedicated internal IPv4 Docker bridge with `gateway_mode_ipv4=isolated`. The only service on
 the bridge should be a credential-free proxy restricted to the public PyPI index and file hosts. The
 workload mounts one binary, the required fixture or harness inputs, and dedicated writable cache and
-output directories. Each index-backed command uses the same absolute cutoff.
+result directories. Keep the cache and run output in disjoint directory trees. The container writes
+under `OUTPUT/results`, and the host launcher records provenance in `OUTPUT/run.json`. Each
+index-backed command uses the same absolute cutoff.
 
 For example, with that network and proxy available:
 
