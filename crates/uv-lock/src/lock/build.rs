@@ -253,6 +253,11 @@ impl Lock {
             .await
     }
 
+    /// The encoding to use when updating the recorded build environments.
+    pub fn build_encoding(&self) -> Option<BuildEncoding> {
+        self.builds.as_ref().map(|builds| builds.encoding)
+    }
+
     /// Whether isolated builds must use the recorded build environments.
     pub fn locks_builds(&self) -> bool {
         self.builds.is_some()

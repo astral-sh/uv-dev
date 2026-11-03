@@ -317,6 +317,10 @@ async fn do_lock(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+    // A routine project update must keep the build policy recorded in its lock.
+    let existing_build_encoding = existing_lock.as_ref().and_then(Lock::build_encoding);
+    let lock_build_dependencies = existing_build_encoding.is_some()
+        || preview.is_enabled(PreviewFeature::BuildDependencyLocking);
 
     // Extract the project settings.
     let ResolverSettings {
@@ -787,7 +791,7 @@ async fn do_lock(
         concurrency.clone(),
         preview,
     )
-    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
+    .with_locked_build_dependencies(lock_build_dependencies);
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
@@ -839,8 +843,7 @@ async fn do_lock(
         {
             // Build declarations in a source tree can change without changing runtime metadata.
             Ok(ValidatedLock::Satisfies(lock))
-                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
-                    && !check_locked_builds =>
+                if lock_build_dependencies && !check_locked_builds =>
             {
                 Some(ValidatedLock::Preferable(lock))
             }
@@ -1014,8 +1017,8 @@ async fn do_lock(
             )
             .await?;
 
-            let builds = if preview.is_enabled(PreviewFeature::BuildDependencyLocking) {
-                let encoding = build_encoding()?;
+            let builds = if lock_build_dependencies {
+                let encoding = build_encoding(existing_build_encoding)?;
                 let build_hasher = hasher
                     .clone()
                     .with_constraint_hashes(&resolution_build_hasher)?;

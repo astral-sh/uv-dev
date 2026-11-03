@@ -43,9 +43,10 @@ impl BuildResolutionStrategy {
 /// The direct requirements of each owner identify its roots in the shared build graph.
 pub(crate) type BuildResolution = (Vec<SourceBuildRequirements>, ResolverOutput);
 
-pub(crate) fn build_encoding() -> Result<BuildEncoding, LockError> {
+pub(crate) fn build_encoding(existing: Option<BuildEncoding>) -> Result<BuildEncoding, LockError> {
     match std::env::var("UV_INTERNAL__BUILD_LOCK_ENCODING").as_deref() {
-        Ok("dependency") | Err(std::env::VarError::NotPresent) => Ok(BuildEncoding::Dependency),
+        Ok("dependency") => Ok(BuildEncoding::Dependency),
+        Err(std::env::VarError::NotPresent) => Ok(existing.unwrap_or(BuildEncoding::Dependency)),
         Ok("package") => Ok(BuildEncoding::Package),
         Ok("conflict-marker") => Ok(BuildEncoding::ConflictMarker),
         Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(anyhow::anyhow!(
