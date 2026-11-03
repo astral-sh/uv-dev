@@ -29,8 +29,9 @@ use uv_requirements::{
     partition_requirements,
 };
 use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
-    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+    BuildDependencies, DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options,
+    Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput,
+    UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -94,6 +95,7 @@ pub async fn read_constraints(
 pub async fn resolve(
     requirements: Vec<UnresolvedRequirementSpecification>,
     constraints: Vec<NameRequirementSpecification>,
+    build_dependencies: Option<BuildDependencies>,
     overrides: Vec<UnresolvedRequirementSpecification>,
     lowered_overrides: Vec<Override<Requirement>>,
     excludes: Vec<ExcludeDependency>,
@@ -253,10 +255,12 @@ pub async fn resolve(
         requirements
     };
 
-    // Incorporate hashes from requirements discovered while resolving source trees and groups.
+    let build_dependencies = build_dependencies.unwrap_or_default();
+    // Build roots participate in lookahead discovery and hash policy without requiring callers
+    // to duplicate them in the runtime requirements.
     let mut hasher = hasher
         .clone()
-        .augment_with_requirements(requirements.iter())?;
+        .augment_with_requirements(requirements.iter().chain(&build_dependencies.requirements))?;
 
     // Resolve the overrides from the provided sources.
     let overrides = {
@@ -307,23 +311,42 @@ pub async fn resolve(
         DependencyMode::Transitive => {
             let constraints = constraints.clone().with_recorder(recorder.clone());
             let modifiers = modifiers.clone().with_recorder(recorder.clone());
-            let (lookaheads, updated_hasher) = LookaheadResolver::new(
-                &requirements,
-                &constraints,
-                &modifiers,
-                &hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+            let build_constraints = (!build_dependencies.requirements.is_empty()).then(|| {
+                Constraints::from_specifications(
+                    constraints
+                        .specifications()
+                        .chain(build_dependencies.constraints.specifications())
+                        .cloned(),
                 )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(&resolver_env)
-            .await?;
-            hasher = updated_hasher;
+                .with_recorder(recorder.clone())
+            });
+            let contexts = std::iter::once((requirements.as_slice(), &constraints)).chain(
+                build_constraints
+                    .as_ref()
+                    .map(|constraints| (build_dependencies.requirements.as_slice(), constraints)),
+            );
+            let mut lookaheads = Vec::new();
+            // Build constraints apply only while traversing the build roots and their dependencies.
+            for (requirements, constraints) in contexts {
+                let (discovered, updated_hasher) = LookaheadResolver::new(
+                    requirements,
+                    constraints,
+                    &modifiers,
+                    &hasher,
+                    index,
+                    DistributionDatabase::new(
+                        client,
+                        build_dispatch,
+                        concurrency.downloads_semaphore.clone(),
+                    )
+                    .with_recorder(recorder.clone()),
+                )
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(&resolver_env)
+                .await?;
+                hasher = updated_hasher;
+                lookaheads.extend(discovered);
+            }
             lookaheads
         }
         DependencyMode::Direct => Vec::new(),
@@ -343,6 +366,7 @@ pub async fn resolve(
         exclusions,
         lookaheads,
     )
+    .with_build_dependencies(build_dependencies)
     .with_recorder(recorder.clone());
 
     // Resolve the dependencies.
