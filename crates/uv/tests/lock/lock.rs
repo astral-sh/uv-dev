@@ -388,6 +388,102 @@ fn lock_build_forks_split_incompatible_roots() -> Result<()> {
     Ok(())
 }
 
+/// Two build backends require the same package from different local sources.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_forks_split_transitive_source_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("wheels")
+        .copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "alpha"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend-a"]
+        build-backend = "backend_a"
+
+        [tool.uv.sources]
+        backend-a = { path = "backend-a" }
+
+        [tool.uv.workspace]
+        members = ["beta"]
+    "#})?;
+    context
+        .temp_dir
+        .child("beta/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "beta"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend-b"]
+        build-backend = "backend_b"
+
+        [tool.uv.sources]
+        backend-b = { path = "../backend-b" }
+    "#})?;
+    context
+        .temp_dir
+        .child("backend-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "backend-a"
+        version = "1"
+        dependencies = ["ok"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend_a"
+
+        [tool.uv.sources]
+        ok = { path = "../wheels/ok-1.0.0-py3-none-any.whl" }
+    "#})?;
+    context
+        .temp_dir
+        .child("backend-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "backend-b"
+        version = "1"
+        dependencies = ["ok"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend_b"
+
+        [tool.uv.sources]
+        ok = { path = "../wheels/ok-2.0.0-py3-none-any.whl" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env("RUST_LOG", "uv_resolver::resolver::build_forks=debug")
+        .args(["--preview-features", "build-dependency-locking", "--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Solving build requirements owners=alpha, beta scope=true
+    DEBUG Solving build requirements owners=alpha scope=true
+    DEBUG Solving build requirements owners=beta scope=true
+    DEBUG Resolved build environment owners=alpha scope=true
+    DEBUG Resolved build environment owners=beta scope=true
+    DEBUG Solving build requirements owners=backend-b scope=true
+    DEBUG Resolved build environment owners=backend-b scope=true
+    DEBUG Solving build requirements owners=backend-a scope=true
+    DEBUG Resolved build environment owners=backend-a scope=true
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// A dependency used on older Pythons need not be buildable on newer Pythons.
 #[cfg(feature = "test-universal")]
 #[test]

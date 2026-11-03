@@ -210,13 +210,29 @@ async fn resolve_cluster<T, E: From<ResolveError>>(
 }
 
 fn is_cluster_conflict(error: &ResolveError) -> bool {
-    matches!(
-        error,
+    match error {
+        ResolveError::Dependencies(source, ..) => is_cluster_conflict(source),
         ResolveError::NoSolution(_)
-            | ResolveError::ConflictingUrls { .. }
-            | ResolveError::ConflictingIndexesForEnvironment { .. }
-            | ResolveError::ConflictingIndexes(..)
-    )
+        | ResolveError::ConflictingUrls { .. }
+        | ResolveError::ConflictingIndexesForEnvironment { .. }
+        | ResolveError::ConflictingIndexes(..) => true,
+        ResolveError::Client(_)
+        | ResolveError::Distribution(_)
+        | ResolveError::BuildDependencies(..)
+        | ResolveError::Preference(_)
+        | ResolveError::SpawnThread(_)
+        | ResolveError::ChannelClosed
+        | ResolveError::UnregisteredTask(_)
+        | ResolveError::DisallowedUrl { .. }
+        | ResolveError::DistributionType(_)
+        | ResolveError::Dist(..)
+        | ResolveError::InvalidVersion(_)
+        | ResolveError::UnhashedPackage(_)
+        | ResolveError::ConflictingDistribution(_)
+        | ResolveError::PackageUnavailable(_)
+        | ResolveError::ConflictMarker(_)
+        | ResolveError::MismatchedPackageName { .. } => false,
+    }
 }
 
 fn build_error(owners: &[SourceBuildRequirements], error: ResolveError) -> ResolveError {
