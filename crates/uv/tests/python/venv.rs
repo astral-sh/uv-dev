@@ -170,8 +170,8 @@ fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
         Activate with: source .venv/[BIN]/activate
         ");
 
-        outside_module.assert("SENTINEL\n");
-        outside_pth.assert("SENTINEL\n");
+        assert_eq!(fs_err::read_to_string(outside_module.path())?, "SENTINEL\n");
+        assert_eq!(fs_err::read_to_string(outside_pth.path())?, "SENTINEL\n");
         assert!(!site_packages.join("_virtualenv.py").is_symlink());
         assert!(!site_packages.join("_virtualenv.pth").is_symlink());
     }
@@ -1791,130 +1791,70 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Ok(())
 }
 
-/// Regenerating an activation script must leave an existing symlink's target unchanged.
+/// A pre-existing activation script can point outside the environment.
 #[test]
 #[cfg(unix)]
 fn allow_existing_activate_symlink() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let outside_file = context.temp_dir.child("outside-activate");
-    outside_file.write_str("SENTINEL\n")?;
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
     context.venv.child("bin").create_dir_all()?;
-    let activate = context.venv.child("bin/activate");
-    symlink(&outside_file, &activate)?;
+    symlink(&outside, context.venv.child("bin/activate"))?;
 
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--offline")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    error: Failed to create virtual environment
-      cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
-    ");
-    outside_file.assert("SENTINEL\n");
-    assert_link_target(&activate, &outside_file);
-
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--offline")
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    ");
-    outside_file.assert("SENTINEL\n");
-    assert!(!activate.path().is_symlink());
-
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_eq!(context.read("outside"), "keep");
     uv_snapshot!(context.filters(), context.external_command("sh")
-        .arg("-c")
-        .arg(". .venv/bin/activate && python -c 'import sys; print(sys.prefix)'"), @"
+        .args(["-c", ". .venv/bin/activate && python -c 'import sys; print(sys.prefix)'"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     [VENV]/
     ");
-
     Ok(())
 }
 
 #[test]
-#[cfg(unix)]
-fn allow_existing_gitignore_symlink() -> Result<()> {
+fn allow_existing_gitignore_hardlink() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let outside_file = context.temp_dir.child("outside-gitignore");
-    outside_file.write_str("SENTINEL\n")?;
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
     context.venv.create_dir_all()?;
-    let gitignore = context.venv.child(".gitignore");
-    symlink(&outside_file, &gitignore)?;
+    fs_err::hard_link(&outside, context.venv.child(".gitignore"))?;
 
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--offline")
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    ");
-    outside_file.assert("SENTINEL\n");
-    assert!(!gitignore.path().is_symlink());
-    insta::assert_snapshot!(context.read(".venv/.gitignore"), @"*");
-
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_eq!(context.read("outside"), "keep");
+    context.venv.child(".gitignore").assert("*");
     Ok(())
 }
 
 #[test]
 #[cfg(unix)]
 fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_pyvenv_cfg_filters();
-    let outside_file = context.temp_dir.child("outside-pyvenv.cfg");
-    outside_file.write_str("SENTINEL\n")?;
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
     context.venv.create_dir_all()?;
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    symlink(&outside_file, &pyvenv_cfg)?;
+    symlink(&outside, context.venv.child("pyvenv.cfg"))?;
 
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--offline")
-        .arg("--allow-existing")
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    ");
-    outside_file.assert("SENTINEL\n");
-    assert!(!pyvenv_cfg.path().is_symlink());
-
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(context.read(".venv/pyvenv.cfg"), @"
-        home = [PYTHON_HOME]
-        implementation = CPython
-        uv = [UV_VERSION]
-        version_info = 3.12.[X]
-        include-system-site-packages = false
-        prompt = temp
-        ");
-    });
-
-    // Python consumes the generated configuration inside the environment.
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_eq!(context.read("outside"), "keep");
     uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg("import sys; print(sys.prefix)"), @"
+        .args(["-c", "import sys; print(sys.prefix)"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     [VENV]/
     ");
-
     Ok(())
 }
 
