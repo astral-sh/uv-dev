@@ -1126,7 +1126,7 @@ async fn do_lock(
                     concurrency.downloads,
                 )
                 .await?;
-                lock
+                lock.with_compacted_build_domains()?
             } else {
                 lock
             };

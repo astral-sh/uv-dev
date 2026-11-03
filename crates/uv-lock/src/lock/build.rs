@@ -18,7 +18,10 @@ use uv_distribution_types::{
     Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist,
 };
 use uv_normalize::{ExtraName, PackageName};
-use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra};
+use uv_pep508::{
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra,
+    MarkerValueVersion,
+};
 use uv_platform_tags::Tags;
 use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
@@ -173,13 +176,15 @@ impl Lock {
             } else {
                 &[]
             };
+            // Keep complete declaration markers so a shared descriptor retains the
+            // observations for every fork. Checked replay projects them onto the owner domain.
             let inputs = BuildInput::collect(
                 backend,
                 extras,
                 &owner.name,
                 root,
                 &self.requires_python,
-                graph.marker,
+                UniversalMarker::TRUE,
             )?;
             universes.push(Universe {
                 inputs: Some(inputs),
@@ -271,6 +276,68 @@ impl Lock {
                 Ok(())
             })
             .await
+    }
+
+    /// The complete supported environment, including exclusions inside the Python range.
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
+        let mut project =
+            self.requires_python
+                .specifiers()
+                .iter()
+                .fold(MarkerTree::TRUE, |domain, specifier| {
+                    domain.and(MarkerTree::expression(MarkerExpression::Version {
+                        key: MarkerValueVersion::PythonFullVersion,
+                        specifier: specifier.clone(),
+                    }))
+                });
+        if !self.supported_environments.is_empty() {
+            let supported = self
+                .supported_environments
+                .iter()
+                .copied()
+                .fold(MarkerTree::FALSE, MarkerTree::or);
+            project = project.and(supported);
+        }
+        project
+    }
+
+    /// Combine disjoint marker domains for an owner when it selects the same build environment
+    /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
+    pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {
+        let project = self.build_project_domain();
+        let Some(builds) = &mut self.builds else {
+            return Ok(self);
+        };
+        let mut owners: BTreeMap<PackageId, Vec<Universe>> = BTreeMap::new();
+        for universe in std::mem::take(&mut builds.universes) {
+            let domain = universe.marker.combined().and(project);
+            if domain.is_false() {
+                continue;
+            }
+            let mut universe = universe.project(domain, &self.requires_python)?;
+            universe.marker =
+                UniversalMarker::from_combined(universe.marker.combined().restrict(project));
+            let variants = owners.entry(universe.owner.clone()).or_default();
+            if let Some(other) = variants.iter_mut().find(|other| {
+                other.marker.combined().is_disjoint(domain)
+                    && other.inputs.is_some()
+                    && other.inputs == universe.inputs
+                    && other.roots == universe.roots
+                    && other.packages == universe.packages
+            }) {
+                other.marker.or(universe.marker);
+            } else {
+                variants.push(universe);
+            }
+        }
+        builds.universes = owners
+            .into_values()
+            .flat_map(|mut variants| {
+                variants.sort_by_key(|universe| universe.marker);
+                variants
+            })
+            .collect();
+        Ok(self)
     }
 
     /// The encoding to use when updating the recorded build environments.
@@ -399,6 +466,76 @@ impl BuildMarkerEnvironment<'_> {
 }
 
 impl Universe {
+    /// Package markers are evaluated only after the owning build environment is selected.
+    fn project(
+        mut self,
+        domain: MarkerTree,
+        requires_python: &RequiresPython,
+    ) -> Result<Self, LockError> {
+        fn project_edges(
+            edges: &mut Vec<Dependency>,
+            domain: MarkerTree,
+            requires_python: &RequiresPython,
+        ) {
+            edges.sort_unstable();
+            edges.dedup_by(|later, earlier| {
+                if earlier.package_id != later.package_id || earlier.extra != later.extra {
+                    return false;
+                }
+                earlier.complexified_marker.or(later.complexified_marker);
+                true
+            });
+            edges.retain_mut(|dep| {
+                let marker = dep.complexified_marker.combined().restrict(domain);
+                if marker.is_false() {
+                    return false;
+                }
+                dep.simplified_marker = SimplifiedMarkerTree::new(requires_python, marker);
+                dep.complexified_marker = UniversalMarker::from_combined(
+                    dep.simplified_marker.into_marker(requires_python),
+                );
+                true
+            });
+        }
+        project_edges(&mut self.roots, domain, requires_python);
+        let pep508_domain = UniversalMarker::from_combined(domain).pep508();
+        self.packages = closure(&self.roots, |id| {
+            let mut package = self.packages.remove(id).ok_or_else(|| missing(id))?;
+            // Fork preferences describe where this package ID applies. Its owner has already
+            // selected a platform. Keep conflict-bearing preference sets in their original form.
+            if !package.fork_markers.is_empty()
+                && !package
+                    .fork_markers
+                    .iter()
+                    .any(|marker| marker.has_conflict_marker())
+            {
+                let mut markers = Vec::new();
+                for marker in &package.fork_markers {
+                    let marker = marker.combined().restrict(pep508_domain);
+                    if marker.is_true() {
+                        markers.clear();
+                        break;
+                    }
+                    markers.push(UniversalMarker::from_combined(
+                        SimplifiedMarkerTree::new(requires_python, marker)
+                            .into_marker(requires_python),
+                    ));
+                }
+                markers.sort_unstable();
+                markers.dedup();
+                package.fork_markers = markers;
+            }
+            for edges in std::iter::once(&mut package.dependencies)
+                .chain(package.optional_dependencies.values_mut())
+                .chain(package.dependency_groups.values_mut())
+            {
+                project_edges(edges, domain, requires_python);
+            }
+            Ok(package)
+        })?;
+        Ok(self)
+    }
+
     fn resolve(
         &self,
         requirements: &[Requirement],
@@ -745,11 +882,12 @@ mod tests {
 
     use indoc::formatdoc;
     use uv_configuration::{Constraints, DependencyModifiers};
-    use uv_distribution_types::Dist;
+    use uv_distribution_types::{Dist, ExtraBuildRequirement};
     use uv_pypi_types::VerbatimParsedUrl;
     use uv_resolver_types::{AnnotatedDist, Options, PackageNodeKind, PackageRole};
 
     use super::*;
+    use crate::lock::SourceDist as LockedSourceDist;
 
     fn dist(name: &str, version: &str) -> Result<AnnotatedDist, Box<dyn Error>> {
         let hash = if version == "1" { "1" } else { "2" }.repeat(64);
@@ -809,7 +947,7 @@ mod tests {
         })
     }
 
-    fn round_trip(encoding: BuildEncoding) -> Result<String, Box<dyn Error>> {
+    fn build_lock(encoding: BuildEncoding) -> Result<Lock, Box<dyn Error>> {
         let root = std::env::current_dir()?;
         let _preview = uv_preview::test::with_features(&[]);
         let runtime = graph("a", "1")?;
@@ -837,6 +975,11 @@ mod tests {
             &indexes,
             &ExtraBuildRequires::default(),
         )?;
+        Ok(lock)
+    }
+
+    fn round_trip(encoding: BuildEncoding) -> Result<String, Box<dyn Error>> {
+        let lock = build_lock(encoding)?;
         let encoded = lock.to_toml()?;
         assert!(encoded.starts_with("version = 2\n"));
         let decoded = Lock::from_toml(&encoded)?;
@@ -864,6 +1007,114 @@ mod tests {
             "2"
         );
         Ok(encoded)
+    }
+
+    /// Platform forks can repeat roots and package preferences while selecting the same closure.
+    /// Keep a fork separate when its transitive edge, sdist hash, or configured inputs differ.
+    #[test]
+    fn compact_build_domains() -> Result<(), Box<dyn Error>> {
+        let mut lock = build_lock(BuildEncoding::Dependency)?;
+        lock.requires_python = RequiresPython::from_specifiers(">=3.11,!=3.12.*".parse()?);
+        let requires_python = &lock.requires_python;
+        let universes = &mut lock.builds.as_mut().expect("build lock").universes;
+        let base = universes.pop().expect("owner");
+        let linux: MarkerTree = "sys_platform == 'linux'".parse()?;
+        let windows: MarkerTree = "sys_platform == 'win32'".parse()?;
+        let darwin: MarkerTree = "sys_platform == 'darwin'".parse()?;
+        let netbsd: MarkerTree = "sys_platform == 'netbsd'".parse()?;
+        let openbsd: MarkerTree = "sys_platform == 'openbsd'".parse()?;
+        let cpython: MarkerTree = "implementation_name == 'cpython'".parse()?;
+        let c = base
+            .roots
+            .iter()
+            .find(|dep| dep.package_name().as_ref() == "c")
+            .expect("C root")
+            .package_id
+            .clone();
+
+        let mut on_linux = base.clone();
+        on_linux.marker = UniversalMarker::from_combined(linux);
+        let root = on_linux.roots.pop().expect("root");
+        for implementation in [cpython, cpython.negate()] {
+            on_linux.roots.push(Dependency::new(
+                requires_python,
+                root.package_id.clone(),
+                root.extra.clone(),
+                SimplifiedMarkerTree::new(requires_python, linux.and(implementation)),
+            ));
+        }
+        on_linux.packages.get_mut(&c).expect("C").fork_markers =
+            vec![UniversalMarker::from_combined(linux.and(cpython))];
+
+        let mut on_windows = base.clone();
+        on_windows.marker = UniversalMarker::from_combined(windows);
+        on_windows.packages.get_mut(&c).expect("C").fork_markers =
+            vec![UniversalMarker::from_combined(windows.and(cpython))];
+
+        let mut on_darwin = base.clone();
+        on_darwin.marker = UniversalMarker::from_combined(darwin);
+        let package = on_darwin.packages.get_mut(&c).expect("C");
+        package.fork_markers = vec![UniversalMarker::from_combined(cpython)];
+        let Some(LockedSourceDist::Url { metadata, .. }) = &mut package.sdist else {
+            return Err("expected a registry sdist".into());
+        };
+        metadata.hash = Some(format!("sha256:{}", "3".repeat(64)).parse()?);
+
+        let mut on_netbsd = base.clone();
+        on_netbsd.marker = UniversalMarker::from_combined(netbsd);
+        let package = on_netbsd.packages.get_mut(&c).expect("C");
+        package.fork_markers = vec![UniversalMarker::from_combined(cpython)];
+        package.dependencies.clear();
+
+        // A configured extra can repeat an existing build dependency on just one platform.
+        let mut on_openbsd = base.clone();
+        on_openbsd.marker = UniversalMarker::from_combined(openbsd);
+        on_openbsd.packages.get_mut(&c).expect("C").fork_markers =
+            vec![UniversalMarker::from_combined(cpython)];
+        let extras = ExtraBuildRequires::from_iter([(
+            base.owner.name.clone(),
+            vec![ExtraBuildRequirement {
+                requirement: requirement("c>=1")?,
+                match_runtime: false,
+            }],
+        )]);
+        on_openbsd.inputs = Some(BuildInput::collect(
+            &[],
+            &extras,
+            &base.owner.name,
+            &std::env::current_dir()?,
+            requires_python,
+            on_openbsd.marker,
+        )?);
+
+        let mut excluded = base.clone();
+        excluded.marker = UniversalMarker::from_combined("python_version == '3.12'".parse()?);
+        let mut outside = base;
+        outside.marker = UniversalMarker::from_combined("python_version < '3.11'".parse()?);
+        *universes = vec![
+            on_linux, on_windows, on_darwin, on_netbsd, on_openbsd, excluded, outside,
+        ];
+        let compact = lock.with_compacted_build_domains()?;
+        let domains = &compact.builds.as_ref().expect("compacted builds").universes;
+        assert_eq!(domains.len(), 4);
+        let shared = domains
+            .iter()
+            .find(|u| u.marker.combined() == linux.or(windows))
+            .expect("shared Linux and Windows build");
+        assert_eq!(shared.roots.len(), 2);
+        assert_eq!(shared.packages[&c].fork_markers.len(), 1);
+        assert_eq!(shared.packages[&c].dependencies.len(), 1);
+        assert!(domains.iter().any(|u| u.marker.combined() == darwin));
+        assert!(domains.iter().any(|u| u.marker.combined() == netbsd));
+        assert!(domains.iter().any(|u| u.marker.combined() == openbsd));
+        let encoded = compact.to_toml()?;
+        assert_eq!(
+            Lock::from_toml(&encoded)?
+                .with_compacted_build_domains()?
+                .to_toml()?,
+            encoded
+        );
+        Ok(())
     }
 
     #[test]
