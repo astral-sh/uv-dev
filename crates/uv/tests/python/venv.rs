@@ -2126,42 +2126,59 @@ fn create_venv_powershell_unc() -> Result<()> {
     Ok(())
 }
 
-/// An apostrophe or an escaped quote can end a fish string and expose a `touch` command.
+/// A backslash before an apostrophe can end the quoted environment path in fish.
 #[test]
 #[cfg(unix)]
-fn activate_fish_with_commands_in_path_and_prompt() {
+fn activate_fish_with_command_in_path() {
     let Ok(fish) = which::which("fish") else {
         return;
     };
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let venv = context.temp_dir.child(r#"dir\'"; touch from-path; #"#);
-    let prompt = r"x'; touch from-prompt; set x '\\";
     context
         .venv()
-        .args(["--python", "3.12", "--no-relocatable", "--prompt", prompt])
+        .args(["--python", "3.12", "--no-relocatable", "--prompt", "env"])
         .arg(venv.path())
         .assert()
         .success();
 
     uv_snapshot!(context.external_command(fish)
-        .args(["--no-config", "-c", indoc! {r#"
-            function fish_prompt; printf original; end
-            source "$argv[1]"; or exit 1
-            test "$VIRTUAL_ENV" = "$argv[2]"; and echo 'path is literal'
-            fish_prompt
-            deactivate
-            fish_prompt
-        "#}]).arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    path is literal
-    (x'; touch from-prompt; set x '\\) original
-    original
-    ");
+        .env(EnvVars::VIRTUAL_ENV_DISABLE_PROMPT, "1")
+        .args(["--no-config", "-c", r#"source "$argv[1]"; or exit 2; test "$VIRTUAL_ENV" = "$argv[2]""#])
+        .arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @"exit_code: 0 (success)");
     context
         .temp_dir
         .child("from-path")
         .assert(predicate::path::missing());
+}
+
+/// An apostrophe in an explicit prompt can end its quoted string during activation.
+#[test]
+#[cfg(unix)]
+fn activate_fish_with_command_in_prompt() {
+    let Ok(fish) = which::which("fish") else {
+        return;
+    };
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let prompt = r"x'; touch from-prompt; set x '\\";
+    context
+        .venv()
+        .args(["--python", "3.12", "--prompt", prompt])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.external_command(fish).args(["--no-config", "-c", indoc! {r#"
+        function fish_prompt; printf original; end
+        source .venv/bin/activate.fish; or exit 1
+        fish_prompt
+        deactivate
+        fish_prompt
+    "#}]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (x'; touch from-prompt; set x '\\) original
+    original
+    ");
     context
         .temp_dir
         .child("from-prompt")
