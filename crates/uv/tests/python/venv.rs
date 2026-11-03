@@ -2194,12 +2194,12 @@ fn activate_venv_bash_prompt_substitution() {
     "#}]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    env
+    env$(touch sourced)
     ");
     context
         .temp_dir
         .child("sourced")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
 }
 
 /// Bash decodes backslash escapes even when prompt variable expansion is disabled.
@@ -2222,8 +2222,7 @@ fn activate_venv_bash_promptvars_disabled() {
     "#}]), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    (it's
-    ew) original>
+    (it's\new) original>
     ");
 }
 
@@ -2252,11 +2251,11 @@ fn activate_venv_bash_current_directory_prompt_substitution() -> Result<()> {
         "#}]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    (env) original>
+    (env$(touch sourced)) original>
     ");
     project_dir
         .child("sourced")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
     Ok(())
 }
 
@@ -2286,13 +2285,13 @@ fn activate_venv_bash_directory_prompt_substitution() {
         "#}, "bash"]).arg(venv.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    (env) original>
+    (env$(touch redrawn)) original>
     original>
     ");
     context
         .temp_dir
         .child("redrawn")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
 }
 
 /// Emulate a ksh without ksh93's `${.sh.file}` parameter using a POSIX shell.
