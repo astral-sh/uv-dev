@@ -425,7 +425,8 @@ pub async fn resolve(
                             client,
                             build_dispatch,
                             concurrency.downloads_semaphore.clone(),
-                        ),
+                        )
+                        .with_recorder(build_recorder.clone()),
                     )
                     .resolve(env)
                     .await?;
@@ -482,7 +483,7 @@ pub async fn resolve(
             ))
             .await?;
             if let (Some(recorder), Some(build_recorder)) = (&recorder, build_recorder) {
-                recorder.record_build_cutoffs(build_recorder.take());
+                recorder.record_build_lookups(build_recorder.take());
             }
             resolution
         } else {
