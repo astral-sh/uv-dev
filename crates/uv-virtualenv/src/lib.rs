@@ -88,19 +88,56 @@ pub fn create_venv(
     seed: Seed,
     upgrade_policy: UpgradePolicy,
 ) -> Result<PythonEnvironment, Error> {
-    // Create the virtualenv at the given location.
-    let virtualenv = virtualenv::create(
-        location,
-        &interpreter,
+    PreparedEnvironment::new(
+        interpreter,
         prompt,
         system_site_packages,
-        on_existing,
         relocatable,
         seed,
         upgrade_policy,
-    )?;
+    )?
+    .create(location, on_existing)
+}
 
-    // Create the corresponding `PythonEnvironment`.
-    let interpreter = interpreter.with_virtualenv(virtualenv);
-    Ok(PythonEnvironment::from_interpreter(interpreter))
+/// A virtual environment whose complete configuration has been validated before destination cleanup.
+pub struct PreparedEnvironment {
+    interpreter: Interpreter,
+    configuration: virtualenv::Configuration,
+}
+
+impl PreparedEnvironment {
+    /// Resolve and validate configuration without modifying the destination.
+    pub fn new(
+        interpreter: Interpreter,
+        prompt: Prompt,
+        system_site_packages: bool,
+        relocatable: bool,
+        seed: Seed,
+        upgrade_policy: UpgradePolicy,
+    ) -> Result<Self, Error> {
+        let configuration = virtualenv::Configuration::new(
+            &interpreter,
+            prompt,
+            system_site_packages,
+            relocatable,
+            seed,
+            upgrade_policy,
+        )?;
+        Ok(Self {
+            interpreter,
+            configuration,
+        })
+    }
+
+    /// Create the environment using its checked configuration.
+    pub fn create(
+        self,
+        location: &Path,
+        on_existing: OnExisting,
+    ) -> Result<PythonEnvironment, Error> {
+        let virtualenv =
+            virtualenv::create(location, &self.interpreter, self.configuration, on_existing)?;
+        let interpreter = self.interpreter.with_virtualenv(virtualenv);
+        Ok(PythonEnvironment::from_interpreter(interpreter))
+    }
 }

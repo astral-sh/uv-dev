@@ -989,20 +989,23 @@ impl ProjectEnvironment {
                     .map(uv_virtualenv::Prompt::Static)
                     .unwrap_or(uv_virtualenv::Prompt::None);
 
+                let prepared = uv_virtualenv::PreparedEnvironment::new(
+                    interpreter,
+                    prompt,
+                    false,
+                    uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
+                    uv_virtualenv::Seed::Disabled,
+                    upgrade_policy,
+                )?;
+
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = prepared.create(
                         temp_dir.path(),
-                        interpreter,
-                        prompt,
-                        false,
                         uv_virtualenv::OnExisting::Remove(
                             uv_virtualenv::RemovalReason::ManagedEnvironment,
                         ),
-                        uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                        uv_virtualenv::Seed::Disabled,
-                        upgrade_policy,
                     )?;
                     return Ok(if replace_environment {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -1053,17 +1056,11 @@ impl ProjectEnvironment {
                     )?;
                 }
 
-                let environment = uv_virtualenv::create_venv(
+                let environment = prepared.create(
                     &root,
-                    interpreter,
-                    prompt,
-                    false,
                     uv_virtualenv::OnExisting::Remove(
                         uv_virtualenv::RemovalReason::ManagedEnvironment,
                     ),
-                    uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                    uv_virtualenv::Seed::Disabled,
-                    upgrade_policy,
                 )?;
 
                 if centralized {
@@ -1225,20 +1222,23 @@ impl ScriptEnvironment {
                     .map(uv_virtualenv::Prompt::Static)
                     .unwrap_or(uv_virtualenv::Prompt::None);
 
+                let prepared = uv_virtualenv::PreparedEnvironment::new(
+                    interpreter,
+                    prompt,
+                    false,
+                    false,
+                    uv_virtualenv::Seed::Disabled,
+                    upgrade_policy,
+                )?;
+
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = prepared.create(
                         temp_dir.path(),
-                        interpreter,
-                        prompt,
-                        false,
                         uv_virtualenv::OnExisting::Remove(
                             uv_virtualenv::RemovalReason::ManagedEnvironment,
                         ),
-                        false,
-                        uv_virtualenv::Seed::Disabled,
-                        upgrade_policy,
                     )?;
                     return Ok(if replace_environment && root.exists() {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -1269,16 +1269,10 @@ impl ScriptEnvironment {
                     root.user_display().cyan()
                 );
 
-                let environment = uv_virtualenv::create_venv(
+                let environment = prepared.create(
                     &root,
-                    interpreter,
-                    prompt,
-                    false,
                     // Do not clear any contents that appeared after validating the destination.
                     uv_virtualenv::OnExisting::Fail,
-                    false,
-                    uv_virtualenv::Seed::Disabled,
-                    upgrade_policy,
                 )?;
 
                 Ok(if replaced {

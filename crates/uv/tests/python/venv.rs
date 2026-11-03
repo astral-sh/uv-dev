@@ -102,27 +102,15 @@ fn create_venv_with_newline_in_prompt() {
         .arg("3.12")
         .arg("--prompt")
         .arg("safe\ninclude-system-site-packages = true"), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
     ");
 
-    context
-        .venv
-        .child("pyvenv.cfg")
-        .assert(predicate::str::contains(
-            "\ninclude-system-site-packages = true",
-        ));
-    // Xonsh embeds the prompt in a Python bytes literal.
-    assert!(
-        context
-            .read(uv_test::venv_bin_path(&context.venv).join("activate.xsh"))
-            .contains(
-                r#"self.embedded_virtual_prompt = b"safe\ninclude-system-site-packages = true""#,
-            )
-    );
+    assert!(!context.venv.exists());
 }
 
 #[test]
@@ -2604,13 +2592,14 @@ fn no_clear_conflicts_with_allow_existing() {
 fn create_venv_with_carriage_return_in_prompt() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     uv_snapshot!(context.filters(), context.venv().args(["--python", "3.12", "--prompt", "bad\rprompt"]), @r#"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
     "#);
-    context.venv.assert(predicate::path::is_dir());
+    context.venv.assert(predicate::path::missing());
 }
 
 #[test]
@@ -2637,13 +2626,14 @@ fn create_venv_with_newline_in_prompt_and_centralized_reference() -> Result<()> 
     reference.child("marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
     uv_snapshot!(context.filters(), context.venv().args(["--prompt", "bad\nprompt"]), @r#"
-        exit_code: 0 (success)
+        exit_code: 2 (failure)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Creating virtual environment at: .venv
-        Activate with: source .venv/[BIN]/activate
+        error: Failed to create virtual environment
+          cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
         "#);
-    assert_ne!(fs_err::canonicalize(reference.path())?, target);
+    assert_eq!(fs_err::canonicalize(reference.path())?, target);
     assert_eq!(fs_err::read_to_string(target.join("marker"))?, "keep");
     assert_eq!(fs_err::read_to_string(target.join("pyvenv.cfg"))?, config);
     Ok(())
@@ -2674,18 +2664,14 @@ fn create_venv_with_newline_in_home_and_allow_existing() -> Result<()> {
     let config = context.read(".venv/pyvenv.cfg");
 
     uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python.as_path()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
     ");
-    assert_ne!(context.read(".venv/pyvenv.cfg"), config);
-    assert!(
-        context
-            .read(".venv/pyvenv.cfg")
-            .contains(&format!("home = {}\n", python.parent().unwrap().display()))
-    );
+    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
     assert_eq!(context.read(".venv/marker"), "keep");
     Ok(())
 }
@@ -2699,22 +2685,15 @@ fn create_venv_with_newline_in_home_and_clear() -> Result<()> {
     let config = context.read(".venv/pyvenv.cfg");
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python.as_path()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
     ");
-    assert_ne!(context.read(".venv/pyvenv.cfg"), config);
-    assert!(
-        context
-            .read(".venv/pyvenv.cfg")
-            .contains(&format!("home = {}\n", python.parent().unwrap().display()))
-    );
-    context
-        .venv
-        .child("marker")
-        .assert(predicate::path::missing());
+    assert_eq!(context.read(".venv/pyvenv.cfg"), config);
+    assert_eq!(context.read(".venv/marker"), "keep");
     Ok(())
 }
 
@@ -2725,16 +2704,16 @@ fn create_venv_with_newline_in_home_and_new_destination() -> Result<()> {
     let python = python_with_newline_in_home(&context)?;
 
     uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python.as_path()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
     Creating virtual environment at: new-venv
-    Activate with: source new-venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: invalid `home` value in `pyvenv.cfg`: newlines are not supported
     ");
-    assert!(
-        context
-            .read("new-venv/pyvenv.cfg")
-            .contains(&format!("home = {}\n", python.parent().unwrap().display()))
-    );
+    context
+        .temp_dir
+        .child("new-venv")
+        .assert(predicate::path::missing());
     Ok(())
 }
