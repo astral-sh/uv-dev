@@ -13,7 +13,7 @@ use wiremock::matchers::{basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
-use uv_lock::Lock;
+use uv_lock::{BuildEncoding, Lock};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
@@ -19153,6 +19153,43 @@ fn locked_build_frozen_requires_build_environments() -> Result<()> {
     error: The lockfile has no locked build environments. Run `uv lock --preview-features build-dependency-locking` to record them.
     ");
     assert!(!context.temp_dir.child("backend-executed").exists());
+    Ok(())
+}
+
+/// Updating a project in plain sync must keep its locked build policy and encoding.
+#[test]
+fn locked_build_policy_survives_sync_update() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "build-dependency-locking"])
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING, "package"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let pyproject = context.read("pyproject.toml")
+        + indoc! {r#"
+        [dependency-groups]
+        dev = ["dynamic-dependency==1.0.0"]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject)?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--offline", "--no-editable"])
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["dynamic-dependency==1.0.0"]"#), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: `get_requires_for_build_wheel` requested `dynamic-dependency`, which was not declared in the build requirements
+    ");
+    assert_eq!(
+        Lock::from_toml(&context.read("uv.lock"))?.build_encoding(),
+        Some(BuildEncoding::Package),
+    );
     Ok(())
 }
 

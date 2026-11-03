@@ -317,6 +317,10 @@ async fn do_lock(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+    // A routine project update must keep the build policy recorded in its lock.
+    let existing_build_encoding = existing_lock.as_ref().and_then(Lock::build_encoding);
+    let lock_build_dependencies = existing_build_encoding.is_some()
+        || preview.is_enabled(PreviewFeature::BuildDependencyLocking);
 
     // Extract the project settings.
     let ResolverSettings {
@@ -787,7 +791,7 @@ async fn do_lock(
         concurrency.clone(),
         preview,
     )
-    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
+    .with_locked_build_dependencies(lock_build_dependencies);
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
@@ -838,8 +842,7 @@ async fn do_lock(
         .await
         {
             Ok(ValidatedLock::Satisfies(lock))
-                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
-                    && !lock.locks_builds() =>
+                if lock_build_dependencies && !lock.locks_builds() =>
             {
                 Some(ValidatedLock::Versions(lock))
             }
@@ -876,10 +879,7 @@ async fn do_lock(
 
     match existing_lock {
         // Resolution from the lockfile succeeded.
-        Some(ValidatedLock::Satisfies(lock))
-            if check_locked_builds
-                || !preview.is_enabled(PreviewFeature::BuildDependencyLocking) =>
-        {
+        Some(ValidatedLock::Satisfies(lock)) if check_locked_builds || !lock_build_dependencies => {
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
@@ -1067,12 +1067,14 @@ async fn do_lock(
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
 
-            let lock = if preview.is_enabled(PreviewFeature::BuildDependencyLocking) {
+            let lock = if lock_build_dependencies {
                 let encoding = match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING) {
                     Ok(value) if value == "package" => BuildEncoding::Package,
                     Ok(value) if value == "conflict-marker" => BuildEncoding::ConflictMarker,
                     Ok(value) if value == "dependency" => BuildEncoding::Dependency,
-                    Err(std::env::VarError::NotPresent) => BuildEncoding::Dependency,
+                    Err(std::env::VarError::NotPresent) => {
+                        existing_build_encoding.unwrap_or(BuildEncoding::Dependency)
+                    }
                     Ok(value) => return Err(anyhow::anyhow!(
                         "Unknown build lock encoding `{value}` (expected `conflict-marker`, `package`, or `dependency`)"
                     ).into()),
