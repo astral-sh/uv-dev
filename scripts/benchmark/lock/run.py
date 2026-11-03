@@ -25,6 +25,7 @@ PROJECTS = {
     "black": "test/requirements/black.in",
     "jupyter": "test/requirements/jupyter.in",
     "transformers": "test/requirements/transformers/pyproject.toml",
+    "trio": "test/requirements/trio.in",
     "warehouse": "test/ecosystem/warehouse/pyproject.toml",
 }
 
