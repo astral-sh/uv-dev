@@ -2126,6 +2126,47 @@ fn create_venv_powershell_unc() -> Result<()> {
     Ok(())
 }
 
+/// Fish parses the embedded environment path and prompt while sourcing its activation script.
+#[test]
+#[cfg(unix)]
+fn activate_fish_quotes_path_and_prompt() {
+    let Ok(fish) = which::which("fish") else {
+        return;
+    };
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let venv = context.temp_dir.child(r#"dir\'"; touch from-path; #"#);
+    let prompt = r"x'; touch from-prompt; set x '\\";
+    context
+        .venv()
+        .args(["--python", "3.12", "--no-relocatable", "--prompt", prompt])
+        .arg(venv.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.external_command(fish)
+        .args(["--no-config", "-c", indoc! {r#"
+            function fish_prompt; printf original; end
+            source "$argv[1]"; or exit 1
+            test "$VIRTUAL_ENV" = "$argv[2]"; and echo 'path is literal'
+            fish_prompt
+            deactivate
+            fish_prompt
+        "#}]).arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (x) original
+    original
+    ");
+    context
+        .temp_dir
+        .child("from-path")
+        .assert(predicate::path::exists());
+    context
+        .temp_dir
+        .child("from-prompt")
+        .assert(predicate::path::exists());
+}
+
 /// Check that the activate script still works with the path contains an apostrophe.
 #[test]
 #[cfg(target_os = "linux")]
