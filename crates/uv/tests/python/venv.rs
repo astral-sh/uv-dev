@@ -2167,13 +2167,13 @@ fn activate_fish_with_command_in_prompt() {
         .assert()
         .success();
 
-    uv_snapshot!(context.external_command(fish).args(["--no-config", "-c", indoc! {r#"
+    uv_snapshot!(context.external_command(fish).args(["--no-config", "-c", indoc! {"
         function fish_prompt; printf original; end
         source .venv/bin/activate.fish; or exit 1
         fish_prompt
         deactivate
         fish_prompt
-    "#}]), @r"
+    "}]), @r"
     exit_code: 0 (success)
     ----- stdout -----
     (x'; touch from-prompt; set x '\\) original
