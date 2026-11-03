@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::io;
 use std::iter;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::slice;
 use std::str::FromStr;
@@ -2941,18 +2942,16 @@ impl Lock {
     /// Omit package-specific settings for packages outside the resolution.
     #[must_use]
     pub fn without_unused_exclude_newer_packages(mut self) -> Self {
-        self.options.exclude_newer = self
-            .options
-            .exclude_newer
-            .filter_packages(self.packages.iter().map(Package::name));
+        let exclude_newer = mem::take(&mut self.options.exclude_newer);
+        self.options.exclude_newer =
+            exclude_newer.filter_packages(self.packages_in_all_environments().map(Package::name));
         self
     }
 
     /// Retain cutoffs for locked packages and names whose cutoffs are already stored in the lock.
     pub fn filter_exclude_newer(&self, exclude_newer: ExcludeNewer) -> ExcludeNewer {
         exclude_newer.filter_packages(
-            self.packages
-                .iter()
+            self.packages_in_all_environments()
                 .map(Package::name)
                 .chain(self.options.exclude_newer.package.keys()),
         )

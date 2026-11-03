@@ -1079,6 +1079,7 @@ async fn do_lock(
                     &runtime_hasher,
                     &build_hasher,
                     concurrency,
+                    recorder.as_ref(),
                 ))
                 .await?;
                 debug!("Resolved {} build environments", builds.len());

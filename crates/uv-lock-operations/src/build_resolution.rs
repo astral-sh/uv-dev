@@ -8,7 +8,7 @@ use uv_client::RegistryClient;
 use uv_configuration::{Concurrency, Constraints, DependencyModifiers};
 use uv_dispatch::{BuildDispatch, SourceBuildRequirements};
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{DistributionMetadata, Requirement};
+use uv_distribution_types::{DistributionMetadata, Requirement, ResolutionRecorder};
 use uv_lock::BuildEncoding;
 use uv_pep508::MarkerEnvironment;
 use uv_pypi_types::Conflicts;
@@ -69,8 +69,10 @@ pub(crate) async fn resolve_builds(
     runtime_hasher: &HashStrategy,
     build_hasher: &HashStrategy,
     concurrency: &Concurrency,
+    recorder: Option<&ResolutionRecorder>,
 ) -> Result<Vec<BuildResolution>, LockError> {
     let preferences = Preference::from_runtime(runtime).map_err(anyhow::Error::from)?;
+    let build_recorder = recorder.map(|_| ResolutionRecorder::default());
 
     let solve = async |owners: &[SourceBuildRequirements], scope: UniversalMarker| {
         // Each batch shares a scope. Seed the forks to respect runtime preferences and
@@ -125,7 +127,8 @@ pub(crate) async fn resolve_builds(
             BTreeMap::new(),
             Exclusions::default(),
             lookaheads,
-        );
+        )
+        .with_recorder(build_recorder.clone());
         let resolver = Resolver::new(
             manifest,
             runtime.options.clone(),
@@ -188,6 +191,9 @@ pub(crate) async fn resolve_builds(
                 builds.push((owners, graph));
             }
         }
+    }
+    if let (Some(recorder), Some(build_recorder)) = (recorder, build_recorder) {
+        recorder.record_build_cutoffs(build_recorder.take());
     }
     Ok(builds)
 }
