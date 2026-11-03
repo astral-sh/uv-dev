@@ -16,7 +16,7 @@ use uv_fs::Simplified;
 use uv_lock::{BuildEncoding, Lock};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, WheelBuilder};
 
@@ -18937,6 +18937,67 @@ fn locked_build_hashes_local_owner() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A runtime wheel and the only trusted build artifact, its sdist, need one build environment.
+#[test]
+fn locked_build_owner_wheel_and_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "shared".parse()?;
+    let version = "1".parse()?;
+    let index = context.temp_dir.child("simple");
+    let package = index.child("shared");
+    let (wheel_name, wheel) = WheelBuilder::new(&name, &version).build();
+    let wheel_hash = hex::encode(Sha256::digest(&wheel));
+    package.child(&wheel_name).write_binary(&wheel)?;
+    let source = generate_source_archive(&name, &version, "", None)?;
+    let source_hash = hex::encode(Sha256::digest(&source));
+    package.child("shared-1.tar.gz").write_binary(&source)?;
+    package.child("index.html").write_str(&formatdoc! {r#"
+        <a href="{wheel_name}#sha256={wheel_hash}" data-upload-time="2020-01-01T00:00:00Z">{wheel_name}</a>
+        <a href="shared-1.tar.gz#sha256={source_hash}" data-upload-time="2020-01-01T00:00:00Z">shared-1.tar.gz</a>
+    "#})?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1"]
+
+        [build-system]
+        requires = ["shared==1"]
+        build-backend = "backend"
+
+        [tool.uv]
+        build-constraint-dependencies = [
+            {{ requirement = "shared==1", hashes = ["sha256:{source_hash}"] }},
+        ]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "simple"
+        default = true
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--preview-features=build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--no-install-project", "--no-binary-package", "shared",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared==1
     ");
     Ok(())
 }
