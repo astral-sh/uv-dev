@@ -30,9 +30,9 @@ use uv_requirements::{
     partition_requirements,
 };
 use uv_resolver::{
-    BuildForkStrategy, DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options,
-    Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput,
-    RuntimePreferenceMode, UpgradePackages,
+    BuildConstraintHashes, BuildForkStrategy, DependencyMode, Exclusions, FlatIndex, InMemoryIndex,
+    Manifest, Options, Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment,
+    ResolverOutput, RuntimePreferenceMode, UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -48,6 +48,13 @@ pub mod reporters;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+
+/// Project constraints and existing selections used by universal build resolution.
+pub struct BuildLockInputs<'a> {
+    pub constraints: &'a Constraints,
+    pub hashes: BuildConstraintHashes,
+    pub previous: Option<PreviousBuildLock<'a>>,
+}
 
 /// Existing owner-scoped selections for a project build dependency update.
 pub struct PreviousBuildLock<'a> {
@@ -126,7 +133,7 @@ pub async fn resolve(
     flat_index: &FlatIndex,
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
-    previous_build: Option<PreviousBuildLock<'_>>,
+    build_inputs: Option<BuildLockInputs<'_>>,
     concurrency: &Concurrency,
     options: Options,
     recorder: Option<ResolutionRecorder>,
@@ -388,7 +395,12 @@ pub async fn resolve(
         )?
         .with_reporter(Arc::new(reporter));
 
-        if let Some((constraints, hasher)) = build_dispatch.locked_build_inputs() {
+        if let Some(BuildLockInputs {
+            constraints,
+            hashes,
+            previous: previous_build,
+        }) = build_inputs
+        {
             let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
             let build_recorder = recorder.as_ref().map(|_| ResolutionRecorder::default());
             let runtime_preferences =
@@ -396,7 +408,7 @@ pub async fn resolve(
             let resolution = Box::pin(resolver.resolve_with_build_forks(
                 strategy,
                 runtime_preferences,
-                hasher,
+                &hashes,
                 async |requirements, env, index, hasher, pins: Option<&BuildPins>| {
                     let hasher = match pins {
                         Some(pins) => pins.apply_hashes(hasher.clone()),

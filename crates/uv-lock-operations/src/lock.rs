@@ -26,9 +26,10 @@ use uv_requirements::{ExtrasResolver, script_extra_build_requires};
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_resolve_operations::{Error as ResolveError, PreviousBuildLock};
+use uv_resolve_operations::{BuildLockInputs, Error as ResolveError, PreviousBuildLock};
 use uv_resolver::{
-    FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
+    BuildConstraintHashes, FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment,
+    UniversalMarker,
 };
 use uv_settings::{LockedSource, ResolverSettings};
 use uv_static::EnvVars;
@@ -1030,15 +1031,26 @@ async fn do_lock(
                 .filter(|_| build_encoding.is_some())
                 .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
                 .transpose()?;
-            let previous_build = previous_pins.as_ref().map(|pins| PreviousBuildLock {
-                pins,
-                root: target.install_path(),
-                project_domain: Lock::build_domain(
-                    &requires_python,
-                    lock_supported_environments.as_markers(),
-                ),
-                prefer_versions,
-            });
+            let build_inputs = if build_encoding.is_some() {
+                let project_domain =
+                    Lock::build_domain(&requires_python, lock_supported_environments.as_markers());
+                Some(BuildLockInputs {
+                    constraints: &build_constraints,
+                    hashes: BuildConstraintHashes::from_constraints(
+                        &build_constraints,
+                        *build_hash_checking,
+                        project_domain,
+                    )?,
+                    previous: previous_pins.as_ref().map(|pins| PreviousBuildLock {
+                        pins,
+                        root: target.install_path(),
+                        project_domain,
+                        prefer_versions,
+                    }),
+                })
+            } else {
+                None
+            };
 
             // Expand the available extras for each workspace member.
             let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
@@ -1093,7 +1105,7 @@ async fn do_lock(
                 flat_index,
                 state.index(),
                 &build_dispatch,
-                previous_build,
+                build_inputs,
                 concurrency,
                 options,
                 recorder.clone(),

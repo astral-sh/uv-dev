@@ -6,7 +6,7 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::debug;
 
-use uv_distribution_types::{DistributionId, HashCollection, Identifier, Name, Requirement};
+use uv_distribution_types::{DistributionId, Identifier, Name, Requirement};
 use uv_pep440::Version;
 use uv_resolver_types::{
     BuildResolution, ResolverOutput, SourceBuildRequirements, UniversalMarker,
@@ -19,7 +19,7 @@ use super::{
     ResolverState, RootFork,
 };
 use crate::preferences::{Preference, Preferences, RuntimePreferenceMode};
-use crate::{AllowedYanks, Manifest, ResolveError};
+use crate::{AllowedYanks, BuildConstraintHashes, Manifest, ResolveError};
 
 /// Which source packages can share an isolated build resolution.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -67,7 +67,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
         self,
         strategy: BuildForkStrategy,
         runtime_preferences: RuntimePreferenceMode,
-        build_hasher: &HashStrategy,
+        hashes: &BuildConstraintHashes,
         prepare: impl AsyncFn(
             Vec<Requirement>,
             &ResolverEnvironment,
@@ -107,73 +107,80 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
         let mut pending = PendingBuilds {
             covered: FxHashMap::default(),
             groups: Vec::new(),
+            hashes,
         };
         pending.enqueue(roots, strategy, &runtime.fork_markers);
         let mut builds = Vec::new();
-        let hasher = HashStrategy::collect(HashCollection::Url)
-            .with_verification(build_hasher.verification().clone());
 
-        let mut solve = async |owners: &[SourceBuildRequirements], pins: Option<&P>| {
-            let scope = owners[0].marker;
-            let env = ResolverEnvironment::universal(vec![scope.combined()]);
-            // A URL can be trusted by one root but carry different hashes in another.
-            let index = match (hasher.verification(), pins) {
-                (HashVerification::Unspecified, None) => state.index.fork_versions(),
-                (HashVerification::IfPresent(_) | HashVerification::Required(_), _)
-                | (HashVerification::Unspecified, Some(_)) => InMemoryIndex::default(),
-            };
-            let requirements = owners
-                .iter()
-                .flat_map(|owner| &owner.requirements)
-                .filter(|requirement| !requirement.marker.is_disjoint(scope.pep508()))
-                .cloned()
-                .collect();
-            let (mut manifest, hasher, locked) =
-                prepare(requirements, &env, &index, &hasher, pins).await?;
-            provider.set_hasher(hasher.clone());
+        let mut solve =
+            async |owners: &[SourceBuildRequirements], pins: Option<&P>, hasher: &HashStrategy| {
+                let scope = owners[0].marker;
+                let env = ResolverEnvironment::universal(vec![scope.combined()]);
+                // A URL can be trusted by one root but carry different hashes in another.
+                let index = match (hasher.verification(), pins) {
+                    (HashVerification::Unspecified, None) => state.index.fork_versions(),
+                    (HashVerification::IfPresent(_) | HashVerification::Required(_), _)
+                    | (HashVerification::Unspecified, Some(_)) => InMemoryIndex::default(),
+                };
+                let requirements = owners
+                    .iter()
+                    .flat_map(|owner| &owner.requirements)
+                    .filter(|requirement| !requirement.marker.is_disjoint(scope.pep508()))
+                    .cloned()
+                    .collect();
+                let (mut manifest, hasher, locked) =
+                    prepare(requirements, &env, &index, hasher, pins).await?;
+                provider.set_hasher(hasher.clone());
 
-            manifest.preferences = if locked.is_empty() {
-                preferences.clone()
-            } else {
-                Preferences::from_iter(
-                    locked
-                        .into_iter()
-                        .chain(runtime_preferences.iter().cloned()),
+                manifest.preferences = if locked.is_empty() {
+                    preferences.clone()
+                } else {
+                    Preferences::from_iter(
+                        locked
+                            .into_iter()
+                            .chain(runtime_preferences.iter().cloned()),
+                        &env,
+                    )
+                };
+                provider.set_allowed_yanks(AllowedYanks::from_manifest(
+                    &manifest,
                     &env,
-                )
+                    state.dependency_mode,
+                ));
+                let mut build = ResolverState::new(
+                    manifest,
+                    state.options.clone(),
+                    &hasher,
+                    env,
+                    &state.current_environment,
+                    state.tags.clone(),
+                    &state.python_requirement,
+                    state.conflicts.clone(),
+                    &index,
+                    &state.git,
+                    &state.capabilities,
+                    &state.locations,
+                    state.installed_packages.clone(),
+                );
+                build.reporter = state.reporter.clone();
+                debug!(
+                    owners = %owners.iter().map(|root| root.owner.name()).join(", "),
+                    ?scope,
+                    "Solving build requirements"
+                );
+                let graph = Arc::new(build).run(&provider, schedule).await;
+                Ok::<_, E>(graph.map(|graph| (graph, hasher)))
             };
-            provider.set_allowed_yanks(AllowedYanks::from_manifest(
-                &manifest,
-                &env,
-                state.dependency_mode,
-            ));
-            let mut build = ResolverState::new(
-                manifest,
-                state.options.clone(),
-                &hasher,
-                env,
-                &state.current_environment,
-                state.tags.clone(),
-                &state.python_requirement,
-                state.conflicts.clone(),
-                &index,
-                &state.git,
-                &state.capabilities,
-                &state.locations,
-                state.installed_packages.clone(),
-            );
-            build.reporter = state.reporter.clone();
-            debug!(
-                owners = %owners.iter().map(|root| root.owner.name()).join(", "),
-                ?scope,
-                "Solving build requirements"
-            );
-            let graph = Arc::new(build).run(&provider, schedule).await;
-            Ok::<_, E>(graph.map(|graph| (graph, hasher)))
-        };
-        while let Some((pins, owners)) = pending.groups.pop() {
-            for (owners, (graph, hasher)) in
-                resolve_cluster(owners, &mut async |owners| solve(owners, pins).await).await?
+        while let Some(BuildGroup {
+            pins,
+            owners,
+            hasher,
+        }) = pending.groups.pop()
+        {
+            for (owners, (graph, hasher)) in resolve_cluster(owners, &mut async |owners| {
+                solve(owners, pins, hasher).await
+            })
+            .await?
             {
                 let scope = owners[0].marker;
                 debug!(
@@ -273,10 +280,17 @@ fn build_error(owners: &[SourceBuildRequirements], error: ResolveError) -> Resol
     ResolveError::BuildDependencies(packages, Box::new(error))
 }
 
-struct PendingBuilds<'pins, P> {
+struct BuildGroup<'a, P> {
+    pins: Option<&'a P>,
+    hasher: &'a HashStrategy,
+    owners: Vec<SourceBuildRequirements>,
+}
+
+struct PendingBuilds<'a, P> {
     /// A source build can recur through another build dependency. Only visit new marker regions.
     covered: FxHashMap<(DistributionId, Option<Version>), UniversalMarker>,
-    groups: Vec<(Option<&'pins P>, Vec<SourceBuildRequirements>)>,
+    groups: Vec<BuildGroup<'a, P>>,
+    hashes: &'a BuildConstraintHashes,
 }
 
 impl<'pins, P: Ord> PendingBuilds<'pins, P> {
@@ -286,7 +300,7 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
         strategy: BuildForkStrategy,
         runtime_forks: &[UniversalMarker],
     ) {
-        let mut groups = BTreeMap::<_, Vec<_>>::new();
+        let mut groups = BTreeMap::new();
         let runtime_forks = if runtime_forks.is_empty() {
             &[UniversalMarker::TRUE][..]
         } else {
@@ -319,17 +333,30 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
                     continue;
                 }
                 covered.or(marker);
-                let mut root = owner.clone();
-                root.marker = marker;
-                match strategy {
-                    BuildForkStrategy::Clustered => {
-                        groups.entry((marker, pins)).or_default().push(root);
+                for (scope, hasher) in self.hashes.for_scope(marker) {
+                    let mut root = owner.clone();
+                    root.marker = scope;
+                    match strategy {
+                        BuildForkStrategy::Clustered => {
+                            groups
+                                .entry((scope, pins))
+                                .or_insert_with(|| BuildGroup {
+                                    pins,
+                                    hasher,
+                                    owners: Vec::new(),
+                                })
+                                .owners
+                                .push(root);
+                        }
+                        BuildForkStrategy::PerPackage => self.groups.push(BuildGroup {
+                            pins,
+                            hasher,
+                            owners: vec![root],
+                        }),
                     }
-                    BuildForkStrategy::PerPackage => self.groups.push((pins, vec![root])),
                 }
             }
         }
-        self.groups
-            .extend(groups.into_iter().map(|((_, pins), owners)| (pins, owners)));
+        self.groups.extend(groups.into_values());
     }
 }
