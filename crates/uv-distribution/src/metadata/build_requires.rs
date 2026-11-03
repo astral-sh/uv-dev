@@ -269,7 +269,7 @@ impl LoweredExtraBuildDependencies {
         credentials_cache: &CredentialsCache,
     ) -> Result<Self, MetadataError> {
         match source_strategy {
-            NoSources::None => {
+            NoSources::None | NoSources::Packages(_) => {
                 // Collect project sources and indexes
                 let project_indexes = workspace
                     .pyproject_toml()
@@ -298,6 +298,15 @@ impl LoweredExtraBuildDependencies {
                         match_runtime,
                     } in requirements
                     {
+                        // Runtime matching supplies the selected distribution's source after
+                        // resolution. Only a constraint on the requirement itself is invalid.
+                        if match_runtime || source_strategy.for_package(&requirement.name) {
+                            lowered.push(ExtraBuildRequirement {
+                                requirement: requirement.into(),
+                                match_runtime,
+                            });
+                            continue;
+                        }
                         let requirement_name = requirement.name.clone();
                         let extra = requirement.marker.top_level_extra_name();
                         lowered.extend(
@@ -338,7 +347,7 @@ impl LoweredExtraBuildDependencies {
                 }
                 Ok(Self(build_requires))
             }
-            NoSources::All | NoSources::Packages(_) => {
+            NoSources::All => {
                 // Without source resolution, just return the dependencies as-is
                 Ok(Self::from_non_lowered(extra_build_dependencies))
             }

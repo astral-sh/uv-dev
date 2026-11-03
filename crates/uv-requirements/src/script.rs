@@ -211,6 +211,14 @@ pub async fn script_extra_build_requires(
             match_runtime,
         } in requirements.iter().cloned()
         {
+            if match_runtime {
+                // The runtime selection supplies both the version and the source.
+                lowered_requirements.push(ExtraBuildRequirement {
+                    requirement: requirement.into(),
+                    match_runtime,
+                });
+                continue;
+            }
             lowered_requirements.extend(
                 LoweredRequirement::from_non_workspace_requirement(
                     requirement,
