@@ -218,13 +218,15 @@ impl Lock {
             } else {
                 &[]
             };
+            // Retain the complete declarations across forks. Checked replay projects them
+            // onto the portion of the owner domain supported by the project.
             let inputs = BuildInput::collect(
                 backend,
                 extras,
                 &owner.name,
                 root,
                 &self.requires_python,
-                graph.marker,
+                UniversalMarker::TRUE,
             )?;
             universes.push(Universe {
                 ordinary_owner: None,
@@ -316,7 +318,7 @@ impl Lock {
     /// Combine disjoint marker domains for an owner when it selects the same build environment
     /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
     pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {
-        let project = self.build_domain();
+        let project = self.build_project_domain();
         let Some(builds) = &mut self.builds else {
             return Ok(self);
         };
@@ -332,6 +334,7 @@ impl Lock {
             let variants = owners.entry(universe.owner.clone()).or_default();
             if let Some(other) = variants.iter_mut().find(|other| {
                 other.marker.combined().is_disjoint(domain)
+                    && other.inputs.is_some()
                     && other.inputs == universe.inputs
                     && other.roots == universe.roots
                     && other.packages == universe.packages
@@ -351,7 +354,8 @@ impl Lock {
         Ok(self)
     }
 
-    fn build_domain(&self) -> MarkerTree {
+    /// The supported environment, including exclusions within the Python range.
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
         let mut project =
             self.requires_python
                 .specifiers()
@@ -528,7 +532,7 @@ impl<'a> OrdinaryGraph<'a> {
         }
         Self {
             lock,
-            domain: lock.build_domain(),
+            domain: lock.build_project_domain(),
             unique,
         }
     }
