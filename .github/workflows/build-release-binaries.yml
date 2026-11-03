@@ -1393,6 +1393,77 @@ jobs:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
           path: crates/uv-build/dist
 
+  freebsd:
+    name: x86_64-unknown-freebsd
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install Rust target"
+        run: rustup target add x86_64-unknown-freebsd
+      - name: "Install cargo extensions"
+        run: scripts/install-cargo-extensions.sh
+      - name: "Build binaries"
+        run: |
+          # Use the `cross-rs` C toolchain with the repository's Rust toolchain and `cargo-auditable`.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/io" \
+            --volume "$HOME/.cargo:/cargo" \
+            --volume "$(rustc --print sysroot):/rust:ro" \
+            --workdir /io \
+            --env CARGO_HOME=/cargo \
+            --env CARGO_INCREMENTAL \
+            --env CARGO_NET_RETRY \
+            --env CARGO_TERM_COLOR \
+            --env AWS_LC_SYS_USE_SYSTEM \
+            ghcr.io/cross-rs/x86_64-unknown-freebsd:main@sha256:76e45e1baed4894595ea1d006c441184af7527fe2cdc27ca42d49c60201363a6 \
+            sh -eu -c '
+              export PATH="/rust/bin:$PATH"
+              /cargo/bin/cargo-auditable auditable build --release --locked \
+                --target x86_64-unknown-freebsd --package uv --bin uv --bin uvx --features self-update
+            '
+      - name: "Archive binaries"
+        run: |
+          ARCHIVE_NAME=uv-x86_64-unknown-freebsd
+          mkdir "$ARCHIVE_NAME"
+          cp target/x86_64-unknown-freebsd/release/{uv,uvx} "$ARCHIVE_NAME/"
+          tar czvf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+          sha256sum "$ARCHIVE_NAME.tar.gz" > "$ARCHIVE_NAME.tar.gz.sha256"
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Exclude this archive from release assembly while `cargo-dist` lacks FreeBSD support.
+          name: build-freebsd-release-binaries
+          path: |
+            uv-x86_64-unknown-freebsd.tar.gz
+            uv-x86_64-unknown-freebsd.tar.gz.sha256
+          if-no-files-found: error
+
+  test-freebsd:
+    name: "test x86_64-unknown-freebsd archive"
+    needs: freebsd
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-freebsd-release-binaries
+      - name: "Test in Firecracker VM"
+        uses: acj/freebsd-firecracker-action@ba4f70408ef1d979acdd7bd36fc4b27e06fe5abe # v0.12.0
+        with:
+          checkout: false
+          pre-run: |
+            sha256sum --check uv-x86_64-unknown-freebsd.tar.gz.sha256
+            scp uv-x86_64-unknown-freebsd.tar.gz firecracker:
+          run-in-vm: |
+            tar xzf uv-x86_64-unknown-freebsd.tar.gz
+            ./uv-x86_64-unknown-freebsd/uv --version
+            ./uv-x86_64-unknown-freebsd/uvx --version
+            ./uv-x86_64-unknown-freebsd/uv self update --help
+          post-run: "true"
+
   check-wheels:
     name: "check wheel contents"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
