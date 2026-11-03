@@ -2177,143 +2177,121 @@ fn create_venv_apostrophe() {
     assert_eq!(stdout.trim(), venv_dir.to_string_lossy());
 }
 
-/// An explicit prompt must remain literal during both activation and Bash prompt expansion.
+/// An explicit prompt is inserted into the script that Bash sources.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_prompt_substitution() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     context
         .venv()
-        .arg("--python")
-        .arg("3.12")
-        .arg("--prompt")
-        .arg("prompt-$(printf substituted)")
+        .args(["--python", "3.12", "--prompt", "env$(touch sourced)"])
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.external_command("bash")
-        .arg("--noprofile")
-        .arg("--norc")
-        .arg("-c")
-        .arg(indoc! {r#"
-            PS1='original>'
-            source .venv/bin/activate &&
-            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}" &&
-            deactivate && printf 'deactivated=%s\n' "$PS1"
-        "#}), @"
+    uv_snapshot!(context.external_command("bash").args(["--noprofile", "--norc", "-c", indoc! {r#"
+        source .venv/bin/activate || exit 1
+        printf '%s\n' "$VIRTUAL_ENV_PROMPT"
+    "#}]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
-    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
-    rendered=(prompt-$(printf substituted)) original>
-    deactivated=original>
+    env$(touch sourced)
     ");
+    context
+        .temp_dir
+        .child("sourced")
+        .assert(predicate::path::missing());
 }
 
-/// Bash still decodes prompt backslash escapes when `promptvars` is disabled.
+/// Bash decodes backslash escapes even when prompt variable expansion is disabled.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_promptvars_disabled() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let prompt = r#"résumé "quoted"'\new"#;
     context
         .venv()
-        .args(["--python", "3.12", "--relocatable", "--prompt", prompt])
+        .args(["--python", "3.12", "--prompt", r"it's\new"])
         .assert()
         .success();
 
-    // Omit the standard filters so backslashes are not normalized as path separators.
-    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command("bash")
-        .arg("--noprofile")
-        .arg("--norc")
-        .arg("-c")
-        .arg(indoc! {r#"
-            shopt -u promptvars
-            PS1='original>'
-            source .venv/bin/activate &&
-            printf 'prompt=<%s>\nrendered=<%s>\n' "$VIRTUAL_ENV_PROMPT" "${PS1@P}" &&
-            deactivate && printf 'deactivated=%s\n' "$PS1"
-        "#}), @r#"
+    // Keep the literal backslash in the rendered prompt.
+    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command("bash").args(["--noprofile", "--norc", "-c", indoc! {r#"
+        shopt -u promptvars
+        PS1='original>'
+        source .venv/bin/activate || exit 1
+        printf '%s\n' "${PS1@P}"
+    "#}]), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    prompt=<résumé "quoted"'\new>
-    rendered=<(résumé "quoted"'\new) original>>
-    deactivated=original>
-    "#);
+    (it's\new) original>
+    ");
 }
 
-/// Without a venv path, the working directory's name is embedded as the default prompt.
-/// POSIX mode expands prompt variables even with promptvars disabled and an older compatibility level.
+/// POSIX mode expands the prompt even with `promptvars` disabled at activation.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_current_directory_prompt_substitution() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let project_dir = context.temp_dir.child("prompt-$(printf substituted)");
+    let project_dir = context.temp_dir.child("env$(touch sourced)");
     project_dir.create_dir_all()?;
-
     context
         .venv()
         .current_dir(&project_dir)
-        .arg("--python")
-        .arg("3.12")
+        .args(["--python", "3.12"])
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.external_command("bash")
-        .current_dir(&project_dir)
-        .arg("--noprofile")
-        .arg("--norc")
-        .arg("-c")
-        .arg(indoc! {r#"
+    uv_snapshot!(context.external_command("bash").current_dir(&project_dir)
+        .args(["--noprofile", "--norc", "-c", indoc! {r#"
             set -o posix
             shopt -s compat42
             shopt -u promptvars
             PS1='original>'
-            source .venv/bin/activate &&
-            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}"
-        "#}), @"
+            source .venv/bin/activate || exit 1
+            printf '%s\n' "${PS1@P}"
+        "#}]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
-    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
-    rendered=(prompt-$(printf substituted)) original>
+    (env$(touch sourced)) original>
     ");
-
+    project_dir
+        .child("sourced")
+        .assert(predicate::path::missing());
     Ok(())
 }
 
-/// With an explicit venv path, Bash derives the prompt from its basename during activation.
-/// The directory name must remain literal when the prompt is rendered.
+/// Bash derives an explicit environment directory's prompt at activation and expands it on redraw.
 #[test]
 #[cfg(target_os = "linux")]
 fn activate_venv_bash_directory_prompt_substitution() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let venv_dir = context.temp_dir.child("prompt-$(printf substituted)");
+    let venv = context.temp_dir.child("env$(touch redrawn)");
     context
         .venv()
-        .arg(venv_dir.path())
-        .arg("--python")
-        .arg("3.12")
+        .arg(venv.path())
+        .args(["--python", "3.12"])
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.external_command("bash")
-        .arg("--noprofile")
-        .arg("--norc")
-        .arg("-c")
-        .arg(indoc! {r#"
+    uv_snapshot!(context.external_command("bash")
+        .args(["--noprofile", "--norc", "-c", indoc! {r#"
             PS1='original>'
-            source "$1/bin/activate" &&
-            printf 'VIRTUAL_ENV_PROMPT=%s\nPS1=%s\nrendered=%s\n' "$VIRTUAL_ENV_PROMPT" "$PS1" "${PS1@P}"
-        "#})
-        .arg("bash")
-        .arg(venv_dir.path()), @"
+            source "$1/bin/activate" || exit 1
+            test ! -e redrawn || exit 1
+            set -o posix
+            shopt -u promptvars
+            printf '%s\n' "${PS1@P}"
+            deactivate
+            printf '%s\n' "$PS1"
+        "#}, "bash"]).arg(venv.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    VIRTUAL_ENV_PROMPT=prompt-$(printf substituted)
-    PS1=(${VIRTUAL_ENV_PROMPT-}) original>
-    rendered=(prompt-$(printf substituted)) original>
+    (env$(touch redrawn)) original>
+    original>
     ");
+    context
+        .temp_dir
+        .child("redrawn")
+        .assert(predicate::path::missing());
 }
 
 /// Emulate a ksh without ksh93's `${.sh.file}` parameter using a POSIX shell.
