@@ -53,8 +53,13 @@ def cause(result):
         )
     ):
         return "offline-cache"
+    if "failed to extract archive" in stderr:
+        return "archive"
+    # Source distributions report "Failed to download and build" for failures
+    # at either stage. Use the nested cause to identify a transport failure.
+    transport = stderr.replace("failed to download and build", "")
     if any(
-        term in stderr
+        term in transport
         for term in (
             "failed to download",
             "failed to fetch",
@@ -70,6 +75,7 @@ def cause(result):
             "build backend returned an error",
             "build-backend",
             "failed to build",
+            "failed to download and build",
             "build requirements",
             "build dependencies",
         )
