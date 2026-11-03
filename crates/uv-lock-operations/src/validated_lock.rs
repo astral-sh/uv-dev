@@ -41,6 +41,7 @@ impl ValidatedLock {
     /// Validate a [`Lock`] against its requirements and resolution policy.
     pub async fn validate(
         lock: Lock,
+        build_lock_matches: bool,
         install_path: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
@@ -213,6 +214,17 @@ impl ValidatedLock {
                 requires_python,
             );
             return if lock.fork_markers().is_empty() {
+                Ok(Self::Preferable(lock))
+            } else {
+                Ok(Self::Versions(lock))
+            };
+        }
+
+        // A metadata build must use the current build requirements. A v2 lock can still
+        // supply runtime forks when its build graph needs updating.
+        if !build_lock_matches {
+            debug!("Resolving despite existing lockfile due to changed build inputs or encoding");
+            return if lock.locks_builds() {
                 Ok(Self::Preferable(lock))
             } else {
                 Ok(Self::Versions(lock))
