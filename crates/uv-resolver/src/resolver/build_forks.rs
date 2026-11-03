@@ -17,7 +17,7 @@ use uv_types::{BuildContext, HashStrategy, HashVerification, InstalledPackagesPr
 use super::{
     DefaultResolverProvider, InMemoryIndex, Resolver, ResolverEnvironment, ResolverState, RootFork,
 };
-use crate::preferences::{Preference, Preferences};
+use crate::preferences::{Preference, Preferences, RuntimePreferenceMode};
 use crate::{AllowedYanks, Manifest, ResolveError};
 
 /// Which source packages can share an isolated build resolution.
@@ -42,6 +42,19 @@ impl BuildForkStrategy {
     }
 }
 
+impl RuntimePreferenceMode {
+    /// Select the runtime preferences used for experimental build dependency locking.
+    pub fn from_env() -> Result<Self, &'static str> {
+        match std::env::var(EnvVars::UV_INTERNAL__BUILD_RUNTIME_PREFERENCES).as_deref() {
+            Ok("all") | Err(std::env::VarError::NotPresent) => Ok(Self::All),
+            Ok("first") => Ok(Self::First),
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                Err("Expected `all` or `first` for UV_INTERNAL__BUILD_RUNTIME_PREFERENCES")
+            }
+        }
+    }
+}
+
 impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
     Resolver<DefaultResolverProvider<'_, Context>, InstalledPackages>
 {
@@ -50,6 +63,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
     pub async fn resolve_with_build_forks<E: From<ResolveError>>(
         self,
         strategy: BuildForkStrategy,
+        runtime_preferences: RuntimePreferenceMode,
         build_hasher: &HashStrategy,
         prepare: impl AsyncFn(
             Vec<Requirement>,
@@ -82,7 +96,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
 
         let mut runtime = state.run(&provider, schedule).await?;
         let preferences = Preferences::from_iter(
-            Preference::from_runtime(&runtime).map_err(ResolveError::from)?,
+            Preference::from_runtime(&runtime, runtime_preferences),
             &state.env,
         );
         let roots = discover(&runtime, &runtime, UniversalMarker::TRUE, &state.hasher).await?;
@@ -219,7 +233,6 @@ fn is_cluster_conflict(error: &ResolveError) -> bool {
         ResolveError::Client(_)
         | ResolveError::Distribution(_)
         | ResolveError::BuildDependencies(..)
-        | ResolveError::Preference(_)
         | ResolveError::SpawnThread(_)
         | ResolveError::ChannelClosed
         | ResolveError::UnregisteredTask(_)

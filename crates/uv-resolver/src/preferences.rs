@@ -9,7 +9,6 @@ use uv_pep440::{Operator, Version};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
-use uv_static::EnvVars;
 
 use crate::universal_marker::UniversalMarker;
 use crate::{ResolverEnvironment, ResolverOutput};
@@ -18,8 +17,6 @@ use crate::{ResolverEnvironment, ResolverOutput};
 pub enum PreferenceError {
     #[error(transparent)]
     Hash(#[from] HashError),
-    #[error("Expected `all` or `first` for UV_INTERNAL__BUILD_RUNTIME_PREFERENCES")]
-    InvalidRuntimePreferences,
 }
 
 /// A pinned requirement, as extracted from a `requirements.txt` file.
@@ -100,19 +97,11 @@ impl Preference {
 
     /// Use runtime selections as soft preferences for a build resolve. Hard pins for
     /// `match-runtime` are expressed separately as requirements.
-    pub(crate) fn from_runtime(runtime: &ResolverOutput) -> Result<Vec<Self>, PreferenceError> {
-        let first_only =
-            match std::env::var(EnvVars::UV_INTERNAL__BUILD_RUNTIME_PREFERENCES).as_deref() {
-                Ok("all") | Err(std::env::VarError::NotPresent) => false,
-                Ok("first") => true,
-                Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
-                    return Err(PreferenceError::InvalidRuntimePreferences);
-                }
-            };
-        Ok(runtime
+    pub(crate) fn from_runtime(runtime: &ResolverOutput, mode: RuntimePreferenceMode) -> Vec<Self> {
+        runtime
             .base_dists()
             .map(|(_, dist)| Self {
-                source: PreferenceSource::Runtime { first_only },
+                source: PreferenceSource::Runtime(mode),
                 ..Self::from_locked(
                     dist.name.clone(),
                     dist.version.clone(),
@@ -120,7 +109,7 @@ impl Preference {
                     vec![dist.marker],
                 )
             })
-            .collect())
+            .collect()
     }
 
     /// Create a [`Preference`] from an installed distribution.
@@ -179,6 +168,13 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
     }
 }
 
+/// Which runtime selections to try before falling back to normal build candidate selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimePreferenceMode {
+    All,
+    First,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
@@ -190,7 +186,7 @@ pub(crate) enum PreferenceSource {
     /// The preference is from the current solve.
     Resolver,
     /// A project runtime selection used as a preference in an isolated build.
-    Runtime { first_only: bool },
+    Runtime(RuntimePreferenceMode),
 }
 
 #[derive(Debug, Clone)]

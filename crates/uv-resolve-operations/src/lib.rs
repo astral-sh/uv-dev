@@ -31,7 +31,7 @@ use uv_requirements::{
 use uv_resolver::{
     BuildForkStrategy, DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options,
     Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput,
-    UpgradePackages,
+    RuntimePreferenceMode, UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -381,8 +381,11 @@ pub async fn resolve(
         if let Some((constraints, hasher)) = build_dispatch.locked_build_inputs() {
             let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
             let build_recorder = recorder.as_ref().map(|_| ResolutionRecorder::default());
+            let runtime_preferences =
+                RuntimePreferenceMode::from_env().map_err(anyhow::Error::msg)?;
             let resolution = Box::pin(resolver.resolve_with_build_forks(
                 strategy,
+                runtime_preferences,
                 hasher,
                 async |requirements, env, index, hasher| {
                     let hasher = hasher

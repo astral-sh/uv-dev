@@ -36,7 +36,7 @@ use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
     MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
 };
-use crate::{InMemoryIndex, Options, PreferenceError};
+use crate::{InMemoryIndex, Options};
 
 #[derive(DebugNoInline, thiserror::Error)]
 pub enum ResolveError {
@@ -51,9 +51,6 @@ pub enum ResolveError {
 
     #[error("Failed to resolve build requirements for {}", .0.iter().map(|name| format!("`{name}`")).join(", "))]
     BuildDependencies(Vec<PackageName>, #[source] Box<Self>),
-
-    #[error(transparent)]
-    Preference(#[from] PreferenceError),
 
     #[error("Failed to start resolver thread")]
     SpawnThread(#[source] std::io::Error),
@@ -164,7 +161,6 @@ impl ResolveError {
             | Self::NoSolution(_)
             | Self::UnhashedPackage(_)
             | Self::PackageUnavailable(_)
-            | Self::Preference(_)
             | Self::ConflictMarker(_)
             | Self::MismatchedPackageName { .. } => true,
             Self::Dist(_, _, _, error) => error.is_user_failure(),
