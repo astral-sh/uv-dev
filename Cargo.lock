@@ -6426,6 +6426,7 @@ dependencies = [
  "uv-build-backend",
  "uv-build-frontend",
  "uv-cache",
+ "uv-cache-key",
  "uv-client",
  "uv-configuration",
  "uv-distribution",

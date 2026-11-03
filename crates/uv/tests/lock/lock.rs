@@ -838,6 +838,88 @@ fn lock_build_inputs_compacted_domains() -> Result<()> {
     Ok(())
 }
 
+/// Unlocked metadata can include dependencies returned by a backend hook that locked replay rejects.
+#[cfg(feature = "test-universal")]
+#[test]
+fn locked_build_metadata_after_unlocked_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"late".parse()?, &"1".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_editable(config_settings=None):
+            return ["late==1"]
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / "project-1.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text("Metadata-Version: 2.3\nName: project\nVersion: 1\n")
+            return dist_info.name
+
+        def build_editable(*args):
+            raise AssertionError("unexpected wheel build")
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let lock = context
+        .read("uv.lock")
+        .replacen(
+            "version = 1\n",
+            "version = 2\nbuild-encoding = \"dependency\"\n",
+            1,
+        )
+        .replacen(
+            "[[package]]",
+            indoc! {r#"
+        [[build-universes]]
+        owner = { name = "project", version = "1", source = { editable = "." } }
+        roots = []
+        inputs = []
+
+        [[package]]"#},
+            1,
+        );
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to generate package metadata for `project==1 @ editable+.`
+      cause: `get_requires_for_build_editable` requested `late`, which was not declared in the build requirements
+    ");
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check", "--no-cache"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to generate package metadata for `project==1 @ editable+.`
+      cause: `get_requires_for_build_editable` requested `late`, which was not declared in the build requirements
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]

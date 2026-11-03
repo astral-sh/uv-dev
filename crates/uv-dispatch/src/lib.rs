@@ -20,6 +20,7 @@ use tracing::{debug, instrument, trace};
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
+use uv_cache_key::cache_digest;
 use uv_client::RegistryClient;
 use uv_configuration::{
     BuildKind, BuildOptions, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
@@ -36,6 +37,7 @@ use uv_distribution_types::{
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
 use uv_lock::Lock;
+use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -152,6 +154,54 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
+/// The replay policy and the disk-cache namespace used by both planning and isolated builds.
+pub struct BuildLockReplay<'a> {
+    lock: &'a Lock,
+    root: &'a Path,
+    runtime: Option<&'a Resolution>,
+    extra_build_requires: ExtraBuildRequires,
+}
+
+impl<'a> BuildLockReplay<'a> {
+    pub fn new(
+        lock: &'a Lock,
+        root: &'a Path,
+        runtime: Option<&'a Resolution>,
+        interpreter: &Interpreter,
+        tags: &Tags,
+        options: &BuildOptions,
+        mut extra_build_requires: ExtraBuildRequires,
+    ) -> Result<Self> {
+        if lock.locks_builds() {
+            let environment = format!("{:?} {tags} {options:?}", interpreter.markers());
+            // Validation has no selected runtime. Only sync knows which conflicts are inactive.
+            let conflicts = runtime.map(|resolution| {
+                resolution
+                    .activated_conflicts()
+                    .iter()
+                    .map(AsRef::<str>::as_ref)
+                    .collect::<Vec<_>>()
+            });
+            extra_build_requires.set_locked_environment(cache_digest(&(
+                lock.to_toml()?,
+                root,
+                environment,
+                conflicts,
+            )));
+        }
+        Ok(Self {
+            lock,
+            root,
+            runtime,
+            extra_build_requires,
+        })
+    }
+
+    pub fn extra_build_requires(&self) -> &ExtraBuildRequires {
+        &self.extra_build_requires
+    }
+}
+
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 #[derive(Clone)]
@@ -173,7 +223,7 @@ pub struct BuildDispatch<'a> {
     config_settings: &'a ConfigSettings,
     config_settings_package: &'a PackageConfigSettings,
     base_hasher: &'a HashStrategy,
-    build_lock: Option<(&'a Lock, &'a Path, Option<&'a Resolution>)>,
+    build_lock: Option<&'a BuildLockReplay<'a>>,
     build_owner: Option<&'a SourceDist>,
     build_hash_checking: HashCheckingMode,
     lock_build_dependencies: bool,
@@ -264,19 +314,15 @@ impl<'a> BuildDispatch<'a> {
 
     /// Use the lock's owner-specific closure for each isolated source build.
     #[must_use]
-    pub fn with_build_lock(
-        mut self,
-        lock: &'a Lock,
-        root: &'a Path,
-        runtime: Option<&'a Resolution>,
-    ) -> Self {
-        if lock.locks_builds() {
+    pub fn with_build_lock(mut self, replay: &'a BuildLockReplay<'a>) -> Self {
+        if replay.lock.locks_builds() {
+            self.extra_build_requires = replay.extra_build_requires();
             self.shared_state = SharedState {
                 build_arena: BuildArena::default(),
                 ..self.shared_state.fork()
             };
             self.lock_build_dependencies = true;
-            self.build_lock = Some((lock, root, runtime));
+            self.build_lock = Some(replay);
         }
         self
     }
@@ -424,16 +470,17 @@ impl BuildContext for BuildDispatch<'_> {
         hash_override: Option<&'data HashStrategy>,
         build_stack: &'data BuildStack,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
-        if let Some((lock, root, runtime)) = self.build_lock {
+        if let Some(replay) = self.build_lock {
             let owner = self
                 .build_owner
                 .ok_or_else(|| anyhow::anyhow!("Missing source package for locked build"))?;
-            let resolution = lock
+            let resolution = replay
+                .lock
                 .resolve_build(
                     owner,
-                    runtime,
+                    replay.runtime,
                     requirements,
-                    root,
+                    replay.root,
                     &self.interpreter.to_resolver_marker_environment(),
                     self.interpreter.tags()?,
                     self.build_options,
