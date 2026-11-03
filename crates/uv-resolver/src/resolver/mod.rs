@@ -322,9 +322,9 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
                     .map_err(ResolveError::SpawnThread)?;
                 Ok(())
             })
-            .await?;
+            .await;
         state.on_complete();
-        Ok(output)
+        output
     }
 }
 
