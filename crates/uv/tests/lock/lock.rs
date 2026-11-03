@@ -94,6 +94,129 @@ fn lock_validation_warning_chain() -> Result<()> {
     Ok(())
 }
 
+/// One incompatible backend must not prevent the other two projects from sharing their build solve.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_separate_builds_incompatible_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["first", "second", "third"]
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "first"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend==1"]
+        build-backend = "backend"
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "second"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend==2"]
+        build-backend = "backend"
+    "#})?;
+    context
+        .temp_dir
+        .child("third/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "third"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend<2"]
+        build-backend = "backend"
+    "#})?;
+    let wheels = context.temp_dir.child("wheels");
+    let backend = "backend".parse()?;
+    let (filename, wheel) = WheelBuilder::new(&backend, &"1".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&backend, &"2".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env("RUST_LOG", "uv_lock_operations::build_resolution=debug")
+        .arg("--preview-features").arg("build-dependency-locking")
+        .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Resolved 2 build environments in 5 solver runs
+    DEBUG Resolved build requirements for first @ file://[TEMP_DIR]/first, third @ file://[TEMP_DIR]/third: [backend==1]
+    DEBUG Resolved build requirements for second @ file://[TEMP_DIR]/second: [backend==2]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// The active fork's runtime version is incompatible with the build. Only the all-versions
+/// preference also tries the other fork's runtime version before the latest release.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_separate_builds_runtime_preferences_across_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["d==1; python_version < '3.13'", "d==2; python_version >= '3.13'"]
+
+        [build-system]
+        requires = ["d!=2; python_version >= '3.13'"]
+        build-backend = "backend"
+    "#})?;
+    let wheels = context.temp_dir.child("wheels");
+    let package = "d".parse()?;
+    for version in ["1", "2", "3"] {
+        let (filename, wheel) = WheelBuilder::new(&package, &version.parse()?).build();
+        wheels.child(filename).write_binary(&wheel)?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env("RUST_LOG", "uv_lock_operations::build_resolution=debug")
+        .arg("--preview-features=build-dependency-locking")
+        .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Resolved 1 build environments in 1 solver runs
+    DEBUG Resolved build requirements for project @ file://[TEMP_DIR]/: [d==1]
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .env("RUST_LOG", "uv_lock_operations::build_resolution=debug")
+        .env("UV_INTERNAL__BUILD_RUNTIME_PREFERENCES", "first")
+        .arg("--preview-features=build-dependency-locking")
+        .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Resolved 1 build environments in 1 solver runs
+    DEBUG Resolved build requirements for project @ file://[TEMP_DIR]/: [d==3]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Generate the preview lock without package metadata.
 #[cfg(feature = "test-universal")]
 fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {

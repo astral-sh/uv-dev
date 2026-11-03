@@ -19,7 +19,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 
 use uv_cache_key::RepositoryUrl;
-use uv_client::FileHashError;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, DependencyModifierScope,
     DependencyModifiers, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
@@ -9869,10 +9868,10 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
+    #[error(transparent)]
+    FileHash(uv_client::FileHashError),
     #[error("{0}")]
     BuildGraph(String),
-    #[error(transparent)]
-    FileHash(#[from] FileHashError),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

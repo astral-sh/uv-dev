@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use petgraph::Graph;
 use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
@@ -20,14 +20,13 @@ use uv_distribution_types::{
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra};
 use uv_platform_tags::Tags;
-use uv_pypi_types::HashDigest;
 use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
 use super::{
     BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
-    LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
-    SourceDist as LockedSourceDist, TagPolicy, absolute_path,
+    LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source, TagPolicy,
+    absolute_path,
 };
 
 /// The lockfile representation of differences between resolved build environments.
@@ -179,68 +178,79 @@ impl Lock {
         Ok(self)
     }
 
-    /// Hash registry artifacts whose indexes omit digests, including local `--find-links`
-    /// directories. A file referenced by several owners is read once for the whole lock.
-    pub async fn with_missing_registry_hashes(
-        mut self,
-        client: &RegistryClient,
+    /// A project that locks its builds verifies both its runtime and build archives at sync.
+    /// Compute missing hashes when an index or local find-links directory omits them.
+    pub async fn generate_missing_registry_hashes(
+        &mut self,
         root: &Path,
+        client: &RegistryClient,
         concurrency: usize,
-    ) -> Result<Self, LockError> {
-        let mut missing: FxHashMap<SafeUrl, Vec<&mut Option<HashDigest>>> = FxHashMap::default();
-        let build_packages = self
-            .builds
+    ) -> Result<(), LockError> {
+        let Some(builds) = &mut self.builds else {
+            return Ok(());
+        };
+        let mut jobs = FxHashMap::<_, Vec<_>>::default();
+        let build_packages = builds
+            .universes
             .iter_mut()
-            .flat_map(|builds| &mut builds.universes)
             .flat_map(|universe| universe.packages.values_mut());
         for package in self.packages.iter_mut().chain(build_packages) {
-            let Source::Registry(registry) = &package.id.source else {
+            let Source::Registry(index) = &package.id.source else {
                 continue;
             };
-            if package
-                .sdist
-                .as_ref()
-                .is_some_and(|sdist| sdist.hash().is_none())
-                && let Some(SourceDist::Registry(source)) =
-                    package.to_source_dist(root, FirstParty::No)?
-                && let Some(sdist) = &mut package.sdist
-            {
-                let url = source
-                    .file
-                    .url
-                    .to_url()
-                    .map_err(LockErrorKind::InvalidUrl)?;
-                let metadata = match sdist {
-                    LockedSourceDist::Url { metadata, .. }
-                    | LockedSourceDist::Path { metadata, .. }
-                    | LockedSourceDist::Metadata { metadata } => metadata,
-                };
-                missing.entry(url).or_default().push(&mut metadata.hash);
-            }
             for wheel in &mut package.wheels {
                 if wheel.hash.is_none() {
-                    let url = wheel
-                        .to_registry_wheel(registry, root)?
-                        .file
-                        .url
-                        .to_url()
-                        .map_err(LockErrorKind::InvalidUrl)?;
-                    missing.entry(url).or_default().push(&mut wheel.hash);
+                    let file = wheel.to_registry_wheel(index, root)?.file;
+                    let url = file.url.to_url().map_err(LockErrorKind::InvalidUrl)?;
+                    jobs.entry(url).or_default().push(&mut wheel.hash);
                 }
             }
+            if let Some(sdist) = &mut package.sdist
+                && sdist.hash().is_none()
+            {
+                let (url, metadata) = match sdist {
+                    super::SourceDist::Url { url, metadata } => {
+                        (url.to_url().map_err(LockErrorKind::InvalidUrl)?, metadata)
+                    }
+                    super::SourceDist::Path { path, metadata } => {
+                        let RegistrySource::Path(index) = index else {
+                            return Err(error(format!(
+                                "Missing index directory for `{}`",
+                                package.id
+                            )));
+                        };
+                        let path = root.join(index).join(path);
+                        let url = SafeUrl::from_file_path(&path).map_err(|()| {
+                            LockErrorKind::PathToUrl {
+                                path: path.into_boxed_path(),
+                            }
+                        })?;
+                        (url, metadata)
+                    }
+                    super::SourceDist::Metadata { .. } => {
+                        return Err(error(format!(
+                            "Missing source archive location for `{}`",
+                            package.id
+                        )));
+                    }
+                };
+                jobs.entry(url).or_default().push(&mut metadata.hash);
+            }
         }
-        futures::stream::iter(missing)
-            .map(|(url, destinations)| async move {
-                let hash = client.hash_file(&url).await?;
+
+        // Shared artifacts have one download and one digest across all of their owners.
+        futures::stream::iter(jobs.into_iter().map(Ok))
+            .try_for_each_concurrent(concurrency, |(url, destinations)| async move {
+                let digest = client
+                    .hash_file(&url)
+                    .await
+                    .map_err(LockErrorKind::FileHash)?;
                 for destination in destinations {
-                    *destination = Some(hash.clone());
+                    *destination = Some(digest.clone());
                 }
-                Ok::<_, LockError>(())
+                Ok(())
             })
-            .buffer_unordered(concurrency)
-            .try_collect::<()>()
-            .await?;
-        Ok(self)
+            .await
     }
 
     /// Write the same resolved graphs using another lockfile encoding.

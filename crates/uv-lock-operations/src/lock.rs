@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{BuildGraph, GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -35,6 +35,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
+use crate::build_resolution::{BuildResolutionStrategy, build_encoding, resolve_builds};
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
@@ -836,11 +837,12 @@ async fn do_lock(
         ))
         .await
         {
+            // Build declarations in a source tree can change without changing runtime metadata.
             Ok(ValidatedLock::Satisfies(lock))
                 if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
-                    && !lock.locks_builds() =>
+                    && !check_locked_builds =>
             {
-                Some(ValidatedLock::Versions(lock))
+                Some(ValidatedLock::Preferable(lock))
             }
             Ok(ValidatedLock::Satisfies(lock)) => Some(ValidatedLock::Satisfies(lock)),
             Ok(_) if check_locked_builds => return Err(LockError::StaleBuildLock),
@@ -963,7 +965,7 @@ async fn do_lock(
                 .collect();
 
             // Resolve the requirements.
-            let (resolution, _) = uv_resolve_operations::resolve(
+            let (resolution, runtime_hasher) = uv_resolve_operations::resolve(
                 member_requirements
                     .into_iter()
                     .chain(target.group_requirements())
@@ -997,7 +999,7 @@ async fn do_lock(
                 upgrade,
                 None,
                 resolver_env,
-                python_requirement,
+                python_requirement.clone(),
                 interpreter.markers(),
                 conflicts.clone(),
                 &client,
@@ -1011,6 +1013,31 @@ async fn do_lock(
                 printer,
             )
             .await?;
+
+            let builds = if preview.is_enabled(PreviewFeature::BuildDependencyLocking) {
+                let encoding = build_encoding()?;
+                let build_hasher = hasher
+                    .clone()
+                    .with_constraint_hashes(&resolution_build_hasher)?;
+                let builds = Box::pin(resolve_builds(
+                    &resolution,
+                    BuildResolutionStrategy::from_env()?,
+                    &python_requirement,
+                    interpreter.markers(),
+                    &client,
+                    &flat_index,
+                    &build_dispatch,
+                    &build_constraints,
+                    &runtime_hasher,
+                    &build_hasher,
+                    concurrency,
+                ))
+                .await?;
+                debug!("Resolved {} build environments", builds.len());
+                Some((encoding, builds))
+            } else {
+                None
+            };
 
             // Print the success message after completing resolution.
             logger.on_complete(resolution.len(), start, printer)?;
@@ -1056,6 +1083,32 @@ async fn do_lock(
             .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
+
+            let lock = if let Some((encoding, builds)) = builds {
+                let graphs = builds.iter().flat_map(|(owners, resolution)| {
+                    owners.iter().map(move |owner| BuildGraph {
+                        owner: &owner.owner,
+                        marker: owner.marker,
+                        requirements: &owner.requirements,
+                        resolution,
+                    })
+                });
+                let mut lock = lock.with_build_graphs(
+                    encoding,
+                    graphs,
+                    target.install_path(),
+                    index_locations,
+                )?;
+                lock.generate_missing_registry_hashes(
+                    target.install_path(),
+                    &client,
+                    concurrency.downloads,
+                )
+                .await?;
+                lock
+            } else {
+                lock
+            };
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())
