@@ -24,7 +24,6 @@ use uv_pep508::{
 };
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
-use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
 use super::build_inputs::BuildInput;
@@ -276,43 +275,32 @@ impl Lock {
             let Source::Registry(index) = &package.id.source else {
                 continue;
             };
+            if package
+                .sdist
+                .as_ref()
+                .is_some_and(|sdist| sdist.hash().is_none())
+                && let Some(SourceDist::Registry(source)) =
+                    package.to_source_dist(root, FirstParty::No)?
+                && let Some(sdist) = &mut package.sdist
+            {
+                let url = source
+                    .file
+                    .url
+                    .to_url()
+                    .map_err(LockErrorKind::InvalidUrl)?;
+                let metadata = match sdist {
+                    LockedSourceDist::Url { metadata, .. }
+                    | LockedSourceDist::Path { metadata, .. }
+                    | LockedSourceDist::Metadata { metadata } => metadata,
+                };
+                jobs.entry(url).or_default().push(&mut metadata.hash);
+            }
             for wheel in &mut package.wheels {
                 if wheel.hash.is_none() {
                     let file = wheel.to_registry_wheel(index, root)?.file;
                     let url = file.url.to_url().map_err(LockErrorKind::InvalidUrl)?;
                     jobs.entry(url).or_default().push(&mut wheel.hash);
                 }
-            }
-            if let Some(sdist) = &mut package.sdist
-                && sdist.hash().is_none()
-            {
-                let (url, metadata) = match sdist {
-                    super::SourceDist::Url { url, metadata } => {
-                        (url.to_url().map_err(LockErrorKind::InvalidUrl)?, metadata)
-                    }
-                    super::SourceDist::Path { path, metadata } => {
-                        let RegistrySource::Path(index) = index else {
-                            return Err(error(format!(
-                                "Missing index directory for `{}`",
-                                package.id
-                            )));
-                        };
-                        let path = root.join(index).join(path);
-                        let url = SafeUrl::from_file_path(&path).map_err(|()| {
-                            LockErrorKind::PathToUrl {
-                                path: path.into_boxed_path(),
-                            }
-                        })?;
-                        (url, metadata)
-                    }
-                    super::SourceDist::Metadata { .. } => {
-                        return Err(error(format!(
-                            "Missing source archive location for `{}`",
-                            package.id
-                        )));
-                    }
-                };
-                jobs.entry(url).or_default().push(&mut metadata.hash);
             }
         }
 
