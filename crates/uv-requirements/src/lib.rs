@@ -9,6 +9,7 @@ pub use crate::specification::*;
 pub use crate::unnamed::*;
 pub use uv_configuration::RequirementsInput;
 
+use uv_cache::Cache;
 use uv_distribution::check_supported_wheel_variant;
 use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
 
@@ -73,7 +74,10 @@ impl Error {
 }
 
 /// Convert a [`Requirement`] into a [`Dist`], if it is a direct URL.
-pub(crate) fn required_dist(requirement: &Requirement) -> Result<Option<Dist>, Error> {
+pub(crate) fn required_dist(
+    requirement: &Requirement,
+    cache: &Cache,
+) -> Result<Option<Dist>, Error> {
     let dist = match &requirement.source {
         RequirementSource::Registry { .. } => return Ok(None),
         RequirementSource::Url {
@@ -114,7 +118,14 @@ pub(crate) fn required_dist(requirement: &Requirement) -> Result<Option<Dist>, E
             install_path,
             ext,
             url,
-        } => Dist::from_file_url(requirement.name.clone(), url.clone(), install_path, *ext)?,
+        } => {
+            let dist =
+                Dist::from_file_url(requirement.name.clone(), url.clone(), install_path, *ext)?;
+            if !install_path.exists() && !uv_distribution::has_cached_local_archive(cache, &dist) {
+                return Err(uv_distribution_types::Error::NotFound(url.to_url()).into());
+            }
+            dist
+        }
         RequirementSource::Directory {
             install_path,
             r#virtual,

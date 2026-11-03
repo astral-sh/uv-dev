@@ -4,8 +4,10 @@ use std::fmt::Debug;
 use same_file::is_same_file;
 use tracing::{debug, trace};
 
+use uv_cache::Cache;
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
+use uv_distribution::local_archive_cache_info;
 use uv_distribution_filename::ExpandedTags;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires,
@@ -42,6 +44,7 @@ impl RequirementSatisfaction {
     ///
     /// Returns an error if IO fails during a freshness check for a local path.
     pub(crate) fn check(
+        cache: &Cache,
         name: &PackageName,
         distribution: &InstalledDist,
         source: &RequirementSource,
@@ -154,7 +157,7 @@ impl RequirementSatisfaction {
                         let Some(cache_info) = cache_info.as_ref() else {
                             return Self::OutOfDate;
                         };
-                        match CacheInfo::from_path(&archive) {
+                        match local_archive_cache_info(cache, name, source, &archive) {
                             Ok(read_cache_info) => {
                                 if *cache_info != read_cache_info {
                                     return Self::OutOfDate;
@@ -364,7 +367,7 @@ impl RequirementSatisfaction {
                 let Some(cache_info) = cache_info.as_ref() else {
                     return Self::OutOfDate;
                 };
-                match CacheInfo::from_path(requested_path) {
+                match local_archive_cache_info(cache, name, source, requested_path) {
                     Ok(read_cache_info) => {
                         if *cache_info != read_cache_info {
                             return Self::OutOfDate;

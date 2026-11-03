@@ -9,6 +9,7 @@ pub use error::ProjectError;
 pub mod add;
 pub mod audit;
 pub mod check;
+pub mod download;
 mod edit;
 mod error;
 pub mod export;

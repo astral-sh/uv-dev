@@ -42,6 +42,7 @@ fn help() {
       remove                     Remove dependencies from the project
       version                    Read or update the project's version
       sync                       Update the project's environment
+      download                   Download distributions for offline installation
       lock                       Update the project's lockfile
       export                     Export the project's lockfile to an alternate format
       tree                       Display the project's dependency tree
@@ -123,6 +124,7 @@ fn help_flag() {
       remove     Remove dependencies from the project
       version    Read or update the project's version
       sync       Update the project's environment
+      download   Download distributions for offline installation
       lock       Update the project's lockfile
       export     Export the project's lockfile to an alternate format
       tree       Display the project's dependency tree
@@ -203,6 +205,7 @@ fn help_short_flag() {
       remove     Remove dependencies from the project
       version    Read or update the project's version
       sync       Update the project's environment
+      download   Download distributions for offline installation
       lock       Update the project's lockfile
       export     Export the project's lockfile to an alternate format
       tree       Display the project's dependency tree
@@ -991,6 +994,7 @@ fn help_unknown_subcommand() {
         remove
         version
         sync
+        download
         lock
         export
         tree
@@ -1020,6 +1024,7 @@ fn help_unknown_subcommand() {
         remove
         version
         sync
+        download
         lock
         export
         tree
@@ -1077,6 +1082,7 @@ fn help_with_global_option() {
       remove                     Remove dependencies from the project
       version                    Read or update the project's version
       sync                       Update the project's environment
+      download                   Download distributions for offline installation
       lock                       Update the project's lockfile
       export                     Export the project's lockfile to an alternate format
       tree                       Display the project's dependency tree
@@ -1193,6 +1199,7 @@ fn help_with_no_pager() {
       remove                     Remove dependencies from the project
       version                    Read or update the project's version
       sync                       Update the project's environment
+      download                   Download distributions for offline installation
       lock                       Update the project's lockfile
       export                     Export the project's lockfile to an alternate format
       tree                       Display the project's dependency tree

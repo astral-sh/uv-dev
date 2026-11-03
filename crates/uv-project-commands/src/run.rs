@@ -885,7 +885,13 @@ pub async fn run(
     let requirements_env = match spec {
         None => None,
         Some(spec)
-            if can_skip_ephemeral(&spec, &base_interpreter, &base_site_packages, &settings) =>
+            if can_skip_ephemeral(
+                &cache,
+                &spec,
+                &base_interpreter,
+                &base_site_packages,
+                &settings,
+            ) =>
         {
             None
         }
@@ -1285,6 +1291,7 @@ fn set_parent_environment(
 
 /// Returns `true` if we can skip creating an additional ephemeral environment in `uv run`.
 fn can_skip_ephemeral(
+    cache: &Cache,
     spec: &RequirementsSpecification,
     interpreter: &Interpreter,
     site_packages: &SitePackages,
@@ -1322,6 +1329,7 @@ fn can_skip_ephemeral(
             .into_inner();
 
     match site_packages.satisfies_spec(
+        cache,
         &spec.requirements,
         &spec.constraints,
         &spec.overrides,
