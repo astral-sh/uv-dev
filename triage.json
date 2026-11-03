@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12276,
+        "title": "Validate locked versions against constraints in lock file",
+        "url": "https://github.com/astral-sh/uv/issues/12276",
+        "state": "open",
+        "reason": "Same underlying problem and requested validation: matching pyproject.toml and requires-dist declarations permit an incompatible locked version after manual merge resolution. The reproduction installs numpy==2.2.4 despite numpy!=2.2.4; a later comment explicitly covers exact pins passing uv lock --check and uv sync --locked. This is the closest canonical discussion."
+      },
+      {
+        "kind": "issue",
+        "number": 15445,
+        "title": "uv lock does not re-evaluate constraints",
+        "url": "https://github.com/astral-sh/uv/issues/15445",
+        "state": "closed",
+        "reason": "A merged lockfile records numpy==1.26.3 in both project constraints and the lockfile manifest but resolves 1.26.4; uv lock --check accepts it. This closely matches declaration-only validation, though the declaration is constraint-dependencies rather than a direct requires-dist pin. Maintainers consolidated it into astral-sh/uv#18788 without identifying a fix."
+      },
+      {
+        "kind": "issue",
+        "number": 18788,
+        "title": "`uv lock --locked` does not detect transitive dependencies that are no longer depended on by anything",
+        "url": "https://github.com/astral-sh/uv/issues/18788",
+        "state": "open",
+        "reason": "Related merge-induced lockfile inconsistency accepted by uv lock --locked. Its own reproduction concerns unreachable leftover packages rather than a version violating a specifier, but maintainers centralized the incompatible-constraint report astral-sh/uv#15445 and the transitive-version report astral-sh/uv#15378 here."
+      },
+      {
+        "kind": "issue",
+        "number": 21484,
+        "title": "Command to verify uv.lock is legitimate",
+        "url": "https://github.com/astral-sh/uv/issues/21484",
+        "state": "open",
+        "reason": "Broader integrity-verification request explicitly includes checking locked versions against pyproject.toml ranges. Comments describe altered URLs and injected dependency edges passing checks, discuss the same immutable-registry validation path, and point to astral-sh/uv#12276. It additionally seeks artifact provenance verification, beyond the proposed static specifier check."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12235,
+        "title": "Error on lockfiles with incoherent wheel versions",
+        "url": "https://github.com/astral-sh/uv/pull/12235",
+        "state": "merged",
+        "reason": "Historical parser validation cited in astral-sh/uv#12276, merged March 17, 2025 and released in uv 0.6.7. It rejects disagreement between a package version and wheel filename versions; it does not compare resolved versions with dependency declarations. The new reproduction keeps package and wheel versions consistent, so this fix does not establish a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Separated acceptance of incompatible direct pins, acceptance of edited transitive resolutions, and the requested static validation. Literal searches included locked/specifier, sync --check/specifier, hand-edited lockfiles, does not satisfy, the needs-to-be-updated error fragment, MismatchedRequirements, InconsistentVersions, and Lock::satisfies. Conceptual and fix-oriented searches covered lock validation, constraints, inconsistent/merge-edited lockfiles, requires-dist versions, registry immutability, and integrity verification, without package or platform restrictions. Inspected candidate bodies and comments and followed astral-sh/uv#12276 to astral-sh/uv#12254, astral-sh/uv#12164, and astral-sh/uv#12235; followed astral-sh/uv#15445 and astral-sh/uv#15378 to astral-sh/uv#18788. Ruled out astral-sh/uv#12164 and astral-sh/uv#12254 as the same regression because they concern package/wheel version disagreement. Also inspected astral-sh/uv#11932, which primarily requests environment/hash checking, and astral-sh/uv#18553, a refresh-check false positive with conflicts. Read current validation and CLI source to distinguish confirmed behavior from the reporter's proposed mechanism."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#12276 already tracks the same inconsistent declaration/resolution acceptance and requests the same static version-specifier validation, including exact pins and the same CI commands. The more specific six reproduction does not establish a separate problem. No inspected fix previously implemented this check; astral-sh/uv#12235 addresses wheel-version coherence, so the report does not establish a regression.",
+  "summary": "astral-sh/uv#12276 is a direct duplicate. astral-sh/uv#15445 and astral-sh/uv#18788 cover related merge-induced inconsistencies; astral-sh/uv#21484 requests broader integrity verification. Merged astral-sh/uv#12235 validates wheel versions, a different invariant.",
+  "draft_response": "Your reproduction matches astral-sh/uv#12276, which already tracks locked versions violating the recorded dependency specifiers. That discussion also explicitly covers exact pins passing `uv lock --check` and `uv sync --locked`. Please add this reproduction there so the validation work can stay in one place.\n\nThe validation added in astral-sh/uv#12235 checks that package and wheel versions agree; it does not check dependency specifiers. One clarification: `uv lock --check` is equivalent to `uv lock --locked`, while `uv sync --check` checks whether the environment is synchronized."
+}
