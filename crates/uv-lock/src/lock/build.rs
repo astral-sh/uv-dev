@@ -24,7 +24,6 @@ use uv_pep508::{
 };
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
-use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
 use super::build_inputs::BuildInput;
@@ -264,7 +263,7 @@ impl Lock {
         root: &Path,
         concurrency: usize,
     ) -> Result<Self, LockError> {
-        let mut missing: FxHashMap<SafeUrl, Vec<&mut Option<HashDigest>>> = FxHashMap::default();
+        let mut missing: FxHashMap<_, Vec<_>> = FxHashMap::default();
         let build_packages = self
             .builds
             .iter_mut()
