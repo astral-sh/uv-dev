@@ -2148,11 +2148,11 @@ fn activate_fish_with_command_in_path() {
             source "$argv[1]"; or exit 2
             test "$VIRTUAL_ENV" = "$argv[2]"
         "#}])
-        .arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @"exit_code: 1 (failure)");
+        .arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @"exit_code: 0 (success)");
     context
         .temp_dir
         .child("from-path")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
 }
 
 /// An apostrophe in an explicit prompt can end its quoted string during activation.
@@ -2179,13 +2179,13 @@ fn activate_fish_with_command_in_prompt() {
     "}]), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    (x) original
+    (x'; touch from-prompt; set x '\\) original
     original
     ");
     context
         .temp_dir
         .child("from-prompt")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::missing());
 }
 
 /// Check that the activate script still works with the path contains an apostrophe.
