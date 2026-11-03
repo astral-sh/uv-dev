@@ -1130,7 +1130,7 @@ async fn do_lock(
                     &runtime_hasher,
                     *build_hash_checking,
                     target.install_path(),
-                    lock.build_project_domain(),
+                    Lock::build_domain(lock.requires_python(), lock.supported_environments()),
                     &previous_pins,
                     prefer_locked,
                     concurrency,

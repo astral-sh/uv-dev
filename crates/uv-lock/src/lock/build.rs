@@ -31,7 +31,7 @@ use super::build_inputs::BuildInput;
 use super::{
     BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
     LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
-    SourceDist as LockedSourceDist, TagPolicy, absolute_path,
+    SourceDist as LockedSourceDist, TagPolicy, absolute_path, implicit_constraints_marker,
 };
 
 mod pins;
@@ -322,10 +322,18 @@ impl Lock {
             .await
     }
 
-    /// The complete supported environment, including exclusions inside the Python range.
-    pub fn build_project_domain(&self) -> MarkerTree {
-        let mut project =
-            self.requires_python
+    /// The supported environment, including exclusions within the Python range.
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
+        Self::build_domain(&self.requires_python, &self.supported_environments)
+    }
+
+    /// The marker domain for a build solve with the given project requirements.
+    pub fn build_domain(
+        requires_python: &RequiresPython,
+        environments: &[MarkerTree],
+    ) -> MarkerTree {
+        let python =
+            requires_python
                 .specifiers()
                 .iter()
                 .fold(MarkerTree::TRUE, |domain, specifier| {
@@ -334,15 +342,7 @@ impl Lock {
                         specifier: specifier.clone(),
                     }))
                 });
-        if !self.supported_environments.is_empty() {
-            let supported = self
-                .supported_environments
-                .iter()
-                .copied()
-                .fold(MarkerTree::FALSE, MarkerTree::or);
-            project = project.and(supported);
-        }
-        project
+        implicit_constraints_marker(python, environments)
     }
 
     /// Combine disjoint marker domains for an owner when it selects the same build environment
@@ -949,7 +949,7 @@ impl BuildLocks {
             for mut row in rows {
                 let mut scoped = BTreeMap::new();
                 for ((section, mut dep), universes) in std::mem::take(&mut row.edges) {
-                    if universes.len() != row.universes.len() {
+                    if universes != row.universes {
                         match self.encoding {
                             BuildEncoding::Package => {}
                             BuildEncoding::Dependency => {
@@ -1119,12 +1119,14 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
                     index + 1
                 )));
             }
-            row.project(index + 1, &runtime.requires_python).unwire(
+            let mut package = row.project(index + 1, &runtime.requires_python).unwire(
                 &runtime.requires_python,
                 environment,
                 default,
                 &names,
-            )
+            )?;
+            package.normalize_dependencies()?;
+            Ok(package)
         })?;
         universes.push(Universe {
             ordinary_owner: None,

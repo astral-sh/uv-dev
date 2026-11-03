@@ -2697,49 +2697,8 @@ impl Lock {
         required_environments: Vec<MarkerTree>,
         fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
-        // Put all dependencies for each package in a canonical order and
-        // check for duplicates.
         for package in &mut packages {
-            package.dependencies.sort();
-            for [dep1, dep2] in package.dependencies.array_windows() {
-                if dep1 == dep2 {
-                    return Err(LockErrorKind::DuplicateDependency {
-                        id: package.id.clone(),
-                        dependency: dep1.clone(),
-                    }
-                    .into());
-                }
-            }
-
-            // Perform the same validation for optional dependencies.
-            for (extra, dependencies) in &mut package.optional_dependencies {
-                dependencies.sort();
-                for [dep1, dep2] in dependencies.array_windows() {
-                    if dep1 == dep2 {
-                        return Err(LockErrorKind::DuplicateOptionalDependency {
-                            id: package.id.clone(),
-                            extra: extra.clone(),
-                            dependency: dep1.clone(),
-                        }
-                        .into());
-                    }
-                }
-            }
-
-            // Perform the same validation for dev dependencies.
-            for (group, dependencies) in &mut package.dependency_groups {
-                dependencies.sort();
-                for [dep1, dep2] in dependencies.array_windows() {
-                    if dep1 == dep2 {
-                        return Err(LockErrorKind::DuplicateDevDependency {
-                            id: package.id.clone(),
-                            group: group.clone(),
-                            dependency: dep1.clone(),
-                        }
-                        .into());
-                    }
-                }
-            }
+            package.normalize_dependencies()?;
         }
         packages.sort_by(|dist1, dist2| dist1.id.cmp(&dist2.id));
 
@@ -6645,6 +6604,51 @@ pub struct Package {
 }
 
 impl Package {
+    /// Canonicalize the edges of this package and reject duplicates in each dependency section.
+    fn normalize_dependencies(&mut self) -> Result<(), LockError> {
+        self.dependencies.sort();
+        for [dep1, dep2] in self.dependencies.array_windows() {
+            if dep1 == dep2 {
+                return Err(LockErrorKind::DuplicateDependency {
+                    id: self.id.clone(),
+                    dependency: dep1.clone(),
+                }
+                .into());
+            }
+        }
+
+        // Perform the same validation for optional dependencies.
+        for (extra, dependencies) in &mut self.optional_dependencies {
+            dependencies.sort();
+            for [dep1, dep2] in dependencies.array_windows() {
+                if dep1 == dep2 {
+                    return Err(LockErrorKind::DuplicateOptionalDependency {
+                        id: self.id.clone(),
+                        extra: extra.clone(),
+                        dependency: dep1.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        // Perform the same validation for dev dependencies.
+        for (group, dependencies) in &mut self.dependency_groups {
+            dependencies.sort();
+            for [dep1, dep2] in dependencies.array_windows() {
+                if dep1 == dep2 {
+                    return Err(LockErrorKind::DuplicateDevDependency {
+                        id: self.id.clone(),
+                        group: group.clone(),
+                        dependency: dep1.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }
@@ -10717,6 +10721,94 @@ mod tests {
             let expr = format!("{}", anstream::adapter::strip_str(&expr));
             insta::assert_snapshot!(expr, @$snapshot);
         }};
+    }
+
+    // The runtime and build share a package row, but only the build depends on the leaf.
+    const EXPLICIT_BUILD_EDGES: &str = r#"
+version = 2
+revision = 5
+requires-python = ">=3.12"
+build-encoding = "dependency"
+
+[[build-universes]]
+owner = { name = "project", version = "1", source = { editable = "." } }
+inputs = []
+roots = [{ name = "shared" }]
+
+[[package]]
+name = "project"
+version = "1"
+source = { editable = "." }
+dependencies = [{ name = "shared" }]
+
+[[package]]
+name = "shared"
+version = "1"
+source = { registry = "https://example.com/simple" }
+dependencies = [{ name = "leaf", universe = [1] }]
+
+[package.optional-dependencies]
+opt = [{ name = "leaf", universe = [1] }]
+both = [{ name = "common", universe = [0] }, { name = "common", universe = [1] }]
+
+[package.dependency-groups]
+dev = [{ name = "leaf", universe = [1] }]
+
+[[package]]
+name = "leaf"
+version = "1"
+source = { registry = "https://example.com/simple" }
+build-only = true
+
+[[package]]
+name = "common"
+version = "1"
+source = { registry = "https://example.com/simple" }
+"#;
+
+    #[test]
+    fn explicit_build_edges_round_trip() {
+        let lock = Lock::from_toml(EXPLICIT_BUILD_EDGES).expect("valid explicit build lock");
+        let encoded = lock.to_toml().expect("lock serializes");
+        let decoded = Lock::from_toml(&encoded).expect("serialized lock parses");
+        let shared = decoded
+            .packages()
+            .iter()
+            .find(|package| package.name().as_str() == "shared")
+            .expect("runtime package");
+        assert!(shared.dependencies.is_empty());
+        assert_eq!(decoded, lock);
+    }
+
+    #[test]
+    fn explicit_build_duplicate_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "dependencies = [{ name = \"leaf\", universe = [1] }]",
+            "dependencies = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error = toml::from_str::<Lock>(&input).expect_err("duplicate build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple`, found duplicate dependency `leaf==1`");
+    }
+
+    #[test]
+    fn explicit_build_duplicate_optional_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "opt = [{ name = \"leaf\", universe = [1] }]",
+            "opt = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error =
+            toml::from_str::<Lock>(&input).expect_err("duplicate optional build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple[opt]`, found duplicate dependency `leaf==1`");
+    }
+
+    #[test]
+    fn explicit_build_duplicate_group_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "dev = [{ name = \"leaf\", universe = [1] }]",
+            "dev = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error = toml::from_str::<Lock>(&input).expect_err("duplicate group build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple:dev`, found duplicate dependency `leaf==1`");
     }
 
     fn marker_environment() -> MarkerEnvironment {
