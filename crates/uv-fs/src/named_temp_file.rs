@@ -6,7 +6,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::verbatim_path;
+use crate::{persist_with_retry_sync, verbatim_path};
 
 /// A temporary file that supports long Windows paths without the process's long-path opt-in.
 ///
@@ -39,6 +39,27 @@ pub(crate) fn tempfile_in_with_permissions(
         builder.permissions(permissions);
     }
     Ok(NamedTempFile(builder.tempfile_in(verbatim_path(path))?))
+}
+
+pub(super) fn write_atomic_sync_with_permissions(
+    path: &Path,
+    data: &[u8],
+    permissions: Option<Permissions>,
+) -> io::Result<()> {
+    let parent = path.parent().expect("Write path must have a parent");
+    let NamedTempFile(temp_file) = tempfile_in_with_permissions(parent, permissions.clone())?;
+    let (file, temp_path) = temp_file.into_parts();
+    // Report the destination on write errors without reopening the temporary file.
+    let mut file = fs_err::File::from_parts(file, path);
+    file.write_all(data)?;
+    if let Some(permissions) = permissions {
+        file.set_permissions(permissions)?;
+    }
+    let temp_file = NamedTempFile(tempfile::NamedTempFile::from_parts(
+        file.into_file(),
+        temp_path,
+    ));
+    persist_with_retry_sync(temp_file, path)
 }
 
 impl NamedTempFile {

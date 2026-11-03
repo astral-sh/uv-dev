@@ -170,10 +170,10 @@ fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
         Activate with: source .venv/[BIN]/activate
         ");
 
-        assert_ne!(fs_err::read_to_string(outside_module.path())?, "SENTINEL\n");
-        assert_ne!(fs_err::read_to_string(outside_pth.path())?, "SENTINEL\n");
-        assert!(site_packages.join("_virtualenv.py").is_symlink());
-        assert!(site_packages.join("_virtualenv.pth").is_symlink());
+        assert_eq!(fs_err::read_to_string(outside_module.path())?, "SENTINEL\n");
+        assert_eq!(fs_err::read_to_string(outside_pth.path())?, "SENTINEL\n");
+        assert!(!site_packages.join("_virtualenv.py").is_symlink());
+        assert!(!site_packages.join("_virtualenv.pth").is_symlink());
     }
 
     // Python must load the generated module via the .pth file during startup.
@@ -1806,7 +1806,7 @@ fn allow_existing_activate_symlink() -> Result<()> {
         .args(["--allow-existing", "--python", "3.12"])
         .assert()
         .success();
-    assert_ne!(context.read("outside"), "keep");
+    assert_eq!(context.read("outside"), "keep");
     uv_snapshot!(context.filters(), context.external_command("sh")
         .args(["-c", ". .venv/bin/activate && python -c 'import sys; print(sys.prefix)'"]), @"
     exit_code: 0 (success)
@@ -1829,7 +1829,7 @@ fn allow_existing_gitignore_hardlink() -> Result<()> {
         .args(["--allow-existing", "--python", "3.12"])
         .assert()
         .success();
-    assert_ne!(context.read("outside"), "keep");
+    assert_eq!(context.read("outside"), "keep");
     context.venv.child(".gitignore").assert("*");
     Ok(())
 }
@@ -1848,7 +1848,7 @@ fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
         .args(["--allow-existing", "--python", "3.12"])
         .assert()
         .success();
-    assert_ne!(context.read("outside"), "keep");
+    assert_eq!(context.read("outside"), "keep");
     uv_snapshot!(context.filters(), context.python_command()
         .args(["-c", "import sys; print(sys.prefix)"]), @"
     exit_code: 0 (success)
@@ -1905,7 +1905,7 @@ fn allow_existing_reports_generated_file_write_error() -> Result<()> {
     error: Failed to create virtual environment
       cause: failed to write to file `[VENV]/bin/activate`: File too large (os error 27)
     ");
-    assert_ne!(context.read(".venv/bin/activate"), "keep");
+    assert_eq!(context.read(".venv/bin/activate"), "keep");
     Ok(())
 }
 
