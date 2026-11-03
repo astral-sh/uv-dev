@@ -319,6 +319,80 @@ fn lock_build_forks_limit_owner_markers() -> Result<()> {
     Ok(())
 }
 
+/// Each fork builds with the same wheel, but its conditional declarations must still be
+/// observable after compaction, including on Python versions other than the one running uv.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_compacted_domains() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_toml(indoc! {r#"
+        name = "compacted-build-inputs"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.d.versions."1"]
+        sdist = false
+    "#})?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["d==1"]
+
+        [build-system]
+        requires = ["d==1; python_version < '3.13'", "d==1; python_version >= '3.13'"]
+        build-backend = "backend"
+
+        [tool.uv]
+        environments = ["python_version != '3.14'"]
+
+        [tool.uv.extra-build-dependencies]
+        project = [
+            { requirement = "d; python_version < '3.13'", match-runtime = true },
+            { requirement = "d; python_version >= '3.13'", match-runtime = true },
+        ]
+    "#};
+    pyproject.write_str(project)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features=build-dependency-locking")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let universes = lock["build-universes"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("expected build environments"))?;
+    assert_eq!(universes.len(), 1);
+
+    // Changes outside the supported project environments leave the descriptor current.
+    let excluded = project.replace(
+        "requires = [",
+        "requires = [\"other; python_version == '3.14'\", ",
+    );
+    pyproject.write_str(&excluded)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    pyproject.write_str(
+        &excluded.replace("d; python_version >= '3.13'", "d; python_version >= '3.15'"),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().args(["--locked", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    Ok(())
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]

@@ -134,6 +134,7 @@ impl Lock {
         extras: &ExtraBuildRequires,
         read_directory: impl AsyncFn(&PackageName, &Path) -> Result<Vec<Requirement>, E>,
     ) -> Result<bool, E> {
+        let project = self.build_project_domain();
         let mut directories = BTreeMap::new();
         for universe in self.builds.iter().flat_map(|builds| &builds.universes) {
             let Some(inputs) = &universe.inputs else {
@@ -151,13 +152,14 @@ impl Lock {
             } else {
                 &[]
             };
+            let domain = UniversalMarker::from_combined(universe.marker.combined().and(project));
             let expected = BuildInput::collect(
                 backend,
                 extras,
                 &universe.owner.name,
                 root,
                 &self.requires_python,
-                universe.marker,
+                domain,
             )?;
             // Wire paths are relative to the lock. Reconstruct both sides against the same root.
             let locked = inputs
@@ -165,7 +167,7 @@ impl Lock {
                 .cloned()
                 .filter_map(|input| {
                     input
-                        .normalize(root, &self.requires_python, universe.marker)
+                        .normalize(root, &self.requires_python, domain)
                         .transpose()
                 })
                 .collect::<Result<BTreeSet<_>, _>>()?;

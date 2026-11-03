@@ -177,13 +177,15 @@ impl Lock {
             } else {
                 &[]
             };
+            // Keep complete declaration markers so a shared descriptor retains the
+            // observations for every fork. Checked replay projects them onto the owner domain.
             let inputs = BuildInput::collect(
                 backend,
                 extras,
                 &owner.name,
                 root,
                 &self.requires_python,
-                graph.marker,
+                UniversalMarker::TRUE,
             )?;
             universes.push(Universe {
                 inputs: Some(inputs),
@@ -280,12 +282,8 @@ impl Lock {
         self
     }
 
-    /// Combine disjoint marker domains for an owner when it selects the same build environment
-    /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
-    pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {
-        let Some(builds) = &mut self.builds else {
-            return Ok(self);
-        };
+    /// The complete supported environment, including exclusions inside the Python range.
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
         let mut project =
             self.requires_python
                 .specifiers()
@@ -304,7 +302,16 @@ impl Lock {
                 .fold(MarkerTree::FALSE, MarkerTree::or);
             project = project.and(supported);
         }
+        project
+    }
 
+    /// Combine disjoint marker domains for an owner when it selects the same build environment
+    /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
+    pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {
+        let project = self.build_project_domain();
+        let Some(builds) = &mut self.builds else {
+            return Ok(self);
+        };
         let mut owners: BTreeMap<PackageId, Vec<Universe>> = BTreeMap::new();
         for universe in std::mem::take(&mut builds.universes) {
             let domain = universe.marker.combined().and(project);
@@ -317,6 +324,7 @@ impl Lock {
             let variants = owners.entry(universe.owner.clone()).or_default();
             if let Some(other) = variants.iter_mut().find(|other| {
                 other.marker.combined().is_disjoint(domain)
+                    && other.inputs.is_some()
                     && other.inputs == universe.inputs
                     && other.roots == universe.roots
                     && other.packages == universe.packages
