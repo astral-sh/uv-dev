@@ -376,7 +376,7 @@ impl Lock {
     }
 
     /// The supported environment, including exclusions within the Python range.
-    pub fn build_project_domain(&self) -> MarkerTree {
+    pub(super) fn build_project_domain(&self) -> MarkerTree {
         Self::build_domain(&self.requires_python, &self.supported_environments)
     }
 
@@ -949,7 +949,7 @@ impl BuildLocks {
             for mut row in rows {
                 let mut scoped = BTreeMap::new();
                 for ((section, mut dep), universes) in std::mem::take(&mut row.edges) {
-                    if universes.len() != row.universes.len() {
+                    if universes != row.universes {
                         match self.encoding {
                             BuildEncoding::Package => {}
                             BuildEncoding::Dependency => {
@@ -1119,12 +1119,14 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
                     index + 1
                 )));
             }
-            row.project(index + 1, &runtime.requires_python).unwire(
+            let mut package = row.project(index + 1, &runtime.requires_python).unwire(
                 &runtime.requires_python,
                 environment,
                 default,
                 &names,
-            )
+            )?;
+            package.normalize_dependencies()?;
+            Ok(package)
         })?;
         universes.push(Universe {
             ordinary_owner: None,

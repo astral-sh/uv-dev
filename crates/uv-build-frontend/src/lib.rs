@@ -490,18 +490,14 @@ impl SourceBuild {
                     .requirements
                     .iter()
                     .chain(&extra_build_dependencies);
-                if let Some(requirement) = extra_requires.iter().find(|requirement| {
-                    !hook_requirement_satisfied(
+                for requirement in &extra_requires {
+                    check_hook_requirement(
+                        build_kind,
                         requirement,
                         declared.clone(),
                         &resolved_requirements,
                         interpreter.markers(),
-                    )
-                }) {
-                    return Err(Error::UndeclaredBuildRequirement {
-                        kind: build_kind,
-                        name: requirement.name.clone(),
-                    });
+                    )?;
                 }
             } else if extra_requires
                 .iter()
@@ -1157,14 +1153,23 @@ impl SourceBuildTrait for SourceBuild {
 
 /// A hook may repeat a direct build requirement with different bounds. Its requested
 /// version and extras must already be available in this build environment.
-fn hook_requirement_satisfied<'a>(
+fn check_hook_requirement<'a>(
+    kind: BuildKind,
     requirement: &Requirement,
     declared: impl Iterator<Item = &'a Requirement> + Clone,
     resolved: &ResolvedRequirements,
     markers: &MarkerEnvironment,
-) -> bool {
+) -> Result<(), Error> {
     if !requirement.evaluate_markers(Some(markers), &[]) {
-        return true;
+        return Ok(());
+    }
+    let declared = declared
+        .filter(|root| root.name == requirement.name && root.evaluate_markers(Some(markers), &[]));
+    if declared.clone().next().is_none() {
+        return Err(Error::UndeclaredBuildRequirement {
+            kind,
+            name: requirement.name.clone(),
+        });
     }
     let version_satisfied = if let RequirementSource::Registry {
         specifier, index, ..
@@ -1183,16 +1188,20 @@ fn hook_requirement_satisfied<'a>(
     } else {
         false
     };
-    let declared = declared.filter(|root| {
-        root.name == requirement.name
-            && root.evaluate_markers(Some(markers), &[])
-            && (version_satisfied || root.source == requirement.source)
-    });
-    declared.clone().next().is_some()
+    let compatible = declared.filter(|root| version_satisfied || root.source == requirement.source);
+    if compatible.clone().next().is_some()
         && requirement
             .extras
             .iter()
-            .all(|extra| declared.clone().any(|root| root.extras.contains(extra)))
+            .all(|extra| compatible.clone().any(|root| root.extras.contains(extra)))
+    {
+        Ok(())
+    } else {
+        Err(Error::IncompatibleBuildRequirement {
+            kind,
+            requirement: Box::new(requirement.clone()),
+        })
+    }
 }
 
 /// Discover additional requirements before completing build environment setup.
