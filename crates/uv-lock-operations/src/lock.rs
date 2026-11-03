@@ -1114,6 +1114,7 @@ async fn do_lock(
                 )?
                 .with_missing_registry_hashes(&client, target.install_path(), concurrency.downloads)
                 .await?
+                .with_compacted_build_domains()?
             } else {
                 lock
             };
