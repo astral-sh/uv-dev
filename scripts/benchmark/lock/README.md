@@ -138,9 +138,12 @@ streamed stdout and stderr in the package directory.
 
 ## Compare encodings of the same graph
 
-Build the uv binary first. In a prototype checkout with the
-`Lock::with_build_encoding` API, copy `encoding_sizes.rs` into
-`crates/uv-lock/examples/` and build the example with the same toolchain:
+Build the uv binary first and record its digest. Copy `encoding_sizes.rs` into
+`crates/uv-lock/examples/` in the prototype checkout. If the crate omits
+`Lock::with_build_encoding`, append `reencode.rs` to
+`crates/uv-lock/src/lock/build.rs` for this example build. The adapter selects
+the encoding on an already resolved graph. Build the example with the same
+toolchain and restore the source file after the build:
 
 ```sh
 cargo build --locked --profile profiling -p uv-lock --example encoding_sizes
