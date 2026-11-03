@@ -1,0 +1,101 @@
+# Compare build dependency lock times
+
+`run.py` launches a single named project or the pinned `uv-ecosystem-testing`
+lock workload. Run it from a non-root Linux account with Docker and Python 3.11
+or later. Pull the digest-pinned Python images listed in the script first. The
+corpus uses CPython 3.14 with the harness default universal range of `>=3.13`.
+The named workloads use 3.12, except for Warehouse, whose project requires 3.11.
+The Transformers project includes all its optional dependency groups in the lock.
+Airflow uses the requirements in `test/requirements/airflow.in`.
+
+## Seed
+
+Use a dedicated internal IPv4 Docker bridge with `gateway_mode_ipv4=isolated`.
+The only service on the bridge should be a credential-free proxy restricted to
+the public PyPI index and file hosts. The workload mounts one binary, the
+required fixture or harness inputs, and dedicated writable cache and output
+directories. Each index-backed command uses the same absolute cutoff.
+
+For example, with that network and proxy available:
+
+```sh
+python3 scripts/benchmark/lock/run.py black --uv "$BASELINE" \
+    --output "$RUN/base-seed" --cache "$RUN/base-cache" \
+    --network "$BENCH_NETWORK" --proxy "$BENCH_PROXY"
+```
+
+For the corpus, pass `corpus --harness "$HARNESS" --wheels "$WHEELS"` instead
+of `black`. Check out harness commit
+`50ed1c0b195e773da684d72db6e863aba32ffcde` and supply the `tomli-w` and `tqdm`
+wheels from its lockfile. The launcher checks their hashes before importing
+the resolver harness inside Docker. The checked-in 15k list is the default.
+Use `--limit` for a pilot. Eight packages are listed in the upstream harness's
+exclusions. Each corpus subprocess has a ten-minute time limit.
+
+Archive a seed after its container exits. This reads the package-created cache
+through a read-only mount. `SEED_IMAGE` is the digest-pinned image for the run.
+
+```sh
+docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    --read-only --user "$(id -u):$(id -g)" -e UV_EXCLUDE_NEWER=2026-10-01T00:00:00Z \
+    --mount "type=bind,src=$RUN/base-cache,dst=/cache,readonly" \
+    "$SEED_IMAGE" tar -C /cache -cf - . > "$RUN/base.tar"
+```
+
+To include candidate-only inputs, repeat the online seed with the candidate
+binary and its preview settings, passing `--seed "$RUN/base.tar"` and fresh
+directories. Archive the resulting cache as `union.tar`. Keep the online
+outcomes so cache misses in subsequent offline runs can be distinguished from
+resolution failures.
+
+## Measure and compare
+
+Run the two binaries serially on the same host with the same seed archive.
+Each invocation restores an independent writable cache in a network-disabled
+container and starts the project without a lockfile. For repeats, use new
+output and cache directories. Record the source commits and build profile for
+both binaries. Use identical `--workers` for both sides of a corpus comparison.
+
+```sh
+python3 scripts/benchmark/lock/run.py black --uv "$BASELINE" \
+    --output "$RUN/base" --cache "$RUN/base-measured-cache" --seed "$RUN/union.tar"
+python3 scripts/benchmark/lock/run.py black --uv "$CANDIDATE" \
+    --output "$RUN/candidate" --cache "$RUN/candidate-measured-cache" \
+    --seed "$RUN/union.tar" --preview build-dependency-locking
+mkdir "$RUN/report"
+docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    --read-only --user "$(id -u):$(id -g)" -e UV_EXCLUDE_NEWER=2026-10-01T00:00:00Z \
+    --mount "type=bind,src=$RUN/base,dst=/base,readonly" \
+    --mount "type=bind,src=$RUN/candidate,dst=/candidate,readonly" \
+    --mount "type=bind,src=$RUN/report,dst=/out" \
+    --mount "type=bind,src=$PWD/scripts/benchmark/lock/compare.py,dst=/compare.py,readonly" \
+    "$SEED_IMAGE" python -I /compare.py /base /candidate /out/comparison
+```
+
+The CSV records outcomes for both sides, wall time, lockfile size, package
+entries and distinct versions. A paired success also reports additional versions
+to audit. The SVGs plot the absolute and percentage change for paired successes.
+Failure causes are inferred from stderr. Raw stderr and lockfiles remain in
+each run's output directory.
+
+## Resume a stopped corpus run
+
+Each package's summary, stdout, stderr and successful lockfile are flushed
+independently. Snapshot a stopped run's cache as above. Mount its output and
+the original checked-in CSV read-only when generating the remaining targets:
+
+```sh
+docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    --read-only --user "$(id -u):$(id -g)" -e UV_EXCLUDE_NEWER=2026-10-01T00:00:00Z \
+    --mount "type=bind,src=$HARNESS/data/top-15k-pypi.csv,dst=/manifest.csv,readonly" \
+    --mount "type=bind,src=$RUN/base,dst=/prior,readonly" \
+    --mount "type=bind,src=$PWD/scripts/benchmark/lock/resume.py,dst=/resume.py,readonly" \
+    "$SEED_IMAGE" python -I /resume.py /manifest.csv /prior > "$RUN/remaining.csv"
+```
+
+Pass `--input "$RUN/remaining.csv"` to a fresh corpus invocation. For an online
+seed, restore the interrupted cache using `--seed`. For a paired measurement,
+use the original seed and use the same shard on both sides. Keep each attempt
+in a separate directory. For a second interruption, supply all prior run
+directories to `resume.py` in order. The command checks their manifest hashes
+and experiment settings and retries partially written records.
