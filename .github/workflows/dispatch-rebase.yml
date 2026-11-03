@@ -1,4 +1,5 @@
 name: Dispatch pull request rebases
+run-name: "${{ inputs.pull_request && format('Rebase pull request #{0}', inputs.pull_request) || 'Rebase conflicted pull requests' }}"
 
 on:
   workflow_dispatch:
