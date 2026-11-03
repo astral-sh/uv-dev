@@ -40,6 +40,108 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// Runtime metadata is static, but an editable root's isolated build can still change.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_editable_requires() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok==1"]
+        build-backend = "ok"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    pyproject.write_str(project)?;
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let locked = context.read("uv.lock");
+    // An empty cache and an unavailable flat index force the check to use only local declarations.
+    let hidden = context.temp_dir.child("hidden");
+    fs_err::rename(&links, &hidden)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--no-cache").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    pyproject.write_str(&project.replace("ok==1", "ok==2"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--no-cache").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock --preview-features build-dependency-locking` to update them.
+    ");
+
+    assert_eq!(context.read("uv.lock"), locked);
+
+    fs_err::rename(hidden, links)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A marker edit outside the running interpreter still changes the universal build lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_extra_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+
+        [tool.uv]
+        no-index = true
+
+        [tool.uv.extra-build-dependencies]
+        project = ["ok==1; python_version >= '3.13'"]
+    "#};
+    pyproject.write_str(project)?;
+    let links = context.workspace_root.join("test/links");
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("build-dependency-locking").arg("--find-links").arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    pyproject.write_str(&project.replace(">= '3.13'", ">= '3.14'"))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--find-links").arg(&links).arg("--offline").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock --preview-features build-dependency-locking` to update them.
+    ");
+    Ok(())
+}
+
 /// One incompatible member must not separate two owners that can share a build environment.
 #[cfg(feature = "test-universal")]
 #[test]

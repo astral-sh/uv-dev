@@ -14,8 +14,8 @@ use serde::Deserialize;
 use uv_client::RegistryClient;
 use uv_configuration::BuildOptions;
 use uv_distribution_types::{
-    Edge, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython, Resolution,
-    ResolvedDist, SimplifiedMarkerTree, SourceDist,
+    Edge, ExtraBuildRequires, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython,
+    Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra};
@@ -24,6 +24,7 @@ use uv_pypi_types::HashDigest;
 use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
+use super::build_inputs::BuildInput;
 use super::{
     BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
     LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
@@ -54,6 +55,8 @@ pub struct BuildGraph<'a> {
     pub owner: &'a ResolvedDist,
     pub marker: UniversalMarker,
     pub requirements: &'a [Requirement],
+    /// The backend-declared prefix of the roots, before any extra build dependencies.
+    pub backend_requirements: &'a [Requirement],
     pub resolution: &'a ResolverOutput,
 }
 
@@ -68,6 +71,7 @@ pub(super) struct Universe {
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
+    pub(super) inputs: Option<BTreeSet<BuildInput>>,
     packages: BTreeMap<PackageId, Package>,
 }
 
@@ -78,6 +82,7 @@ pub(super) struct UniverseWire {
     marker: MarkerTree,
     #[serde(default)]
     roots: Vec<DependencyWire>,
+    inputs: Option<BTreeSet<BuildInput>>,
 }
 
 fn error(reason: impl Into<String>) -> LockError {
@@ -92,6 +97,7 @@ impl Lock {
         graphs: impl IntoIterator<Item = BuildGraph<'a>>,
         root: &Path,
         indexes: &IndexLocations,
+        extras: &ExtraBuildRequires,
     ) -> Result<Self, LockError> {
         let mut universes = Vec::new();
         let mut resolutions = FxHashMap::default();
@@ -163,7 +169,21 @@ impl Lock {
                     .map(|index| build.package(*index).clone())
                     .ok_or_else(|| missing(id))
             })?;
+            let backend = if owner.source.mutable_build_directory().is_some() {
+                graph.backend_requirements
+            } else {
+                &[]
+            };
+            let inputs = BuildInput::collect(
+                backend,
+                extras,
+                &owner.name,
+                root,
+                &self.requires_python,
+                graph.marker,
+            )?;
             universes.push(Universe {
+                inputs: Some(inputs),
                 owner,
                 marker: graph.marker,
                 roots,
@@ -695,6 +715,7 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
             )
         })?;
         universes.push(Universe {
+            inputs: descriptor.inputs,
             owner: descriptor.owner,
             marker: UniversalMarker::from_combined(descriptor.marker),
             roots,
@@ -799,11 +820,13 @@ mod tests {
             [BuildGraph {
                 owner: &owner.dist,
                 marker: UniversalMarker::TRUE,
+                backend_requirements: &build.requirements,
                 requirements: &build.requirements,
                 resolution: &build,
             }],
             &root,
             &indexes,
+            &ExtraBuildRequires::default(),
         )?;
         let encoded = lock.to_toml()?;
         assert!(encoded.starts_with("version = 2\n"));

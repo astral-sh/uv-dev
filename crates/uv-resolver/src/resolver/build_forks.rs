@@ -274,11 +274,8 @@ impl PendingBuilds {
                     continue;
                 }
                 covered.or(marker);
-                let root = SourceBuildRequirements {
-                    marker,
-                    owner: owner.owner.clone(),
-                    requirements: owner.requirements.clone(),
-                };
+                let mut root = owner.clone();
+                root.marker = marker;
                 match strategy {
                     BuildForkStrategy::Clustered => groups.entry(marker).or_default().push(root),
                     BuildForkStrategy::PerPackage => self.groups.push(vec![root]),
