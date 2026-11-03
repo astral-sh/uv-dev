@@ -219,6 +219,7 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
             HashVerification::Unspecified => self.hasher.collection(),
         };
         let hashes = MetadataHashPolicy {
+            verify_wheel: false,
             collection,
             validation: HashValidation::None,
         };

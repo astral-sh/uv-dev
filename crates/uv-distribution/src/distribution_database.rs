@@ -670,8 +670,15 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Box the full-wheel futures to keep their state out of metadata-only requests.
         // Fetch the entire wheel only when we need to compute a hash for resolution.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hash_policy == ArchiveHashPolicy::Generate {
+        if hash_policy == ArchiveHashPolicy::Generate || hashes.verify_wheel {
             let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
+            if hashes.verify_wheel && !hash_policy.matches(wheel.hashes.as_slice()) {
+                return Err(Error::hash_mismatch(
+                    dist.to_string(),
+                    hash_policy.digests(),
+                    wheel.hashes.as_slice(),
+                ));
+            }
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) =
                 self.dependency_metadata(dist.name(), Some(dist.version()))

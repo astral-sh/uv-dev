@@ -793,9 +793,9 @@ impl VersionMapLazy {
         }
 
         // Check if hashes line up. If hashes aren't required, they're considered matching.
-        let hash_policy = self
-            .hasher
-            .archive_policy_for_package(&filename.name, &filename.version);
+        let hash_policy =
+            self.hasher
+                .archive_policy_for_package(&filename.name, &filename.version, &self.index);
         let required_hashes = hash_policy.digests();
         let hash = if required_hashes.is_empty() {
             HashComparison::Matched
@@ -865,7 +865,9 @@ impl VersionMapLazy {
         };
 
         // Check if hashes line up. If hashes aren't required, they're considered matching.
-        let hash_policy = self.hasher.archive_policy_for_package(name, version);
+        let hash_policy = self
+            .hasher
+            .archive_policy_for_package(name, version, &self.index);
         let required_hashes = hash_policy.digests();
         let hash = if required_hashes.is_empty() {
             HashComparison::Matched

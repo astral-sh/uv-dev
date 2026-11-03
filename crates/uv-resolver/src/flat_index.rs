@@ -150,6 +150,7 @@ impl FlatDistributions {
                     file.hashes.as_slice(),
                     tags,
                     hasher,
+                    &index,
                     build_options,
                 );
                 let dist = RegistryBuiltWheel {
@@ -170,6 +171,7 @@ impl FlatDistributions {
                     &filename,
                     file.hashes.as_slice(),
                     hasher,
+                    &index,
                     build_options,
                 );
                 let dist = RegistrySourceDist {
@@ -194,6 +196,7 @@ impl FlatDistributions {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         hasher: &HashStrategy,
+        index: &IndexUrl,
         build_options: &BuildOptions,
     ) -> SourceDistCompatibility {
         // Check if source distributions are allowed for this package.
@@ -210,7 +213,8 @@ impl FlatDistributions {
         }
 
         // Check if hashes line up
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
+        let hash_policy =
+            hasher.archive_policy_for_package(&filename.name, &filename.version, index);
         let hash = if hash_policy.requires_validation() {
             if hashes.is_empty() {
                 HashComparison::Missing
@@ -231,6 +235,7 @@ impl FlatDistributions {
         hashes: &[HashDigest],
         tags: Option<&Tags>,
         hasher: &HashStrategy,
+        index: &IndexUrl,
         build_options: &BuildOptions,
     ) -> WheelCompatibility {
         if filename.variant().is_some() && !uv_preview::is_enabled(PreviewFeature::WheelVariants) {
@@ -255,7 +260,8 @@ impl FlatDistributions {
         };
 
         // Check if hashes line up.
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
+        let hash_policy =
+            hasher.archive_policy_for_package(&filename.name, &filename.version, index);
         let hash = if hash_policy.requires_validation() {
             if hashes.is_empty() {
                 HashComparison::Missing

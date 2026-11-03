@@ -239,7 +239,12 @@ impl CandidateSelector {
 
                     let first_runtime =
                         entry.source() == PreferenceSource::Runtime(RuntimePreferenceMode::First);
-                    std::cmp::Reverse((first_runtime, matches_env, version))
+                    std::cmp::Reverse((
+                        entry.source() == PreferenceSource::BuildLock,
+                        first_runtime,
+                        matches_env,
+                        version,
+                    ))
                 });
 
                 // Limit runtime preferences after ranking by fork and resolution mode, but
@@ -337,7 +342,8 @@ impl CandidateSelector {
                     // current solve, accept it unless pre-releases are completely banned.
                     PrereleaseSelection::PreferStable => match source {
                         PreferenceSource::Resolver => false,
-                        PreferenceSource::Lock
+                        PreferenceSource::BuildLock
+                        | PreferenceSource::Lock
                         | PreferenceSource::Runtime(_)
                         | PreferenceSource::Environment
                         | PreferenceSource::RequirementsTxt => true,

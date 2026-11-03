@@ -34,6 +34,9 @@ use super::{
     SourceDist as LockedSourceDist, TagPolicy, absolute_path,
 };
 
+mod pins;
+pub use pins::{BuildLockPins, BuildPins};
+
 /// The lockfile representation of differences between resolved build environments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -183,11 +186,7 @@ impl Lock {
             .flat_map(|index| resolution.graph.edges(index))
             .collect();
         for declaration in owners {
-            let owner = PackageId {
-                name: declaration.owner.name().clone(),
-                source: Source::from_resolved_dist(&declaration.owner, root)?,
-                version: declaration.owner.version().cloned(),
-            };
+            let owner = PackageId::build_owner(&declaration.owner, root)?;
             let mut roots = BTreeSet::new();
             for edge in &root_edges {
                 let ResolutionGraphNode::Dist(dist) = &resolution.graph[edge.target()] else {
@@ -377,7 +376,7 @@ impl Lock {
     }
 
     /// The supported environment, including exclusions within the Python range.
-    pub(super) fn build_project_domain(&self) -> MarkerTree {
+    pub fn build_project_domain(&self) -> MarkerTree {
         let mut project =
             self.requires_python
                 .specifiers()
