@@ -1,8 +1,8 @@
 use std::fmt::{Display, Formatter};
 
 use crate::{
-    Dist, DistributionId, DistributionMetadata, Identifier, InstalledDist, Name, ResourceId,
-    VersionId, VersionOrUrlRef,
+    Dist, DistributionId, DistributionMetadata, Identifier, IndexUrl, InstalledDist, Name,
+    ResourceId, VersionId, VersionOrUrlRef,
 };
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -37,6 +37,13 @@ impl Name for RequestedDist {
 }
 
 impl DistributionMetadata for RequestedDist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        match self {
+            Self::Installed(dist) => dist.registry_index(),
+            Self::Installable(dist) => dist.registry_index(),
+        }
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         match self {
             Self::Installed(dist) => dist.version_or_url(),

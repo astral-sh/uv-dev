@@ -8,8 +8,8 @@ use rustc_hash::FxHashMap;
 use uv_configuration::{Constraints, HashCheckingMode};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, Dist, DistributionMetadata, HashCollection, HashValidation,
-    MetadataHashPolicy, Name, Requirement, RequirementSource, Resolution, ResolvedDist, SourceDist,
-    UnresolvedRequirement, VersionId, satisfies_require_hashes,
+    IndexUrl, MetadataHashPolicy, Name, Requirement, RequirementSource, Resolution, ResolvedDist,
+    SourceDist, UnresolvedRequirement, VersionId, satisfies_require_hashes,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -26,6 +26,37 @@ use uv_redacted::SafeUrl;
 pub struct HashStrategy {
     collection: HashCollection,
     verification: HashVerification,
+    /// Exact, source-qualified identities from the current build owner.
+    locked: Option<Arc<LockedArtifactHashes>>,
+}
+
+/// Audited archives selected in a single owner and marker domain.
+#[derive(Clone, Debug, Default)]
+pub struct LockedArtifactHashes {
+    direct: FxHashMap<VersionId, Vec<HashDigest>>,
+    indexes: FxHashMap<SafeUrl, FxHashMap<VersionId, Vec<HashDigest>>>,
+}
+
+impl LockedArtifactHashes {
+    /// Record hashes from one exact package source. Registry IDs additionally need their index.
+    pub fn insert(&mut self, index: Option<&IndexUrl>, id: VersionId, hashes: Vec<HashDigest>) {
+        match index {
+            Some(index) => self
+                .indexes
+                .entry(index.without_credentials().into_owned())
+                .or_default(),
+            None => &mut self.direct,
+        }
+        .insert(id, hashes);
+    }
+
+    fn get(&self, index: Option<&IndexUrl>, id: &VersionId) -> Option<&[HashDigest]> {
+        let hashes = match index {
+            Some(index) => self.indexes.get(index.without_credentials().as_ref())?,
+            None => &self.direct,
+        };
+        hashes.get(id).map(Vec::as_slice)
+    }
 }
 
 /// The trusted hashes to enforce when retrieving distributions.
@@ -63,6 +94,7 @@ impl HashStrategy {
     #[must_use]
     pub fn with_verification(mut self, verification: HashVerification) -> Self {
         self.verification = verification;
+        self.locked = None;
         self
     }
 
@@ -71,6 +103,15 @@ impl HashStrategy {
     /// Preserve hash collection and require hashes if either strategy requires them. Constraints
     /// for identities absent from this strategy remain available for newly resolved dependencies.
     pub fn with_constraint_hashes(mut self, constraints: &Self) -> Result<Self, HashStrategyError> {
+        let previous = self.locked.take();
+        self = self.combine_verification(constraints)?;
+        for locked in previous.iter().chain(&constraints.locked) {
+            self = self.with_locked_hashes(locked);
+        }
+        Ok(self)
+    }
+
+    fn combine_verification(mut self, constraints: &Self) -> Result<Self, HashStrategyError> {
         let (requirement_hashes, mode) = match &self.verification {
             HashVerification::Unspecified => {
                 self.verification = constraints.verification.clone();
@@ -123,6 +164,55 @@ impl HashStrategy {
         Ok(self)
     }
 
+    /// Intersect owner-specific artifact pins with the configured verification policy. Keep
+    /// exact registry versions and their indexes separate from constraint specifier matching.
+    #[must_use]
+    pub fn with_locked_hashes(mut self, pins: &LockedArtifactHashes) -> Self {
+        if pins.direct.is_empty() && pins.indexes.is_empty() {
+            return self;
+        }
+        let mut locked = self
+            .locked
+            .take()
+            .map(Arc::unwrap_or_clone)
+            .unwrap_or_default();
+        let mode = if matches!(self.verification, HashVerification::Required(_)) {
+            HashCheckingMode::Require
+        } else {
+            HashCheckingMode::Verify
+        };
+        let merge = |target: &mut FxHashMap<VersionId, Vec<HashDigest>>,
+                     additions: &FxHashMap<VersionId, Vec<HashDigest>>| {
+            for (id, expected) in additions {
+                let mut digests = expected.clone();
+                if mode.is_require() {
+                    digests.retain(satisfies_require_hashes);
+                }
+                for constraint in self
+                    .hashes_for_id(id)
+                    .into_iter()
+                    .chain(target.get(id).map(Vec::as_slice))
+                {
+                    // A conflicting pin rules out this exact source. Other registries and
+                    // versions can still satisfy the new requirements.
+                    if digests.is_empty() || constraint.is_empty() {
+                        digests.clear();
+                        break;
+                    }
+                    digests = combine_constraint_hashes(id, digests, constraint, id, mode)
+                        .unwrap_or_default();
+                }
+                target.insert(id.clone(), digests);
+            }
+        };
+        merge(&mut locked.direct, &pins.direct);
+        for (index, pins) in &pins.indexes {
+            merge(locked.indexes.entry(index.clone()).or_default(), pins);
+        }
+        self.locked = Some(Arc::new(locked));
+        self
+    }
+
     /// Return the hash collection policy.
     pub fn collection(&self) -> HashCollection {
         self.collection
@@ -138,7 +228,7 @@ impl HashStrategy {
         &self,
         distribution: &T,
     ) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| distribution.version_id())
+        self.archive_policy_for_id(distribution.registry_index(), || distribution.version_id())
     }
 
     /// Return the [`MetadataHashPolicy`] for retrieving the given distribution's metadata.
@@ -146,10 +236,7 @@ impl HashStrategy {
         &self,
         distribution: &T,
     ) -> MetadataHashPolicy<'_> {
-        MetadataHashPolicy {
-            collection: self.collection,
-            validation: self.validation_for_id(|| distribution.version_id()),
-        }
+        self.metadata_policy_for_id(distribution.registry_index(), || distribution.version_id())
     }
 
     /// Return the [`ArchiveHashPolicy`] for the given registry-based package.
@@ -157,28 +244,32 @@ impl HashStrategy {
         &self,
         name: &PackageName,
         version: &Version,
+        index: &IndexUrl,
     ) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| VersionId::from_registry(name.clone(), version.clone()))
+        self.archive_policy_for_id(Some(index), || {
+            VersionId::from_registry(name.clone(), version.clone())
+        })
     }
 
     /// Return the [`ArchiveHashPolicy`] for the given direct URL package.
     ///
     /// A direct URL identifies a single concrete artifact, so every provided digest must match.
     pub fn archive_policy_for_url(&self, url: &SafeUrl) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| VersionId::from_url(url))
+        self.archive_policy_for_id(None, || VersionId::from_url(url))
     }
 
     /// Return the [`MetadataHashPolicy`] for a URL whose package name is not yet known.
     pub fn metadata_policy_for_url(&self, url: &SafeUrl) -> MetadataHashPolicy<'_> {
-        MetadataHashPolicy {
-            collection: self.collection,
-            validation: self.validation_for_id(|| VersionId::from_url(url)),
-        }
+        self.metadata_policy_for_id(None, || VersionId::from_url(url))
     }
 
     /// Return the archive hash policy for a distribution identity.
-    fn archive_policy_for_id(&self, id: impl FnOnce() -> VersionId) -> ArchiveHashPolicy<'_> {
-        let validation = self.validation_for_id(id);
+    fn archive_policy_for_id(
+        &self,
+        index: Option<&IndexUrl>,
+        id: impl FnOnce() -> VersionId,
+    ) -> ArchiveHashPolicy<'_> {
+        let validation = self.metadata_policy_for_id(index, id).validation;
         match validation {
             HashValidation::None => match self.collection {
                 HashCollection::None => ArchiveHashPolicy::None,
@@ -189,24 +280,27 @@ impl HashStrategy {
     }
 
     /// Construct an identity only when verification requires a lookup.
-    fn validation_for_id(&self, id: impl FnOnce() -> VersionId) -> HashValidation<'_> {
-        match &self.verification {
-            HashVerification::IfPresent(_) => {
-                let id = id();
-                if let Some(hashes) = self.hashes_for_id(&id) {
-                    return hash_validation(&id, hashes);
-                }
+    fn metadata_policy_for_id(
+        &self,
+        index: Option<&IndexUrl>,
+        id: impl FnOnce() -> VersionId,
+    ) -> MetadataHashPolicy<'_> {
+        let mut policy = MetadataHashPolicy {
+            collection: self.collection,
+            ..MetadataHashPolicy::default()
+        };
+        if self.locked.is_some() || !matches!(self.verification, HashVerification::Unspecified) {
+            let id = id();
+            if let Some(expected) = self.locked.as_ref().and_then(|pins| pins.get(index, &id)) {
+                policy.validation = hash_validation(&id, expected);
+                policy.verify_wheel = true;
+            } else if let Some(expected) = self.hashes_for_id(&id) {
+                policy.validation = hash_validation(&id, expected);
+            } else if matches!(self.verification, HashVerification::Required(_)) {
+                policy.validation = hash_validation(&id, &[]);
             }
-            HashVerification::Required(hashes) => {
-                let id = id();
-                return hash_validation(
-                    &id,
-                    hashes.get(&id).map(Vec::as_slice).unwrap_or_default(),
-                );
-            }
-            HashVerification::Unspecified => {}
         }
-        HashValidation::None
+        policy
     }
 
     /// Look up supplied hashes, including public-version pins in verification mode.
@@ -235,21 +329,25 @@ impl HashStrategy {
     }
 
     /// Returns `true` if the given registry-based package is allowed.
-    pub fn allows_package(&self, name: &PackageName, version: &Version) -> bool {
-        match &self.verification {
-            HashVerification::Required(hashes) => {
-                hashes.contains_key(&VersionId::from_registry(name.clone(), version.clone()))
-            }
-            HashVerification::Unspecified | HashVerification::IfPresent(_) => true,
-        }
+    pub fn allows_package(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        index: Option<&IndexUrl>,
+    ) -> bool {
+        !matches!(self.verification, HashVerification::Required(_))
+            || !self
+                .archive_policy_for_id(index, || {
+                    VersionId::from_registry(name.clone(), version.clone())
+                })
+                .digests()
+                .is_empty()
     }
 
     /// Returns `true` if the given direct URL package is allowed.
     pub fn allows_url(&self, url: &SafeUrl) -> bool {
-        match &self.verification {
-            HashVerification::Required(hashes) => hashes.contains_key(&VersionId::from_url(url)),
-            HashVerification::Unspecified | HashVerification::IfPresent(_) => true,
-        }
+        !matches!(self.verification, HashVerification::Required(_))
+            || !self.archive_policy_for_url(url).digests().is_empty()
     }
 
     /// Return a [`HashStrategy`] augmented with archive URL hashes discovered in additional
@@ -263,6 +361,9 @@ impl HashStrategy {
             HashVerification::IfPresent(existing) | HashVerification::Required(existing) => {
                 if let Some(hashes) = Self::augment_hashes(existing, requirements)? {
                     *existing = Arc::new(hashes);
+                    if let Some(pins) = self.locked.take() {
+                        return Ok(self.with_locked_hashes(&pins));
+                    }
                 }
             }
         }
@@ -749,8 +850,8 @@ mod tests {
     use uv_configuration::HashCheckingMode;
     use uv_distribution_filename::DistExtension;
     use uv_distribution_types::{
-        ArchiveHashPolicy, HashCollection, HashValidation, MetadataHashPolicy, Requirement,
-        RequirementScope, RequirementSource, UnresolvedRequirement, VersionId,
+        ArchiveHashPolicy, HashCollection, HashValidation, IndexUrl, MetadataHashPolicy,
+        Requirement, RequirementScope, RequirementSource, UnresolvedRequirement, VersionId,
     };
     use uv_normalize::PackageName;
     use uv_pep440::Version;
@@ -758,7 +859,7 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_redacted::policy::Raw;
 
-    use super::{HashStrategy, HashVerification};
+    use super::{HashStrategy, HashVerification, LockedArtifactHashes};
 
     fn requirement(url: &str) -> Requirement {
         Requirement {
@@ -826,6 +927,7 @@ mod tests {
     #[test]
     fn generate_and_verify_validates_known_hashes_and_generates_unknown_hashes()
     -> Result<(), Box<dyn std::error::Error>> {
+        let index = IndexUrl::from_str("https://example.test/simple")?;
         let url: SafeUrl = "https://example.com/anyio-4.0.0.tar.gz".parse()?;
         let unknown_url: SafeUrl = "https://example.com/anyio-4.1.0.tar.gz".parse()?;
         let name: PackageName = "anyio".parse()?;
@@ -868,6 +970,7 @@ mod tests {
             strategy.metadata_policy_for_url(&unknown_url),
             MetadataHashPolicy {
                 collection: HashCollection::All,
+                verify_wheel: false,
                 validation: HashValidation::None,
             }
         );
@@ -875,15 +978,16 @@ mod tests {
             strategy.metadata_policy_for_url(&url),
             MetadataHashPolicy {
                 collection: HashCollection::All,
+                verify_wheel: false,
                 validation: HashValidation::All(slice::from_ref(&digest)),
             }
         );
         assert_eq!(
-            strategy.archive_policy_for_package(&name, &version),
+            strategy.archive_policy_for_package(&name, &version, &index),
             ArchiveHashPolicy::Any(slice::from_ref(&digest))
         );
         assert_eq!(
-            strategy.archive_policy_for_package(&name, &unknown_version),
+            strategy.archive_policy_for_package(&name, &unknown_version, &index),
             ArchiveHashPolicy::Generate
         );
 
@@ -892,6 +996,7 @@ mod tests {
 
     #[test]
     fn required_hashes_take_precedence_over_collection() -> Result<(), Box<dyn std::error::Error>> {
+        let index = IndexUrl::from_str("https://example.test/simple")?;
         let url: SafeUrl = "https://example.com/anyio-4.0.0.tar.gz".parse()?;
         let name: PackageName = "anyio".parse()?;
         let version: Version = "4.0.0".parse()?;
@@ -906,15 +1011,16 @@ mod tests {
             strategy.metadata_policy_for_url(&url),
             MetadataHashPolicy {
                 collection: HashCollection::All,
+                verify_wheel: false,
                 validation: HashValidation::All(&[]),
             }
         );
         assert_eq!(
-            strategy.archive_policy_for_package(&name, &version),
+            strategy.archive_policy_for_package(&name, &version, &index),
             ArchiveHashPolicy::Any(&[])
         );
         assert!(!strategy.allows_url(&url));
-        assert!(!strategy.allows_package(&name, &version));
+        assert!(!strategy.allows_package(&name, &version, None));
 
         let digest = HashDigest::from_str(
             "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
@@ -937,11 +1043,42 @@ mod tests {
                 ArchiveHashPolicy::All(slice::from_ref(&digest))
             );
             assert_eq!(
-                strategy.archive_policy_for_package(&name, &version),
+                strategy.archive_policy_for_package(&name, &version, &index),
                 ArchiveHashPolicy::Any(&[])
             );
-            assert!(!strategy.allows_package(&name, &version));
+            assert!(!strategy.allows_package(&name, &version, None));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn locked_registry_hashes_require_the_same_index_and_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let name: PackageName = "backend".parse()?;
+        let version: Version = "1".parse()?;
+        let identity = VersionId::from_registry(name.clone(), version.clone());
+        let left: IndexUrl = "https://left.test/simple".parse()?;
+        let right: IndexUrl = "https://right.test/simple".parse()?;
+        let new: IndexUrl = "https://new.test/simple".parse()?;
+        let first: HashDigest =
+            "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f".parse()?;
+        let second: HashDigest =
+            "sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a".parse()?;
+        let mut pins = LockedArtifactHashes::default();
+        pins.insert(Some(&left), identity.clone(), vec![first.clone()]);
+        pins.insert(Some(&right), identity, vec![second.clone()]);
+        let hasher = HashStrategy::require(Arc::default()).with_locked_hashes(&pins);
+        assert_eq!(
+            hasher.archive_policy_for_package(&name, &version, &left),
+            ArchiveHashPolicy::Any(slice::from_ref(&first))
+        );
+        assert_eq!(
+            hasher.archive_policy_for_package(&name, &version, &right),
+            ArchiveHashPolicy::Any(slice::from_ref(&second))
+        );
+        assert!(hasher.allows_package(&name, &version, Some(&left)));
+        assert!(!hasher.allows_package(&name, &version, Some(&new)));
+        assert!(!hasher.allows_package(&name, &"1+local".parse()?, Some(&left)));
         Ok(())
     }
 

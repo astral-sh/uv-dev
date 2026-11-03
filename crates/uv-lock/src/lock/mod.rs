@@ -84,7 +84,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
-pub use build::BuildEncoding;
+pub use build::{BuildEncoding, BuildLockPins, BuildPins};
 
 mod build;
 mod build_inputs;
@@ -3052,32 +3052,10 @@ impl Lock {
             if excluded_packages.contains(package.name()) {
                 continue;
             }
-            let (id, package_hashes) = match &package.id.source {
-                Source::Registry(_) => {
-                    let Some(version) = &package.id.version else {
-                        continue;
-                    };
-                    (
-                        VersionId::from_registry(package.id.name.clone(), version.clone()),
-                        package.hashes(),
-                    )
-                }
-                Source::Direct(url, source) => (
-                    VersionId::from_archive(
-                        url.to_url().map_err(LockErrorKind::InvalidUrl)?,
-                        source.subdirectory.clone().map(Path::into_path_buf),
-                    ),
-                    package.hashes(),
-                ),
-                Source::Path(path) => (
-                    VersionId::from_path(&absolute_path(root, path)?),
-                    package.hashes(),
-                ),
-                Source::Git(..)
-                | Source::Directory(_)
-                | Source::Editable(_)
-                | Source::Virtual(_) => continue,
+            let Some(id) = package.id.hash_identity(root)? else {
+                continue;
             };
+            let package_hashes = package.hashes();
             if package_hashes.is_empty() {
                 continue;
             }
@@ -5964,6 +5942,7 @@ impl Lock {
 
         let metadata_hashes = if let Some(validation) = locked_hashes {
             MetadataHashPolicy {
+                verify_wheel: false,
                 collection: hasher.collection(),
                 validation,
             }
@@ -7657,6 +7636,23 @@ pub(crate) struct PackageId {
 }
 
 impl PackageId {
+    fn hash_identity(&self, root: &Path) -> Result<Option<VersionId>, LockError> {
+        Ok(match &self.source {
+            Source::Registry(_) => self
+                .version
+                .as_ref()
+                .map(|version| VersionId::from_registry(self.name.clone(), version.clone())),
+            Source::Direct(url, source) => Some(VersionId::from_archive(
+                url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                source.subdirectory.clone().map(Path::into_path_buf),
+            )),
+            Source::Path(path) => Some(VersionId::from_path(&absolute_path(root, path)?)),
+            Source::Git(..) | Source::Directory(_) | Source::Editable(_) | Source::Virtual(_) => {
+                None
+            }
+        })
+    }
+
     fn from_annotated_dist(annotated_dist: &AnnotatedDist, root: &Path) -> Result<Self, LockError> {
         // Identify the source of the package.
         let source = Source::from_resolved_dist(&annotated_dist.dist, root)?;

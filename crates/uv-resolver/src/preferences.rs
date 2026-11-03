@@ -95,6 +95,14 @@ impl Preference {
         }
     }
 
+    /// A selection from this build owner's previous lock, within its original marker domain.
+    pub fn from_build_lock(name: PackageName, version: Version, index: Option<IndexUrl>) -> Self {
+        Self {
+            source: PreferenceSource::BuildLock,
+            ..Self::from_locked(name, version, index, Vec::new())
+        }
+    }
+
     /// Use runtime selections as soft preferences for a build resolve. Hard pins for
     /// `match-runtime` are expressed separately as requirements.
     pub fn from_runtime(runtime: &ResolverOutput, mode: RuntimePreferenceMode) -> Vec<Self> {
@@ -179,7 +187,9 @@ pub enum RuntimePreferenceMode {
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,
-    /// The preference is from a `uv.ock` file.
+    /// The preference is from a build owner in the lockfile.
+    BuildLock,
+    /// The preference is from a `uv.lock` file.
     Lock,
     /// The preference is from a `requirements.txt` file.
     RequirementsTxt,

@@ -100,6 +100,10 @@ impl Name for ResolvedDistRef<'_> {
 }
 
 impl DistributionMetadata for ResolvedDistRef<'_> {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        self.index()
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         match self {
             Self::Installed { dist } => VersionOrUrlRef::Version(dist.version()),

@@ -1853,10 +1853,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             });
                         }
                         // Verify that the package is allowed under the hash-checking policy.
-                        if !self
-                            .hasher
-                            .allows_package(candidate.name(), candidate.version())
-                        {
+                        if !self.hasher.allows_package(
+                            candidate.name(),
+                            candidate.version(),
+                            dist.for_resolution().index(),
+                        ) {
                             return Err(ResolveError::UnhashedPackage(candidate.name().clone()));
                         }
                         Ok(())
@@ -2500,10 +2501,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 }
 
                 // Verify that the package is allowed under the hash-checking policy.
-                if !self
-                    .hasher
-                    .allows_package(candidate.name(), candidate.version())
-                {
+                if !self.hasher.allows_package(
+                    candidate.name(),
+                    candidate.version(),
+                    dist.for_resolution().index(),
+                ) {
                     return Ok(None);
                 }
 
