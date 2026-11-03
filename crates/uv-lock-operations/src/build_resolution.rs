@@ -16,7 +16,8 @@ use uv_requirements::LookaheadResolver;
 use uv_resolve_operations::Error;
 use uv_resolver::{
     Exclusions, FlatIndex, InMemoryIndex, Manifest, Preference, Preferences, PythonRequirement,
-    ResolveError, Resolver, ResolverEnvironment, ResolverOutput, UniversalMarker,
+    ResolveError, Resolver, ResolverEnvironment, ResolverOutput, RuntimePreferenceMode,
+    UniversalMarker,
 };
 use uv_static::EnvVars;
 use uv_types::{EmptyInstalledPackages, HashStrategy};
@@ -71,7 +72,17 @@ pub(crate) async fn resolve_builds(
     concurrency: &Concurrency,
     recorder: Option<&ResolutionRecorder>,
 ) -> Result<Vec<BuildResolution>, LockError> {
-    let preferences = Preference::from_runtime(runtime).map_err(anyhow::Error::from)?;
+    let mode = match std::env::var(EnvVars::UV_INTERNAL__BUILD_RUNTIME_PREFERENCES).as_deref() {
+        Ok("all") | Err(std::env::VarError::NotPresent) => RuntimePreferenceMode::All,
+        Ok("first") => RuntimePreferenceMode::First,
+        Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(anyhow::anyhow!(
+                "Expected `all` or `first` for UV_INTERNAL__BUILD_RUNTIME_PREFERENCES"
+            )
+            .into());
+        }
+    };
+    let preferences = Preference::from_runtime(runtime, mode);
     let build_recorder = recorder.map(|_| ResolutionRecorder::default());
 
     let solve = async |owners: &[SourceBuildRequirements], scope: UniversalMarker| {

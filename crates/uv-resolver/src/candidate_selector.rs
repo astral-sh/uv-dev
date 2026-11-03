@@ -13,7 +13,7 @@ use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_types::InstalledPackagesProvider;
 
-use crate::preferences::{Entry, PreferenceSource, Preferences};
+use crate::preferences::{Entry, PreferenceSource, Preferences, RuntimePreferenceMode};
 use crate::prerelease::{PrereleaseSelection, PrereleaseStrategy};
 use crate::prioritized_distribution::{
     CompatibleDist, IncompatibleDist, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
@@ -221,7 +221,7 @@ impl CandidateSelector {
                     let marker = entry.marker();
 
                     // Prefer preferences that match the current environment.
-                    let matches_env = if let PreferenceSource::Runtime { .. } = entry.source()
+                    let matches_env = if let PreferenceSource::Runtime(_) = entry.source()
                         && marker.has_conflict_marker()
                         && let Some(fork) = env.try_universal_markers()
                     {
@@ -238,7 +238,7 @@ impl CandidateSelector {
                     };
 
                     let first_runtime =
-                        entry.source() == PreferenceSource::Runtime { first_only: true };
+                        entry.source() == PreferenceSource::Runtime(RuntimePreferenceMode::First);
                     std::cmp::Reverse((first_runtime, matches_env, version))
                 });
 
@@ -246,7 +246,7 @@ impl CandidateSelector {
                 // before checking the package's range or wheel compatibility.
                 let mut tried_runtime = false;
                 Either::Right(preferences.into_iter().filter_map(move |entry| {
-                    if let PreferenceSource::Runtime { first_only: true } = entry.source()
+                    if let PreferenceSource::Runtime(RuntimePreferenceMode::First) = entry.source()
                         && std::mem::replace(&mut tried_runtime, true)
                     {
                         return None;
@@ -338,7 +338,7 @@ impl CandidateSelector {
                     PrereleaseSelection::PreferStable => match source {
                         PreferenceSource::Resolver => false,
                         PreferenceSource::Lock
-                        | PreferenceSource::Runtime { .. }
+                        | PreferenceSource::Runtime(_)
                         | PreferenceSource::Environment
                         | PreferenceSource::RequirementsTxt => true,
                     },

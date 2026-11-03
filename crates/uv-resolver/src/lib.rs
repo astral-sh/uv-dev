@@ -2,7 +2,7 @@ pub use error::{ErrorTree, NoSolutionError, NoSolutionHeader, ResolveError};
 pub use exclusions::Exclusions;
 pub use flat_index::{FlatDistributions, FlatIndex};
 pub use manifest::Manifest;
-pub use preferences::{Preference, PreferenceError, Preferences};
+pub use preferences::{Preference, PreferenceError, Preferences, RuntimePreferenceMode};
 pub use prioritized_distribution::{HashComparison, PrioritizedDist, SourceDistCompatibility};
 pub use pubgrub::PubGrubHint;
 pub use python_requirement::PythonRequirement;
