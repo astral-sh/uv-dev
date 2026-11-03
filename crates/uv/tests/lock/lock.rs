@@ -40,6 +40,75 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// A cutoff for a discarded build candidate can select an older backend even though
+/// neither the backend nor its discarded dependency occurs in the runtime graph.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_exclude_newer() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::from_toml(indoc! {r#"
+        name = "build-cutoffs"
+        [root]
+        [expected]
+        satisfiable = true
+
+        [packages.backend.versions."1"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+
+        [packages.backend.versions."2"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+        requires = ["discarded==1"]
+
+        [packages.discarded.versions."1"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+    "#})?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "backend"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "resolution-inputs"]
+
+        [tool.uv.exclude-newer-package]
+        backend = "2025-01-01T00:00:00Z"
+        discarded = "2023-01-01T00:00:00Z"
+        unused = "2023-01-01T00:00:00Z"
+    "#};
+    pyproject.write_str(project)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    let parsed = lock.parse::<toml_edit::DocumentMut>()?;
+    insta::assert_snapshot!(parsed["options"]["exclude-newer-package"].to_string().trim(), @r#"
+    backend = "2025-01-01T00:00:00Z"
+    discarded = "2023-01-01T00:00:00Z"
+    "#);
+
+    pyproject.write_str(&project.replace("discarded = \"2023", "discarded = \"2022"))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile due to change of exclude newer timestamp from `2023-01-01T00:00:00Z` to `2022-01-01T00:00:00Z` for package `discarded`
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
 /// Re-encoding a lock must keep its audited build-only version when a newer wheel is available.
 #[cfg(feature = "test-universal")]
 #[test]

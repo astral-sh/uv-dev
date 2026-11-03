@@ -32,9 +32,9 @@ impl Lock {
         self.manifest
             .dependency_metadata
             .retain(|entry| filter.includes_metadata(entry));
-        self.options.exclude_newer = self.options.exclude_newer.filter_packages(
-            self.packages
-                .iter()
+        let exclude_newer = mem::take(&mut self.options.exclude_newer);
+        self.options.exclude_newer = exclude_newer.filter_packages(
+            self.packages_in_all_environments()
                 .map(Package::name)
                 .chain(&filter.lookups.exclude_newer),
         );

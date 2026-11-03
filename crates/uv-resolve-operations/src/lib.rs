@@ -380,7 +380,8 @@ pub async fn resolve(
 
         if let Some((constraints, hasher)) = build_dispatch.locked_build_inputs() {
             let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
-            Box::pin(resolver.resolve_with_build_forks(
+            let build_recorder = recorder.as_ref().map(|_| ResolutionRecorder::default());
+            let resolution = Box::pin(resolver.resolve_with_build_forks(
                 strategy,
                 hasher,
                 async |requirements, env, index, hasher| {
@@ -404,7 +405,8 @@ pub async fn resolve(
                     Ok((
                         Manifest::simple(requirements)
                             .with_constraints(constraints.clone())
-                            .with_lookaheads(lookaheads),
+                            .with_lookaheads(lookaheads)
+                            .with_recorder(build_recorder.clone()),
                         hasher,
                     ))
                 },
@@ -415,7 +417,11 @@ pub async fn resolve(
                         .map_err(Error::Anyhow)
                 },
             ))
-            .await?
+            .await?;
+            if let (Some(recorder), Some(build_recorder)) = (&recorder, build_recorder) {
+                recorder.record_build_cutoffs(build_recorder.take());
+            }
+            resolution
         } else {
             resolver.resolve().await?
         }
