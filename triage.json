@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8953,
+        "title": "MuJoCo `mjpython` fails with uvx",
+        "url": "https://github.com/astral-sh/uv/issues/8953",
+        "state": "open",
+        "reason": "Adjacent macOS loader failure: a maintainer identified libpython being sought relative to a cached environment instead of the managed interpreter. It concerns @executable_path and libpython under uvx, whereas this report concerns @rpath/libmlx.dylib when package files are installed with symlink mode; it does not establish a shared root cause."
+      },
+      {
+        "kind": "issue",
+        "number": 5244,
+        "title": "Symlink link mode should symlink at the directory level",
+        "url": "https://github.com/astral-sh/uv/issues/5244",
+        "state": "closed",
+        "reason": "Relevant installer design history: directory-level symlinking was proposed, then reconsidered by a maintainer because compiled .pyc files would pollute the cache. Current source still symlinks individual files. This discussion neither reports nor fixes native-library resolution across symlinked files."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5208,
+        "title": "Support  `--link-mode=symlink`",
+        "url": "https://github.com/astral-sh/uv/pull/5208",
+        "state": "merged",
+        "reason": "Introduced symbolic linking for dependency installation and syncing on July 19, 2024; discovered through astral-sh/uv#5147. This establishes the feature's history, but provides no fix for MLX or @rpath resolution and no evidence that the reported failure is a regression."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered libmlx.dylib, libmlx, mlx, @rpath, and Library not loaded. Separate conceptual searches covered symlink imports, symlink library/dylib failures, link-mode imports, realpath, __file__, dynamic linking, shared libraries, and namespace packages, removing MLX, version, and platform restrictions. Fix-oriented PR searches covered symlink, link-mode, symbolic, rpath, dylib, mlx, and shared library; followed astral-sh/uv#5147 to astral-sh/uv#5208 and inspected the 0.13.6/0.13.7 changelog. Some supplemental queries were rate-limited; subsequent narrower searches succeeded. Ruled out astral-sh/uv#19126 (archived interpreter relocation), astral-sh/uv#11554 (missing cloned .so files), astral-sh/uv#12869 (upstream CMake installation path), astral-sh/uv#8762 (MLX wheel selection), and astral-sh/uv#7764 (Homebrew library search paths). No matching fix or canonical duplicate was found."
+  },
+  "type": "bug",
+  "type_reason": "The report describes an installed extension failing to load a required library specifically with supported symlink mode, while clone and copy work. Source confirms per-file symlinking, but the exact MLX wheel layout and loader mechanism remain unverified. The documented cache-deletion warning does not explain this intact-cache import failure. No inspected item tracks the same failure or establishes a previously fixed regression.",
+  "summary": "No canonical duplicate or matching fix found. astral-sh/uv#8953 is an adjacent loader-path failure; astral-sh/uv#5244 and astral-sh/uv#5208 document symlink-mode design and implementation history.",
+  "draft_response": "The traceback shows macOS loading `mlx.core` from uv's cache and looking for `libmlx.dylib` within that cached wheel's directory. uv currently symlinks individual package files; the exact MLX library layout still needs confirmation.\n\nAs a workaround, set `link-mode = \"clone\"` (the macOS default) and run `uv sync --reinstall` to replace the installed symlinks.\n\nPlease share the exact MLX-related package versions and confirm whether the fresh-project example fails on its own. The traceback also includes `mlx_spatial`, which isn't shown in that example. Those details will help establish the affected wheel layout."
+}
