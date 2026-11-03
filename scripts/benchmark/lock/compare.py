@@ -167,6 +167,8 @@ def main():
         parser.error("continued online seed passes are cache population runs")
     if baseline.get("excluded_root") != candidate.get("excluded_root"):
         parser.error("incomparable excluded roots")
+    if baseline.get("source_pair") != candidate.get("source_pair"):
+        parser.error("incomparable source pairs")
     for field in (
         "image",
         "input_sha256",

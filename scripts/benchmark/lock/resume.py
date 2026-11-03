@@ -54,6 +54,7 @@ def main():
             for key in (
                 "image",
                 "binary_sha256",
+                "source_pair",
                 "exclude_newer",
                 "harness",
                 "preview",

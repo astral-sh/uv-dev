@@ -26,6 +26,7 @@ PROJECTS = {
     "black": "test/requirements/black.in",
     "jupyter": "test/requirements/jupyter.in",
     "transformers": "test/requirements/transformers/pyproject.toml",
+    "transformers-torch-vision": "scripts/benchmark/lock/fixtures/transformers-torch-vision.toml",
     "trio": "test/requirements/trio.in",
     "warehouse": "test/ecosystem/warehouse/pyproject.toml",
 }
@@ -107,12 +108,22 @@ def main():
         help="explicit UV_INTERNAL__ experiment setting, NAME=VALUE",
     )
     parser.add_argument(
+        "--source-pair",
+        nargs=2,
+        metavar=("SEPARATE_COMMIT", "INTEGRATED_COMMIT"),
+        help="record both full candidate commits for a matched batch",
+    )
+    parser.add_argument(
         "--prefetch-diagnostics",
         action="store_true",
         help="collect verbose prefetch counters in a separate named-project run",
     )
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
+    if args.source_pair and any(
+        not re.fullmatch("[0-9a-f]{40}", commit) for commit in args.source_pair
+    ):
+        parser.error("--source-pair requires two full Git commit hashes")
     if os.getuid() == 0:
         parser.error("run as a non-root user")
     if args.prefetch_diagnostics and (args.project == "corpus" or not args.preview):
@@ -340,6 +351,9 @@ def run(args, parser):
     }
     if args.prefetch_diagnostics:
         receipt["prefetch_diagnostics"] = True
+    if args.source_pair:
+        separate, integrated = args.source_pair
+        receipt["source_pair"] = {"separate": separate, "integrated": integrated}
     if args.excluded_root:
         receipt["excluded_root"] = args.excluded_root
     if args.project == "corpus" and args.network != "none":
@@ -358,6 +372,7 @@ def run(args, parser):
                 previous.get(key) != receipt.get(key)
                 for key in (
                     "seed_cache_identity",
+                    "source_pair",
                     "project",
                     "image",
                     "input_sha256",

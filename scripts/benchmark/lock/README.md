@@ -5,7 +5,9 @@ lock workload. Run it from a non-root Linux account with Docker and Python 3.11
 or later. Pull the digest-pinned Python images listed in the script first. The
 corpus uses CPython 3.14 with the harness default universal range of `>=3.13`.
 The named workloads use 3.12, except for Warehouse, whose project requires 3.11.
-The Transformers project includes all its optional dependency groups in the lock.
+The `transformers` project includes all 39 optional dependency groups in the lock.
+The separate `transformers-torch-vision` project retains the upstream `torch` and
+`vision` groups from the same revision. Use the same native image for both cases.
 Airflow uses the requirements in `test/requirements/airflow.in`.
 
 ## Seed
@@ -57,6 +59,9 @@ the last pass and use a fresh cache directory for each timed run.
 ## Measure and compare
 
 Run the two binaries serially on the same host with the same seed archive.
+Pass `--source-pair SEPARATE_COMMIT INTEGRATED_COMMIT` to every arm, including
+the baseline, to record the two full source hashes. Comparison, resume, and
+continued cache population check that the pair matches.
 Each invocation restores an independent writable cache in a network-disabled
 container and starts the project without a lockfile. For repeats, use new
 output and cache directories. Record the source commits and build profile for
