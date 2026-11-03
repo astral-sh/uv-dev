@@ -299,6 +299,9 @@ fn install_scripts_in_tab_path() -> Result<()> {
     let python = bin.join("python");
     if python.as_os_str().len() + 3 <= 127 && !python.as_os_str().as_encoded_bytes().contains(&b' ')
     {
+        let shebang = format!("#!{}\n", python.display());
+        assert!(fs::read_to_string(bin.join("tab-probe"))?.starts_with(&shebang));
+        assert!(fs::read_to_string(bin.join("wheel-script"))?.starts_with(&shebang));
         assert_eq!(
             entry_point.unwrap_err().kind(),
             std::io::ErrorKind::NotFound
