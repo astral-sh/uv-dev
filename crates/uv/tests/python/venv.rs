@@ -93,6 +93,30 @@ fn create_venv_ksh() {
 }
 
 #[test]
+fn create_venv_rejects_prompt_newlines() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--prompt")
+        .arg("safe\ninclude-system-site-packages = true"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    context
+        .venv
+        .child("pyvenv.cfg")
+        .assert(predicate::str::contains(
+            "\ninclude-system-site-packages = true",
+        ));
+}
+
+#[test]
 fn create_venv_skips_distutils_patch_on_py310() {
     let context = uv_test::test_context_with_versions!(&["3.10"]);
 
@@ -1832,7 +1856,7 @@ fn verify_pyvenv_cfg() {
 #[test]
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
-    let prompt = "résumé \"quoted\"\\path\n";
+    let prompt = "résumé \"quoted\"\\path";
 
     // Create a virtual environment at `.venv`.
     context
@@ -1905,7 +1929,7 @@ fn verify_pyvenv_cfg_relocatable() {
         r"dirname(dirname(realpath(__file__)))",
     ));
     activate_xsh.assert(predicates::str::contains(
-        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path\n".decode("utf-8")"#,
+        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path".decode("utf-8")"#,
     ));
 }
 
@@ -2565,4 +2589,132 @@ fn no_clear_conflicts_with_allow_existing() {
     For more information, try '--help'.
     "
     );
+}
+
+#[test]
+fn create_venv_rejects_prompt_carriage_return() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    uv_snapshot!(context.filters(), context.venv().args(["--python", "3.12", "--prompt", "bad\rprompt"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "#);
+    context.venv.assert(predicate::path::is_dir());
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_prompt_before_removing_centralized_reference() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_centralized_environment_hashes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .venv()
+        .args(["--preview-features", "centralized-project-envs"])
+        .assert()
+        .success();
+    let reference = context.temp_dir.child(".venv");
+    let target = fs_err::canonicalize(reference.path())?;
+    reference.child("marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+    uv_snapshot!(context.filters(), context.venv().args(["--prompt", "bad\nprompt"]), @r#"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        Creating virtual environment at: .venv
+        Activate with: source .venv/[BIN]/activate
+        "#);
+    assert_ne!(fs_err::canonicalize(reference.path())?, target);
+    assert_eq!(fs_err::read_to_string(target.join("marker"))?, "keep");
+    assert_eq!(fs_err::read_to_string(target.join("pyvenv.cfg"))?, config);
+    Ok(())
+}
+
+/// Give CPython a real executable path containing a newline while sharing its standard library.
+#[cfg(unix)]
+fn python_with_newline_in_home(context: &uv_test::TestContext) -> Result<PathBuf> {
+    let python = fs_err::canonicalize(&context.python_versions[0].1)?;
+    let home = context.temp_dir.child("bad\nhome");
+    home.child("bin").create_dir_all()?;
+    let executable = home.child("bin/python3.12");
+    fs_err::copy(&python, executable.path())?;
+    let prefix = python
+        .ancestors()
+        .nth(2)
+        .expect("managed Python is installed in a bin directory");
+    symlink(prefix.join("lib"), home.child("lib"))?;
+    Ok(executable.path().to_owned())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_with_newline_in_home(&context)?;
+    context.temp_dir.child(".venv/marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_ne!(context.read(".venv/pyvenv.cfg"), config);
+    assert_eq!(context.read(".venv/marker"), "keep");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_with_newline_in_home(&context)?;
+    context.temp_dir.child(".venv/marker").write_str("keep")?;
+    let config = context.read(".venv/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_ne!(context.read(".venv/pyvenv.cfg"), config);
+    context
+        .venv
+        .child("marker")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn create_venv_validates_home_before_creating_destination() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
+    let python = python_with_newline_in_home(&context)?;
+
+    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
+    Creating virtual environment at: new-venv
+    Activate with: source new-venv/[BIN]/activate
+    ");
+    context
+        .temp_dir
+        .child("new-venv")
+        .assert(predicate::path::is_dir());
+    Ok(())
 }
