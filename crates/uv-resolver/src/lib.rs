@@ -1,3 +1,4 @@
+pub use build_constraint_hashes::BuildConstraintHashes;
 pub use error::{ErrorTree, NoSolutionError, NoSolutionHeader, ResolveError};
 pub use exclusions::Exclusions;
 pub use flat_index::{FlatDistributions, FlatIndex};
@@ -37,6 +38,7 @@ type FxHashbrownSet<T> = hashbrown::HashSet<T, rustc_hash::FxBuildHasher>;
 
 type FxHashbrownMap<K, V> = hashbrown::HashMap<K, V, rustc_hash::FxBuildHasher>;
 
+mod build_constraint_hashes;
 mod candidate_selector;
 mod dependency_provider;
 mod error;
