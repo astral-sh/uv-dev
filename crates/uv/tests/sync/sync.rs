@@ -19040,6 +19040,51 @@ fn match_runtime_wheel_source() -> Result<()> {
     Ok(())
 }
 
+/// An unlocked script uses the resolved wheel to build a dependency with static project metadata.
+#[test]
+fn match_runtime_unlocked_script() -> Result<()> {
+    let (context, _) = build_hash_project_in_subdirectory()?;
+    context
+        .temp_dir
+        .child("package/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["project", "build-dependency"]
+        # [tool.uv]
+        # no-index = true
+        # [tool.uv.sources]
+        # project = { path = "package" }
+        # build-dependency = { path = "package/wheels/build_dependency-1.0.0-py3-none-any.whl" }
+        # [tool.uv.extra-build-dependencies]
+        # project = [{ requirement = "build-dependency", match-runtime = true }]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--script", "script.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Creating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0 (from file://[TEMP_DIR]/package/wheels/build_dependency-1.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/package)
+    ");
+    Ok(())
+}
+
 /// A project with an in-tree backend in a subdirectory for `--with` tests.
 fn build_hash_project_in_subdirectory() -> Result<(TestContext, String)> {
     let (context, hash) = build_hash_project()?;

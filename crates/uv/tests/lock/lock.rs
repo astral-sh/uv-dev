@@ -697,6 +697,88 @@ fn locked_build_metadata_after_unlocked_build() -> Result<()> {
     Ok(())
 }
 
+/// A stale v2 build declaration can be updated without upgrading the runtime dependency.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_migrates_stale_v2_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"1".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let manifest = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["backend==1"]
+
+        [build-system]
+        requires = ["backend==1"]
+        build-backend = "backend"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#};
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(manifest)?;
+    context.lock().arg("--offline").assert().success();
+    let lock = context
+        .read("uv.lock")
+        .replacen(
+            "version = 1\n",
+            "version = 2\nbuild-encoding = \"dependency\"\n",
+            1,
+        )
+        .replacen(
+            "[[package]]",
+            indoc! {r#"
+        [[build-universes]]
+        owner = { name = "project", version = "1", source = { editable = "." } }
+        roots = [{ name = "backend" }]
+        inputs = [{ kind = "backend", name = "backend", specifier = "==1" }]
+
+        [[package]]"#},
+            1,
+        )
+        .replace(
+            "[[package]]\nname = \"backend\"",
+            "[[package]]\nuniverse = [0, 1]\nname = \"backend\"",
+        );
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    context
+        .lock()
+        .args(["--offline", "--check"])
+        .assert()
+        .success();
+
+    pyproject.write_str(
+        &manifest.replace("requires = [\"backend==1\"]", "requires = [\"backend==2\"]"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"2".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .lock()
+        .args(["--offline", "--check"])
+        .assert()
+        .success();
+    Ok(())
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]
