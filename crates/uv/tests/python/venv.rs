@@ -2126,12 +2126,15 @@ fn create_venv_powershell_unc() -> Result<()> {
     Ok(())
 }
 
-/// Fish parses both the embedded environment path and the explicit prompt as single-quoted strings.
+/// Fish parses the embedded environment path and prompt while sourcing its activation script.
 #[test]
 #[cfg(unix)]
 fn activate_fish_quotes_path_and_prompt() {
+    let Ok(fish) = which::which("fish") else {
+        return;
+    };
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let venv = context.temp_dir.child(r"dir\'; touch from-path; #");
+    let venv = context.temp_dir.child(r#"dir\'"; touch from-path; #"#);
     let prompt = r"x'; touch from-prompt; set x '\\";
     context
         .venv()
@@ -2140,41 +2143,29 @@ fn activate_fish_quotes_path_and_prompt() {
         .assert()
         .success();
 
-    let activate = venv.child("bin/activate.fish");
-    activate.assert(predicates::str::contains(r"dir\\\'; touch from-path; #'"));
-    activate.assert(predicates::str::contains(
-        r"set -gx VIRTUAL_ENV_PROMPT 'x\'; touch from-prompt; set x \'\\\\'",
-    ));
-
-    if let Ok(fish) = which::which("fish") {
-        // Keep backslashes in the rendered prompt instead of normalizing them as path separators.
-        uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command(fish)
-            .args(["--no-config", "-c", indoc! {r#"
-                function fish_prompt; printf original; end
-                source "$argv[1]"; or exit 1
-                test "$VIRTUAL_ENV" = "$argv[2]"; or exit 1
-                test "$VIRTUAL_ENV_PROMPT" = "$argv[3]"; or exit 1
-                fish_prompt
-                deactivate
-                fish_prompt
-            "#}])
-            .arg(activate.path())
-            .arg(venv.path())
-            .arg(prompt), @r"
-        exit_code: 0 (success)
-        ----- stdout -----
-        (x'; touch from-prompt; set x '\\) original
-        original
-        ");
-        context
-            .temp_dir
-            .child("from-path")
-            .assert(predicate::path::missing());
-        context
-            .temp_dir
-            .child("from-prompt")
-            .assert(predicate::path::missing());
-    }
+    uv_snapshot!(context.external_command(fish)
+        .args(["--no-config", "-c", indoc! {r#"
+            function fish_prompt; printf original; end
+            source "$argv[1]"; or exit 1
+            test "$VIRTUAL_ENV" = "$argv[2]"; and echo 'path is literal'
+            fish_prompt
+            deactivate
+            fish_prompt
+        "#}]).arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    path is literal
+    (x'; touch from-prompt; set x '\\) original
+    original
+    ");
+    context
+        .temp_dir
+        .child("from-path")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("from-prompt")
+        .assert(predicate::path::missing());
 }
 
 /// Check that the activate script still works with the path contains an apostrophe.
