@@ -157,6 +157,8 @@ def main():
         )
     baseline, left = read_results(args.baseline)
     candidate, right = read_results(args.candidate)
+    if "continued_from" in baseline or "continued_from" in candidate:
+        parser.error("continued online seed passes are cache population runs")
     if baseline.get("excluded_root") != candidate.get("excluded_root"):
         parser.error("incomparable excluded roots")
     for field in (

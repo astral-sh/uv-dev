@@ -48,6 +48,12 @@ directories. Archive the resulting cache as `union.tar`. Keep the online
 outcomes so cache misses in subsequent offline runs can be distinguished from
 resolution failures.
 
+For several online corpus passes on the same shard, keep the dedicated cache
+directory and pass `--continue-seed-from` with the preceding run's output
+directory. Each pass records its predecessor. The launcher verifies the cache
+identity and workload and allows one writer at a time. Archive the union after
+the last pass and use a fresh cache directory for each timed run.
+
 ## Measure and compare
 
 Run the two binaries serially on the same host with the same seed archive.

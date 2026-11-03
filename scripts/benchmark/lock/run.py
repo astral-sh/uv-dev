@@ -1,6 +1,7 @@
 """Run an index-backed lock benchmark in an isolated Docker container."""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -61,6 +62,11 @@ def main():
         "--seed", type=Path, help="cache tar archive; restored only inside Docker"
     )
     parser.add_argument(
+        "--continue-seed-from",
+        type=Path,
+        help="continue online corpus seeding from a completed run using the same cache",
+    )
+    parser.add_argument(
         "--network", default="none", help="isolated internal Docker network for seeding"
     )
     parser.add_argument(
@@ -104,6 +110,12 @@ def main():
     args = parser.parse_args()
     if os.getuid() == 0:
         parser.error("run as a non-root user")
+    if args.continue_seed_from and (
+        args.project != "corpus" or args.network == "none" or args.seed
+    ):
+        parser.error(
+            "--continue-seed-from requires online corpus seeding without --seed"
+        )
     if args.excluded_root and (
         args.project != "corpus" or not args.input or args.limit is not None
     ):
@@ -136,6 +148,19 @@ def main():
     elif args.proxy:
         parser.error("offline runs have no reachable proxy")
 
+    args.cache.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(args.cache, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            parser.error("another benchmark is using this cache")
+        run(args, parser)
+    finally:
+        os.close(descriptor)
+
+
+def run(args, parser):
     selector = "3.11" if args.project == "warehouse" else "3.12"
     if args.project == "corpus":
         selector = "3.14"
@@ -145,13 +170,8 @@ def main():
             parser.error("--image-id requires the full sha256 digest")
         image = args.image_id
     name = "uv-lock-" + uuid.uuid4().hex
-    args.cache.mkdir(parents=True, exist_ok=True)
-    if any(args.cache.iterdir()):
+    if not args.continue_seed_from and any(args.cache.iterdir()):
         parser.error("--cache must be a fresh directory")
-    args.output.mkdir(parents=True, exist_ok=False)
-    # Keep host provenance outside the writable bind mount.
-    results = args.output / "results"
-    results.mkdir()
     docker = [
         "docker",
         "run",
@@ -186,7 +206,6 @@ def main():
         "--tmpfs",
         "/tmp:rw,nosuid,nodev,size=2g",
         *mount(args.uv, "/bin/uv-bench"),
-        *mount(results, "/out", writable=True),
         *mount(args.cache, "/cache", writable=True),
         "--workdir",
         "/tmp",
@@ -310,8 +329,46 @@ def main():
     }
     if args.excluded_root:
         receipt["excluded_root"] = args.excluded_root
+    if args.project == "corpus" and args.network != "none":
+        cache = args.cache.stat()
+        receipt["seed_cache_identity"] = [cache.st_dev, cache.st_ino]
+    if args.continue_seed_from:
+        try:
+            previous = json.loads((args.continue_seed_from / "run.json").read_text())
+        except (OSError, ValueError) as error:
+            parser.error(f"cannot read previous seed run: {error}")
+        if (
+            not isinstance(previous, dict)
+            or not previous.get("complete")
+            or not previous.get("container")
+            or any(
+                previous.get(key) != receipt.get(key)
+                for key in (
+                    "seed_cache_identity",
+                    "project",
+                    "image",
+                    "input_sha256",
+                    "python",
+                    "exclude_newer",
+                    "offline",
+                    "harness",
+                    "limit",
+                    "workers",
+                    "excluded_root",
+                )
+            )
+        ):
+            parser.error(
+                "previous run must have completed on the same corpus and cache"
+            )
+        receipt["continued_from"] = previous["container"]
     if not receipt["python"].startswith(f"Python {selector}."):
         parser.error(f"image must provide CPython {selector}")
+    args.output.mkdir(parents=True, exist_ok=False)
+    # Keep host provenance outside the writable bind mount.
+    results = args.output / "results"
+    results.mkdir()
+    command += mount(results, "/out", writable=True)
     (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
     for key, value in env.items():
         command += ["--env", f"{key}={value}"]
