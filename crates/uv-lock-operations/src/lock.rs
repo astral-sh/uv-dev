@@ -724,7 +724,7 @@ async fn do_lock(
     // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
     let resolution_build_hasher = match mode {
         LockMode::Locked(..) => locked_hasher.with_constraint_hashes(&build_hasher)?,
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher,
+        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher.clone(),
     };
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
@@ -1063,37 +1063,7 @@ async fn do_lock(
             )
             .await?;
 
-            let builds = if let Some(encoding) = build_encoding {
-                let build_hasher = hasher
-                    .clone()
-                    .with_constraint_hashes(&resolution_build_hasher)?;
-                let builds = Box::pin(resolve_builds(
-                    &resolution,
-                    BuildResolutionStrategy::from_env()?,
-                    &python_requirement,
-                    interpreter.markers(),
-                    &client,
-                    flat_index,
-                    &build_dispatch,
-                    &build_constraints,
-                    &runtime_hasher,
-                    &build_hasher,
-                    concurrency,
-                    recorder.as_ref(),
-                ))
-                .await?;
-                debug!("Resolved {} build environments", builds.len());
-                Some((encoding, builds))
-            } else {
-                None
-            };
-
-            // Print the success message after completing resolution.
-            logger.on_complete(resolution.len(), start, printer)?;
-
-            // Notify the user of any resolution diagnostics.
-            uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
-
+            let prefer_locked = versions_lock.is_some();
             let manifest = ResolverManifest::new(
                 members,
                 requirements,
@@ -1133,7 +1103,34 @@ async fn do_lock(
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
 
-            let lock = if let Some((encoding, builds)) = builds {
+            let lock = if let Some(encoding) = build_encoding {
+                let previous_pins = previous
+                    .as_ref()
+                    .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
+                    .transpose()?
+                    .unwrap_or_default();
+                let build_hasher = HashStrategy::collect(HashCollection::Url)
+                    .with_constraint_hashes(&build_hasher)?;
+                let builds = Box::pin(resolve_builds(
+                    &resolution,
+                    BuildResolutionStrategy::from_env()?,
+                    &python_requirement,
+                    interpreter.markers(),
+                    &client,
+                    flat_index,
+                    &build_dispatch,
+                    &build_constraints,
+                    &runtime_hasher,
+                    &build_hasher,
+                    target.install_path(),
+                    lock.build_project_domain(),
+                    &previous_pins,
+                    prefer_locked,
+                    concurrency,
+                    recorder.as_ref(),
+                ))
+                .await?;
+                debug!("Resolved {} build environments", builds.len());
                 let mut lock = lock.with_build_graphs(
                     encoding,
                     builds
@@ -1149,11 +1146,18 @@ async fn do_lock(
                     concurrency.downloads,
                 )
                 .await?;
+                previous_pins.verify(&lock)?;
                 lock.with_compacted_build_domains()?
                     .with_ordinary_build_roots()?
             } else {
                 lock
             };
+
+            // Print the success message after completing resolution.
+            logger.on_complete(resolution.len(), start, printer)?;
+
+            // Notify the user of any resolution diagnostics.
+            uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())
