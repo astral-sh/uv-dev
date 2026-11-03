@@ -271,6 +271,15 @@ impl Lock {
         self.builds.as_ref().map(|builds| builds.encoding)
     }
 
+    /// Serialize the recorded environments in the selected encoding.
+    #[must_use]
+    pub fn with_build_encoding(mut self, encoding: BuildEncoding) -> Self {
+        if let Some(builds) = &mut self.builds {
+            builds.encoding = encoding;
+        }
+        self
+    }
+
     /// Combine disjoint marker domains for an owner when it selects the same build environment
     /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
     pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {

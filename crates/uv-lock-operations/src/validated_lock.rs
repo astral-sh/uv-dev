@@ -223,7 +223,7 @@ impl ValidatedLock {
         // A metadata build must use the current build requirements. A v2 lock can still
         // supply runtime forks when its build graph needs updating.
         if !build_lock_matches {
-            debug!("Resolving despite existing lockfile due to changed build inputs or encoding");
+            debug!("Resolving due to missing or changed build requirements in the lockfile");
             return if lock.locks_builds() {
                 Ok(Self::Preferable(lock))
             } else {

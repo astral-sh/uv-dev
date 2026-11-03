@@ -326,7 +326,9 @@ async fn do_lock(
             Ok(value) if value == "package" => BuildEncoding::Package,
             Ok(value) if value == "conflict-marker" => BuildEncoding::ConflictMarker,
             Ok(value) if value == "dependency" => BuildEncoding::Dependency,
-            Err(std::env::VarError::NotPresent) => existing_build_encoding.unwrap_or(BuildEncoding::Dependency),
+            Err(std::env::VarError::NotPresent) => {
+                existing_build_encoding.unwrap_or(BuildEncoding::Dependency)
+            }
             Ok(value) => return Err(anyhow::anyhow!(
                 "Unknown build lock encoding `{value}` (expected `conflict-marker`, `package`, or `dependency`)"
             ).into()),
@@ -815,9 +817,7 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
-        let build_lock_matches = if existing_build_encoding != build_encoding {
-            false
-        } else if existing_lock.locks_builds() {
+        let build_lock_matches = if existing_lock.locks_builds() {
             match existing_lock
                 .satisfies_build_inputs(
                     target.install_path(),
@@ -840,9 +840,10 @@ async fn do_lock(
                 }
             }
         } else {
-            true
+            build_encoding.is_none()
         };
-        if !build_lock_matches && check_locked_builds {
+        if check_locked_builds && (!build_lock_matches || existing_build_encoding != build_encoding)
+        {
             return Err(LockError::StaleBuildLock);
         }
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
@@ -929,6 +930,13 @@ async fn do_lock(
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
+            // Reuse the audited versions and hashes when only the wire format changes.
+            if let Some(encoding) = build_encoding
+                && existing_build_encoding != Some(encoding)
+            {
+                let updated = lock.clone().with_build_encoding(encoding);
+                return Ok(LockResult::Changed(Some(lock), updated));
+            }
             Ok(LockResult::Unchanged(lock))
         }
 
