@@ -198,7 +198,8 @@ mod tests {
             .expect_err("Python 3.12+ is missing a runtime selection on Linux");
         assert_eq!(
             error.to_string(),
-            "`native` was declared as an extra build dependency with `match-runtime = true`, but was not found in the resolution"
+            "`native` was declared as an extra build dependency with `match-runtime = true`, \
+             but was not found in the resolution"
         );
         Ok(())
     }
