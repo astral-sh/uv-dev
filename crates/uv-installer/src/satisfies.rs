@@ -29,6 +29,20 @@ pub struct BuildSettings<'a> {
     pub extra_build_variables: &'a ExtraBuildVariables,
 }
 
+impl BuildSettings<'_> {
+    pub(crate) fn build_info(self, name: &PackageName) -> BuildInfo {
+        let config_settings =
+            config_settings_for(name, self.config_settings, self.config_settings_package);
+        let extra_build_requires = extra_build_requires_for(name, self.extra_build_requires);
+        let extra_build_variables = extra_build_variables_for(name, self.extra_build_variables);
+        BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_requires.to_vec(),
+            extra_build_variables.cloned(),
+        )
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum RequirementSatisfaction {
     Mismatch,
@@ -57,23 +71,9 @@ impl RequirementSatisfaction {
 
         // If the distribution was built with other settings, it is out of date.
         if let Some(build_settings) = build_settings
-            && distribution.build_info().is_some_and(|dist_build_info| {
-                let config_settings = config_settings_for(
-                    name,
-                    build_settings.config_settings,
-                    build_settings.config_settings_package,
-                );
-                let extra_build_requires =
-                    extra_build_requires_for(name, build_settings.extra_build_requires);
-                let extra_build_variables =
-                    extra_build_variables_for(name, build_settings.extra_build_variables);
-                let build_info = BuildInfo::from_settings(
-                    config_settings.into_owned(),
-                    extra_build_requires.to_vec(),
-                    extra_build_variables.cloned(),
-                );
-                dist_build_info != &build_info
-            })
+            && distribution
+                .build_info()
+                .is_some_and(|dist_build_info| dist_build_info != &build_settings.build_info(name))
         {
             debug!("Build info mismatch for {name}: {distribution}");
             return Self::OutOfDate;

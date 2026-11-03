@@ -19065,6 +19065,22 @@ fn match_runtime_unlocked_script() -> Result<()> {
      + build-dependency==1.0.0 (from file://[TEMP_DIR]/package/wheels/build_dependency-1.0.0-py3-none-any.whl)
      + project==0.1.0 (from file://[TEMP_DIR]/package)
     ");
+    // The installed build records the local wheel selected by the previous resolution.
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--show-resolution", "script.py"]), @"
+    exit_code: 0 (success)
+    ");
+    // The wheel remains installed but is no longer a runtime dependency of the script.
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&context.read("script.py").replace(
+        r#"dependencies = ["project", "build-dependency"]"#,
+        r#"dependencies = ["project"]"#,
+    ))?;
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--show-resolution", "script.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: `build-dependency` was declared as an extra build dependency with `match-runtime = true`, but was not found in the resolution
+    ");
     Ok(())
 }
 

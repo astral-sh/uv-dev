@@ -1,6 +1,6 @@
 use uv_cache_key::{CacheKey, CacheKeyHasher, cache_digest};
 
-use crate::{BuildVariables, ConfigSettings, ExtraBuildRequirement};
+use crate::{BuildVariables, ConfigSettings, ExtraBuildRequirement, Requirement};
 
 /// A digest representing the build settings, such as build dependencies or other build-time
 /// configuration.
@@ -35,6 +35,31 @@ impl BuildInfo {
             extra_build_requires: extra_build_dependencies,
             extra_build_variables: extra_build_variables.unwrap_or_default(),
         }
+    }
+
+    /// Compare build settings before resolution, verifying each recorded runtime pin against
+    /// the installed runtime selection. The remaining declaration and settings must match exactly.
+    pub fn matches_with_runtime(
+        &self,
+        mut expected: Self,
+        pin_is_current: impl Fn(&Requirement) -> bool,
+    ) -> bool {
+        for (declared, recorded) in expected
+            .extra_build_requires
+            .iter_mut()
+            .zip(&self.extra_build_requires)
+        {
+            if declared.match_runtime && declared.requirement.source.is_empty() {
+                if !recorded.match_runtime || !pin_is_current(&recorded.requirement) {
+                    return false;
+                }
+                declared
+                    .requirement
+                    .source
+                    .clone_from(&recorded.requirement.source);
+            }
+        }
+        *self == expected
     }
 
     /// Returns `true` if the [`BuildInfo`] is empty, meaning it has no configuration settings,
