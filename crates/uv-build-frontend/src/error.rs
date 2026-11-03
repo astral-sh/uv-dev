@@ -52,7 +52,7 @@ pub enum Error {
     #[error("Cyclic build dependency detected for `{0}`")]
     CyclicBuildDependency(PackageName),
     #[error(
-        "Extra build requirement `{0}` was declared with `match-runtime = true`, but `{1}` does not declare static metadata, making runtime-matching impossible"
+        "Extra build requirement `{0}` for `{1}` uses `match-runtime = true`, but no runtime selection is available"
     )]
     UnmatchedRuntime(PackageName, PackageName),
 }
@@ -108,6 +108,10 @@ impl Hinted for Error {
                 "Build failures usually indicate a problem with the package or the build environment",
             ),
             Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
+            Self::UnmatchedRuntime(requirement, package) => Hints::from(format!(
+                "If uv needs to build `{package}` for metadata before resolving `{requirement}`, \
+                 provide static metadata or pin the build requirement without `match-runtime`."
+            )),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
             _ => Hints::none(),

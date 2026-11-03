@@ -2022,6 +2022,11 @@ pub async fn update_environment(
         Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
         Err(err) => return Err(err.into()),
     };
+
+    // Build against the versions and sources selected for this environment.
+    let extra_build_requires = extra_build_requires.clone().match_runtime(&resolution)?;
+    let build_dispatch = build_dispatch.with_extra_build_requires(&extra_build_requires);
+
     // Sync the environment.
     let changelog = uv_install_operations::install(
         &resolution,

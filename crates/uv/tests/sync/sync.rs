@@ -16731,9 +16731,11 @@ fn reject_unmatched_runtime() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `source-distribution==0.0.3`
-      cause: Extra build requirement `iniconfig` was declared with `match-runtime = true`, but `source-distribution` does not declare static metadata, making runtime-matching impossible
+      cause: Extra build requirement `iniconfig` for `source-distribution` uses `match-runtime = true`, but no runtime selection is available
 
     hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
+
+    hint: If uv needs to build `source-distribution` for metadata before resolving `iniconfig`, provide static metadata or pin the build requirement without `match-runtime`.
     ");
 
     Ok(())
@@ -18914,6 +18916,174 @@ fn build_hash_project() -> Result<(TestContext, String)> {
     "#})?;
     let context = context.with_filter((build_hash.clone(), "[BUILD_HASH]"));
     Ok((context, build_hash))
+}
+
+/// A runtime-matched build requirement inherits the wheel selected by a path source.
+#[test]
+fn match_runtime_wheel_source() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["build-dependency"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.sources]
+        build-dependency = { path = "wheels/build_dependency-1.0.0-py3-none-any.whl" }
+
+        [tool.uv.extra-build-dependencies]
+        project = [{ requirement = "build-dependency", match-runtime = true }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--no-editable"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0 (from file://[TEMP_DIR]/wheels/build_dependency-1.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    Ok(())
+}
+
+/// A build-only backend can require both an ordinary wheel and a wheel selected by the script.
+#[test]
+fn unlocked_script_recursive_extra_build_requirements() -> Result<()> {
+    let (context, _) = build_hash_project_in_subdirectory()?;
+    let backend = context.temp_dir.child("backend");
+    backend.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "build-dependency"
+        version = "1.0.0"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let wheel = "build_dependency-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context.temp_dir.child("package/wheels").child(wheel),
+        backend.child(wheel),
+    )?;
+    backend.child("backend.py").write_str(&formatdoc! {r#"
+        import shutil
+        from pathlib import Path
+
+        import ok
+        import dynamic_dependency
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            shutil.copyfile(Path(__file__).with_name("{wheel}"), Path(wheel_directory) / "{wheel}")
+            return "{wheel}"
+    "#})?;
+    let backend_url =
+        SafeUrl::from_directory_path(&backend).map_err(|()| anyhow!("absolute backend path"))?;
+    let project = context.temp_dir.child("package/pyproject.toml");
+    project.write_str(&fs_err::read_to_string(&project)?.replace(
+        "build-dependency==1.0.0",
+        &format!("build-dependency @ {backend_url}"),
+    ))?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        context.temp_dir.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["project", "dynamic-dependency"]
+        # [tool.uv.sources]
+        # project = { path = "package" }
+        # ok = { path = "ok-1.0.0-py3-none-any.whl" }
+        # dynamic-dependency = { path = "package/wheels/dynamic_dependency-1.0.0-py3-none-any.whl" }
+        # [tool.uv.extra-build-dependencies]
+        # build-dependency = ["ok", { requirement = "dynamic-dependency", match-runtime = true }]
+        # ///
+        import project
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args(["--no-index", "--offline", "script.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + dynamic-dependency==1.0.0 (from file://[TEMP_DIR]/package/wheels/dynamic_dependency-1.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/package)
+    ");
+    Ok(())
+}
+
+/// An unlocked script uses the resolved wheel to build a dependency with static project metadata.
+#[test]
+fn match_runtime_unlocked_script() -> Result<()> {
+    let (context, _) = build_hash_project_in_subdirectory()?;
+    context
+        .temp_dir
+        .child("package/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["project", "build-dependency"]
+        # [tool.uv]
+        # no-index = true
+        # [tool.uv.sources]
+        # project = { path = "package" }
+        # build-dependency = { path = "package/wheels/build_dependency-1.0.0-py3-none-any.whl" }
+        # [tool.uv.extra-build-dependencies]
+        # project = [{ requirement = "build-dependency", match-runtime = true }]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--offline", "--script", "script.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Creating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + build-dependency==1.0.0 (from file://[TEMP_DIR]/package/wheels/build_dependency-1.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/package)
+    ");
+    // The installed build records the local wheel selected by the previous resolution.
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--show-resolution", "script.py"]), @"
+    exit_code: 0 (success)
+    ");
+    // The wheel remains installed but is no longer a runtime dependency of the script.
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&context.read("script.py").replace(
+        r#"dependencies = ["project", "build-dependency"]"#,
+        r#"dependencies = ["project"]"#,
+    ))?;
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--show-resolution", "script.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: `build-dependency` was declared as an extra build dependency with `match-runtime = true`, but was not found in the resolution
+    ");
+    Ok(())
 }
 
 /// A project with an in-tree backend in a subdirectory for `--with` tests.

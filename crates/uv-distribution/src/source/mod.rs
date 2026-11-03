@@ -208,6 +208,21 @@ async fn fetch_git_source_tree(
     Ok(fetch)
 }
 
+fn validate_revision(
+    source: &BuildableSource<'_>,
+    revision: &impl Hashed,
+    hashes: ArchiveHashPolicy<'_>,
+) -> Result<(), Error> {
+    if !revision.satisfies(hashes) {
+        return Err(Error::hash_mismatch(
+            source.to_string(),
+            hashes.digests(),
+            revision.hashes(),
+        ));
+    }
+    Ok(())
+}
+
 /// Fetch and build a source distribution from a remote source, or from a local cache.
 pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_context: &'a T,
@@ -480,14 +495,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .url_revision(source, ext, url, index, cache_shard, hashes, client)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -613,14 +621,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .url_revision(source, ext, url, index, cache_shard, hashes, client)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -908,14 +909,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .archive_revision(source, resource, cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -1013,14 +1007,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .archive_revision(source, resource, cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -1691,15 +1678,14 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok(revision)
     }
 
-    /// Build a source distribution from a Git repository.
-    async fn git_archive(
+    /// Locate the unpacked archive and its verified hashes in the Git commit's cache shard.
+    async fn git_archive_cache(
         &self,
         source: &BuildableSource<'_>,
         resource: &GitPathSourceUrl<'_>,
-        tags: &Tags,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
-    ) -> Result<BuiltWheelMetadata, Error> {
+    ) -> Result<(CacheShard, RevisionHashes), Error> {
         // Fetch the Git repository.
         let fetch = self
             .build_context
@@ -1725,15 +1711,23 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
             .await?;
 
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        validate_revision(source, &revision, hashes)?;
 
+        Ok((cache_shard, revision))
+    }
+
+    /// Build a source distribution from a Git repository.
+    async fn git_archive(
+        &self,
+        source: &BuildableSource<'_>,
+        resource: &GitPathSourceUrl<'_>,
+        tags: &Tags,
+        hashes: ArchiveHashPolicy<'_>,
+        client: &ManagedClient<'_>,
+    ) -> Result<BuiltWheelMetadata, Error> {
+        let (cache_shard, revision) = self
+            .git_archive_cache(source, resource, hashes, client)
+            .await?;
         let source_entry = cache_shard.entry(SOURCE);
 
         // If there are build settings or extra build dependencies, we need to scope to a cache shard.
@@ -1810,40 +1804,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        // Fetch the Git repository.
-        let fetch = self
-            .build_context
-            .git()
-            .fetch(
-                resource.git,
-                client.unmanaged.git_http_settings(resource.git.url()),
-                self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
-            )
+        let (cache_shard, revision) = self
+            .git_archive_cache(source, resource, hashes, client)
             .await?;
-
-        let git_sha = fetch.git().precise().expect("Exact commit after checkout");
-        let cache_shard = self.build_context.cache().shard(
-            CacheBucket::SourceDistributions,
-            WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
-        );
-
-        // Fetch the revision for the source distribution.
-        let revision = self
-            .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
-            .await?;
-
-        // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
-
         let source_entry = cache_shard.entry(SOURCE);
 
         // If the metadata is static, return it.

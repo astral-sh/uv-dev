@@ -263,6 +263,16 @@ impl<'a> BuildDispatch<'a> {
         }
     }
 
+    /// Use the runtime-matched requirements when installing the resolution.
+    #[must_use]
+    pub fn with_extra_build_requires(
+        mut self,
+        extra_build_requires: &'a ExtraBuildRequires,
+    ) -> Self {
+        self.extra_build_requires = extra_build_requires;
+        self
+    }
+
     /// Set the environment variables to be used when building a source distribution.
     #[must_use]
     pub fn with_build_extra_env_vars<I, K, V>(mut self, sdist_build_env_variables: I) -> Self

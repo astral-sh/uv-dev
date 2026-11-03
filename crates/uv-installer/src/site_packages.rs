@@ -15,7 +15,8 @@ use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
     InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
-    Requirement, RequiresPython, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    Requirement, RequirementSource, RequiresPython, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -512,6 +513,7 @@ impl SitePackages {
             }
         }
 
+        let mut runtime_builds = Vec::new();
         // Verify that all non-editable requirements are met.
         while let Some(requirement) = stack.pop() {
             let name = &requirement.name;
@@ -522,6 +524,20 @@ impl SitePackages {
                     return Ok(SatisfiesResult::Unsatisfied(requirement));
                 }
                 [distribution] => {
+                    // Runtime pins in the installed build settings refer to other members of
+                    // the active dependency graph. Check them once the traversal is complete.
+                    let build_settings = if let Some(settings) = build_settings
+                        && let Some(info) = distribution.build_info()
+                        && let Some(extras) = settings.extra_build_requires.get(name)
+                        && extras
+                            .iter()
+                            .any(|extra| extra.match_runtime && extra.requirement.source.is_empty())
+                    {
+                        runtime_builds.push((requirement.clone(), info, settings));
+                        None
+                    } else {
+                        build_settings
+                    };
                     // Requirements were filtered with the parent extras before entering the stack.
                     match RequirementSatisfaction::check(
                         name,
@@ -603,6 +619,19 @@ impl SitePackages {
                     // There are multiple installed distributions for the same package.
                     return Ok(SatisfiesResult::Unsatisfied(requirement));
                 }
+            }
+        }
+
+        for (owner, info, settings) in runtime_builds {
+            if !info.matches_with_runtime(settings.build_info(&owner.name), |pin| {
+                // Each active requirement has passed its source and freshness checks. Registry
+                // installations do not record the index, so leave their pins to the resolver.
+                !matches!(pin.source, RequirementSource::Registry { .. })
+                    && seen.iter().any(|requirement| {
+                        requirement.name == pin.name && requirement.source == pin.source
+                    })
+            }) {
+                return Ok(SatisfiesResult::Unsatisfied(owner));
             }
         }
 
