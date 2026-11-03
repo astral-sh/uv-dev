@@ -2143,8 +2143,11 @@ fn activate_fish_with_command_in_path() {
         .success();
 
     uv_snapshot!(context.external_command(fish)
-        .env(EnvVars::VIRTUAL_ENV_DISABLE_PROMPT, "1")
-        .args(["--no-config", "-c", r#"source "$argv[1]"; or exit 2; test "$VIRTUAL_ENV" = "$argv[2]""#])
+        .args(["--no-config", "-c", indoc! {r#"
+            set -g VIRTUAL_ENV_DISABLE_PROMPT 1
+            source "$argv[1]"; or exit 2
+            test "$VIRTUAL_ENV" = "$argv[2]"
+        "#}])
         .arg(venv.child("bin/activate.fish").path()).arg(venv.path()), @"exit_code: 1 (failure)");
     context
         .temp_dir
