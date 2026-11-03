@@ -41,7 +41,11 @@ def cause(result):
         return "timeout"
     if summary.get("oom_kills") or summary.get("pids_limit_hits"):
         return "resources"
-    stderr = (directory / "stderr.txt").read_text(errors="replace").lower()
+    # Verbose resolver traces also describe successful builds and network requests.
+    lines = (directory / "stderr.txt").read_text(errors="replace").splitlines()
+    stderr = "\n".join(
+        line for line in lines if not line.startswith(("DEBUG ", "TRACE "))
+    ).lower()
     if "git executable not found" in stderr:
         return "missing-tool"
     if any(
