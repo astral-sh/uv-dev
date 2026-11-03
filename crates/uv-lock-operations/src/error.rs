@@ -57,11 +57,13 @@ impl From<FrozenSource> for MissingLockfileSource {
 #[derive(thiserror::Error, DebugNoInline)]
 pub enum LockError {
     #[error(
-        "The lockfile has no locked build environments. Run `uv lock --preview-features build-dependency-locking` to record them."
+        "The lockfile has no locked build environments. \
+         Run `uv lock --preview-features build-dependency-locking` to record them."
     )]
     MissingBuildEnvironments,
     #[error(
-        "The locked build environments are out of date. Run `uv lock --preview-features build-dependency-locking` to update them."
+        "The locked build environments are out of date. \
+         Run `uv lock --preview-features build-dependency-locking` to update them."
     )]
     StaleBuildLock,
     #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
