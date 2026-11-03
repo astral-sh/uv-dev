@@ -255,6 +255,13 @@ impl<'a> BuildDispatch<'a> {
         }
     }
 
+    /// Use the flat index loaded for a fresh resolution.
+    #[must_use]
+    pub fn with_flat_index(mut self, flat_index: &'a FlatIndex) -> Self {
+        self.flat_index = flat_index;
+        self
+    }
+
     /// Use the lock's owner-specific closure for each isolated source build.
     #[must_use]
     pub fn with_build_lock(

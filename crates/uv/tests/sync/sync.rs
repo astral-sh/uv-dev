@@ -19156,6 +19156,53 @@ fn locked_build_frozen_requires_build_environments() -> Result<()> {
     Ok(())
 }
 
+/// A cold plain sync fetches the pinned build wheel without querying the flat index again.
+#[tokio::test]
+async fn locked_build_plain_sync_skips_flat_index() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    let server = MockServer::start().await;
+    let wheel = "build_dependency-1.0.0-py3-none-any.whl";
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="/{wheel}#sha256={hash}" data-upload-time="2024-01-01T00:00:00Z">{wheel}</a>"#),
+            "text/html",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{wheel}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(context.read_bytes(format!("wheels/{wheel}"))),
+        )
+        .mount(&server)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"["wheels"]"#, &format!(r#"["{}/links"]"#, server.uri())),
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--preview-features", "build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args(["--no-cache", "--no-editable"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// Updating a project in plain sync must keep its locked build policy and encoding.
 #[test]
 fn locked_build_policy_survives_sync_update() -> Result<()> {
