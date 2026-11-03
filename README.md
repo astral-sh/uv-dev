@@ -6,7 +6,7 @@ Classification: duplicate
 
 ## Summary
 
-The reporter describes a lockfile whose recorded root requirements match `pyproject.toml` while its resolved package version violates those requirements. Their public-PyPI example first locks `six==1.16.0`, then changes both the project declaration and the lockfile's `requires-dist` declaration to `six==1.17.0`, leaving the resolved package, artifacts, and hashes at 1.16.0. They report that `uv lock --locked`, `uv lock --check`, `uv sync --locked`, and an already synchronized environment's `uv sync --check` accept this state. Changing only the project declaration is the control case and correctly invalidates the lockfile.
+The reporter describes a lockfile whose recorded root requirements match `pyproject.toml` while its resolved package version violates those requirements. Their public-PyPI example first locks `six==1.16.0`, then changes both the project declaration and the lockfile's `requires-dist` declaration to `six==1.17.0`, leaving the resolved package, artifacts, and hashes at 1.16.0. They report that `uv lock --locked`, `uv lock --check`, `uv sync --locked`, and an already synchronized environment's `uv sync --check` accept this state. Changing only the project declaration is the control case and correctly invalidates the lockfile. The updated issue body says the production inconsistency was observed after Git merges: the recorded declaration required `kifv-model-serving==2.3.0rc2`, while the resolution remained at 2.2.7. This is a reporter-provided account of how the problem arose; the supplied minimal reproduction still uses explicit lockfile edits and does not demonstrate the merge sequence.
 
 The report also requests rejection of inconsistent direct dependency edges without fetching metadata, suggests parser validation as an alternative, and notes a related transitive-dependency concern. The body names uv 0.12.3 on Windows and CPython 3.13.15; the issue's version field names uv 0.13.7 dated November 3, 2026. The supplied reproduction uses ordinary registry packages and is not inherently Windows-specific. These runtime outcomes are reporter-provided; no reproduction was executed during this triage.
 
@@ -24,7 +24,7 @@ Open astral-sh/uv#12276 already tracks the same inconsistent declaration/resolut
 
 The incorrect-version acceptance is a correctness concern. Duplicate takes precedence because the same behavior and requested validation already have an open discussion. The enhancement label on astral-sh/uv#12276 and maintainer comments about unsupported manual editing do not change the symptom match.
 
-The issue was opened November 3, 2026 and currently has a bug label and no comments. The canonical report dates to March 18, 2025, reproduces on uv 0.6.7, and remains open. Its March 2026 comment explicitly extends the original exclusion-constraint example to exact pins and the same locked/check commands. The new versions and reproduction do not establish that an intervening fix regressed.
+The issue was opened November 3, 2026 and had a bug label at initial triage. The reporter's follow-up describes astral-sh/uv#12276 and three other discussions as related but not identical, without identifying an additional behavioral distinction from astral-sh/uv#12276. Review of the linked discussions does not change the duplicate classification. The canonical report dates to March 18, 2025, reproduces on uv 0.6.7, and remains open. Its March 2026 comment explicitly extends the original exclusion-constraint example to exact pins and the same locked/check commands. The new versions and reproduction do not establish that an intervening fix regressed.
 
 ## Related
 
@@ -33,6 +33,8 @@ The issue was opened November 3, 2026 and currently has a bug label and no comme
 - astral-sh/uv#18788 — issue, open: `uv lock --locked` does not detect transitive dependencies that are no longer depended on by anything. Related merge-induced lockfile inconsistency accepted by uv lock --locked. Its own reproduction concerns unreachable leftover packages rather than a version violating a specifier, but maintainers centralized the incompatible-constraint report astral-sh/uv#15445 and the transitive-version report astral-sh/uv#15378 here.
 - astral-sh/uv#21484 — issue, open: Command to verify uv.lock is legitimate. Broader integrity-verification request explicitly includes checking locked versions against pyproject.toml ranges. Comments describe altered URLs and injected dependency edges passing checks, discuss the same immutable-registry validation path, and point to astral-sh/uv#12276. It additionally seeks artifact provenance verification, beyond the proposed static specifier check.
 - astral-sh/uv#12235 — pull request, merged: Error on lockfiles with incoherent wheel versions. Historical parser validation cited in astral-sh/uv#12276, merged March 17, 2025 and released in uv 0.6.7. It rejects disagreement between a package version and wheel filename versions; it does not compare resolved versions with dependency declarations. The new reproduction keeps package and wheel versions consistent, so this fix does not establish a regression.
+
+- astral-sh/uv#18781 — issue, closed: Reject locked malware installations. Maintainers explicitly favor installing from lockfiles without querying the package index and addressed known malicious releases through OSV malware checks; a maintainer marked it done with astral-sh/uv#18936 on May 21, 2026. This supplies relevant design context for avoiding index refreshes, but malware-advisory checking does not validate a locked version against project specifiers.
 
 ## Supporting evidence
 
@@ -45,6 +47,8 @@ In astral-sh/uv#15445, the project and lockfile manifest both constrain numpy to
 The historical astral-sh/uv#12164 and astral-sh/uv#12254 concern package versions edited without corresponding wheel updates. Merged astral-sh/uv#12235 rejects that mismatch. The release discussion identifies uv 0.6.7 as containing the validation. It does not cover an internally coherent package/artifact record that contradicts its parent's declaration.
 
 In astral-sh/uv#21484, a maintainer suggests `uv lock --check --refresh --no-build` for broader integrity checking, and the reporter says it meets that use case. This does not establish that ordinary locked checks validate edited resolutions. The related astral-sh/uv#18553 concerns the opposite failure: a refreshed check rejecting an unchanged valid lockfile with workspace conflicts. It is closed and does not establish a fix or regression for this report.
+
+The reporter also points to astral-sh/uv#18781. Its maintainer discussion explains that locked installs intentionally avoid index lookups, including quarantine status checks; OSV malware queries address known malicious releases separately. This supports the relevance of an offline validation proposal, but does not establish that any particular implementation is sufficient or approved. Its completed malware work is not a fix for declaration/resolution inconsistencies.
 
 ### Current checkout
 
@@ -65,6 +69,11 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 Searches used both GitHub REST search and the gh issue/PR search and listing commands, with all-state and explicit open, closed, and merged PR queries. PR searches returned no additional relevant candidates; linked historical pull requests were inspected directly, and a recent all-state REST pull-request listing was also checked. This search does not establish that no other related work exists.
 
 astral-sh/uv#11932 was inspected because it mentions the same four commands and edited lockfiles. Its primary request is to compare the installed environment and hashes with the lockfile; its maintainer discussion explicitly distinguishes the lock namespace from environment checking and points to the wheel-version fix. It is less specific than astral-sh/uv#12276 for the new requirement-versus-resolution mismatch.
+
+The follow-up's other links were inspected and do not identify a closer duplicate or a prior fix:
+
+- astral-sh/uv#14630 — closed: support to ensure lockfile dev release matches pyproject.toml's. Although the opening report claimed an incompatible development release was retained, the discussion established that the example had changed the consuming project's own version while leaving its dependency bound unchanged. After correcting that bound, the reporter confirmed the expected upgrade and closed the issue because they could not reproduce the original claim. This is not evidence of the declaration/resolution mismatch reported here, or of a fix that later regressed.
+- astral-sh/uv#18775 — open: Alternatives for handling issues with `uv lock [--check]` and `exclude-newer`. The reported failure is rejection of a lockfile because global cooldown configuration differs between the locking workstation and the container. A follow-up says the behavior persisted on uv 0.11.15 after the related timestamp change. It requests control over configuration validation; it does not demonstrate acceptance of an incompatible resolved version.
 
 ## Handoff scope
 
