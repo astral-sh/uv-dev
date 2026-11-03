@@ -1698,15 +1698,16 @@ fn create_venv_allow_existing_symlink_bin() -> Result<()> {
     uv_fs::create_symlink(&outside, &scripts)?;
 
     uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.12"]), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: Directory link at .venv/[BIN] points outside the virtual environment
     ");
 
     assert_link_target(&scripts, dunce::simplified(outside.path()));
-    outside.child("activate").assert(predicate::path::is_file());
+    assert_eq!(fs_err::read_dir(outside.path())?.count(), 0);
     Ok(())
 }
 
@@ -1721,17 +1722,16 @@ fn create_venv_allow_existing_symlink_lib() -> Result<()> {
     symlink(&outside, context.venv.child("lib"))?;
 
     uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.9"]), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
+    error: Failed to create virtual environment
+      cause: Directory link at .venv/lib points outside the virtual environment
     ");
 
     assert_link_target(context.venv.child("lib"), &outside);
-    outside
-        .child("python3.9/site-packages/_virtualenv.pth")
-        .assert("import _virtualenv");
+    assert_eq!(fs_err::read_dir(outside.path())?.count(), 0);
     Ok(())
 }
 

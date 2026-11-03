@@ -38,6 +38,8 @@ pub enum Error {
         /// The non-UTF-8 virtual environment path.
         path: PathBuf,
     },
+    #[error("Directory link at {} points outside the virtual environment", path.user_display())]
+    DirectoryLinkOutsideEnvironment { path: PathBuf },
 }
 
 impl uv_errors::Hinted for Error {
