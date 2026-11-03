@@ -9,6 +9,7 @@ use uv_distribution::{BuildSourceTree, DistributionDatabase};
 use uv_distribution_types::{BuiltDist, Dist, Requirement, ResolvedDist, SourceDist};
 use uv_normalize::PackageName;
 use uv_resolver::{ResolverOutput, UniversalMarker};
+use uv_types::HashStrategy;
 
 use crate::{BuildDispatch, SourceBuildRequirements};
 
@@ -51,12 +52,14 @@ impl BuildDispatch<'_> {
 
     /// Discover requirements for every installable source in `graph`, including releases where
     /// the resolver used a wheel for metadata. Match extra build requirements against `runtime`.
-    /// For recursive discovery, pass the marker of the parent build and the original runtime graph.
+    /// Verify source archives with the hash strategy that resolved `graph`. For recursive
+    /// discovery, pass the marker of the parent build and the original runtime graph.
     pub async fn discover_build_requirements(
         &self,
         graph: &ResolverOutput,
         runtime: &ResolverOutput,
         scope: UniversalMarker,
+        owner_hasher: &HashStrategy,
     ) -> Result<Vec<SourceBuildRequirements>> {
         let database = DistributionDatabase::new(
             self.client,
@@ -86,7 +89,7 @@ impl BuildDispatch<'_> {
             .map(|(owner, source, marker)| {
                 let database = &database;
                 async move {
-                    let hashes = self.base_hasher.archive_policy(source.as_ref());
+                    let hashes = owner_hasher.archive_policy(source.as_ref());
                     let tree = database
                         .build_source_tree(&source, hashes)
                         .await

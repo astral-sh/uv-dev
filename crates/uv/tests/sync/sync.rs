@@ -18918,6 +18918,29 @@ fn build_hash_project() -> Result<(TestContext, String)> {
     Ok((context, build_hash))
 }
 
+/// A local project is the source being built. Only its build dependencies require hashes.
+#[test]
+fn locked_build_hashes_local_owner() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        {project}
+        build-constraint-dependencies = [
+            {{ requirement = "build-dependency==1.0.0", hashes = ["sha256:{hash}"] }},
+        ]
+    "#, project = context.read("pyproject.toml")})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--require-build-hashes", "--preview-features=build-dependency-locking,build-dependency-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
 /// A runtime-matched build requirement inherits the wheel selected by a path source.
 #[test]
 fn match_runtime_wheel_source() -> Result<()> {

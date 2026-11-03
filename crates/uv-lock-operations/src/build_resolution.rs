@@ -150,8 +150,7 @@ pub(crate) async fn resolve_builds(
     let mut builds = Vec::new();
     let mut seen = FxHashMap::default();
     let mut pending = dispatch
-        .fork(runtime_hasher)
-        .discover_build_requirements(runtime, runtime, UniversalMarker::TRUE)
+        .discover_build_requirements(runtime, runtime, UniversalMarker::TRUE, runtime_hasher)
         .await?;
     while !pending.is_empty() {
         let mut groups = BTreeMap::<_, Vec<_>>::new();
@@ -184,8 +183,7 @@ pub(crate) async fn resolve_builds(
                 );
                 pending.extend(
                     dispatch
-                        .fork(&hasher)
-                        .discover_build_requirements(&graph, runtime, scope)
+                        .discover_build_requirements(&graph, runtime, scope, &hasher)
                         .await?,
                 );
                 builds.push((owners, graph));
