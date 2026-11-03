@@ -2,10 +2,6 @@
 //! [installer][`uv_installer`] and [build frontend][`uv_build_frontend`] through [`BuildDispatch`]
 //! implementing [`BuildContext`].
 
-mod build_requirements;
-
-pub use uv_resolver::SourceBuildRequirements;
-
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
