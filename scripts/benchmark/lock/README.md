@@ -99,3 +99,24 @@ use the original seed and use the same shard on both sides. Keep each attempt
 in a separate directory. For a second interruption, supply all prior run
 directories to `resume.py` in order. The command checks their manifest hashes
 and experiment settings and retries partially written records.
+
+## Transformers native build dependencies
+
+For a separate Transformers run, gather the Debian packages for the pinned
+CPython 3.12 base image using its signed apt indexes. Use
+`apt-get --download-only --no-install-recommends install` with `pkg-config`,
+`gcc`, `libc6-dev`, `libavformat-dev`, `libavcodec-dev`, `libavdevice-dev`,
+`libavutil-dev`, `libavfilter-dev`, `libswscale-dev` and `libswresample-dev`.
+Save the downloaded packages and their hashes. Put the packages under `debs/`
+in a build context. The offline build checks that pkg-config finds all seven
+FFmpeg libraries.
+
+```sh
+docker build --network none --provenance=false -t uv-lock-transformers \
+    -f scripts/benchmark/lock/transformers.Dockerfile "$BUILD_CONTEXT"
+docker image inspect uv-lock-transformers --format '{{.Id}}'
+```
+
+Pass the resulting digest to `run.py transformers --image-id "$IMAGE_ID"`
+for both binaries. The runner verifies the image's Python minor and records
+its digest alongside the original fixture hash.

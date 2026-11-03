@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tomllib
 import uuid
@@ -45,6 +46,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", choices=[*PROJECTS, "corpus"])
     parser.add_argument("--uv", type=Path, required=True)
+    parser.add_argument(
+        "--image-id",
+        help="immutable local Docker image ID for an image with native build dependencies",
+    )
     parser.add_argument(
         "--output", type=Path, required=True, help="fresh output directory"
     )
@@ -117,6 +122,10 @@ def main():
     if args.project == "corpus":
         selector = "3.14"
     image = "python@sha256:" + PYTHONS[selector]
+    if args.image_id:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", args.image_id):
+            parser.error("--image-id requires the full sha256 digest")
+        image = args.image_id
     name = "uv-lock-" + uuid.uuid4().hex
     args.cache.mkdir(parents=True, exist_ok=True)
     if any(args.cache.iterdir()):
@@ -274,6 +283,8 @@ def main():
         "workers": args.workers if args.project == "corpus" else 1,
         "seed_sha256": file_hash(args.seed) if args.seed else None,
     }
+    if not receipt["python"].startswith(f"Python {selector}."):
+        parser.error(f"image must provide CPython {selector}")
     (args.output / "run.json").write_text(json.dumps(receipt, indent=2) + "\n")
     for key, value in env.items():
         command += ["--env", f"{key}={value}"]
