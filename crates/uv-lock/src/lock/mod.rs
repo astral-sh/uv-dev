@@ -9880,6 +9880,17 @@ enum LockErrorKind {
     FileHash(uv_client::FileHashError),
     #[error("{0}")]
     BuildGraph(String),
+    #[error(
+        "Hash mismatch for `{artifact}` of `{package}` in the build environment of `{owner}`\n  Expected: {}\n  Computed: {actual}",
+        expected.iter().format(", ")
+    )]
+    BuildArtifactHashMismatch {
+        owner: PackageId,
+        package: PackageId,
+        artifact: String,
+        expected: Vec<HashDigest>,
+        actual: HashDigest,
+    },
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

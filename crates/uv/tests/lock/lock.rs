@@ -300,6 +300,61 @@ fn lock_build_relock_verifies_flat_wheel() -> Result<()> {
     Ok(())
 }
 
+/// Locking inventories the CPython 3.9 wheel even though the metadata fetch on Python 3.12
+/// selects the universal wheel. Relocking must report the modified file and its old digest.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_relock_foreign_wheel_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.9"
+        dependencies = []
+
+        [build-system]
+        requires = ["backend==1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(project)?;
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    let name = "backend".parse()?;
+    let version = "1".parse()?;
+    let (filename, wheel) = WheelBuilder::new(&name, &version).build();
+    links.child(filename).write_binary(&wheel)?;
+    let foreign = WheelBuilder::new(&name, &version).tag("cp39-cp39-win_amd64");
+    let (filename, wheel) = foreign.build();
+    links.child(&filename).write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features=build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let (_, replacement) = foreign.files(&[("backend/data", "changed")]).build();
+    links.child(filename).write_binary(&replacement)?;
+    pyproject
+        .write_str(&project.replace("dependencies = []", r#"dependencies = ["ok==1.0.0"]"#))?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Hash mismatch for `backend-1-cp39-cp39-win_amd64.whl` of `backend==1 @ registry+links` in the build environment of `project==1 @ editable+.`
+      Expected: sha256:bdf31333eb2ece229277fde34449fe58d6b06062247da31e20566bbe077e311b
+      Computed: sha256:c1d73d201833a81f28d2d3d1fe249af9ecb6e5d774276057b3d813f84e7eba2e
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// Two owners select different wheels with the same name and version. The other owner's
 /// recorded digest cannot authorize replacement of the first wheel.
 #[cfg(feature = "test-universal")]
@@ -901,6 +956,69 @@ fn lock_separate_builds_incompatible_roots() -> Result<()> {
     DEBUG Resolved build requirements for first @ file://[TEMP_DIR]/first, third @ file://[TEMP_DIR]/third: [backend==1]
     DEBUG Resolved build requirements for second @ file://[TEMP_DIR]/second: [backend==2]
     Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Each workspace member can build independently, but the two backends require different
+/// direct URLs for the same transitive dependency.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_separate_builds_transitive_urls() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+    let base =
+        SafeUrl::from_directory_path(wheels.path()).map_err(|()| anyhow!("invalid file URL"))?;
+    let version = "1".parse()?;
+    let (first, wheel) = WheelBuilder::new(&"backend-a".parse()?, &version)
+        .requires(&[format!("ok @ {base}ok-1.0.0-py3-none-any.whl").parse()?])
+        .build();
+    wheels.child(&first).write_binary(&wheel)?;
+    let (second, wheel) = WheelBuilder::new(&"backend-b".parse()?, &version)
+        .requires(&[format!("ok @ {base}ok-2.0.0-py3-none-any.whl").parse()?])
+        .build();
+    wheels.child(&second).write_binary(&wheel)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["first", "second"]
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "first"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend-a @ {base}{first}"]
+        build-backend = "unused"
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "second"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend-b @ {base}{second}"]
+        build-backend = "unused"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features=build-dependency-locking", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
     Ok(())
 }

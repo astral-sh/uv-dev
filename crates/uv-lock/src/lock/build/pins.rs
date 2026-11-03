@@ -1,6 +1,7 @@
 //! Owner-specific versions and artifact hashes used when updating a build lock.
 
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use uv_pypi_types::HashDigest;
 use uv_resolver_types::UniversalMarker;
 use uv_types::{HashStrategy, LockedArtifactHashes};
 
-use super::{Lock, LockError, Package, PackageId, Source, error};
+use super::{Lock, LockError, LockErrorKind, Package, PackageId, Source, error};
 
 /// Previous build selections, partitioned by exact source owner and marker domain.
 #[derive(Debug, Default)]
@@ -215,32 +216,53 @@ impl Pin {
         if self.source_hash.is_none() && self.wheels.is_empty() {
             return Ok(());
         }
-        let source = package
-            .sdist
-            .iter()
-            .map(|sdist| (self.source_hash.as_ref(), sdist.hash()));
-        let wheels = package
-            .wheels
-            .iter()
-            .map(|wheel| (self.wheels.get(&wheel.filename), wheel.hash.as_ref()));
-        for (expected, actual) in source.chain(wheels) {
-            let Some(actual) = actual else {
-                return Err(error(format!(
-                    "Missing artifact hash for `{}` in the build environment of `{owner}`",
-                    package.id
-                )));
-            };
-            let matches = match expected {
-                Some(expected) => expected == actual,
-                None => self.hashes().any(|hash| hash == actual),
-            };
-            if !matches {
-                return Err(error(format!(
-                    "Artifact hash for `{}` in the build environment of `{owner}` does not match the existing lockfile: {actual}",
-                    package.id
-                )));
-            }
+        if let Some(sdist) = &package.sdist {
+            self.verify_hash(
+                owner,
+                &package.id,
+                sdist.filename().as_deref().unwrap_or("source distribution"),
+                self.source_hash.as_ref(),
+                sdist.hash(),
+            )?;
+        }
+        for wheel in &package.wheels {
+            self.verify_hash(
+                owner,
+                &package.id,
+                &wheel.filename,
+                self.wheels.get(&wheel.filename),
+                wheel.hash.as_ref(),
+            )?;
         }
         Ok(())
+    }
+
+    fn verify_hash(
+        &self,
+        owner: &PackageId,
+        package: &PackageId,
+        artifact: impl Display,
+        expected: Option<&HashDigest>,
+        actual: Option<&HashDigest>,
+    ) -> Result<(), LockError> {
+        let Some(actual) = actual else {
+            return Err(error(format!(
+                "Missing hash for `{artifact}` of `{package}` in the build environment of `{owner}`"
+            )));
+        };
+        let expected = match expected {
+            Some(expected) if expected == actual => return Ok(()),
+            Some(expected) => vec![expected.clone()],
+            None if self.hashes().any(|hash| hash == actual) => return Ok(()),
+            None => self.hashes().cloned().collect(),
+        };
+        Err(LockErrorKind::BuildArtifactHashMismatch {
+            owner: owner.clone(),
+            package: package.clone(),
+            artifact: artifact.to_string(),
+            expected,
+            actual: actual.clone(),
+        }
+        .into())
     }
 }

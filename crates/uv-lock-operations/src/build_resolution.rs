@@ -17,8 +17,7 @@ use uv_requirements::LookaheadResolver;
 use uv_resolve_operations::Error;
 use uv_resolver::{
     Exclusions, FlatIndex, InMemoryIndex, Manifest, Preference, Preferences, PythonRequirement,
-    ResolveError, Resolver, ResolverEnvironment, ResolverOutput, RuntimePreferenceMode,
-    UniversalMarker,
+    Resolver, ResolverEnvironment, ResolverOutput, RuntimePreferenceMode, UniversalMarker,
 };
 use uv_static::EnvVars;
 use uv_types::{EmptyInstalledPackages, HashStrategy};
@@ -300,12 +299,5 @@ async fn resolve_scope<T>(
 
 fn is_group_conflict(error: &Error) -> bool {
     error.as_no_solution().is_some()
-        || matches!(
-            error,
-            Error::Resolve(
-                ResolveError::ConflictingUrls { .. }
-                    | ResolveError::ConflictingIndexesForEnvironment { .. }
-                    | ResolveError::ConflictingIndexes(..)
-            )
-        )
+        || matches!(error, Error::Resolve(error) if error.is_source_conflict())
 }
