@@ -146,7 +146,7 @@ fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
         "import _virtualenv"
     );
 
-    // Regenerating the patch must replace destination links without changing their targets.
+    // Both patch files can be links to files outside the environment.
     #[cfg(unix)]
     {
         let outside_module = context.temp_dir.child("outside-module");
@@ -1883,7 +1883,7 @@ fn allow_existing_preserves_generated_file_modes() -> Result<()> {
     Ok(())
 }
 
-/// A file-size limit interrupts the activation script write before it replaces the original.
+/// A file-size limit interrupts a write to the activation script.
 #[test]
 #[cfg(target_os = "linux")]
 fn allow_existing_reports_generated_file_write_error() -> Result<()> {
