@@ -84,7 +84,7 @@ fn lock_build_inputs_editable_requires() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--no-cache").arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The locked build environments are out of date. Run `uv lock --preview-features build-dependency-locking` to update them.
+    error: The locked build environments are out of date. Run `uv lock` to update them.
     ");
 
     assert_eq!(context.read("uv.lock"), locked);
@@ -137,7 +137,7 @@ fn lock_build_inputs_extra_marker() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--find-links").arg(&links).arg("--offline").arg("--no-cache"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The locked build environments are out of date. Run `uv lock --preview-features build-dependency-locking` to update them.
+    error: The locked build environments are out of date. Run `uv lock` to update them.
     ");
     Ok(())
 }

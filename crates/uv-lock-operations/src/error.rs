@@ -61,10 +61,7 @@ pub enum LockError {
          Run `uv lock --preview-features build-dependency-locking` to record them."
     )]
     MissingBuildEnvironments,
-    #[error(
-        "The locked build environments are out of date. \
-         Run `uv lock --preview-features build-dependency-locking` to update them."
-    )]
+    #[error("The locked build environments are out of date. Run `uv lock` to update them.")]
     StaleBuildLock,
     #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
