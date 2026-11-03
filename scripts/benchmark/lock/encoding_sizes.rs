@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
+use std::time::Instant;
 
 use serde_json::{Value, json};
 use uv_lock::{BuildEncoding, Lock};
@@ -16,12 +17,24 @@ fn sizes(path: &Path) -> Result<Value, Box<dyn Error>> {
         ("package", BuildEncoding::Package),
         ("conflict-marker", BuildEncoding::ConflictMarker),
     ] {
-        let encoded = expected.clone().with_build_encoding(encoding).to_toml()?;
+        let graph = expected.clone().with_build_encoding(encoding);
+        let mut samples_ns = [0; 3];
+        let mut encoded = String::new();
+        for elapsed in &mut samples_ns {
+            let start = Instant::now();
+            let rendered = graph.to_toml()?;
+            *elapsed = start.elapsed().as_nanos();
+            encoded = rendered;
+        }
+        let mut ordered_ns = samples_ns;
+        ordered_ns.sort_unstable();
         let decoded = Lock::from_toml(&encoded)?.with_build_encoding(BuildEncoding::Dependency);
         results.push(json!({
             "encoding": name,
             "bytes": encoded.len(),
             "entries": encoded.lines().filter(|line| *line == "[[package]]").count(),
+            "serialize_ns": samples_ns,
+            "median_serialize_ns": ordered_ns[1],
             "roundtrip_equal": decoded == expected,
         }));
     }
