@@ -1446,6 +1446,13 @@ mod test {
             }
         );
 
+        // Kernels also split the interpreter path at a tab.
+        let executable = Path::new("/tab\tdir/python");
+        assert_eq!(
+            format_shebang(executable, "posix", false),
+            "#!/bin/sh\n'''exec' '/tab\tdir/python' \"$0\" \"$@\"\n' '''"
+        );
+
         // And if we want a relocatable script, we should use the `exec` trick with `dirname`.
         let executable = Path::new("python3");
         let os_name = "posix";
