@@ -49,6 +49,9 @@ pub enum ResolveError {
     #[error(transparent)]
     Distribution(#[from] uv_distribution::Error),
 
+    #[error("Failed to start resolver thread")]
+    SpawnThread(#[source] std::io::Error),
+
     #[error("The channel closed unexpectedly")]
     ChannelClosed,
 
@@ -157,7 +160,8 @@ impl ResolveError {
             | Self::MismatchedPackageName { .. } => true,
             Self::Dist(_, _, _, error) => error.is_user_failure(),
             Self::Client(error) => error.is_user_failure(),
-            Self::ChannelClosed
+            Self::SpawnThread(_)
+            | Self::ChannelClosed
             | Self::UnregisteredTask(_)
             | Self::InvalidVersion(_)
             | Self::ConflictingDistribution(_) => false,

@@ -122,6 +122,21 @@ pub struct Resolver<Provider: ResolverProvider, InstalledPackages: InstalledPack
     provider: Provider,
 }
 
+/// A root branch and its asynchronous metadata and result channels.
+struct RootFork<InstalledPackages: InstalledPackagesProvider> {
+    state: Arc<ResolverState<InstalledPackages>>,
+    requests: MetadataRequests,
+    result: oneshot::Sender<Result<ResolverOutput, ResolveError>>,
+}
+
+impl<InstalledPackages: InstalledPackagesProvider> RootFork<InstalledPackages> {
+    fn solve(self, root: State<UvDependencyProvider>) {
+        let resolution = self.state.solve(&self.requests, root);
+        // The caller can leave early on a fatal I/O error.
+        let _ = self.result.send(resolution);
+    }
+}
+
 /// State that is shared between the prefetcher and the PubGrub solver during
 /// resolution, across all forks.
 struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
@@ -258,7 +273,76 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
         provider: Provider,
         installed_packages: InstalledPackages,
     ) -> Self {
-        let state = ResolverState {
+        let state = ResolverState::new(
+            manifest,
+            options,
+            hasher,
+            env,
+            current_environment,
+            tags,
+            python_requirement,
+            conflicts,
+            index,
+            git,
+            capabilities,
+            locations,
+            installed_packages,
+        );
+        Self { state, provider }
+    }
+
+    /// Set the [`Reporter`] to use for this installer.
+    #[must_use]
+    pub fn with_reporter(self, reporter: Arc<dyn Reporter>) -> Self {
+        Self {
+            state: ResolverState {
+                reporter: Some(reporter.clone()),
+                ..self.state
+            },
+            provider: self
+                .provider
+                .with_reporter(reporter.into_distribution_reporter()),
+        }
+    }
+
+    /// Resolve a set of requirements into a set of pinned versions.
+    pub async fn resolve(self) -> Result<ResolverOutput, ResolveError> {
+        let state = Arc::new(self.state);
+
+        let output = state
+            .run(&self.provider, |job| {
+                thread::Builder::new()
+                    .name("uv-resolver".into())
+                    .spawn(move || {
+                        let root = job.state.root();
+                        job.solve(root);
+                    })
+                    .map_err(ResolveError::SpawnThread)?;
+                Ok(())
+            })
+            .await?;
+        state.on_complete();
+        Ok(output)
+    }
+}
+
+impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackages> {
+    fn new(
+        manifest: Manifest,
+        options: Options,
+        hasher: &HashStrategy,
+        env: ResolverEnvironment,
+        current_environment: &MarkerEnvironment,
+        tags: Option<Tags>,
+        python_requirement: &PythonRequirement,
+        conflicts: Conflicts,
+        index: &InMemoryIndex,
+        git: &GitResolver,
+        capabilities: &IndexCapabilities,
+        locations: &IndexLocations,
+        installed_packages: InstalledPackages,
+    ) -> Self {
+        Self {
             index: index.clone(),
             git: git.clone(),
             capabilities: capabilities.clone(),
@@ -288,65 +372,43 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             incomplete_packages: Box::default(),
             options,
             reporter: None,
-        };
-        Self { state, provider }
-    }
-
-    /// Set the [`Reporter`] to use for this installer.
-    #[must_use]
-    pub fn with_reporter(self, reporter: Arc<dyn Reporter>) -> Self {
-        Self {
-            state: ResolverState {
-                reporter: Some(reporter.clone()),
-                ..self.state
-            },
-            provider: self
-                .provider
-                .with_reporter(reporter.into_distribution_reporter()),
         }
     }
 
-    /// Resolve a set of requirements into a set of pinned versions.
-    pub async fn resolve(self) -> Result<ResolverOutput, ResolveError> {
-        let state = Arc::new(self.state);
-        let provider = Arc::new(self.provider);
-
-        // A channel to fetch package metadata (e.g., given `flask`, fetch all versions) and version
-        // metadata (e.g., given `flask==1.0.0`, fetch the metadata for that version).
-        // Channel size is set large to accommodate batch prefetching.
+    /// Drive metadata requests while the solver works through this root's requirements.
+    async fn run(
+        self: &Arc<Self>,
+        provider: &impl ResolverProvider,
+        schedule: impl FnOnce(RootFork<InstalledPackages>) -> Result<(), ResolveError>,
+    ) -> Result<ResolverOutput, ResolveError> {
         let (request_sink, request_stream) = mpsc::channel(300);
         let requests =
-            MetadataRequests::new(state.index.clone(), request_sink, state.recorder.clone());
-
-        // Run the fetcher.
-        let requests_fut = state.clone().fetch(provider.clone(), request_stream).fuse();
-
-        // Spawn the PubGrub solver on a dedicated thread.
-        let solver = state.clone();
-        let (tx, rx) = oneshot::channel();
-        thread::Builder::new()
-            .name("uv-resolver".into())
-            .spawn(move || {
-                let result = solver.solve(&requests);
-
-                // This may fail if the main thread returned early due to an error.
-                let _ = tx.send(result);
-            })
-            .unwrap();
-
-        let resolve_fut = async move { rx.await.map_err(|_| ResolveError::ChannelClosed) };
-
-        // Wait for both to complete.
-        let ((), resolution) = tokio::try_join!(requests_fut, resolve_fut)?;
-
-        state.on_complete();
+            MetadataRequests::new(self.index.clone(), request_sink, self.recorder.clone());
+        let (result, completion) = oneshot::channel();
+        schedule(RootFork {
+            state: self.clone(),
+            requests,
+            result,
+        })?;
+        let ((), resolution) = tokio::try_join!(self.fetch(provider, request_stream), async {
+            completion.await.map_err(|_| ResolveError::ChannelClosed)
+        })?;
         resolution
     }
-}
 
-impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackages> {
+    fn root(&self) -> State<UvDependencyProvider> {
+        State::init(
+            PubGrubPackageInner::Root(self.project.clone()).into(),
+            MIN_VERSION.clone(),
+        )
+    }
+
     #[instrument(skip_all)]
-    fn solve(self: Arc<Self>, requests: &MetadataRequests) -> Result<ResolverOutput, ResolveError> {
+    fn solve(
+        &self,
+        requests: &MetadataRequests,
+        pubgrub: State<UvDependencyProvider>,
+    ) -> Result<ResolverOutput, ResolveError> {
         debug!(
             "Solving with installed Python version: {}",
             self.python_requirement.exact()
@@ -361,8 +423,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         let mut visited = FxHashSet::default();
 
-        let root = PubGrubPackage::from(PubGrubPackageInner::Root(self.project.clone()));
-        let pubgrub = State::init(root.clone(), MIN_VERSION.clone());
         let prefetcher = BatchPrefetcher::new(self.capabilities.clone(), requests.clone());
         let mut state = ForkState::new(
             pubgrub,
@@ -2183,12 +2243,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Fetch the metadata for a stream of packages and versions.
     async fn fetch<Provider: ResolverProvider>(
-        self: Arc<Self>,
-        provider: Arc<Provider>,
+        &self,
+        provider: &Provider,
         request_stream: Receiver<Request>,
     ) -> Result<(), ResolveError> {
         let mut response_stream = ReceiverStream::new(request_stream)
-            .map(|request| self.process_request(request, &*provider).boxed_local())
+            .map(|request| self.process_request(request, provider).boxed_local())
             // Allow as many futures as possible to start in the background.
             // Backpressure is provided by at a more granular level by `DistributionDatabase`
             // and `SourceDispatch`, as well as the bounded request channel.
