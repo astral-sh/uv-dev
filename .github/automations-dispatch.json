@@ -53,8 +53,7 @@
         "/label/name": "bot:rebase"
       },
       "allow_draft": true,
-      "workflow": "dispatch-rebase.yml",
-      "workflow_ref": "automation/rebase"
+      "workflow": "pull-request-conflicts.yml"
     },
     {
       "repository": "uv",
@@ -65,8 +64,7 @@
         "/ref": "refs/heads/main",
         "/deleted": false
       },
-      "workflow": "dispatch-rebase.yml",
-      "workflow_ref": "automation/rebase"
+      "workflow": "pull-request-conflicts.yml"
     },
     {
       "repository": "uv",
