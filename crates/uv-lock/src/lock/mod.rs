@@ -19,6 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 
 use uv_cache_key::RepositoryUrl;
+use uv_client::FileHashError;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, DependencyModifierScope,
     DependencyModifiers, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
@@ -83,7 +84,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
-use build::BuildEncoding;
+pub use build::{BuildEncoding, BuildGraph};
 
 mod build;
 mod deserialize;
@@ -9870,6 +9871,8 @@ impl std::fmt::Display for WheelTagHint {
 enum LockErrorKind {
     #[error("{0}")]
     BuildGraph(String),
+    #[error(transparent)]
+    FileHash(#[from] FileHashError),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

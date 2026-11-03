@@ -72,6 +72,19 @@ pub struct ExtraBuildRequirement {
     pub match_runtime: bool,
 }
 
+impl ExtraBuildRequirement {
+    /// Check that a runtime-matched requirement leaves its version and source to the runtime resolver.
+    pub fn validate_runtime_source(&self) -> Result<(), ExtraBuildRequiresError> {
+        if self.match_runtime && !self.requirement.source.is_empty() {
+            return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
+                self.requirement.name.clone(),
+                Box::new(self.requirement.source.clone()),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl From<ExtraBuildRequirement> for Requirement {
     fn from(value: ExtraBuildRequirement) -> Self {
         value.requirement
@@ -104,13 +117,8 @@ impl ExtraBuildRequires {
                 let requirements = requirements
                     .into_iter()
                     .map(|mut extra| {
+                        extra.validate_runtime_source()?;
                         if extra.match_runtime {
-                            if !extra.requirement.source.is_empty() {
-                                return Err(ExtraBuildRequiresError::VersionSpecifiersNotAllowed(
-                                    extra.requirement.name.clone(),
-                                    Box::new(extra.requirement.source),
-                                ));
-                            }
                             let dist = resolution
                                 .distributions()
                                 .find(|dist| dist.name() == &extra.requirement.name)

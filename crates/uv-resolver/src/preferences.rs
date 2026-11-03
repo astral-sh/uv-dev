@@ -9,14 +9,17 @@ use uv_pep440::{Operator, Version};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
+use uv_static::EnvVars;
 
-use crate::ResolverEnvironment;
 use crate::universal_marker::UniversalMarker;
+use crate::{ResolverEnvironment, ResolverOutput};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PreferenceError {
     #[error(transparent)]
     Hash(#[from] HashError),
+    #[error("Expected `all` or `first` for UV_INTERNAL__BUILD_RUNTIME_PREFERENCES")]
+    InvalidRuntimePreferences,
 }
 
 /// A pinned requirement, as extracted from a `requirements.txt` file.
@@ -95,6 +98,31 @@ impl Preference {
         }
     }
 
+    /// Use runtime selections as soft preferences for a build resolve. Hard pins for
+    /// `match-runtime` are expressed separately as requirements.
+    pub fn from_runtime(runtime: &ResolverOutput) -> Result<Vec<Self>, PreferenceError> {
+        let first_only =
+            match std::env::var(EnvVars::UV_INTERNAL__BUILD_RUNTIME_PREFERENCES).as_deref() {
+                Ok("all") | Err(std::env::VarError::NotPresent) => false,
+                Ok("first") => true,
+                Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(PreferenceError::InvalidRuntimePreferences);
+                }
+            };
+        Ok(runtime
+            .base_dists()
+            .map(|(_, dist)| Self {
+                source: PreferenceSource::Runtime { first_only },
+                ..Self::from_locked(
+                    dist.name.clone(),
+                    dist.version.clone(),
+                    dist.index().cloned(),
+                    vec![dist.marker],
+                )
+            })
+            .collect())
+    }
+
     /// Create a [`Preference`] from an installed distribution.
     pub fn from_installed(dist: &InstalledDist) -> Option<Self> {
         let InstalledDistKind::Registry(dist) = &dist.kind else {
@@ -161,6 +189,8 @@ pub(crate) enum PreferenceSource {
     RequirementsTxt,
     /// The preference is from the current solve.
     Resolver,
+    /// A project runtime selection used as a preference in an isolated build.
+    Runtime { first_only: bool },
 }
 
 #[derive(Debug, Clone)]

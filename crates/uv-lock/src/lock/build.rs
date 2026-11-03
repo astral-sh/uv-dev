@@ -1,32 +1,39 @@
 //! Locked build environments. Universe zero denotes the runtime graph. Each subsequent
 //! universe has its own source package, marker domain and set of direct build requirements.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
+use futures::{StreamExt, TryStreamExt};
 use petgraph::Graph;
+use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
+use uv_client::RegistryClient;
 use uv_configuration::BuildOptions;
 use uv_distribution_types::{
-    Edge, FirstParty, Name, Node, Requirement, RequiresPython, Resolution, ResolvedDist,
-    SimplifiedMarkerTree, SourceDist,
+    Edge, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython, Resolution,
+    ResolvedDist, SimplifiedMarkerTree, SourceDist,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueExtra};
 use uv_platform_tags::Tags;
-use uv_resolver_types::UniversalMarker;
+use uv_pypi_types::HashDigest;
+use uv_redacted::SafeUrl;
+use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
 use super::{
-    Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind, LockWire, Package,
-    PackageId, PackageWire, RegistrySource, Source, TagPolicy, absolute_path,
+    BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
+    LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
+    SourceDist as LockedSourceDist, TagPolicy, absolute_path,
 };
 
 /// The lockfile representation of differences between resolved build environments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(super) enum BuildEncoding {
+pub enum BuildEncoding {
     ConflictMarker,
     Package,
     Dependency,
@@ -40,6 +47,14 @@ impl BuildEncoding {
             Self::Dependency => "dependency",
         }
     }
+}
+
+/// A source package's part of a possibly shared build resolution.
+pub struct BuildGraph<'a> {
+    pub owner: &'a ResolvedDist,
+    pub marker: UniversalMarker,
+    pub requirements: &'a [Requirement],
+    pub resolution: &'a ResolverOutput,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,6 +85,173 @@ fn error(reason: impl Into<String>) -> LockError {
 }
 
 impl Lock {
+    /// Attach the resolved graphs for isolated source builds to the runtime lock.
+    pub fn with_build_graphs<'a>(
+        mut self,
+        encoding: BuildEncoding,
+        graphs: impl IntoIterator<Item = BuildGraph<'a>>,
+        root: &Path,
+        indexes: &IndexLocations,
+    ) -> Result<Self, LockError> {
+        let mut universes = Vec::new();
+        let mut resolutions = FxHashMap::default();
+        for graph in graphs {
+            // Owners solved together share the same package table and artifact metadata.
+            let build = match resolutions.entry(std::ptr::from_ref(graph.resolution)) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(Self::from_resolution(
+                    graph.resolution,
+                    ResolverManifest::default(),
+                    root,
+                    Vec::new(),
+                    indexes,
+                    false,
+                )?),
+            };
+            let owner = PackageId {
+                name: graph.owner.name().clone(),
+                source: Source::from_resolved_dist(graph.owner, root)?,
+                version: graph.owner.version().cloned(),
+            };
+            let mut roots = BTreeSet::new();
+            for node in graph.resolution.graph.node_indices() {
+                if let ResolutionGraphNode::Root = graph.resolution.graph[node] {
+                    for edge in graph.resolution.graph.edges(node) {
+                        let ResolutionGraphNode::Dist(dist) =
+                            &graph.resolution.graph[edge.target()]
+                        else {
+                            continue;
+                        };
+                        for requirement in graph
+                            .requirements
+                            .iter()
+                            .filter(|req| req.name == dist.name)
+                        {
+                            // A cluster can contain the same distribution with different extras.
+                            // Activate only those named by this owner's direct requirement.
+                            let id = PackageId::from_annotated_dist(dist, root)?;
+                            if let Some(extra) = dist.kind.extra()
+                                && !requirement.extras.contains(extra)
+                            {
+                                continue;
+                            }
+                            if !Self::package_satisfies_requirement(
+                                &build.packages[build.by_id[&id].0],
+                                requirement,
+                                root,
+                            )? {
+                                continue;
+                            }
+                            let marker = edge.weight().combined().and(requirement.marker);
+                            if !marker.is_false() {
+                                roots.insert(Dependency::new(
+                                    &self.requires_python,
+                                    id,
+                                    requirement.extras.iter().cloned().collect(),
+                                    SimplifiedMarkerTree::new(&self.requires_python, marker),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let roots = roots.into_iter().collect::<Vec<_>>();
+            let packages = closure(&roots, |id| {
+                build
+                    .by_id
+                    .get(id)
+                    .map(|index| build.package(*index).clone())
+                    .ok_or_else(|| missing(id))
+            })?;
+            universes.push(Universe {
+                owner,
+                marker: graph.marker,
+                roots,
+                packages,
+            });
+        }
+        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
+        self.version = BUILD_LOCK_VERSION;
+        self.builds = Some(BuildLocks {
+            encoding,
+            universes,
+        });
+        Ok(self)
+    }
+
+    /// Hash registry artifacts whose indexes omit digests, including local `--find-links`
+    /// directories. A file referenced by several owners is read once for the whole lock.
+    pub async fn with_missing_registry_hashes(
+        mut self,
+        client: &RegistryClient,
+        root: &Path,
+        concurrency: usize,
+    ) -> Result<Self, LockError> {
+        let mut missing: FxHashMap<SafeUrl, Vec<&mut Option<HashDigest>>> = FxHashMap::default();
+        let build_packages = self
+            .builds
+            .iter_mut()
+            .flat_map(|builds| &mut builds.universes)
+            .flat_map(|universe| universe.packages.values_mut());
+        for package in self.packages.iter_mut().chain(build_packages) {
+            let Source::Registry(registry) = &package.id.source else {
+                continue;
+            };
+            if package
+                .sdist
+                .as_ref()
+                .is_some_and(|sdist| sdist.hash().is_none())
+                && let Some(SourceDist::Registry(source)) =
+                    package.to_source_dist(root, FirstParty::No)?
+                && let Some(sdist) = &mut package.sdist
+            {
+                let url = source
+                    .file
+                    .url
+                    .to_url()
+                    .map_err(LockErrorKind::InvalidUrl)?;
+                let metadata = match sdist {
+                    LockedSourceDist::Url { metadata, .. }
+                    | LockedSourceDist::Path { metadata, .. }
+                    | LockedSourceDist::Metadata { metadata } => metadata,
+                };
+                missing.entry(url).or_default().push(&mut metadata.hash);
+            }
+            for wheel in &mut package.wheels {
+                if wheel.hash.is_none() {
+                    let url = wheel
+                        .to_registry_wheel(registry, root)?
+                        .file
+                        .url
+                        .to_url()
+                        .map_err(LockErrorKind::InvalidUrl)?;
+                    missing.entry(url).or_default().push(&mut wheel.hash);
+                }
+            }
+        }
+        futures::stream::iter(missing)
+            .map(|(url, destinations)| async move {
+                let hash = client.hash_file(&url).await?;
+                for destination in destinations {
+                    *destination = Some(hash.clone());
+                }
+                Ok::<_, LockError>(())
+            })
+            .buffer_unordered(concurrency)
+            .try_collect::<()>()
+            .await?;
+        Ok(self)
+    }
+
+    /// Write the same resolved graphs using another lockfile encoding.
+    #[must_use]
+    pub fn with_build_encoding(mut self, encoding: BuildEncoding) -> Self {
+        if let Some(builds) = &mut self.builds {
+            builds.encoding = encoding;
+        }
+        self
+    }
+
     /// Whether isolated builds must use the recorded build environments.
     pub fn locks_builds(&self) -> bool {
         self.builds.is_some()
@@ -528,4 +710,153 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
         universes,
     });
     Ok(runtime)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use indoc::formatdoc;
+    use uv_configuration::{Constraints, DependencyModifiers};
+    use uv_distribution_types::Dist;
+    use uv_pypi_types::VerbatimParsedUrl;
+    use uv_resolver_types::{AnnotatedDist, Options, PackageNodeKind, PackageRole};
+
+    use super::*;
+
+    fn dist(name: &str, version: &str) -> Result<AnnotatedDist, Box<dyn Error>> {
+        let hash = if version == "1" { "1" } else { "2" }.repeat(64);
+        let seed = Lock::from_toml(&formatdoc! {r#"
+            version = 1
+            requires-python = ">=3.11"
+            [[package]]
+            name = "{name}"
+            version = "{version}"
+            source = {{ registry = "https://example.org/simple" }}
+            sdist = {{ url = "https://example.org/{name}-{version}.tar.gz", hash = "sha256:{hash}" }}
+        "#})?;
+        let source = seed.packages[0]
+            .to_source_dist(&std::env::current_dir()?, FirstParty::No)?
+            .expect("fixture sdist");
+        Ok(AnnotatedDist {
+            dist: ResolvedDist::Installable {
+                dist: Arc::new(Dist::Source(source)),
+                version: Some(version.parse()?),
+            },
+            name: name.parse()?,
+            version: version.parse()?,
+            kind: PackageNodeKind::Base,
+            role: PackageRole::Dependency,
+            marker: UniversalMarker::TRUE,
+            hashes: Vec::new().into(),
+            metadata: None,
+        })
+    }
+
+    fn requirement(spec: &str) -> Result<Requirement, Box<dyn Error>> {
+        Ok(spec
+            .parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?
+            .into())
+    }
+
+    /// Build one of two graphs which agree on C but select different versions of its dependency.
+    fn graph(direct: &str, d: &str) -> Result<ResolverOutput, Box<dyn Error>> {
+        let mut graph = Graph::new();
+        let root = graph.add_node(ResolutionGraphNode::Root);
+        let direct_node = graph.add_node(ResolutionGraphNode::Dist(dist(direct, "1")?));
+        let c = graph.add_node(ResolutionGraphNode::Dist(dist("c", "1")?));
+        let d = graph.add_node(ResolutionGraphNode::Dist(dist("d", d)?));
+        graph.add_edge(root, direct_node, UniversalMarker::TRUE);
+        graph.add_edge(root, c, UniversalMarker::TRUE);
+        graph.add_edge(direct_node, d, UniversalMarker::TRUE);
+        graph.add_edge(c, d, UniversalMarker::TRUE);
+        Ok(ResolverOutput {
+            graph,
+            requires_python: RequiresPython::from_specifiers(">=3.11".parse()?),
+            fork_markers: Vec::new(),
+            diagnostics: Vec::new(),
+            requirements: vec![requirement(direct)?, requirement("c==1")?],
+            constraints: Constraints::default(),
+            modifiers: DependencyModifiers::default(),
+            options: Options::default(),
+        })
+    }
+
+    fn round_trip(encoding: BuildEncoding) -> Result<String, Box<dyn Error>> {
+        let root = std::env::current_dir()?;
+        let _preview = uv_preview::test::with_features(&[]);
+        let runtime = graph("a", "1")?;
+        let build = graph("b", "2")?;
+        let owner = dist("a", "1")?;
+        let indexes = IndexLocations::default();
+        let lock = Lock::from_resolution(
+            &runtime,
+            ResolverManifest::default(),
+            &root,
+            vec![],
+            &indexes,
+            false,
+        )?
+        .with_build_graphs(
+            encoding,
+            [BuildGraph {
+                owner: &owner.dist,
+                marker: UniversalMarker::TRUE,
+                requirements: &build.requirements,
+                resolution: &build,
+            }],
+            &root,
+            &indexes,
+        )?;
+        let encoded = lock.to_toml()?;
+        assert!(encoded.starts_with("version = 2\n"));
+        let decoded = Lock::from_toml(&encoded)?;
+        assert_eq!(lock, decoded);
+        assert_eq!(decoded.to_toml()?, encoded);
+        let runtime_c = decoded.find_by_name(&"c".parse()?)?.expect("runtime C");
+        let build_c =
+            &decoded.builds.as_ref().expect("build lock").universes[0].packages[&runtime_c.id];
+        assert_eq!(
+            runtime_c.dependencies[0]
+                .package_id
+                .version
+                .as_ref()
+                .expect("D version")
+                .to_string(),
+            "1"
+        );
+        assert_eq!(
+            build_c.dependencies[0]
+                .package_id
+                .version
+                .as_ref()
+                .expect("D version")
+                .to_string(),
+            "2"
+        );
+        Ok(encoded)
+    }
+
+    #[test]
+    fn build_conflict_marker_round_trip() -> Result<(), Box<dyn Error>> {
+        let encoded = round_trip(BuildEncoding::ConflictMarker)?;
+        assert!(encoded.contains("extra == 'uv-build-1'"));
+        assert_eq!(encoded.matches("name = \"c\"\n").count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn build_package_universe_round_trip() -> Result<(), Box<dyn Error>> {
+        let encoded = round_trip(BuildEncoding::Package)?;
+        assert_eq!(encoded.matches("name = \"c\"\n").count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn build_dependency_universe_round_trip() -> Result<(), Box<dyn Error>> {
+        let encoded = round_trip(BuildEncoding::Dependency)?;
+        assert_eq!(encoded.matches("name = \"c\"\n").count(), 1);
+        assert!(encoded.contains("universe = [1]"));
+        Ok(())
+    }
 }

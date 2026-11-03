@@ -221,7 +221,14 @@ impl CandidateSelector {
                     let marker = entry.marker();
 
                     // Prefer preferences that match the current environment.
-                    let matches_env = env.included_by_marker(marker.pep508());
+                    let matches_env = if let PreferenceSource::Runtime { .. } = entry.source()
+                        && marker.has_conflict_marker()
+                        && let Some(fork) = env.try_universal_markers()
+                    {
+                        !fork.is_disjoint(*marker)
+                    } else {
+                        env.included_by_marker(marker.pep508())
+                    };
 
                     // Prefer the latest (or earliest) version.
                     let version = if highest {
@@ -230,14 +237,22 @@ impl CandidateSelector {
                         Either::Right(std::cmp::Reverse(entry.pin().version()))
                     };
 
-                    std::cmp::Reverse((matches_env, version))
+                    let first_runtime =
+                        entry.source() == PreferenceSource::Runtime { first_only: true };
+                    std::cmp::Reverse((first_runtime, matches_env, version))
                 });
 
-                Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
-                )
+                // Limit runtime preferences after ranking by fork and resolution mode, but
+                // before checking the package's range or wheel compatibility.
+                let mut tried_runtime = false;
+                Either::Right(preferences.into_iter().filter_map(move |entry| {
+                    if let PreferenceSource::Runtime { first_only: true } = entry.source()
+                        && std::mem::replace(&mut tried_runtime, true)
+                    {
+                        return None;
+                    }
+                    Some((entry.pin().version(), entry.source()))
+                }))
             }
         };
 
@@ -323,6 +338,7 @@ impl CandidateSelector {
                     PrereleaseSelection::PreferStable => match source {
                         PreferenceSource::Resolver => false,
                         PreferenceSource::Lock
+                        | PreferenceSource::Runtime { .. }
                         | PreferenceSource::Environment
                         | PreferenceSource::RequirementsTxt => true,
                     },
