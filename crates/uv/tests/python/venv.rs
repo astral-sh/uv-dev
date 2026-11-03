@@ -1687,6 +1687,7 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
     Ok(())
 }
 
+/// A linked scripts directory can redirect generated activation scripts outside the environment.
 #[test]
 fn create_venv_allow_existing_symlink_bin() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_virtualenv_bin();
@@ -1705,32 +1706,36 @@ fn create_venv_allow_existing_symlink_bin() -> Result<()> {
     ");
 
     assert_link_target(&scripts, dunce::simplified(outside.path()));
-    assert_ne!(fs_err::read_dir(outside.path())?.count(), 0);
+    outside.child("activate").assert(predicate::path::is_file());
     Ok(())
 }
 
+/// A linked `lib` can redirect the distutils patch that Python 3.9 needs at startup.
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python-eol"))]
 fn create_venv_allow_existing_symlink_lib() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
     context.venv.create_dir_all()?;
     let outside = context.temp_dir.child("outside");
     outside.create_dir_all()?;
     symlink(&outside, context.venv.child("lib"))?;
 
-    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.12"]), @"
+    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.9"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
 
     assert_link_target(context.venv.child("lib"), &outside);
-    assert_ne!(fs_err::read_dir(outside.path())?.count(), 0);
+    outside
+        .child("python3.9/site-packages/_virtualenv.pth")
+        .assert("import _virtualenv");
     Ok(())
 }
 
+/// A scripts directory that resolves inside the environment supports activation.
 #[test]
 fn create_venv_allow_existing_symlink_inside_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
