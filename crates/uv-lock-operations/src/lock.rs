@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{BuildEncoding, BuildGraph, GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{BuildEncoding, GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -1124,18 +1124,12 @@ async fn do_lock(
             .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(encoding) = build_encoding {
-                let graphs = resolution.builds.iter().flat_map(|build| {
-                    build.owners.iter().map(|owner| BuildGraph {
-                        owner: &owner.owner,
-                        marker: owner.marker,
-                        backend_requirements: owner.backend_requirements(),
-                        requirements: &owner.requirements,
-                        resolution: &build.graph,
-                    })
-                });
                 lock.with_build_graphs(
                     encoding,
-                    graphs,
+                    resolution
+                        .builds
+                        .iter()
+                        .map(|build| (build.owners.as_slice(), &build.graph)),
                     target.install_path(),
                     index_locations,
                     &extra_build_requires,
