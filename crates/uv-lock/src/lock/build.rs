@@ -1,7 +1,6 @@
 //! Locked build environments. Universe zero denotes the runtime graph. Each subsequent
 //! universe has its own source package, marker domain and set of direct build requirements.
 
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
@@ -24,7 +23,9 @@ use uv_pep508::{
 };
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
-use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
+use uv_resolver_types::{
+    ResolutionGraphNode, ResolverOutput, SourceBuildRequirements, UniversalMarker,
+};
 
 use super::build_inputs::BuildInput;
 use super::{
@@ -50,16 +51,6 @@ impl BuildEncoding {
             Self::Dependency => "dependency",
         }
     }
-}
-
-/// A source package's part of a possibly shared build resolution.
-pub struct BuildGraph<'a> {
-    pub owner: &'a ResolvedDist,
-    pub marker: UniversalMarker,
-    pub requirements: &'a [Requirement],
-    /// The backend-declared prefix of the roots, before any extra build dependencies.
-    pub backend_requirements: &'a [Requirement],
-    pub resolution: &'a ResolverOutput,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,70 +138,89 @@ impl Lock {
     pub fn with_build_graphs<'a>(
         mut self,
         encoding: BuildEncoding,
-        graphs: impl IntoIterator<Item = BuildGraph<'a>>,
+        groups: impl IntoIterator<Item = (&'a [SourceBuildRequirements], &'a ResolverOutput)>,
         root: &Path,
         indexes: &IndexLocations,
         extras: &ExtraBuildRequires,
     ) -> Result<Self, LockError> {
         let mut universes = Vec::new();
-        let mut resolutions = FxHashMap::default();
-        for graph in graphs {
-            // Owners solved together share the same package table and artifact metadata.
-            let build = match resolutions.entry(std::ptr::from_ref(graph.resolution)) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => entry.insert(Self::from_resolution(
-                    graph.resolution,
-                    ResolverManifest::default(),
-                    root,
-                    Vec::new(),
-                    indexes,
-                    false,
-                )?),
-            };
+        for (owners, resolution) in groups {
+            self.append_build_group(owners, resolution, root, indexes, extras, &mut universes)?;
+        }
+        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
+        self.version = BUILD_LOCK_VERSION;
+        self.builds = Some(BuildLocks {
+            encoding,
+            universes,
+        });
+        Ok(self)
+    }
+
+    fn append_build_group(
+        &self,
+        owners: &[SourceBuildRequirements],
+        resolution: &ResolverOutput,
+        root: &Path,
+        indexes: &IndexLocations,
+        extras: &ExtraBuildRequires,
+        universes: &mut Vec<Universe>,
+    ) -> Result<(), LockError> {
+        if owners.is_empty() {
+            return Ok(());
+        }
+        let build = Self::from_resolution(
+            resolution,
+            ResolverManifest::default(),
+            root,
+            Vec::new(),
+            indexes,
+            false,
+        )?;
+        let root_edges: Vec<_> = resolution
+            .graph
+            .node_indices()
+            .filter(|&index| matches!(resolution.graph[index], ResolutionGraphNode::Root))
+            .flat_map(|index| resolution.graph.edges(index))
+            .collect();
+        for declaration in owners {
             let owner = PackageId {
-                name: graph.owner.name().clone(),
-                source: Source::from_resolved_dist(graph.owner, root)?,
-                version: graph.owner.version().cloned(),
+                name: declaration.owner.name().clone(),
+                source: Source::from_resolved_dist(&declaration.owner, root)?,
+                version: declaration.owner.version().cloned(),
             };
             let mut roots = BTreeSet::new();
-            for node in graph.resolution.graph.node_indices() {
-                if let ResolutionGraphNode::Root = graph.resolution.graph[node] {
-                    for edge in graph.resolution.graph.edges(node) {
-                        let ResolutionGraphNode::Dist(dist) =
-                            &graph.resolution.graph[edge.target()]
-                        else {
-                            continue;
-                        };
-                        for requirement in graph
-                            .requirements
-                            .iter()
-                            .filter(|req| req.name == dist.name)
-                        {
-                            // A cluster can contain the same distribution with different extras.
-                            // Activate only those named by this owner's direct requirement.
-                            let id = PackageId::from_annotated_dist(dist, root)?;
-                            if let Some(extra) = dist.kind.extra()
-                                && !requirement.extras.contains(extra)
-                            {
-                                continue;
-                            }
-                            if !Self::package_satisfies_requirement(
-                                &build.packages[build.by_id[&id].0],
-                                requirement,
-                                root,
-                            )? {
-                                continue;
-                            }
-                            let marker = edge.weight().combined().and(requirement.marker);
-                            if !marker.is_false() {
-                                roots.insert(Dependency::new(
-                                    &self.requires_python,
-                                    id,
-                                    requirement.extras.iter().cloned().collect(),
-                                    SimplifiedMarkerTree::new(&self.requires_python, marker),
-                                ));
-                            }
-                        }
+            for edge in &root_edges {
+                let ResolutionGraphNode::Dist(dist) = &resolution.graph[edge.target()] else {
+                    continue;
+                };
+                for requirement in declaration
+                    .requirements
+                    .iter()
+                    .filter(|req| req.name == dist.name)
+                {
+                    // A cluster can contain the same distribution with different extras.
+                    // Activate only those named by this owner's direct requirement.
+                    let id = PackageId::from_annotated_dist(dist, root)?;
+                    if let Some(extra) = dist.kind.extra()
+                        && !requirement.extras.contains(extra)
+                    {
+                        continue;
+                    }
+                    if !Self::package_satisfies_requirement(
+                        &build.packages[build.by_id[&id].0],
+                        requirement,
+                        root,
+                    )? {
+                        continue;
+                    }
+                    let marker = edge.weight().combined().and(requirement.marker);
+                    if !marker.is_false() {
+                        roots.insert(Dependency::new(
+                            &self.requires_python,
+                            id,
+                            requirement.extras.iter().cloned().collect(),
+                            SimplifiedMarkerTree::new(&self.requires_python, marker),
+                        ));
                     }
                 }
             }
@@ -223,7 +233,7 @@ impl Lock {
                     .ok_or_else(|| missing(id))
             })?;
             let backend = if owner.source.mutable_build_directory().is_some() {
-                graph.backend_requirements
+                declaration.backend_requirements()
             } else {
                 &[]
             };
@@ -241,18 +251,12 @@ impl Lock {
                 ordinary_owner: None,
                 inputs: Some(inputs),
                 owner,
-                marker: graph.marker,
+                marker: declaration.marker,
                 roots,
                 packages,
             });
         }
-        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
-        self.version = BUILD_LOCK_VERSION;
-        self.builds = Some(BuildLocks {
-            encoding,
-            universes,
-        });
-        Ok(self)
+        Ok(())
     }
 
     /// Hash registry artifacts whose indexes omit digests, including local `--find-links`
@@ -1248,6 +1252,12 @@ mod tests {
         let runtime = graph("a", "1")?;
         let owner = dist("a", "1")?;
         let indexes = IndexLocations::default();
+        let owners = runtime.match_build_requirements(
+            &owner.dist,
+            UniversalMarker::TRUE,
+            roots.to_vec(),
+            &[],
+        )?;
         let lock = Lock::from_resolution(
             &runtime,
             ResolverManifest::default(),
@@ -1258,13 +1268,7 @@ mod tests {
         )?
         .with_build_graphs(
             encoding,
-            [BuildGraph {
-                owner: &owner.dist,
-                marker: UniversalMarker::TRUE,
-                backend_requirements: roots,
-                requirements: roots,
-                resolution: build,
-            }],
+            [(owners.as_slice(), build)],
             &root,
             &indexes,
             &ExtraBuildRequires::default(),

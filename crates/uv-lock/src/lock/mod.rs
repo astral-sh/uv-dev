@@ -85,7 +85,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
-pub use build::{BuildEncoding, BuildGraph};
+pub use build::BuildEncoding;
 
 mod build;
 mod build_inputs;
