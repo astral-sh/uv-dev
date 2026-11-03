@@ -74,7 +74,7 @@ impl BuildConstraintHashes {
     }
 
     /// Limit a build owner's scope to regions with a single trusted hash policy.
-    pub fn for_scope(
+    pub(crate) fn for_scope(
         &self,
         scope: UniversalMarker,
     ) -> impl Iterator<Item = (UniversalMarker, &HashStrategy)> {
