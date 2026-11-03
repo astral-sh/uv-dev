@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9988,
+        "title": "Dependency Resolver Ignores Platform-Specific Version Constraints",
+        "url": "https://github.com/astral-sh/uv/issues/9988",
+        "state": "closed",
+        "reason": "Closest match: a macOS Intel-only upper bound selects an older package across other platforms despite looser requirements there. Maintainers discuss disjoint version constraints. Its required-environments workaround concerns wheel-only packages and does not guarantee compatible wheels for NumPy, which publishes source distributions."
+      },
+      {
+        "kind": "issue",
+        "number": 9515,
+        "title": "Specifying different dependency versions for different platforms",
+        "url": "https://github.com/astral-sh/uv/issues/9515",
+        "state": "closed",
+        "reason": "Predecessor to astral-sh/uv#9988 with the same overlapping platform-specific ranges. A maintainer explicitly confirms that uv reuses the older version when it satisfies both ranges and recommends disjoint bounds to require different versions."
+      },
+      {
+        "kind": "issue",
+        "number": 14588,
+        "title": "New `--fork-strategy` option to prioritize the latest version for each Python implementation",
+        "url": "https://github.com/astral-sh/uv/issues/14588",
+        "state": "open",
+        "reason": "Adjacent request for independently selecting newer versions instead of sharing an older version across environments. It concerns CPython versus PyPy, whereas this report concerns operating-system/architecture branches and a transitive NumPy constraint."
+      },
+      {
+        "kind": "issue",
+        "number": 8492,
+        "title": "Fork when wheels only support a specific range",
+        "url": "https://github.com/astral-sh/uv/issues/8492",
+        "state": "closed",
+        "reason": "Historical NumPy source-build symptom on newer Python when older-Python support held back dependency versions. Closed by astral-sh/uv#9827; the implemented fix splits on Requires-Python lower bounds, unlike this report's platform-driven version reuse."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9827,
+        "title": "Fork version selection based on `requires-python` requirements",
+        "url": "https://github.com/astral-sh/uv/pull/9827",
+        "state": "merged",
+        "reason": "Merged December 13, 2024, fixing astral-sh/uv#8492 by forking when newer releases raise their Python minimum. It does not implement independent latest-version selection for every platform or infer Python upper compatibility from missing wheels; this report does not establish a regression of that fix."
+      }
+    ],
+    "search_scope": "Authenticated gh searches covered open and closed issues and open, closed, and merged pull requests. Literal searches included NumPy/Python 3.14, NumPy 2.2.6, Numba, Darwin, no-build, and the 'marked as --no-build'/'no binary distribution' error fragments. Separate conceptual searches covered platform markers, overlapping constraints, universal resolution, cross-fork preferences, fork-strategy, latest-per-platform selection, and wheel versus source fallback; fix-oriented searches covered Requires-Python forking and newer-Python wheel selection. PR searches returned no matches, so linked PRs were inspected directly, including astral-sh/uv#8686, astral-sh/uv#9827, and astral-sh/uv#14041. Followed maintainer comments and reference chains through astral-sh/uv#9515, astral-sh/uv#9988, and astral-sh/uv#9711. Ruled out astral-sh/uv#17649 and astral-sh/uv#12060 as different backtracking-priority cases, astral-sh/uv#20999 as explicit-environments ordering, and astral-sh/uv#19911 as missing index Requires-Python metadata. Checked the reported napari revision, attached log, repository documentation, and resolver source."
+  },
+  "type": "duplicate",
+  "type_reason": "The platform-specific upper bound holding other platforms to an older shared version is already discussed in astral-sh/uv#9988 and astral-sh/uv#9515. The supplied log confirms macOS Intel resolves first and NumPy 2.2.6 is subsequently selected as a preference elsewhere. Python 3.14 exposes the missing-wheel consequence of that same behavior. The historical fix in astral-sh/uv#9827 addresses Requires-Python lower-bound splitting, so the evidence does not establish a previously fixed bug returning.",
+  "summary": "astral-sh/uv#9988 and astral-sh/uv#9515 cover the same cross-platform version reuse. astral-sh/uv#14588 requests adjacent selection controls; astral-sh/uv#8492 and astral-sh/uv#9827 explain the distinct historical Python-version fix.",
+  "draft_response": "Your log shows the macOS Intel branch selecting Numba 0.61.2, which requires NumPy <2.3, then reusing NumPy 2.2.6 as a preference on other platforms. This matches the behavior discussed in astral-sh/uv#9988 and astral-sh/uv#9515: overlapping platform-specific ranges can share an older version.\n\nThe default strategy minimizes version differences across platforms. A missing wheel does not itself force an upgrade when a source distribution exists, and --python 3.14 selects the interpreter without restricting universal resolution to that environment. Your attached run ends with --no-build rejecting NumPy 2.2.6.\n\nTo require newer versions elsewhere, add platform/Python-specific lower bounds that exclude the older NumPy and Numba releases, then regenerate the lockfile. Please continue the per-platform version-selection discussion in astral-sh/uv#9988."
+}
