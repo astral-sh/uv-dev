@@ -16733,9 +16733,11 @@ fn reject_unmatched_runtime() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `source-distribution==0.0.3`
-      cause: Extra build requirement `iniconfig` was declared with `match-runtime = true`, but `source-distribution` does not declare static metadata, making runtime-matching impossible
+      cause: Extra build requirement `iniconfig` for `source-distribution` uses `match-runtime = true`, but no runtime selection is available
 
     hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
+
+    hint: If uv needs to build `source-distribution` for metadata before resolving `iniconfig`, provide static metadata or pin the build requirement without `match-runtime`.
     ");
 
     Ok(())
