@@ -4033,6 +4033,7 @@ fn preview_features() {
     +            BuildDependencyCheck,
     +            BuildLazyImports,
     +            BuildDependencyHashes,
+    +            BuildDependencyLocking,
     +            WheelVariants,
     +        ],
          },
