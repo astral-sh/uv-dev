@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt, stream};
@@ -106,9 +107,18 @@ impl BuildDispatch<'_> {
                     let backend = self
                         .static_build_requirements(&tree, &owner.name, sources)
                         .await?;
+                    // A registry wheel can supply runtime metadata for the same sdist that a
+                    // build resolution selects directly. Both builds belong to that sdist.
+                    let source_owner = match source {
+                        Cow::Borrowed(_) => &owner.dist,
+                        Cow::Owned(source) => &ResolvedDist::Installable {
+                            dist: Arc::new(Dist::Source(source)),
+                            version: owner.dist.version().cloned(),
+                        },
+                    };
                     runtime
                         .match_build_requirements(
-                            &owner.dist,
+                            source_owner,
                             marker,
                             backend,
                             self.extra_build_requires
