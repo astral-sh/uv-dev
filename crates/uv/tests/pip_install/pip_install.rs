@@ -267,7 +267,7 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
-/// Both launcher formats must pass a tab through the POSIX shell wrapper to Python.
+/// POSIX kernels split a direct shebang at a tab in either kind of wheel launcher.
 #[test]
 #[cfg(unix)]
 fn install_scripts_in_tab_path() -> Result<()> {
@@ -281,8 +281,7 @@ fn install_scripts_in_tab_path() -> Result<()> {
         .build();
     fs::write(context.temp_dir.join(&filename), wheel)?;
 
-    // The space forces the wrapper regardless of the runner's temporary-directory path.
-    let venv = context.temp_dir.join("tab\tdir with space");
+    let venv = context.temp_dir.join("tab\tdir");
     context.venv().arg(&venv).assert().success();
     context
         .pip_install()
@@ -293,16 +292,14 @@ fn install_scripts_in_tab_path() -> Result<()> {
         .success();
 
     let bin = venv_bin_path(&venv);
-    uv_snapshot!(context.external_command(bin.join("tab-probe")), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello from tab-probe!
-    ");
-    uv_snapshot!(context.external_command(bin.join("wheel-script")), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    wheel script
-    ");
+    let entry_point = context.external_command(bin.join("tab-probe")).output();
+    let wheel_script = context.external_command(bin.join("wheel-script")).output();
+
+    entry_point?
+        .assert()
+        .success()
+        .stdout("Hello from tab-probe!\n");
+    wheel_script?.assert().success().stdout("wheel script\n");
     Ok(())
 }
 
