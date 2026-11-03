@@ -885,7 +885,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
             }
         }
 
-        Ok(Resolution::new(petgraph))
+        Ok(Resolution::new(petgraph).with_activated_conflicts(activated.into_sorted_extras()))
     }
 }
 

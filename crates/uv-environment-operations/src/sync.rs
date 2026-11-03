@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
+use uv_cache_key::cache_digest;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
@@ -15,8 +16,9 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
+use uv_normalize::ExtraName;
 use uv_pep508::{MarkerTree, VersionOrUrl};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
@@ -216,10 +218,27 @@ pub async fn sync_from_lock(
     let resolution = apply_editable_mode(resolution, editable);
 
     // Constrain any build requirements marked as `match-runtime = true`.
-    let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
+    let mut extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
+    if target.lock().locks_builds() {
+        let lock = target.lock().to_toml().map_err(anyhow::Error::from)?;
+        let environment = format!(
+            "{:?} {tags} {build_options:?}",
+            venv.interpreter().markers()
+        );
+        let conflicts = resolution
+            .activated_conflicts()
+            .iter()
+            .map(ExtraName::as_str)
+            .collect::<Vec<_>>();
+        extra_build_requires.set_locked_environment(cache_digest(&(lock, environment, conflicts)));
+    }
 
     // Extract the hashes from the lockfile.
-    let hasher = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
+    let hasher = if target.lock().locks_builds() {
+        HashStrategy::from_locked_resolution(&resolution)?
+    } else {
+        HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?
+    };
 
     // Populate credentials from the target.
     store_credentials_from_target(target, &client_builder)?;
@@ -299,7 +318,11 @@ pub async fn sync_from_lock(
         .with_constraint_hashes(&build_hasher)?;
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = if target.lock().locks_builds() {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, cache, index_locations).await?
+    };
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -326,7 +349,11 @@ pub async fn sync_from_lock(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_locked_build_dependencies(
+        target.lock().locks_builds() || preview.is_enabled(PreviewFeature::BuildDependencyLocking),
+    )
+    .with_build_lock(target.lock(), target.install_path(), Some(&resolution));
 
     // Run a malware check against OSV before installing.
     maybe_check_malware(

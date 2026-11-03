@@ -31,6 +31,7 @@ use uv_distribution_types::{
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
+use uv_lock::Lock;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -168,7 +169,10 @@ pub struct BuildDispatch<'a> {
     config_settings: &'a ConfigSettings,
     config_settings_package: &'a PackageConfigSettings,
     base_hasher: &'a HashStrategy,
+    build_lock: Option<(&'a Lock, &'a Path, Option<&'a Resolution>)>,
+    build_owner: Option<&'a SourceDist>,
     build_hash_checking: HashCheckingMode,
+    lock_build_dependencies: bool,
     exclude_newer: ExcludeNewer,
     source_build_context: SourceBuildContext,
     build_extra_env_vars: FxHashMap<OsString, OsString>,
@@ -226,6 +230,9 @@ impl<'a> BuildDispatch<'a> {
             link_mode,
             build_options,
             base_hasher: hasher,
+            lock_build_dependencies: false,
+            build_lock: None,
+            build_owner: None,
             build_hash_checking: match hasher.verification() {
                 HashVerification::Required(_) => HashCheckingMode::Require,
                 HashVerification::Unspecified | HashVerification::IfPresent(_) => {
@@ -242,6 +249,25 @@ impl<'a> BuildDispatch<'a> {
             preview,
             tar_backend: TarBackend::from_env(),
         }
+    }
+
+    /// Use the lock's owner-specific closure for each isolated source build.
+    #[must_use]
+    pub fn with_build_lock(
+        mut self,
+        lock: &'a Lock,
+        root: &'a Path,
+        runtime: Option<&'a Resolution>,
+    ) -> Self {
+        if lock.locks_builds() {
+            self.shared_state = SharedState {
+                build_arena: BuildArena::default(),
+                ..self.shared_state.fork()
+            };
+            self.lock_build_dependencies = true;
+            self.build_lock = Some((lock, root, runtime));
+        }
+        self
     }
 
     /// Fork the dispatch with a different hash strategy.
@@ -290,6 +316,13 @@ impl<'a> BuildDispatch<'a> {
     fn require_build_hashes(&self) -> bool {
         self.build_hash_checking.is_require()
     }
+
+    /// Require builds for this project resolution or installation to use locked dependencies.
+    #[must_use]
+    pub fn with_locked_build_dependencies(mut self, enabled: bool) -> Self {
+        self.lock_build_dependencies = enabled;
+        self
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -298,6 +331,10 @@ impl BuildContext for BuildDispatch<'_> {
 
     fn tar_backend(&self) -> TarBackend {
         self.tar_backend
+    }
+
+    fn lock_build_dependencies(&self) -> bool {
+        self.lock_build_dependencies
     }
 
     fn interpreter(&self) -> impl Future<Output = &Interpreter> + '_ {
@@ -370,6 +407,25 @@ impl BuildContext for BuildDispatch<'_> {
         hash_override: Option<&'data HashStrategy>,
         build_stack: &'data BuildStack,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
+        if let Some((lock, root, runtime)) = self.build_lock {
+            let owner = self
+                .build_owner
+                .ok_or_else(|| anyhow::anyhow!("Missing source package for locked build"))?;
+            let resolution = lock
+                .resolve_build(
+                    owner,
+                    runtime,
+                    requirements,
+                    root,
+                    &self.interpreter.to_resolver_marker_environment(),
+                    self.interpreter.tags()?,
+                    self.build_options,
+                )
+                .map_err(anyhow::Error::from)?;
+            let hasher =
+                HashStrategy::from_locked_resolution(&resolution).map_err(anyhow::Error::from)?;
+            return Ok(ResolvedRequirements::new(resolution, hasher));
+        }
         let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
         let marker_env = self.interpreter.to_resolver_marker_environment();
         let resolver_env = ResolverEnvironment::specific(marker_env);
@@ -634,6 +690,20 @@ impl BuildContext for BuildDispatch<'_> {
             }
         }
 
+        // The default backend resolution is shared only among builds with the same pins.
+        let scoped;
+        let context = if self.build_lock.is_some() {
+            scoped = BuildDispatch {
+                build_owner: dist,
+                source_build_context: SourceBuildContext::new(
+                    self.concurrency.builds_semaphore.clone(),
+                ),
+                ..self.clone()
+            };
+            &scoped
+        } else {
+            self
+        };
         let builder = SourceBuild::setup(
             source,
             subdirectory,
@@ -642,8 +712,8 @@ impl BuildContext for BuildDispatch<'_> {
             dist_name,
             dist_version,
             self.interpreter,
-            self,
-            self.source_build_context.clone(),
+            context,
+            context.source_build_context.clone(),
             version_id,
             self.index_locations,
             sources.clone(),
@@ -671,6 +741,9 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
+        if self.build_lock.is_some() {
+            return Ok(None);
+        }
         let source_tree = if let Some(subdir) = subdirectory {
             source.join(subdir)
         } else {

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use either::Either;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use toml_edit::Value;
@@ -10,6 +11,7 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
+use super::build::{EncodedPackage, Section};
 use super::{
     Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
     PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
@@ -107,26 +109,58 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         writer.raw("]\n");
     }
 
+    if let Some(builds) = &lock.builds {
+        writer.key_value("build-encoding", builds.encoding.name())?;
+    }
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
 
-    // Count the number of packages for each package name. When there's only one package for a
-    // particular package name (the overwhelmingly common case), we can omit some data (like
-    // source and version) on dependency edges since it is strictly redundant.
+    let encoded = lock.builds.as_ref().map(|builds| builds.packages(lock));
+    let packages = match encoded.as_ref() {
+        Some(rows) => Either::Left(rows.iter().map(|row| (&row.package, Some(row)))),
+        None => Either::Right(lock.packages.iter().map(|package| (package, None))),
+    };
+
     let mut dist_count_by_name: FxHashMap<PackageName, u64> = FxHashMap::default();
-    for package in &lock.packages {
+    for (package, _) in packages.clone() {
         *dist_count_by_name
             .entry(package.id.name.clone())
             .or_default() += 1;
     }
-
-    for package in &lock.packages {
+    if let Some(builds) = &lock.builds {
+        for universe in &builds.universes {
+            writer.array_of_tables(&["build-universes"])?;
+            writer.key_start("owner")?;
+            let mut first = true;
+            writer.start_inline_table();
+            write_package_id(
+                writer,
+                &universe.owner,
+                None,
+                PackageIdLocation::Inline(&mut first),
+            )?;
+            writer.finish_inline_table(first);
+            writer.raw("\n");
+            if let Some(marker) = universe.marker.combined().try_to_string() {
+                writer.key_value("marker", &marker)?;
+            }
+            writer.key_multiline_array("roots", &universe.roots, |writer, dep| {
+                write_dependency_inline(writer, dep, MarkerTree::TRUE, &dist_count_by_name, None)
+            })?;
+        }
+    }
+    for (package, scope) in packages {
         write_package(
             writer,
             package,
             &lock.requires_python,
-            simplified_environment,
+            if scope.is_some() {
+                MarkerTree::TRUE
+            } else {
+                simplified_environment
+            },
             &dist_count_by_name,
+            scope,
         )?;
     }
 
@@ -282,8 +316,17 @@ fn write_package(
     requires_python: &RequiresPython,
     simplified_environment: MarkerTree,
     dist_count_by_name: &FxHashMap<PackageName, u64>,
+    scope: Option<&EncodedPackage>,
 ) -> Result<(), WriteError> {
     writer.array_of_tables(&["package"])?;
+    if let Some(scope) = scope {
+        if scope.build_only {
+            writer.key_value("build-only", true)?;
+        }
+        if !scope.universes.is_empty() {
+            writer.key_value("universe", serialize_value(&scope.universes)?)?;
+        }
+    }
     write_package_id(writer, &package.id, None, PackageIdLocation::Table)?;
     if let Some(groups) = &package.default_groups {
         writer.key_value("default-groups", serialize_value(groups)?)?;
@@ -308,6 +351,7 @@ fn write_package(
                     dependency,
                     simplified_environment,
                     dist_count_by_name,
+                    scope.and_then(|row| row.edges.get(&(Section::Production, dependency.clone()))),
                 )
             },
         )?;
@@ -337,6 +381,10 @@ fn write_package(
                     dependency,
                     simplified_environment,
                     dist_count_by_name,
+                    scope.and_then(|row| {
+                        row.edges
+                            .get(&(Section::Extra(extra.clone()), dependency.clone()))
+                    }),
                 )
             })?;
         }
@@ -356,6 +404,10 @@ fn write_package(
                     dependency,
                     simplified_environment,
                     dist_count_by_name,
+                    scope.and_then(|row| {
+                        row.edges
+                            .get(&(Section::Group(group.clone()), dependency.clone()))
+                    }),
                 )
             })?;
         }
@@ -568,6 +620,7 @@ fn write_dependency_inline(
     dependency: &Dependency,
     simplified_environment: MarkerTree,
     dist_count_by_name: &FxHashMap<PackageName, u64>,
+    universes: Option<&Vec<usize>>,
 ) -> Result<(), WriteError> {
     let mut first = true;
     writer.start_inline_table();
@@ -579,6 +632,9 @@ fn write_dependency_inline(
         PackageIdLocation::Inline(&mut first),
     )?;
 
+    if let Some(universes) = universes {
+        writer.inline_value(&mut first, "universe", serialize_value(universes)?)?;
+    }
     if !dependency.extra.is_empty() {
         writer.inline_key_start(&mut first, "extra")?;
         writer.array(&dependency.extra, |writer, extra| {

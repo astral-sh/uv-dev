@@ -15,6 +15,7 @@ use crate::{
 pub struct Resolution {
     graph: petgraph::graph::DiGraph<Node, Edge>,
     diagnostics: Vec<ResolutionDiagnostic>,
+    activated_conflicts: Vec<ExtraName>,
 }
 
 impl Resolution {
@@ -23,7 +24,21 @@ impl Resolution {
         Self {
             graph,
             diagnostics: Vec::new(),
+            activated_conflicts: Vec::new(),
         }
+    }
+
+    /// Record the encoded conflict items selected during lockfile traversal.
+    #[must_use]
+    pub fn with_activated_conflicts(mut self, activated: Vec<ExtraName>) -> Self {
+        self.activated_conflicts = activated;
+        self
+    }
+
+    /// The projects, extras, and groups activated in this concrete runtime resolution, encoded
+    /// as PEP 508 extras for evaluating conflict markers.
+    pub fn activated_conflicts(&self) -> &[ExtraName] {
+        &self.activated_conflicts
     }
 
     /// Return the underlying graph of the resolution.

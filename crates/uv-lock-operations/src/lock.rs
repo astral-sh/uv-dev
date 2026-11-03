@@ -166,7 +166,15 @@ impl<'env> LockOperation<'env> {
         match self.mode {
             LockMode::Frozen(source) => {
                 // Read the existing lockfile, but don't attempt to lock the project.
-                Ok(LockResult::Unchanged(target.read_frozen(source).await?))
+                let lock = target.read_frozen(source).await?;
+                if self
+                    .preview
+                    .is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !lock.locks_builds()
+                {
+                    return Err(LockError::MissingBuildEnvironments);
+                }
+                Ok(LockResult::Unchanged(lock))
             }
             LockMode::Locked(interpreter, lock_source) => {
                 // Read the existing lockfile.
@@ -178,6 +186,13 @@ impl<'env> LockOperation<'env> {
                     ));
                 };
 
+                if self
+                    .preview
+                    .is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !existing.locks_builds()
+                {
+                    return Err(LockError::MissingBuildEnvironments);
+                }
                 if self.preview.is_enabled(PreviewFeature::LockfileFormatCheck)
                     && let Some(line) = find_lock_format_error(&existing_contents)
                 {
@@ -708,7 +723,13 @@ async fn do_lock(
     let groups = BTreeMap::new();
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let check_locked_builds = matches!(mode, LockMode::Locked(_, _))
+        && existing_lock.as_ref().is_some_and(Lock::locks_builds);
+    let flat_index = if check_locked_builds {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, cache, index_locations).await?
+    };
 
     // Lower the extra build dependencies.
     let extra_build_requires = match &target {
@@ -764,11 +785,19 @@ async fn do_lock(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
+        let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
+        let validation_build_dispatch = match &snapshot {
+            Some(lock) => {
+                validation_build_dispatch.with_build_lock(lock, target.install_path(), None)
+            }
+            None => validation_build_dispatch,
+        };
         let database = DistributionDatabase::new(
             &client,
             &validation_build_dispatch,
@@ -807,7 +836,16 @@ async fn do_lock(
         ))
         .await
         {
+            Ok(ValidatedLock::Satisfies(lock))
+                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !lock.locks_builds() =>
+            {
+                Some(ValidatedLock::Versions(lock))
+            }
+            Ok(ValidatedLock::Satisfies(lock)) => Some(ValidatedLock::Satisfies(lock)),
+            Ok(_) if check_locked_builds => return Err(LockError::StaleBuildLock),
             Ok(result) => Some(result),
+            Err(err) if check_locked_builds => return Err(anyhow::Error::from(err).into()),
             Err(LockValidationError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
                 // Resolver errors are not recoverable, as such errors can leave the resolver in a
                 // broken state. Specifically, tasks that fail with an error can be left as pending.
