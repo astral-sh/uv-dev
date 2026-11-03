@@ -135,3 +135,19 @@ command with ten additional seconds for termination. On a cgroup v2 host the
 summary includes maximum RSS in KiB, OOM kills and PID-limit hits. If the
 whole container is killed, inspect the Docker state in `run.json` and the
 streamed stdout and stderr in the package directory.
+
+## Compare encodings of the same graph
+
+Build the uv binary first. In a prototype checkout with the
+`Lock::with_build_encoding` API, copy `encoding_sizes.rs` into
+`crates/uv-lock/examples/` and build the example with the same toolchain:
+
+```sh
+cargo build --locked --profile profiling -p uv-lock --example encoding_sizes
+```
+
+In a network-disabled analysis container, mount the example binary and the
+measured locks read-only. Pass one or more lockfile paths to the example. Each
+JSON line records the byte and package-row counts for all three encodings.
+The round-trip check reparses each result and compares its decoded graph to
+the original. Serialization takes place after timing the resolver.
