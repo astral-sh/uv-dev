@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fixture", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--prefetch-diagnostics", action="store_true")
     args = parser.parse_args()
     if not Path("/.dockerenv").exists() or not os.environ.get("UV_EXCLUDE_NEWER"):
         parser.error("run in Docker with an explicit UV_EXCLUDE_NEWER")
@@ -43,6 +44,8 @@ def main():
         sys.executable,
         "--no-python-downloads",
     ]
+    if args.prefetch_diagnostics:
+        command.append("-v")
     with (
         (args.output / "stdout.txt").open("wb") as stdout,
         (args.output / "stderr.txt").open("wb") as stderr,

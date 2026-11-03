@@ -164,3 +164,11 @@ cost for a larger graph, pass the runtime-only and build-locked files to the
 same example binary and compare their dependency-encoding medians.
 The round-trip check reparses each result and compares its decoded graph to
 the original. Serialization takes place after timing the resolver.
+
+For a prefetch A/B, use the same overlay binary and set
+`UV_INTERNAL__BUILD_REQUIREMENTS_PREFETCH` to `0` and `1` in separate runs.
+Hold `UV_INTERNAL__BUILD_RUNTIME_PREFERENCES=first` fixed. Run the cold pair
+online with fresh empty caches and the warm pair offline with copies of the
+same seed. Pass `--prefetch-diagnostics` in additional named runs to capture
+the resolver's counters in saved stderr. Exclude those verbose runs from the
+timing comparison and verify that successful off/on locks have identical bytes.

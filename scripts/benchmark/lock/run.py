@@ -106,10 +106,17 @@ def main():
         default=[],
         help="explicit UV_INTERNAL__ experiment setting, NAME=VALUE",
     )
+    parser.add_argument(
+        "--prefetch-diagnostics",
+        action="store_true",
+        help="collect verbose prefetch counters in a separate named-project run",
+    )
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
     if os.getuid() == 0:
         parser.error("run as a non-root user")
+    if args.prefetch_diagnostics and (args.project == "corpus" or not args.preview):
+        parser.error("--prefetch-diagnostics requires a named project and a preview")
     if args.continue_seed_from and (
         args.project != "corpus" or args.network == "none" or args.seed
     ):
@@ -239,6 +246,8 @@ def run(args, parser):
             parser.error("expected --setting UV_INTERNAL__NAME=VALUE")
         settings[key] = value
     env.update(settings)
+    if args.prefetch_diagnostics:
+        env["RUST_LOG"] = "uv_resolver::resolver::build_prefetch=debug"
     if args.preview:
         env["UV_PREVIEW_FEATURES"] = args.preview
     if args.ca_bundle:
@@ -304,6 +313,8 @@ def run(args, parser):
         destination = f"/fixture/{fixture.name}"
         command += mount(fixture, destination) + mount(HERE / "named.py", "/runner.py")
         task = ["python", "-I", "/runner.py", destination, f"/out/{args.project}"]
+        if args.prefetch_diagnostics:
+            task.append("--prefetch-diagnostics")
         input_hash = file_hash(fixture)
 
     receipt = {
@@ -327,6 +338,8 @@ def run(args, parser):
         else 1,
         "seed_sha256": file_hash(args.seed) if args.seed else None,
     }
+    if args.prefetch_diagnostics:
+        receipt["prefetch_diagnostics"] = True
     if args.excluded_root:
         receipt["excluded_root"] = args.excluded_root
     if args.project == "corpus" and args.network != "none":
