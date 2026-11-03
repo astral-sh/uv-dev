@@ -1446,7 +1446,7 @@ mod test {
             }
         );
 
-        // Kernels also split the interpreter path at a tab.
+        // This short path isolates the tab from the space and length fallbacks.
         let executable = Path::new("/tab\tdir/python");
         assert_eq!(
             format_shebang(executable, "posix", false),
