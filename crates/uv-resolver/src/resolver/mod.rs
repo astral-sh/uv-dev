@@ -139,6 +139,17 @@ impl<InstalledPackages: InstalledPackagesProvider> RootFork<InstalledPackages> {
     }
 }
 
+/// Finish the progress reporter once, including when a resolution returns early.
+struct ReporterGuard<'a>(Option<&'a dyn Reporter>);
+
+impl Drop for ReporterGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(reporter) = self.0 {
+            reporter.on_complete();
+        }
+    }
+}
+
 /// State that is shared between the prefetcher and the PubGrub solver during
 /// resolution, across all forks.
 struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
@@ -310,8 +321,9 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
     /// Resolve a set of requirements into a set of pinned versions.
     pub async fn resolve(self) -> Result<ResolverOutput, ResolveError> {
         let state = Arc::new(self.state);
+        let _reporter = ReporterGuard(state.reporter.as_deref());
 
-        let output = state
+        state
             .run(&self.provider, |job| {
                 thread::Builder::new()
                     .name("uv-resolver".into())
@@ -322,9 +334,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
                     .map_err(ResolveError::SpawnThread)?;
                 Ok(())
             })
-            .await;
-        state.on_complete();
-        output
+            .await
     }
 }
 
@@ -2787,12 +2797,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     reporter.on_progress(name, &VersionOrUrlRef::Version(version));
                 }
             }
-        }
-    }
-
-    fn on_complete(&self) {
-        if let Some(reporter) = self.reporter.as_ref() {
-            reporter.on_complete();
         }
     }
 }

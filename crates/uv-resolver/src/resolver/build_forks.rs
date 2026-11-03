@@ -15,7 +15,8 @@ use uv_static::EnvVars;
 use uv_types::{BuildContext, HashStrategy, HashVerification, InstalledPackagesProvider};
 
 use super::{
-    DefaultResolverProvider, InMemoryIndex, Resolver, ResolverEnvironment, ResolverState, RootFork,
+    DefaultResolverProvider, InMemoryIndex, ReporterGuard, Resolver, ResolverEnvironment,
+    ResolverState, RootFork,
 };
 use crate::preferences::{Preference, Preferences, RuntimePreferenceMode};
 use crate::{AllowedYanks, Manifest, ResolveError};
@@ -83,6 +84,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             -> Result<Vec<(SourceBuildRequirements, Option<&'pins P>)>, E>,
     ) -> Result<ResolverOutput, E> {
         let state = Arc::new(self.state);
+        let _reporter = ReporterGuard(state.reporter.as_deref());
         let mut provider = self.provider;
         let (sender, receiver) = mpsc::channel::<RootFork<InstalledPackages>>();
         let root = state.root();
@@ -184,7 +186,6 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
                 builds.push(BuildResolution { owners, graph });
             }
         }
-        state.on_complete();
         runtime.builds = builds;
         Ok(runtime)
     }
