@@ -96,7 +96,7 @@ pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     tags: Option<Tags>,
     requires_python: RequiresPython,
     allowed_yanks: AllowedYanks,
-    hasher: &'a HashStrategy,
+    hasher: HashStrategy,
     exclude_newer: ExcludeNewer,
     available_version_cutoff: Option<jiff::Timestamp>,
     index_locations: &'a IndexLocations,
@@ -126,7 +126,7 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
             tags: tags.cloned(),
             requires_python: requires_python.clone(),
             allowed_yanks,
-            hasher,
+            hasher: hasher.clone(),
             exclude_newer,
             available_version_cutoff: std::env::var(
                 EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF,
@@ -138,6 +138,14 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
             capabilities,
             minimum_libc_version,
         }
+    }
+
+    pub(super) fn set_hasher(&mut self, hasher: HashStrategy) {
+        self.hasher = hasher;
+    }
+
+    pub(super) fn set_allowed_yanks(&mut self, allowed_yanks: AllowedYanks) {
+        self.allowed_yanks = allowed_yanks;
     }
 
     fn effective_exclude_newer(
@@ -211,7 +219,7 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                 FlatDistributions::from_entries(
                     entries.iter().cloned(),
                     self.tags.as_ref(),
-                    self.hasher,
+                    &self.hasher,
                     self.build_options,
                     self.minimum_libc_version,
                 )
@@ -247,7 +255,7 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                             MetadataFormat::Flat(metadata) => VersionMap::from_flat_metadata(
                                 metadata,
                                 self.tags.as_ref(),
-                                self.hasher,
+                                &self.hasher,
                                 self.build_options,
                                 self.minimum_libc_version,
                             ),

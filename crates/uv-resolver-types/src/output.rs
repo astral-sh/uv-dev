@@ -1,4 +1,7 @@
-use crate::{AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, UniversalMarker};
+use crate::{
+    AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, SourceBuildRequirements,
+    UniversalMarker,
+};
 use indexmap::IndexSet;
 use petgraph::{
     Directed,
@@ -22,6 +25,8 @@ use uv_pypi_types::{HashDigests, ParsedUrlError};
 /// edge represents a dependency between two pinned packages.
 #[derive(Debug)]
 pub struct ResolverOutput {
+    /// Isolated build graphs reachable from this runtime resolution.
+    pub builds: Vec<BuildResolution>,
     /// The underlying graph.
     pub graph: Graph<ResolutionGraphNode, UniversalMarker, Directed>,
     /// The range of supported Python versions.
@@ -39,6 +44,13 @@ pub struct ResolverOutput {
     pub modifiers: DependencyModifiers,
     /// The options that were used to build the graph.
     pub options: Options,
+}
+
+/// A solved build graph and the direct requirements of each source package it serves.
+#[derive(Debug)]
+pub struct BuildResolution {
+    pub owners: Vec<SourceBuildRequirements>,
+    pub graph: ResolverOutput,
 }
 
 #[derive(Debug, Clone)]

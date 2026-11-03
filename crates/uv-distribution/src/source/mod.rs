@@ -284,6 +284,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .is_some_and(|packages| packages.contains_source(source))
     }
 
+    /// A locked archive build uses the published requirements discovered for its build environment.
+    fn archive_build_sources(&self) -> NoSources {
+        if self.build_context.lock_build_dependencies() {
+            NoSources::All
+        } else {
+            NoSources::None
+        }
+    }
+
     /// Set the [`BuildStack`] to use for the [`SourceDistributionBuilder`].
     #[must_use]
     pub(crate) fn with_build_stack(self, build_stack: &'a BuildStack) -> Self {
@@ -696,7 +705,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_dist_entry.path(),
                 subdirectory,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 
@@ -834,7 +843,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source,
                 source_dist_entry.path(),
                 subdirectory,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .boxed_local()
             .await?
@@ -875,7 +884,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_dist_entry.path(),
                 subdirectory,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 
@@ -1092,7 +1101,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_entry.path(),
                 None,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 
@@ -1201,7 +1210,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the backend supports `prepare_metadata_for_build_wheel`, use it.
         if let Some(metadata) = self
-            .build_metadata(source, source_entry.path(), None, NoSources::None)
+            .build_metadata(
+                source,
+                source_entry.path(),
+                None,
+                self.archive_build_sources(),
+            )
             .boxed_local()
             .await?
         {
@@ -1241,7 +1255,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_entry.path(),
                 None,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 
@@ -1911,7 +1925,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_entry.path(),
                 None,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 
@@ -2000,7 +2014,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the backend supports `prepare_metadata_for_build_wheel`, use it.
         if let Some(metadata) = self
-            .build_metadata(source, source_entry.path(), None, NoSources::None)
+            .build_metadata(
+                source,
+                source_entry.path(),
+                None,
+                self.archive_build_sources(),
+            )
             .boxed_local()
             .await?
         {
@@ -2040,7 +2059,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_entry.path(),
                 None,
                 &cache_shard,
-                NoSources::None,
+                self.archive_build_sources(),
             )
             .await?;
 

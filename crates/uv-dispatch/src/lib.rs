@@ -321,6 +321,12 @@ impl<'a> BuildDispatch<'a> {
         self.build_hash_checking.is_require()
     }
 
+    /// Constraints and trusted hashes for resolving isolated build environments during a project lock.
+    pub fn locked_build_inputs(&self) -> Option<(&Constraints, &HashStrategy)> {
+        self.lock_build_dependencies
+            .then_some((self.constraints, self.base_hasher))
+    }
+
     /// Require builds for this project resolution or installation to use locked dependencies.
     #[must_use]
     pub fn with_locked_build_dependencies(mut self, enabled: bool) -> Self {

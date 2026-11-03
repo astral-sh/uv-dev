@@ -131,6 +131,7 @@ mod tests {
     #[test]
     fn match_build_requirements_across_python_forks() -> Result<(), Box<dyn std::error::Error>> {
         let mut runtime = ResolverOutput {
+            builds: Vec::new(),
             graph: Graph::new(),
             requires_python: RequiresPython::from_specifiers(">=3.10".parse()?),
             fork_markers: vec![],

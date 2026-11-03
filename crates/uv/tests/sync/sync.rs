@@ -16,6 +16,7 @@ use uv_fs::Simplified;
 use uv_lock::Lock;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::write_tar_gz;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, WheelBuilder};
 
@@ -18966,6 +18967,59 @@ fn build_hash_project_in_subdirectory() -> Result<(TestContext, String)> {
     Ok((context, hash))
 }
 
+/// An sdist can contain development source overrides that differ from its published requirements.
+#[test]
+fn locked_build_dependency_from_archive() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    let project = context.read("pyproject.toml")
+        + indoc! {r#"
+        [tool.uv.sources]
+        build-dependency = { path = "vendor/build_dependency-1.0.0-py3-none-any.whl" }
+    "#};
+    let wheels = context.temp_dir.child("wheels");
+    let wheel = fs_err::read(wheels.child("project-0.1.0-py3-none-any.whl"))?;
+    write_tar_gz(
+        fs_err::File::create(wheels.child("project-0.1.0.tar.gz").path())?,
+        &[
+            ("project-0.1.0/pyproject.toml", project.as_bytes()),
+            (
+                "project-0.1.0/backend.py",
+                context.read("backend.py").as_bytes(),
+            ),
+            (
+                "project-0.1.0/wheels/project-0.1.0-py3-none-any.whl",
+                &wheel,
+            ),
+        ],
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "consumer"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["project"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--preview-features", "build-dependency-locking", "--no-binary-package", "project",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0
+    ");
+    Ok(())
+}
+
 /// Conflicting extras select different build roots for one source on the same Python version.
 #[test]
 fn locked_build_follows_runtime_conflict() -> Result<()> {
@@ -19079,6 +19133,26 @@ fn locked_build_follows_runtime_conflict() -> Result<()> {
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     ");
     assert_eq!(context.read("build-version"), "2.0.0");
+    Ok(())
+}
+
+/// Frozen sync cannot discover missing build environments from a runtime-only lock.
+#[test]
+fn locked_build_frozen_requires_build_environments() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--no-editable", "--preview-features", "build-dependency-locking",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile has no locked build environments. Run `uv lock --preview-features build-dependency-locking` to record them.
+    ");
+    assert!(!context.temp_dir.child("backend-executed").exists());
     Ok(())
 }
 

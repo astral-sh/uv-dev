@@ -40,6 +40,133 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// One incompatible member must not separate two owners that can share a build environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_forks_split_incompatible_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "alpha"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["ok==1"]
+
+        [build-system]
+        requires = ["ok==2"]
+        build-backend = "ok"
+
+        [tool.uv.workspace]
+        members = ["beta", "gamma"]
+    "#})?;
+    context
+        .temp_dir
+        .child("beta/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "beta"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok==1"]
+        build-backend = "ok"
+    "#})?;
+
+    context
+        .temp_dir
+        .child("gamma/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "gamma"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok>=2"]
+        build-backend = "ok"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env("RUST_LOG", "uv_resolver::resolver::build_forks=debug")
+        .arg("--preview-features").arg("build-dependency-locking")
+        .arg("--no-index").arg("--find-links").arg(context.workspace_root.join("test/links")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Solving build requirements owners=alpha, beta, gamma scope=true
+    DEBUG Solving build requirements owners=alpha, beta scope=true
+    DEBUG Solving build requirements owners=alpha, gamma scope=true
+    DEBUG Solving build requirements owners=beta scope=true
+    DEBUG Resolved build environment owners=alpha, gamma scope=true
+    DEBUG Resolved build environment owners=beta scope=true
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "per-package")
+        .env("RUST_LOG", "uv_resolver::resolver::build_forks=debug")
+        .arg("--preview-features").arg("build-dependency-locking").arg("--upgrade")
+        .arg("--no-index").arg("--find-links").arg(context.workspace_root.join("test/links")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Solving build requirements owners=gamma scope=true
+    DEBUG Resolved build environment owners=gamma scope=true
+    DEBUG Solving build requirements owners=beta scope=true
+    DEBUG Resolved build environment owners=beta scope=true
+    DEBUG Solving build requirements owners=alpha scope=true
+    DEBUG Resolved build environment owners=alpha scope=true
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A dependency used on older Pythons need not be buildable on newer Pythons.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_forks_limit_owner_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["legacy; python_version < '3.13'"]
+
+        [tool.uv.sources]
+        legacy = { path = "legacy" }
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["unavailable; python_version >= '3.13'"]
+        build-backend = "legacy"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "per-package")
+        .env("RUST_LOG", "uv_resolver::resolver::build_forks=debug")
+        .arg("--preview-features").arg("build-dependency-locking").arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Solving build requirements owners=legacy scope=python_full_version < '3.13'
+    DEBUG Resolved build environment owners=legacy scope=python_full_version < '3.13'
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]

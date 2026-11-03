@@ -23,7 +23,7 @@ struct SharedInMemoryIndex {
     explicit: FxOnceMap<(PackageName, IndexUrl), Arc<VersionsResponse>>,
 
     /// A map from a concrete distribution to its metadata.
-    distributions: DistributionMetadataIndex,
+    distributions: Arc<DistributionMetadataIndex>,
 
     /// A map from an index variant metadata file to its parsed contents.
     variants_json: FxOnceMap<RegistryVariantsJson, Arc<ParsedVariantsJsonResponse>>,
@@ -35,6 +35,15 @@ pub(crate) type FxRegisteredEntry<'a, K, V> =
     RegisteredEntry<'a, K, V, BuildHasherDefault<FxHasher>>;
 
 impl InMemoryIndex {
+    /// Start a new set of candidate lists while sharing artifact metadata. Candidate lists
+    /// incorporate which yanked versions a particular root manifest admits.
+    pub(super) fn fork_versions(&self) -> Self {
+        Self(Arc::new(SharedInMemoryIndex {
+            distributions: self.0.distributions.clone(),
+            ..SharedInMemoryIndex::default()
+        }))
+    }
+
     /// Returns a reference to the package metadata map.
     pub(crate) fn implicit(&self) -> &FxOnceMap<PackageName, Arc<VersionsResponse>> {
         &self.0.implicit
@@ -58,6 +67,6 @@ impl InMemoryIndex {
 
     /// Return exclusive access to distribution metadata when no cloned index can use it.
     pub fn distributions_mut(&mut self) -> Option<&mut DistributionMetadataIndex> {
-        Arc::get_mut(&mut self.0).map(|index| &mut index.distributions)
+        Arc::get_mut(&mut self.0).and_then(|index| Arc::get_mut(&mut index.distributions))
     }
 }

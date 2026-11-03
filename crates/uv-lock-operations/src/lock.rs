@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{BuildEncoding, BuildGraph, GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -31,6 +31,7 @@ use uv_resolver::{
     FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
 };
 use uv_settings::{LockedSource, ResolverSettings};
+use uv_static::EnvVars;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -875,7 +876,10 @@ async fn do_lock(
 
     match existing_lock {
         // Resolution from the lockfile succeeded.
-        Some(ValidatedLock::Satisfies(lock)) => {
+        Some(ValidatedLock::Satisfies(lock))
+            if check_locked_builds
+                || !preview.is_enabled(PreviewFeature::BuildDependencyLocking) =>
+        {
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
@@ -885,7 +889,10 @@ async fn do_lock(
         // The lockfile did not contain enough information to obtain a resolution, fallback
         // to a fresh resolve.
         Some(
-            ValidatedLock::Unusable(_) | ValidatedLock::Versions(_) | ValidatedLock::Preferable(_),
+            ValidatedLock::Unusable(_)
+            | ValidatedLock::Versions(_)
+            | ValidatedLock::Preferable(_)
+            | ValidatedLock::Satisfies(_),
         )
         | None => {
             let recorder = if preview.is_enabled(PreviewFeature::ResolutionInputs) {
@@ -1017,6 +1024,9 @@ async fn do_lock(
 
             // Notify the user of any resolution diagnostics.
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+            for build in &resolution.builds {
+                uv_resolve_operations::diagnose_resolution(build.graph.diagnostics(), printer)?;
+            }
 
             let manifest = ResolverManifest::new(
                 members,
@@ -1056,6 +1066,36 @@ async fn do_lock(
             .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
+
+            let lock = if preview.is_enabled(PreviewFeature::BuildDependencyLocking) {
+                let encoding = match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING) {
+                    Ok(value) if value == "package" => BuildEncoding::Package,
+                    Ok(value) if value == "conflict-marker" => BuildEncoding::ConflictMarker,
+                    Ok(value) if value == "dependency" => BuildEncoding::Dependency,
+                    Err(std::env::VarError::NotPresent) => BuildEncoding::Dependency,
+                    Ok(value) => return Err(anyhow::anyhow!(
+                        "Unknown build lock encoding `{value}` (expected `conflict-marker`, `package`, or `dependency`)"
+                    ).into()),
+                    Err(error) => return Err(anyhow::Error::from(error).into()),
+                };
+                let graphs = resolution.builds.iter().flat_map(|build| {
+                    build.owners.iter().map(|owner| BuildGraph {
+                        owner: &owner.owner,
+                        marker: owner.marker,
+                        requirements: &owner.requirements,
+                        resolution: &build.graph,
+                    })
+                });
+                lock.with_build_graphs(encoding, graphs, target.install_path(), index_locations)?
+                    .with_missing_registry_hashes(
+                        &client,
+                        target.install_path(),
+                        concurrency.downloads,
+                    )
+                    .await?
+            } else {
+                lock
+            };
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())

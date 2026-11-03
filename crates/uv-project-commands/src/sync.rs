@@ -168,6 +168,18 @@ pub async fn sync(
         None
     };
 
+    // Frozen sync can read a lock during discovery or before selecting an environment.
+    // Both paths bypass the lock operation's preview check.
+    if preview.is_enabled(PreviewFeature::BuildDependencyLocking) {
+        let lock = match &target {
+            SyncTarget::Manifest(_) => frozen_lock.as_ref(),
+            SyncTarget::Lockfile { workspace, .. } => Some(workspace.lock()),
+        };
+        if lock.is_some_and(|lock| !lock.locks_builds()) {
+            return Err(UvError::from(LockError::MissingBuildEnvironments).into());
+        }
+    }
+
     let locked_default_groups = match (&frozen_lock, package.as_slice()) {
         (Some(lock), [name]) => lock.member_default_groups(name),
         _ => None,

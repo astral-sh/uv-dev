@@ -772,6 +772,7 @@ mod tests {
         graph.add_edge(c, d, UniversalMarker::TRUE);
         Ok(ResolverOutput {
             graph,
+            builds: Vec::new(),
             requires_python: RequiresPython::from_specifiers(">=3.11".parse()?),
             fork_markers: Vec::new(),
             diagnostics: Vec::new(),

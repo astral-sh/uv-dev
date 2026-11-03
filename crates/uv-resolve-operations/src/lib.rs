@@ -29,8 +29,9 @@ use uv_requirements::{
     partition_requirements,
 };
 use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
-    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+    BuildForkStrategy, DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options,
+    Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput,
+    UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -377,7 +378,47 @@ pub async fn resolve(
         )?
         .with_reporter(Arc::new(reporter));
 
-        resolver.resolve().await?
+        if let Some((constraints, hasher)) = build_dispatch.locked_build_inputs() {
+            let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
+            Box::pin(resolver.resolve_with_build_forks(
+                strategy,
+                hasher,
+                async |requirements, env, index, hasher| {
+                    let hasher = hasher
+                        .clone()
+                        .augment_with_requirements(requirements.iter())?;
+                    let (lookaheads, hasher) = LookaheadResolver::new(
+                        &requirements,
+                        constraints,
+                        &DependencyModifiers::default(),
+                        &hasher,
+                        index,
+                        DistributionDatabase::new(
+                            client,
+                            build_dispatch,
+                            concurrency.downloads_semaphore.clone(),
+                        ),
+                    )
+                    .resolve(env)
+                    .await?;
+                    Ok((
+                        Manifest::simple(requirements)
+                            .with_constraints(constraints.clone())
+                            .with_lookaheads(lookaheads),
+                        hasher,
+                    ))
+                },
+                async |graph, runtime, scope| {
+                    build_dispatch
+                        .discover_build_requirements(graph, runtime, scope)
+                        .await
+                        .map_err(Error::Anyhow)
+                },
+            ))
+            .await?
+        } else {
+            resolver.resolve().await?
+        }
     };
 
     logger.on_complete(resolution.len(), start, printer)?;
