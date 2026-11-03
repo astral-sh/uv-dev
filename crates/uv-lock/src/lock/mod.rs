@@ -102,9 +102,14 @@ mod windows_emulation_tests;
 const VERSION: u32 = 1;
 
 /// Older readers must reject build locks before running a source build with an unlocked backend.
-const BUILD_LOCK_VERSION: u32 = 2;
+const EXPLICIT_BUILD_LOCK_VERSION: u32 = 2;
+// Version 3 is reserved for the incompatible shared package-table layout.
+const BUILD_LOCK_VERSION: u32 = 4;
 
 fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
+    if locks_builds && version == EXPLICIT_BUILD_LOCK_VERSION {
+        return None;
+    }
     let supported = if locks_builds {
         BUILD_LOCK_VERSION
     } else {
@@ -6539,7 +6544,12 @@ impl TryFrom<LockWire> for Lock {
         if let Some(encoding) = wire.build_encoding.take() {
             return build::decode(wire, encoding);
         }
-        if !wire.build_universes.is_empty() {
+        if !wire.build_universes.is_empty()
+            || wire
+                .packages
+                .iter()
+                .any(|package| package.build_roots.is_some() || package.build_inputs.is_some())
+        {
             return Err(LockErrorKind::BuildGraph("Missing build-encoding".into()).into());
         }
         // Count the number of sources for each package name. When
@@ -7428,6 +7438,8 @@ fn absolute_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, LockErro
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct PackageWire {
+    build_roots: Option<Vec<build::OrdinaryRoot>>,
+    build_inputs: Option<BTreeSet<build_inputs::BuildInput>>,
     #[serde(default)]
     universe: Vec<usize>,
     #[serde(default)]

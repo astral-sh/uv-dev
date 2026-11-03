@@ -1156,6 +1156,7 @@ async fn do_lock(
                 )
                 .await?;
                 lock.with_compacted_build_domains()?
+                    .with_ordinary_build_roots()?
             } else {
                 lock
             };
