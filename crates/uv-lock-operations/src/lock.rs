@@ -1072,6 +1072,16 @@ async fn do_lock(
             )
             .await?;
 
+            let report_resolution = || -> Result<(), LockError> {
+                logger.on_complete(resolution.len(), start, printer)?;
+                uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+                Ok(())
+            };
+            if build_encoding.is_none() {
+                // Runtime resolution is complete even if constructing the lockfile fails.
+                report_resolution()?;
+            }
+
             let prefer_locked = versions_lock.is_some();
             let manifest = ResolverManifest::new(
                 members,
@@ -1154,17 +1164,14 @@ async fn do_lock(
                 )
                 .await?;
                 previous_pins.verify(&lock)?;
-                lock.with_compacted_build_domains()?
-                    .with_ordinary_build_roots()?
+                let lock = lock
+                    .with_compacted_build_domains()?
+                    .with_ordinary_build_roots()?;
+                report_resolution()?;
+                lock
             } else {
                 lock
             };
-
-            // Print the success message after completing resolution.
-            logger.on_complete(resolution.len(), start, printer)?;
-
-            // Notify the user of any resolution diagnostics.
-            uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())
