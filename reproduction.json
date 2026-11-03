@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The runner is Linux x86-64, so the reported macOS @rpath failure could not be verified. With uv 0.13.6 and managed Python 3.13.16, a temporary project using link-mode=\"symlink\", `uv add 'mlx[cpu]==0.32.4'`, and `uv run python -c 'import mlx.core'` succeeded. Cross-installing Apple Silicon wheels confirmed that mlx and mlx-metal place the extension and dylib in separate cache archives; the extension declares @rpath/libmlx.dylib and @loader_path/lib. This supports the proposed mechanism but does not reproduce the macOS import failure. Need the exact MLX-related versions and fresh-project import results on Apple Silicon, including whether mlx_spatial is required. Updated the issue-context README with commands, observations, limitations, and nearby test coverage."
+}
