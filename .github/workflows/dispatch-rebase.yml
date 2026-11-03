@@ -1,0 +1,26 @@
+name: Dispatch pull request rebases
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The pull request number to rebase"
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        type: string
+
+permissions: {}
+
+jobs:
+  rebase:
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/automation/rebase' && github.ref_protected
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    # Keep the run on the automation commit and load the implementation from uv's protected main branch.
+    uses: astral-sh/uv/.github/workflows/pull-request-conflicts.yml@main # zizmor: ignore[unpinned-uses]
+    with:
+      pull_request: ${{ inputs.pull_request }}
+      head_sha: ${{ inputs.head_sha }}

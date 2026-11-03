@@ -212,6 +212,17 @@
       "installation": "automations"
     },
     {
+      "caller": "uv",
+      "environment": "automations",
+      "caller_ref": "refs/heads/automation/rebase",
+      "caller_workflow": "dispatch-rebase.yml",
+      "reusable_workflow": "astral-sh/uv/.github/workflows/rebase-conflicted-pull-request.yml@refs/heads/main",
+      "on": ["workflow_dispatch"],
+      "permissions": { "contents": "write", "workflows": "write" },
+      "targets": ["uv", "uv-dev"],
+      "installation": "automations"
+    },
+    {
       "caller": "uv-dev",
       "environment": "automations",
       "caller_workflow": "diagnose-workflow-failure.yml",

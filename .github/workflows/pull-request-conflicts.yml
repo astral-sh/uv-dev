@@ -21,6 +21,12 @@ on:
         description: "The previous base SHA from the signed base-change event"
         required: false
         type: string
+  workflow_call:
+    inputs:
+      pull_request:
+        type: string
+      head_sha:
+        type: string
 
 permissions: {}
 
@@ -36,8 +42,10 @@ jobs:
   identify:
     name: Identify conflicted pull requests
     if: >-
-      github.repository == 'astral-sh/uv' ||
-      (github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch')
+      (github.workflow_ref == format('{0}/.github/workflows/pull-request-conflicts.yml@{1}', github.repository, github.ref) &&
+        (github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch'))) ||
+      (github.workflow_ref == 'astral-sh/uv/.github/workflows/dispatch-rebase.yml@refs/heads/automation/rebase' &&
+        github.event_name == 'workflow_dispatch' && github.ref_protected)
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     timeout-minutes: 5
     permissions:
@@ -49,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
 
       - uses: $/.github/actions/setup-uv-toolchain
