@@ -10,7 +10,7 @@ use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
-use uv_dispatch::{BuildDispatch, UniversalState};
+use uv_dispatch::{BuildDispatch, BuildLockReplay, UniversalState};
 use uv_distribution::{DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
@@ -836,11 +836,20 @@ async fn do_lock(
         }
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
-        let validation_build_dispatch = match &snapshot {
-            Some(lock) => {
-                validation_build_dispatch.with_build_lock(lock, target.install_path(), None)
-            }
-            None => validation_build_dispatch,
+        let replay;
+        let validation_build_dispatch = if let Some(lock) = &snapshot {
+            replay = BuildLockReplay::new(
+                lock,
+                target.install_path(),
+                None,
+                interpreter,
+                interpreter.tags().map_err(anyhow::Error::from)?,
+                build_options,
+                extra_build_requires.clone(),
+            )?;
+            validation_build_dispatch.with_build_lock(&replay)
+        } else {
+            validation_build_dispatch
         };
         let database = DistributionDatabase::new(
             &client,
