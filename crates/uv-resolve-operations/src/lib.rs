@@ -410,9 +410,9 @@ pub async fn resolve(
                         hasher,
                     ))
                 },
-                async |graph, runtime, scope| {
+                async |graph, runtime, scope, owner_hasher| {
                     build_dispatch
-                        .discover_build_requirements(graph, runtime, scope)
+                        .discover_build_requirements(graph, runtime, scope, owner_hasher)
                         .await
                         .map_err(Error::Anyhow)
                 },

@@ -61,6 +61,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             &ResolverOutput,
             &ResolverOutput,
             UniversalMarker,
+            &HashStrategy,
         ) -> Result<Vec<SourceBuildRequirements>, E>,
     ) -> Result<ResolverOutput, E> {
         let state = Arc::new(self.state);
@@ -84,7 +85,7 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             Preference::from_runtime(&runtime).map_err(ResolveError::from)?,
             &state.env,
         );
-        let roots = discover(&runtime, &runtime, UniversalMarker::TRUE).await?;
+        let roots = discover(&runtime, &runtime, UniversalMarker::TRUE, &state.hasher).await?;
         let mut pending = PendingBuilds::default();
         pending.enqueue(roots, strategy, &runtime.fork_markers);
         let mut builds = Vec::new();
@@ -137,19 +138,20 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
                 ?scope,
                 "Solving build requirements"
             );
-            Ok::<_, E>(Arc::new(build).run(&provider, schedule).await)
+            let graph = Arc::new(build).run(&provider, schedule).await;
+            Ok::<_, E>(graph.map(|graph| (graph, hasher)))
         };
         while let Some(owners) = pending.groups.pop() {
-            for build in resolve_cluster(owners, &mut solve).await? {
-                let scope = build.owners[0].marker;
+            for (owners, (graph, hasher)) in resolve_cluster(owners, &mut solve).await? {
+                let scope = owners[0].marker;
                 debug!(
-                    owners = %build.owners.iter().map(|root| root.owner.name()).join(", "),
+                    owners = %owners.iter().map(|root| root.owner.name()).join(", "),
                     ?scope,
                     "Resolved build environment"
                 );
-                let nested = discover(&build.graph, &runtime, scope).await?;
+                let nested = discover(&graph, &runtime, scope, &hasher).await?;
                 pending.enqueue(nested, strategy, &runtime.fork_markers);
-                builds.push(build);
+                builds.push(BuildResolution { owners, graph });
             }
         }
         state.on_complete();
@@ -161,20 +163,18 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
 /// Try a single shared graph first. After a conflict, put each owner in the first cluster
 /// whose combined requirements resolve. Retain the successful graph so it can be emitted
 /// without solving the same combination a second time.
-async fn resolve_cluster<E: From<ResolveError>>(
+async fn resolve_cluster<T, E: From<ResolveError>>(
     owners: Vec<SourceBuildRequirements>,
-    solve: &mut impl AsyncFnMut(
-        &[SourceBuildRequirements],
-    ) -> Result<Result<ResolverOutput, ResolveError>, E>,
-) -> Result<Vec<BuildResolution>, E> {
+    solve: &mut impl AsyncFnMut(&[SourceBuildRequirements]) -> Result<Result<T, ResolveError>, E>,
+) -> Result<Vec<(Vec<SourceBuildRequirements>, T)>, E> {
     let count = owners.len();
     match solve(&owners).await? {
-        Ok(graph) => return Ok(vec![BuildResolution { owners, graph }]),
+        Ok(graph) => return Ok(vec![(owners, graph)]),
         Err(error) if count > 1 && is_cluster_conflict(&error) => {}
         Err(error) => return Err(build_error(&owners, error).into()),
     }
 
-    let mut clusters: Vec<(Vec<SourceBuildRequirements>, Option<ResolverOutput>)> = Vec::new();
+    let mut clusters: Vec<(Vec<SourceBuildRequirements>, Option<T>)> = Vec::new();
     'owner: for owner in owners {
         for (roots, graph) in &mut clusters {
             if roots.len() + 1 == count {
@@ -204,7 +204,7 @@ async fn resolve_cluster<E: From<ResolveError>>(
                 .await?
                 .map_err(|error| build_error(&owners, error))?,
         };
-        builds.push(BuildResolution { owners, graph });
+        builds.push((owners, graph));
     }
     Ok(builds)
 }
