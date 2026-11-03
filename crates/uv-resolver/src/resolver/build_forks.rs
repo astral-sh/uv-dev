@@ -132,13 +132,21 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
                 state.installed_packages.clone(),
             );
             build.reporter = state.reporter.clone();
-            debug!(owners = %owners.iter().map(|root| root.owner.name()).join(", "), ?scope, "Solving build requirements");
+            debug!(
+                owners = %owners.iter().map(|root| root.owner.name()).join(", "),
+                ?scope,
+                "Solving build requirements"
+            );
             Ok::<_, E>(Arc::new(build).run(&provider, schedule).await)
         };
         while let Some(owners) = pending.groups.pop() {
             for build in resolve_cluster(owners, &mut solve).await? {
                 let scope = build.owners[0].marker;
-                debug!(owners = %build.owners.iter().map(|root| root.owner.name()).join(", "), ?scope, "Resolved build environment");
+                debug!(
+                    owners = %build.owners.iter().map(|root| root.owner.name()).join(", "),
+                    ?scope,
+                    "Resolved build environment"
+                );
                 let nested = discover(&build.graph, &runtime, scope).await?;
                 pending.enqueue(nested, strategy, &runtime.fork_markers);
                 builds.push(build);

@@ -100,7 +100,7 @@ impl Preference {
 
     /// Use runtime selections as soft preferences for a build resolve. Hard pins for
     /// `match-runtime` are expressed separately as requirements.
-    pub fn from_runtime(runtime: &ResolverOutput) -> Result<Vec<Self>, PreferenceError> {
+    pub(crate) fn from_runtime(runtime: &ResolverOutput) -> Result<Vec<Self>, PreferenceError> {
         let first_only =
             match std::env::var(EnvVars::UV_INTERNAL__BUILD_RUNTIME_PREFERENCES).as_deref() {
                 Ok("all") | Err(std::env::VarError::NotPresent) => false,
