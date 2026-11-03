@@ -2126,10 +2126,10 @@ fn create_venv_powershell_unc() -> Result<()> {
     Ok(())
 }
 
-/// Fish parses the embedded environment path and prompt while sourcing its activation script.
+/// An apostrophe or an escaped quote can end a fish string and expose a `touch` command.
 #[test]
 #[cfg(unix)]
-fn activate_fish_quotes_path_and_prompt() {
+fn activate_fish_with_commands_in_path_and_prompt() {
     let Ok(fish) = which::which("fish") else {
         return;
     };
