@@ -19213,6 +19213,38 @@ fn locked_build_dependency_from_hook_with_compatible_bounds() -> Result<()> {
 }
 
 #[test]
+fn locked_build_dependency_from_hook_with_incompatible_bounds() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-editable")
+        .arg("--preview-features=build-dependency-locking")
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["build-dependency>=2"]"#), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: `get_requires_for_build_wheel` requested `build-dependency>=2`, which is not satisfied by the declared build environment
+    ");
+    Ok(())
+}
+
+#[test]
+fn locked_build_dependency_from_hook_with_new_extra() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-editable")
+        .arg("--preview-features=build-dependency-locking")
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["build-dependency[new]==1.0.0"]"#), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: `get_requires_for_build_wheel` requested `build-dependency[new]==1.0.0`, which is not satisfied by the declared build environment
+    ");
+    Ok(())
+}
+
+#[test]
 fn project_build_hashes_lock_and_sync() -> Result<()> {
     let (context, hash) = build_hash_project()?;
     let pyproject = context.temp_dir.child("pyproject.toml");
