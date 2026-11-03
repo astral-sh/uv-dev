@@ -153,6 +153,51 @@ fn lock_build_inputs_editable_requires() -> Result<()> {
     Ok(())
 }
 
+/// An editable build using the ordinary version of its backend still locks its exact declaration.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_inputs_ordinary_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["ok==1"]
+
+        [build-system]
+        requires = ["ok==1"]
+        build-backend = "ok"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    pyproject.write_str(project)?;
+    context
+        .temp_dir
+        .child("links")
+        .copy_from(context.workspace_root.join("test/links"), &["ok-*.whl"])?;
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("build-dependency-locking"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let locked = context.read("uv.lock");
+    assert!(locked.contains("build-roots = [{ name = \"ok\" }]"));
+    assert!(!locked.contains("[[build-universes]]"));
+    pyproject.write_str(&project.replace(r#"requires = ["ok==1"]"#, r#"requires = ["ok>=1"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
 /// A marker edit outside the running interpreter still changes the universal build lock.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -362,11 +407,9 @@ fn lock_build_inputs_compacted_domains() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    let lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
-    let universes = lock["build-universes"]
-        .as_array_of_tables()
-        .ok_or_else(|| anyhow!("expected build environments"))?;
-    assert_eq!(universes.len(), 1);
+    let lock = context.read("uv.lock");
+    assert!(lock.contains("build-roots = [{ name = \"d\" }]"));
+    assert!(!lock.contains("[[build-universes]]"));
 
     // Changes outside the supported project environments leave the descriptor current.
     let excluded = project.replace(

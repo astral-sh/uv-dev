@@ -11,7 +11,7 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
-use super::build::{EncodedPackage, Section};
+use super::build::{EncodedPackage, OrdinaryRoot, Section, Universe};
 use super::{
     Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
     PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
@@ -128,7 +128,11 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             .or_default() += 1;
     }
     if let Some(builds) = &lock.builds {
-        for universe in &builds.universes {
+        for universe in builds
+            .universes
+            .iter()
+            .filter(|u| u.ordinary_owner.is_none())
+        {
             writer.array_of_tables(&["build-universes"])?;
             writer.key_start("owner")?;
             let mut first = true;
@@ -144,7 +148,9 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             if let Some(marker) = universe.marker.combined().try_to_string() {
                 writer.key_value("marker", &marker)?;
             }
-            if let Some(inputs) = &universe.inputs {
+            if let Some(inputs) = &universe.inputs
+                && (lock.version != super::BUILD_LOCK_VERSION || !inputs.is_empty())
+            {
                 write_serialized_array(writer, "inputs", inputs)?;
             }
             writer.key_multiline_array("roots", &universe.roots, |writer, dep| {
@@ -152,6 +158,13 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             })?;
         }
     }
+    let mut ordinary: FxHashMap<_, _> = lock
+        .builds
+        .iter()
+        .flat_map(|builds| &builds.universes)
+        .filter(|u| u.ordinary_owner.is_some())
+        .map(|u| (&u.owner, u))
+        .collect();
     for (package, scope) in packages {
         write_package(
             writer,
@@ -164,6 +177,7 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             },
             &dist_count_by_name,
             scope,
+            ordinary.remove(&package.id),
         )?;
     }
 
@@ -320,6 +334,7 @@ fn write_package(
     simplified_environment: MarkerTree,
     dist_count_by_name: &FxHashMap<PackageName, u64>,
     scope: Option<&EncodedPackage>,
+    ordinary: Option<&Universe>,
 ) -> Result<(), WriteError> {
     writer.array_of_tables(&["package"])?;
     if let Some(scope) = scope {
@@ -331,6 +346,17 @@ fn write_package(
         }
     }
     write_package_id(writer, &package.id, None, PackageIdLocation::Table)?;
+    if let Some(universe) = ordinary {
+        writer.key_value(
+            "build-roots",
+            serialize_value(&OrdinaryRoot::from_dependencies(&universe.roots))?,
+        )?;
+        if let Some(inputs) = &universe.inputs
+            && !inputs.is_empty()
+        {
+            write_serialized_array(writer, "build-inputs", inputs)?;
+        }
+    }
     if let Some(groups) = &package.default_groups {
         writer.key_value("default-groups", serialize_value(groups)?)?;
     }
