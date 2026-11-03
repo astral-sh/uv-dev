@@ -10,7 +10,7 @@ use futures::{StreamExt, TryStreamExt};
 use petgraph::Graph;
 use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uv_client::RegistryClient;
 use uv_configuration::BuildOptions;
 use uv_distribution_types::{
@@ -23,7 +23,7 @@ use uv_pep508::{
     MarkerValueVersion,
 };
 use uv_platform_tags::Tags;
-use uv_pypi_types::HashDigest;
+use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_redacted::SafeUrl;
 use uv_resolver_types::{ResolutionGraphNode, ResolverOutput, UniversalMarker};
 
@@ -71,11 +71,52 @@ pub(super) struct BuildLocks {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Universe {
+    /// Provenance for an owner whose roots use the ordinary package graph.
+    pub(super) ordinary_owner: Option<OrdinaryOwner>,
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
     pub(super) inputs: Option<BTreeSet<BuildInput>>,
     packages: BTreeMap<PackageId, Package>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum OrdinaryOwner {
+    Archive(HashDigest),
+    Directory,
+}
+
+impl OrdinaryOwner {
+    fn new(owner: &PackageId, sdist: Option<&LockedSourceDist>) -> Option<Self> {
+        if owner.source.mutable_build_directory().is_some() {
+            return Some(Self::Directory);
+        }
+        let hash = sdist?.hash()?;
+        (matches!(owner.source, Source::Registry(_)) && strong_hash(hash))
+            .then(|| Self::Archive(hash.clone()))
+    }
+}
+
+/// Direct roots authorized for a source build. The ordinary lock supplies
+/// their versions, sources, outgoing edges and allowed artifacts.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OrdinaryRoot {
+    name: PackageName,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    extra: BTreeSet<ExtraName>,
+}
+
+impl OrdinaryRoot {
+    pub(super) fn from_dependencies(roots: &[Dependency]) -> Vec<Self> {
+        roots
+            .iter()
+            .map(|d| Self {
+                name: d.package_id.name.clone(),
+                extra: d.extra.clone(),
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -186,6 +227,7 @@ impl Lock {
                 graph.marker,
             )?;
             universes.push(Universe {
+                ordinary_owner: None,
                 inputs: Some(inputs),
                 owner,
                 marker: graph.marker,
@@ -274,28 +316,10 @@ impl Lock {
     /// Combine disjoint marker domains for an owner when it selects the same build environment
     /// throughout each domain. Keep artifact lists and dependency markers in the comparison.
     pub fn with_compacted_build_domains(mut self) -> Result<Self, LockError> {
+        let project = self.build_domain();
         let Some(builds) = &mut self.builds else {
             return Ok(self);
         };
-        let mut project =
-            self.requires_python
-                .specifiers()
-                .iter()
-                .fold(MarkerTree::TRUE, |domain, specifier| {
-                    domain.and(MarkerTree::expression(MarkerExpression::Version {
-                        key: MarkerValueVersion::PythonFullVersion,
-                        specifier: specifier.clone(),
-                    }))
-                });
-        if !self.supported_environments.is_empty() {
-            let supported = self
-                .supported_environments
-                .iter()
-                .copied()
-                .fold(MarkerTree::FALSE, MarkerTree::or);
-            project = project.and(supported);
-        }
-
         let mut owners: BTreeMap<PackageId, Vec<Universe>> = BTreeMap::new();
         for universe in std::mem::take(&mut builds.universes) {
             let domain = universe.marker.combined().and(project);
@@ -324,6 +348,91 @@ impl Lock {
                 variants
             })
             .collect();
+        Ok(self)
+    }
+
+    fn build_domain(&self) -> MarkerTree {
+        let mut project =
+            self.requires_python
+                .specifiers()
+                .iter()
+                .fold(MarkerTree::TRUE, |domain, specifier| {
+                    domain.and(MarkerTree::expression(MarkerExpression::Version {
+                        key: MarkerValueVersion::PythonFullVersion,
+                        specifier: specifier.clone(),
+                    }))
+                });
+        if !self.supported_environments.is_empty() {
+            let supported = self
+                .supported_environments
+                .iter()
+                .copied()
+                .fold(MarkerTree::FALSE, MarkerTree::or);
+            project = project.and(supported);
+        }
+        project
+    }
+
+    /// Reuse ordinary packages only when reading the compact roots reconstructs the solved
+    /// environment exactly, including every artifact and each outgoing dependency.
+    pub fn with_ordinary_build_roots(mut self) -> Result<Self, LockError> {
+        if self.version != BUILD_LOCK_VERSION {
+            return Ok(self);
+        }
+        let Some(mut builds) = self.builds.take() else {
+            return Ok(self);
+        };
+        let mut owner_artifacts = BTreeMap::new();
+        for package in self
+            .packages
+            .iter()
+            .chain(builds.universes.iter().flat_map(|u| u.packages.values()))
+        {
+            let files = (&package.sdist, &package.wheels);
+            owner_artifacts
+                .entry(&package.id)
+                .and_modify(|known| {
+                    if *known != Some(files) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(files));
+        }
+        let proven: BTreeMap<_, _> = owner_artifacts
+            .into_iter()
+            .filter_map(|(id, files)| {
+                let (sdist, _) = files?;
+                Some((id.clone(), OrdinaryOwner::new(id, sdist.as_ref())?))
+            })
+            .collect();
+        let mut counts = BTreeMap::new();
+        for universe in &builds.universes {
+            *counts.entry(universe.owner.clone()).or_insert(0usize) += 1;
+        }
+        let ordinary = OrdinaryGraph::new(&self);
+        for universe in &mut builds.universes {
+            let Some(provenance) = proven.get(&universe.owner) else {
+                continue;
+            };
+            if counts[&universe.owner] != 1
+                || !universe.marker.is_true()
+                || universe.inputs.is_none()
+            {
+                continue;
+            }
+            let roots = OrdinaryRoot::from_dependencies(&universe.roots);
+            if let Some(candidate) = ordinary.reconstruct(
+                &universe.owner,
+                provenance,
+                &roots,
+                universe.inputs.clone(),
+            )? && candidate.roots == universe.roots
+                && candidate.packages == universe.packages
+            {
+                universe.ordinary_owner = candidate.ordinary_owner;
+            }
+        }
+        self.builds = Some(builds);
         Ok(self)
     }
 
@@ -391,7 +500,108 @@ impl Lock {
                 owner.name()
             ))
         })?;
+        if !universe.accepts_source(owner) {
+            return Err(error(format!(
+                "Source archive for `{}` does not match its locked build owner",
+                universe.owner
+            )));
+        }
         universe.resolve(requirements, root, &environment, tags, options)
+    }
+}
+
+/// The ordinary graph indexed by names with exactly one locked source and version.
+struct OrdinaryGraph<'a> {
+    lock: &'a Lock,
+    domain: MarkerTree,
+    unique: FxHashMap<&'a PackageName, Option<&'a Package>>,
+}
+
+impl<'a> OrdinaryGraph<'a> {
+    fn new(lock: &'a Lock) -> Self {
+        let mut unique = FxHashMap::default();
+        for package in &lock.packages {
+            unique
+                .entry(&package.id.name)
+                .and_modify(|candidate| *candidate = None)
+                .or_insert(Some(package));
+        }
+        Self {
+            lock,
+            domain: lock.build_domain(),
+            unique,
+        }
+    }
+
+    fn reconstruct(
+        &self,
+        owner: &PackageId,
+        provenance: &OrdinaryOwner,
+        roots: &[OrdinaryRoot],
+        inputs: Option<BTreeSet<BuildInput>>,
+    ) -> Result<Option<Universe>, LockError> {
+        let mut dependencies = Vec::with_capacity(roots.len());
+        for root in roots {
+            let Some(Some(package)) = self.unique.get(&root.name) else {
+                return Ok(None);
+            };
+            dependencies.push(Dependency::new(
+                &self.lock.requires_python,
+                package.id.clone(),
+                root.extra.clone(),
+                SimplifiedMarkerTree::default(),
+            ));
+        }
+        let packages = closure(&dependencies, |id| {
+            self.lock
+                .by_id
+                .get(id)
+                .map(|index| self.lock.package(*index).clone())
+                .ok_or_else(|| missing(id))
+        })?;
+        let universe = Universe {
+            ordinary_owner: Some(provenance.clone()),
+            owner: owner.clone(),
+            marker: UniversalMarker::TRUE,
+            inputs,
+            roots: dependencies,
+            packages,
+        }
+        .project(self.domain, &self.lock.requires_python)?;
+        for package in universe.packages.values() {
+            if !matches!(package.id.source, Source::Registry(_))
+                || !package.fork_markers.is_empty()
+                || !matches!(self.unique.get(&package.id.name), Some(Some(_)))
+                || (package.wheels.is_empty() && package.sdist.is_none())
+                || package
+                    .sdist
+                    .as_ref()
+                    .is_some_and(|s| s.hash().is_none_or(|hash| !strong_hash(hash)))
+                || package
+                    .wheels
+                    .iter()
+                    .any(|wheel| !wheel.hash.as_ref().is_some_and(strong_hash))
+                || package
+                    .dependencies
+                    .iter()
+                    .chain(package.optional_dependencies.values().flatten())
+                    .chain(package.dependency_groups.values().flatten())
+                    .any(|dep| !dep.simplified_marker.as_simplified_marker_tree().is_true())
+            {
+                return Ok(None);
+            }
+        }
+        Ok(Some(universe))
+    }
+}
+
+fn strong_hash(hash: &HashDigest) -> bool {
+    match hash.algorithm() {
+        HashAlgorithm::Md5 => false,
+        HashAlgorithm::Sha256
+        | HashAlgorithm::Sha384
+        | HashAlgorithm::Sha512
+        | HashAlgorithm::Blake2b256 => true,
     }
 }
 
@@ -448,6 +658,17 @@ impl BuildMarkerEnvironment<'_> {
 }
 
 impl Universe {
+    fn accepts_source(&self, owner: &SourceDist) -> bool {
+        match &self.ordinary_owner {
+            Some(OrdinaryOwner::Archive(hash)) => {
+                matches!(owner, SourceDist::Registry(archive) if archive.file.hashes.as_slice().contains(hash))
+            }
+            // The caller has already matched the source directory against the lock root.
+            Some(OrdinaryOwner::Directory) => matches!(owner, SourceDist::Directory(_)),
+            None => true,
+        }
+    }
+
     /// Package markers are evaluated only after the owning build environment is selected.
     fn project(
         mut self,
@@ -648,7 +869,12 @@ impl BuildLocks {
         for package in &runtime.packages {
             versions.entry(&package.id).or_default().push((0, package));
         }
-        for (index, universe) in self.universes.iter().enumerate() {
+        for (index, universe) in self
+            .universes
+            .iter()
+            .filter(|u| u.ordinary_owner.is_none())
+            .enumerate()
+        {
             for package in universe.packages.values() {
                 versions
                     .entry(&package.id)
@@ -794,7 +1020,33 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
     let descriptors = std::mem::take(&mut wire.build_universes);
     let mut names = FxHashMap::<PackageName, Option<PackageId>>::default();
     let mut rows: BTreeMap<PackageId, Vec<PackageWire>> = BTreeMap::new();
-    for package in std::mem::take(&mut wire.packages) {
+    let mut ordinary = BTreeMap::new();
+    for mut package in std::mem::take(&mut wire.packages) {
+        if let Some(roots) = package.build_roots.take() {
+            let provenance =
+                OrdinaryOwner::new(&package.id, package.sdist.as_ref()).ok_or_else(|| {
+                    error(format!(
+                        "Missing locked source provenance for ordinary build owner `{}`",
+                        package.id
+                    ))
+                })?;
+            let inputs = package.build_inputs.take().unwrap_or_default();
+            if wire.version != BUILD_LOCK_VERSION
+                || ordinary
+                    .insert(package.id.clone(), (provenance, roots, inputs))
+                    .is_some()
+            {
+                return Err(error(format!(
+                    "Invalid ordinary build roots for `{}`",
+                    package.id
+                )));
+            }
+        } else if package.build_inputs.is_some() {
+            return Err(error(format!(
+                "Missing ordinary build roots for `{}`",
+                package.id
+            )));
+        }
         names
             .entry(package.id.name.clone())
             .and_modify(|id| {
@@ -818,6 +1070,12 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
     let default = UniversalMarker::from_combined(environment.into_marker(&runtime.requires_python));
     let mut universes = Vec::new();
     for (index, descriptor) in descriptors.into_iter().enumerate() {
+        if ordinary.contains_key(&descriptor.owner) {
+            return Err(error(format!(
+                "Ambiguous ordinary build owner `{}`",
+                descriptor.owner
+            )));
+        }
         let roots = descriptor
             .roots
             .into_iter()
@@ -844,12 +1102,36 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
             )
         })?;
         universes.push(Universe {
-            inputs: descriptor.inputs,
+            ordinary_owner: None,
+            inputs: descriptor
+                .inputs
+                .or_else(|| (runtime.version == BUILD_LOCK_VERSION).then(BTreeSet::new)),
             owner: descriptor.owner,
             marker: UniversalMarker::from_combined(descriptor.marker),
             roots,
             packages,
         });
+    }
+    if !ordinary.is_empty() {
+        let graph = OrdinaryGraph::new(&runtime);
+        for (id, (provenance, roots, inputs)) in ordinary {
+            if rows[&id]
+                .windows(2)
+                .any(|pair| pair[0].sdist != pair[1].sdist || pair[0].wheels != pair[1].wheels)
+            {
+                return Err(error(format!("Ambiguous ordinary build owner `{id}`")));
+            }
+            universes.push(
+                graph
+                    .reconstruct(&id, &provenance, &roots, Some(inputs))?
+                    .ok_or_else(|| {
+                        error(format!(
+                            "Cannot reconstruct ordinary build roots for `{id}`"
+                        ))
+                    })?,
+            );
+        }
+        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
     }
     runtime.builds = Some(BuildLocks {
         encoding,
@@ -930,10 +1212,18 @@ mod tests {
     }
 
     fn build_lock(encoding: BuildEncoding) -> Result<Lock, Box<dyn Error>> {
+        let build = graph("b", "2")?;
+        lock_with_roots(encoding, &build, &build.requirements)
+    }
+
+    fn lock_with_roots(
+        encoding: BuildEncoding,
+        build: &ResolverOutput,
+        roots: &[Requirement],
+    ) -> Result<Lock, Box<dyn Error>> {
         let root = std::env::current_dir()?;
         let _preview = uv_preview::test::with_features(&[]);
         let runtime = graph("a", "1")?;
-        let build = graph("b", "2")?;
         let owner = dist("a", "1")?;
         let indexes = IndexLocations::default();
         let lock = Lock::from_resolution(
@@ -949,9 +1239,9 @@ mod tests {
             [BuildGraph {
                 owner: &owner.dist,
                 marker: UniversalMarker::TRUE,
-                backend_requirements: &build.requirements,
-                requirements: &build.requirements,
-                resolution: &build,
+                backend_requirements: roots,
+                requirements: roots,
+                resolution: build,
             }],
             &root,
             &indexes,
@@ -963,7 +1253,7 @@ mod tests {
     fn round_trip(encoding: BuildEncoding) -> Result<String, Box<dyn Error>> {
         let lock = build_lock(encoding)?;
         let encoded = lock.to_toml()?;
-        assert!(encoded.starts_with("version = 2\n"));
+        assert!(encoded.starts_with("version = 4\n"));
         let decoded = Lock::from_toml(&encoded)?;
         assert_eq!(lock, decoded);
         assert_eq!(decoded.to_toml()?, encoded);
@@ -989,6 +1279,62 @@ mod tests {
             "2"
         );
         Ok(encoded)
+    }
+
+    /// The owner selects C alone from a cluster that also solved B. C's transitive D
+    /// must have the same pin and allowed artifacts in the ordinary graph.
+    #[test]
+    fn ordinary_build_roots() -> Result<(), Box<dyn Error>> {
+        let roots = [requirement("c==1")?];
+        let build = graph("b", "1")?;
+        let explicit = lock_with_roots(BuildEncoding::Dependency, &build, &roots)?
+            .with_compacted_build_domains()?;
+        let compact = explicit.clone().with_ordinary_build_roots()?;
+        let encoded = compact.to_toml()?;
+        assert!(!encoded.contains("[[build-universes]]"));
+        assert!(encoded.contains("build-roots = [{ name = \"c\" }]"));
+        assert_eq!(Lock::from_toml(&encoded)?, compact);
+        let inferred = &compact.builds.as_ref().expect("builds").universes[0];
+        let declared = &explicit.builds.as_ref().expect("builds").universes[0];
+        assert_eq!(inferred.roots, declared.roots);
+        assert_eq!(inferred.packages, declared.packages);
+        assert_eq!(inferred.packages.len(), 2);
+
+        let owner = compact.find_by_name(&"a".parse()?)?.expect("source owner");
+        let mut archive = owner
+            .to_source_dist(&std::env::current_dir()?, FirstParty::No)?
+            .expect("sdist");
+        assert!(inferred.accepts_source(&archive));
+        let SourceDist::Registry(claimed) = &mut archive else {
+            return Err("expected a registry source".into());
+        };
+        claimed.file.hashes = vec![format!("sha256:{}", "7".repeat(64)).parse()?].into();
+        assert!(!inferred.accepts_source(&archive));
+
+        let mut different_hash = explicit;
+        let universe = &mut different_hash.builds.as_mut().expect("builds").universes[0];
+        let leaf = universe
+            .packages
+            .values_mut()
+            .find(|p| p.id.name.as_ref() == "d")
+            .expect("D");
+        let Some(LockedSourceDist::Url { metadata, .. }) = &mut leaf.sdist else {
+            return Err("expected a registry sdist".into());
+        };
+        metadata.hash = Some(format!("sha256:{}", "9".repeat(64)).parse()?);
+        assert!(
+            different_hash
+                .with_ordinary_build_roots()?
+                .to_toml()?
+                .contains("[[build-universes]]")
+        );
+
+        let different_pin = graph("b", "2")?;
+        let explicit = lock_with_roots(BuildEncoding::Dependency, &different_pin, &roots)?
+            .with_compacted_build_domains()?
+            .with_ordinary_build_roots()?;
+        assert!(explicit.to_toml()?.contains("[[build-universes]]"));
+        Ok(())
     }
 
     /// Platform forks can repeat roots and package preferences while selecting the same closure.
