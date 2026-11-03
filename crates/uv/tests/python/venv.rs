@@ -2177,6 +2177,55 @@ fn create_venv_apostrophe() {
     assert_eq!(stdout.trim(), venv_dir.to_string_lossy());
 }
 
+/// A zsh theme can enable prompt substitution after activation or in a child shell.
+#[test]
+#[cfg(unix)]
+fn activate_zsh_prompt_subst() {
+    let Ok(zsh) = which::which("zsh") else {
+        return;
+    };
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let name = r"env-$(touch dollar)-`touch backtick`-%1v-!-\path";
+    let venv = context.temp_dir.child(name);
+    context
+        .venv()
+        .args(["--python", "3.12"])
+        .arg(venv.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(Vec::<(&str, &str)>::new(), context.external_command(&zsh)
+        .args(["-f", "-c", indoc! {r#"
+            setopt promptbang
+            unsetopt promptsubst
+            psvar=(user)
+            PS1='original %1v>'
+            source "$1" || exit 1
+            print -Pr -- "$PS1"
+            setopt promptsubst
+            print -Pr -- "$PS1"
+            "$2" -fc 'setopt promptsubst; psvar=(child); print -Pr -- "$PS1"' || exit 1
+            psvar=()
+            deactivate || exit 1
+            print -Pr -- "$PS1"
+        "#}, "zsh"]).arg(venv.child("bin/activate").path()).arg(&zsh), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (env-$(touch dollar)-`touch backtick`-user-0-\path) original user>
+    (env---user-0-\path) original user>
+    (env---child-!-\path) original child>
+    original >
+    ");
+    context
+        .temp_dir
+        .child("dollar")
+        .assert(predicate::path::exists());
+    context
+        .temp_dir
+        .child("backtick")
+        .assert(predicate::path::exists());
+}
+
 /// An explicit prompt is inserted into the script that Bash sources.
 #[test]
 #[cfg(target_os = "linux")]
