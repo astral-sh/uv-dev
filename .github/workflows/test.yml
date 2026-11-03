@@ -75,7 +75,7 @@ jobs:
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
           # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
           sudo apt install -y --no-install-recommends --allow-downgrades \
-            git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
+            git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring zsh
 
       - name: "Start gnome-keyring"
         # run gnome-keyring with 'foobar' as password for the login keyring
