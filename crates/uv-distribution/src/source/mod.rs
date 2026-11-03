@@ -508,10 +508,21 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     (root.clone(), Some(root))
                 }
                 SourceLocation::GitArchive(resource) => {
-                    let (shard, _) = self
+                    let (shard, revision, fetch) = self
                         .git_archive_cache(&source, &resource, hashes, client)
                         .await?;
                     let root = shard.entry(SOURCE).into_path_buf();
+                    if !root.is_dir() {
+                        self.persist_archive(
+                            &source,
+                            &fetch.path().join(resource.path),
+                            resource.ext,
+                            &root,
+                            hashes,
+                            revision.hashes(),
+                        )
+                        .await?;
+                    }
                     (root.clone(), Some(root))
                 }
                 SourceLocation::GitDirectory(resource) => {
@@ -1761,7 +1772,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // If the revision already exists, return it. There's no need to check for freshness, since
         // everything is scoped to a Git commit.
         if let Some(revision) = RevisionHashes::read_from(&revision_entry)? {
-            if revision.has_digests(hashes) && cache_shard.entry(SOURCE).path().is_dir() {
+            if revision.has_digests(hashes) {
                 return Ok(revision);
             }
         }
@@ -1794,7 +1805,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         resource: &GitPathSourceUrl<'_>,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
-    ) -> Result<(CacheShard, RevisionHashes), Error> {
+    ) -> Result<(CacheShard, RevisionHashes, Fetch), Error> {
         // Fetch the Git repository.
         let fetch = self
             .build_context
@@ -1822,7 +1833,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         validate_revision(source, &revision, hashes)?;
 
-        Ok((cache_shard, revision))
+        Ok((cache_shard, revision, fetch))
     }
 
     /// Build a source distribution from a Git repository.
@@ -1834,7 +1845,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let (cache_shard, revision) = self
+        let (cache_shard, revision, _) = self
             .git_archive_cache(source, resource, hashes, client)
             .await?;
         let source_entry = cache_shard.entry(SOURCE);
@@ -1913,7 +1924,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        let (cache_shard, revision) = self
+        let (cache_shard, revision, _) = self
             .git_archive_cache(source, resource, hashes, client)
             .await?;
         let source_entry = cache_shard.entry(SOURCE);

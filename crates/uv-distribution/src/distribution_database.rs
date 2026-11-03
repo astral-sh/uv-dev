@@ -216,11 +216,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &SourceDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<BuildSourceTree, Error> {
-        // Validate the selected sdist's advertised digest on cache hits as well as downloads.
+        // Check the declared digest on cache hits as well as on fresh downloads.
+        let url_hashes;
         let hashes = match dist {
             SourceDist::Registry(dist) => hashes.with_index_hashes(dist.file.hashes.as_slice()),
-            SourceDist::DirectUrl(_)
-            | SourceDist::Path(_)
+            SourceDist::DirectUrl(dist) => {
+                url_hashes = parse_url_hashes(&dist.url);
+                match url_hashes.as_ref() {
+                    Some(digests) if !hashes.requires_validation() => {
+                        ArchiveHashPolicy::All(digests.as_slice())
+                    }
+                    _ => hashes,
+                }
+            }
+            SourceDist::Path(_)
             | SourceDist::GitPath(_)
             | SourceDist::Directory(_)
             | SourceDist::GitDirectory(_) => hashes,
