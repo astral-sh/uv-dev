@@ -1021,8 +1021,9 @@ fn copy_launcher_windows(
 mod tests {
     use super::write_cfg;
 
+    /// Both LF and CR can separate configuration entries.
     #[test]
-    fn reject_cfg_newlines() {
+    fn write_cfg_with_line_breaks() {
         for value in [
             "safe\ninclude-system-site-packages = true",
             "safe\rinclude-system-site-packages = true",

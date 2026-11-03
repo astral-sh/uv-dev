@@ -92,8 +92,9 @@ fn create_venv_ksh() {
     context.venv.assert(predicates::path::is_dir());
 }
 
+/// A newline in the prompt can introduce a second configuration entry.
 #[test]
-fn create_venv_rejects_prompt_newlines() {
+fn create_venv_with_newline_in_prompt() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     uv_snapshot!(context.filters(), context.venv()
@@ -2588,7 +2589,7 @@ fn no_clear_conflicts_with_allow_existing() {
 }
 
 #[test]
-fn create_venv_rejects_prompt_carriage_return() {
+fn create_venv_with_carriage_return_in_prompt() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     uv_snapshot!(context.filters(), context.venv().args(["--python", "3.12", "--prompt", "bad\rprompt"]), @r#"
     exit_code: 2 (failure)
@@ -2603,7 +2604,7 @@ fn create_venv_rejects_prompt_carriage_return() {
 
 #[test]
 #[cfg(unix)]
-fn create_venv_validates_prompt_before_removing_centralized_reference() -> Result<()> {
+fn create_venv_with_newline_in_prompt_and_centralized_reference() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -2656,13 +2657,13 @@ fn python_with_newline_in_home(context: &uv_test::TestContext) -> Result<PathBuf
 
 #[test]
 #[cfg(unix)]
-fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
+fn create_venv_with_newline_in_home_and_allow_existing() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
     let python = python_with_newline_in_home(&context)?;
     context.temp_dir.child(".venv/marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
 
-    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python), @"
+    uv_snapshot!(context.filters(), context.venv().arg("--allow-existing").arg("--python").arg(python.as_path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
@@ -2677,13 +2678,13 @@ fn create_venv_validates_home_before_reusing_destination() -> Result<()> {
 
 #[test]
 #[cfg(unix)]
-fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
+fn create_venv_with_newline_in_home_and_clear() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
     let python = python_with_newline_in_home(&context)?;
     context.temp_dir.child(".venv/marker").write_str("keep")?;
     let config = context.read(".venv/pyvenv.cfg");
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python), @"
+    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg(python.as_path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
@@ -2698,11 +2699,11 @@ fn create_venv_validates_home_before_clearing_destination() -> Result<()> {
 
 #[test]
 #[cfg(unix)]
-fn create_venv_validates_home_before_creating_destination() -> Result<()> {
+fn create_venv_with_newline_in_home_and_new_destination() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"bad[\r\n]home", "bad-home"));
     let python = python_with_newline_in_home(&context)?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python), @"
+    uv_snapshot!(context.filters(), context.venv().arg("new-venv").arg("--python").arg(python.as_path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: bad-home/bin/python3.12
