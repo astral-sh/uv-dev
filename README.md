@@ -25,6 +25,13 @@ that workflow. Explicit uv sync populates the virtual environment with packages 
 language-server (LSP) integrations in an editor. This directly answers the conceptual question;
 it does not report a defect or establish a documentation-change decision.
 
+The reporter accepts the LSP explanation and clarifies the remaining documentation request in
+astral-sh/uv#23102 (comment 6637534303): explicitly introduce LSP integrations so the editor
+reference has context, and mention exact syncing as another benefit of uv sync. The latter is
+supported by the same page: uv sync removes extraneous packages by default, whereas uv run retains
+them unless --exact is used. These are concrete documentation suggestions, not a new failure
+report or a maintainer commitment to change the page.
+
 ## Draft response
 
 This earlier draft is retained as background; the maintainer has since supplied the explanation.
@@ -43,6 +50,10 @@ as a question. Clarifying the sentence or linking to the project-environment exp
 address the ambiguity without changing the documented behavior. The conceptual question can be
 answered from the documentation and the environment demonstration below. There is no reported
 command or editor failure to classify as reproduced or not reproduced.
+
+The original question has been answered and accepted by the reporter. The follow-up asks for a
+documentation improvement rather than alleging incorrect behavior; retain the original question
+classification while recording that narrower documentation follow-up for maintainer review.
 
 ## Reproduction
 
@@ -133,6 +144,13 @@ inputs are unnecessary for answering the wording question itself.
 
 ## Supporting evidence
 
+- astral-sh/uv#23102, reporter comment 6637534303 (2026-11-04), accepts the explanation and
+  asks for explicit LSP context plus mention of exact syncing. This is the reporter's proposal;
+  the supplied discussion contains no maintainer acceptance of these documentation changes.
+- docs/concepts/projects/sync.md:92–108 documents the exact-sync distinction: uv sync removes
+  packages not selected for installation by default; --inexact retains them. uv run retains
+  extraneous packages by default and supports --exact to remove them. Thus manual sync is not
+  the only way to request exact syncing, and preparing an editor environment is not its only use.
 - astral-sh/uv#23102, comment 6635554960 by maintainer zanieb (2026-11-04), explicitly
   identifies editor LSP integrations as the reason to populate the environment with uv sync
   when automatic synchronization through uv run is not being invoked. The supplied full issue
@@ -176,11 +194,17 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 
 ## Handoff
 
-The maintainer has answered the environment/editor connection in the issue discussion. No
-additional public response is prepared. A small wording clarification or cross-reference remains a
-possible documentation follow-up, but the maintainer has not committed to one, and no implementation
-change is established by this report. The classification remains question. The structured
-reproduction outcome remains needs_more_information because no behavioral failure is specified;
-the successful synchronization experiment supports the explanation without claiming to test an
-editor. The new comment supplies no failing reproduction, affected version or platform, or editor
-configuration. No GitHub changes or checkout modifications were made.
+The maintainer has answered the environment/editor connection, and the reporter accepts that
+explanation. The remaining request is to improve the documentation by explicitly introducing LSP
+integrations and mentioning exact syncing as another use of uv sync. Review whether to add that
+context or a cross-reference to “Handling of extraneous packages.” Any clarification should explain
+that exactness is a default difference, configurable with uv sync --inexact and uv run --exact;
+it should not imply that exact syncing requires uv sync.
+
+No maintainer commitment to these edits appears in the supplied discussion. No additional public
+response is prepared. The original classification remains question, with the documentation
+suggestions recorded above. The structured reproduction outcome remains needs_more_information
+because no behavioral failure is specified; the successful synchronization experiment supports the
+explanation without claiming to test an editor. The follow-up supplies no failing reproduction,
+affected version or platform, or editor configuration. No GitHub changes or checkout modifications
+were made.
