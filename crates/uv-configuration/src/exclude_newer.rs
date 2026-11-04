@@ -494,6 +494,9 @@ impl ExcludeNewer {
     /// Filter package-specific settings to packages in the resolution.
     #[must_use]
     pub fn filter_packages<'a>(self, packages: impl IntoIterator<Item = &'a PackageName>) -> Self {
+        if self.package.is_empty() {
+            return self;
+        }
         let packages = packages.into_iter().collect::<FxHashSet<_>>();
         Self {
             global: self.global,

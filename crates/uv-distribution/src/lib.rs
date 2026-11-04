@@ -5,12 +5,12 @@ pub use error::Error;
 pub use first_party::FirstPartyPackages;
 pub use index::{BuiltWheelIndex, RegistryWheelIndex};
 pub use metadata::{
-    ArchiveMetadata, BuildRequires, FlatRequiresDist, LoweredExtraBuildDependencies,
-    LoweredRequirement, LoweringError, Metadata, MetadataError, RequiresDist,
-    SourcedDependencyGroups,
+    ArchiveMetadata, BuildRequires, FlatRequiresDist, GitWorkspaceMember,
+    LoweredExtraBuildDependencies, LoweredRequirement, LoweringError, Metadata, MetadataError,
+    RequiresDist, SourcedDependencyGroups,
 };
 pub use reporter::Reporter;
-pub use source::{StaticMetadataDatabase, prune};
+pub use source::{BuildSourceTree, StaticMetadataDatabase, prune};
 pub use variant::supported_variant_properties;
 
 mod archive;

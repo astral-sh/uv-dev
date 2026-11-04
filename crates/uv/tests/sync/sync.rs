@@ -13,9 +13,10 @@ use wiremock::matchers::{basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
-use uv_lock::Lock;
+use uv_lock::{BuildEncoding, Lock};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, WheelBuilder};
 
@@ -18919,6 +18920,90 @@ fn build_hash_project() -> Result<(TestContext, String)> {
     Ok((context, build_hash))
 }
 
+/// A local project is the source being built. Only its build dependencies require hashes.
+#[test]
+fn locked_build_hashes_local_owner() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        {project}
+        build-constraint-dependencies = [
+            {{ requirement = "build-dependency==1.0.0", hashes = ["sha256:{hash}"] }},
+        ]
+    "#, project = context.read("pyproject.toml")})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--require-build-hashes", "--preview-features=build-dependency-locking,build-dependency-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// A runtime wheel and the only trusted build artifact, its sdist, need one build environment.
+#[test]
+fn locked_build_owner_wheel_and_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "shared".parse()?;
+    let version = "1".parse()?;
+    let index = context.temp_dir.child("simple");
+    let package = index.child("shared");
+    let (wheel_name, wheel) = WheelBuilder::new(&name, &version).build();
+    let wheel_hash = hex::encode(Sha256::digest(&wheel));
+    package.child(&wheel_name).write_binary(&wheel)?;
+    let source = generate_source_archive(&name, &version, "", None)?;
+    let source_hash = hex::encode(Sha256::digest(&source));
+    package.child("shared-1.tar.gz").write_binary(&source)?;
+    package.child("index.html").write_str(&formatdoc! {r#"
+        <a href="{wheel_name}#sha256={wheel_hash}" data-upload-time="2020-01-01T00:00:00Z">{wheel_name}</a>
+        <a href="shared-1.tar.gz#sha256={source_hash}" data-upload-time="2020-01-01T00:00:00Z">shared-1.tar.gz</a>
+    "#})?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1"]
+
+        [build-system]
+        requires = ["shared==1"]
+        build-backend = "backend"
+
+        [tool.uv]
+        build-constraint-dependencies = [
+            {{ requirement = "shared==1", hashes = ["sha256:{source_hash}"] }},
+        ]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "simple"
+        default = true
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--preview-features=build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--no-install-project", "--no-binary-package", "shared",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared==1
+    ");
+    Ok(())
+}
+
 /// A runtime-matched build requirement inherits the wheel selected by a path source.
 #[test]
 fn match_runtime_wheel_source() -> Result<()> {
@@ -19098,6 +19183,59 @@ fn build_hash_project_in_subdirectory() -> Result<(TestContext, String)> {
     Ok((context, hash))
 }
 
+/// An sdist can contain development source overrides that differ from its published requirements.
+#[test]
+fn locked_build_dependency_from_archive() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    let project = context.read("pyproject.toml")
+        + indoc! {r#"
+        [tool.uv.sources]
+        build-dependency = { path = "vendor/build_dependency-1.0.0-py3-none-any.whl" }
+    "#};
+    let wheels = context.temp_dir.child("wheels");
+    let wheel = fs_err::read(wheels.child("project-0.1.0-py3-none-any.whl"))?;
+    write_tar_gz(
+        fs_err::File::create(wheels.child("project-0.1.0.tar.gz").path())?,
+        &[
+            ("project-0.1.0/pyproject.toml", project.as_bytes()),
+            (
+                "project-0.1.0/backend.py",
+                context.read("backend.py").as_bytes(),
+            ),
+            (
+                "project-0.1.0/wheels/project-0.1.0-py3-none-any.whl",
+                &wheel,
+            ),
+        ],
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "consumer"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["project"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--preview-features", "build-dependency-locking", "--no-binary-package", "project",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0
+    ");
+    Ok(())
+}
+
 /// Conflicting extras select different build roots for one source on the same Python version.
 #[test]
 fn locked_build_follows_runtime_conflict() -> Result<()> {
@@ -19211,6 +19349,110 @@ fn locked_build_follows_runtime_conflict() -> Result<()> {
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     ");
     assert_eq!(context.read("build-version"), "2.0.0");
+    Ok(())
+}
+
+/// Frozen sync cannot discover missing build environments from a runtime-only lock.
+#[test]
+fn locked_build_frozen_requires_build_environments() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--no-editable", "--preview-features", "build-dependency-locking",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile has no locked build environments. Run `uv lock --preview-features build-dependency-locking` to record them.
+    ");
+    assert!(!context.temp_dir.child("backend-executed").exists());
+    Ok(())
+}
+
+/// A cold plain sync fetches the pinned build wheel without querying the flat index again.
+#[tokio::test]
+async fn locked_build_plain_sync_skips_flat_index() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    let server = MockServer::start().await;
+    let wheel = "build_dependency-1.0.0-py3-none-any.whl";
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="/{wheel}#sha256={hash}" data-upload-time="2024-01-01T00:00:00Z">{wheel}</a>"#),
+            "text/html",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{wheel}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(context.read_bytes(format!("wheels/{wheel}"))),
+        )
+        .mount(&server)
+        .await;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"["wheels"]"#, &format!(r#"["{}/links"]"#, server.uri())),
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--preview-features", "build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.sync().args(["--no-cache", "--no-editable"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Updating a project in plain sync must keep its locked build policy and encoding.
+#[test]
+fn locked_build_policy_survives_sync_update() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "build-dependency-locking"])
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING, "package"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let pyproject = context.read("pyproject.toml")
+        + indoc! {r#"
+        [dependency-groups]
+        dev = ["dynamic-dependency==1.0.0"]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject)?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--offline", "--no-editable"])
+        .env("UV_TEST_DYNAMIC_BUILD_REQUIRES", r#"["dynamic-dependency==1.0.0"]"#), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: `get_requires_for_build_wheel` requested `dynamic-dependency`, which was not declared in the build requirements
+    ");
+    assert_eq!(
+        Lock::from_toml(&context.read("uv.lock"))?.build_encoding(),
+        Some(BuildEncoding::Package),
+    );
     Ok(())
 }
 

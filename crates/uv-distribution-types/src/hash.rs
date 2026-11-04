@@ -122,7 +122,9 @@ impl<'a> ArchiveHashPolicy<'a> {
 pub struct MetadataHashPolicy<'a> {
     /// Which missing hashes to collect for the resolution.
     pub collection: HashCollection,
-    /// Expected hashes to validate before source builds. Wheel validation is deferred to installation.
+    /// Whether to verify the selected wheel before consuming its metadata.
+    pub verify_wheel: bool,
+    /// Expected archive hashes.
     pub validation: HashValidation<'a>,
 }
 

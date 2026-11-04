@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use owo_colors::OwoColorize;
@@ -19,8 +19,9 @@ use uv_distribution_types::{
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirementSpecification,
 };
 use uv_installer::SitePackages;
+use uv_lock::{BuildLockPins, BuildPins};
 use uv_normalize::PackageName;
-use uv_pep508::{MarkerEnvironment, RequirementOrigin};
+use uv_pep508::{MarkerEnvironment, MarkerTree, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
@@ -29,8 +30,9 @@ use uv_requirements::{
     partition_requirements,
 };
 use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
-    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+    BuildConstraintHashes, BuildForkStrategy, DependencyMode, Exclusions, FlatIndex, InMemoryIndex,
+    Manifest, Options, Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment,
+    ResolverOutput, RuntimePreferenceMode, UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -46,6 +48,21 @@ pub mod reporters;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+
+/// Project constraints and existing selections used by universal build resolution.
+pub struct BuildLockInputs<'a> {
+    pub constraints: &'a Constraints,
+    pub hashes: BuildConstraintHashes,
+    pub previous: Option<PreviousBuildLock<'a>>,
+}
+
+/// Existing owner-scoped selections for a project build dependency update.
+pub struct PreviousBuildLock<'a> {
+    pub pins: &'a BuildLockPins,
+    pub root: &'a Path,
+    pub project_domain: MarkerTree,
+    pub prefer_versions: bool,
+}
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
@@ -116,6 +133,7 @@ pub async fn resolve(
     flat_index: &FlatIndex,
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
+    build_inputs: Option<BuildLockInputs<'_>>,
     concurrency: &Concurrency,
     options: Options,
     recorder: Option<ResolutionRecorder>,
@@ -377,7 +395,107 @@ pub async fn resolve(
         )?
         .with_reporter(Arc::new(reporter));
 
-        resolver.resolve().await?
+        if let Some(BuildLockInputs {
+            constraints,
+            hashes,
+            previous: previous_build,
+        }) = build_inputs
+        {
+            let constraints = Constraints::from_specifications(
+                constraints
+                    .specifications()
+                    .cloned()
+                    .chain(upgrade.constraints().cloned().map(Into::into)),
+            );
+            let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
+            let build_recorder = recorder.as_ref().map(|_| ResolutionRecorder::default());
+            let runtime_preferences =
+                RuntimePreferenceMode::from_env().map_err(anyhow::Error::msg)?;
+            let resolution = Box::pin(resolver.resolve_with_build_forks(
+                strategy,
+                runtime_preferences,
+                &hashes,
+                async |requirements, env, index, hasher, pins: Option<&BuildPins>| {
+                    let hasher = match pins {
+                        Some(pins) => pins.apply_hashes(hasher.clone()),
+                        None => hasher.clone(),
+                    };
+                    // Static build requirements are direct inputs to this isolated environment.
+                    let hasher = hasher.augment_with_requirements(requirements.iter())?;
+                    let (lookaheads, hasher) = LookaheadResolver::new(
+                        &requirements,
+                        &constraints,
+                        &DependencyModifiers::default(),
+                        &hasher,
+                        index,
+                        DistributionDatabase::new(
+                            client,
+                            build_dispatch,
+                            concurrency.downloads_semaphore.clone(),
+                        )
+                        .with_recorder(build_recorder.clone()),
+                    )
+                    .resolve(env)
+                    .await?;
+                    Ok::<_, Error>((
+                        Manifest::simple(requirements)
+                            .with_constraints(constraints.clone())
+                            .with_lookaheads(lookaheads)
+                            .with_recorder(build_recorder.clone()),
+                        hasher,
+                        pins.filter(|_| {
+                            previous_build
+                                .as_ref()
+                                .is_some_and(|previous| previous.prefer_versions)
+                        })
+                        .into_iter()
+                        .flat_map(BuildPins::versions)
+                        .map(|(name, version, index)| {
+                            Preference::from_build_lock(
+                                name.clone(),
+                                version.clone(),
+                                index.cloned(),
+                            )
+                        })
+                        .collect(),
+                    ))
+                },
+                async |graph, runtime, scope, owner_hasher| {
+                    let owners = build_dispatch
+                        .discover_build_requirements(graph, runtime, scope, owner_hasher)
+                        .await
+                        .map_err(Error::Anyhow)?;
+                    let Some(previous) = &previous_build else {
+                        return Ok(owners.into_iter().map(|owner| (owner, None)).collect());
+                    };
+                    let mut scoped = Vec::new();
+                    for owner in owners {
+                        for (marker, pins) in previous
+                            .pins
+                            .for_owner(
+                                &owner.owner,
+                                previous.root,
+                                owner.marker,
+                                previous.project_domain,
+                            )
+                            .map_err(anyhow::Error::from)?
+                        {
+                            let mut owner = owner.clone();
+                            owner.marker = marker;
+                            scoped.push((owner, pins));
+                        }
+                    }
+                    Ok(scoped)
+                },
+            ))
+            .await?;
+            if let (Some(recorder), Some(build_recorder)) = (&recorder, build_recorder) {
+                recorder.record_build_lookups(build_recorder.take());
+            }
+            resolution
+        } else {
+            resolver.resolve().await?
+        }
     };
 
     logger.on_complete(resolution.len(), start, printer)?;

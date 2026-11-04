@@ -1045,12 +1045,20 @@ impl Name for Dist {
 }
 
 impl DistributionMetadata for RegistryBuiltWheel {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        Some(&self.index)
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         VersionOrUrlRef::Version(&self.filename.version)
     }
 }
 
 impl DistributionMetadata for RegistryBuiltDist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        Some(&self.best_wheel().index)
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         self.best_wheel().version_or_url()
     }
@@ -1083,6 +1091,10 @@ impl DistributionMetadata for GitPathBuiltDist {
 }
 
 impl DistributionMetadata for RegistrySourceDist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        Some(&self.index)
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         VersionOrUrlRef::Version(&self.version)
     }
@@ -1142,6 +1154,10 @@ impl DistributionMetadata for DirectorySourceDist {
 }
 
 impl DistributionMetadata for SourceDist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        self.index()
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         match self {
             Self::Registry(dist) => dist.version_or_url(),
@@ -1166,6 +1182,10 @@ impl DistributionMetadata for SourceDist {
 }
 
 impl DistributionMetadata for BuiltDist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        self.index()
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         match self {
             Self::Registry(dist) => dist.version_or_url(),
@@ -1186,6 +1206,10 @@ impl DistributionMetadata for BuiltDist {
 }
 
 impl DistributionMetadata for Dist {
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        self.index()
+    }
+
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         match self {
             Self::Built(dist) => dist.version_or_url(),

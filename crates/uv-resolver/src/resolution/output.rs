@@ -197,6 +197,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
         }
 
         let output = ResolverOutput {
+            builds: Vec::new(),
             graph,
             requires_python,
             fork_markers,

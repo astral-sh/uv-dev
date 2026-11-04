@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Context;
 use rustc_hash::FxHashSet;
 use tracing::debug;
 
-use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
@@ -19,20 +17,22 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{BuildEncoding, GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
-use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
+use uv_resolve_operations::{BuildLockInputs, Error as ResolveError, PreviousBuildLock};
 use uv_resolver::{
-    FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
+    BuildConstraintHashes, FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment,
+    UniversalMarker,
 };
 use uv_settings::{LockedSource, ResolverSettings};
+use uv_static::EnvVars;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -318,6 +318,27 @@ async fn do_lock(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+    // A routine project update must keep the build policy recorded in its lock.
+    let existing_build_encoding = existing_lock.as_ref().and_then(Lock::build_encoding);
+    let build_encoding = if existing_build_encoding.is_some()
+        || preview.is_enabled(PreviewFeature::BuildDependencyLocking)
+    {
+        let encoding = match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING) {
+            Ok(value) if value == "package" => BuildEncoding::Package,
+            Ok(value) if value == "conflict-marker" => BuildEncoding::ConflictMarker,
+            Ok(value) if value == "dependency" => BuildEncoding::Dependency,
+            Err(std::env::VarError::NotPresent) => {
+                existing_build_encoding.unwrap_or(BuildEncoding::Dependency)
+            }
+            Ok(value) => return Err(anyhow::anyhow!(
+                "Unknown build lock encoding `{value}` (expected `conflict-marker`, `package`, or `dependency`)"
+            ).into()),
+            Err(error) => return Err(anyhow::Error::from(error).into()),
+        };
+        Some(encoding)
+    } else {
+        None
+    };
 
     // Extract the project settings.
     let ResolverSettings {
@@ -724,13 +745,19 @@ async fn do_lock(
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
 
-    // Resolve the flat indexes from `--find-links`.
-    let check_locked_builds = existing_lock.as_ref().is_some_and(Lock::locks_builds);
-    let flat_index = if check_locked_builds {
-        FlatIndex::default()
+    let check_locked_builds =
+        matches!(mode, LockMode::Locked(_, _)) && existing_build_encoding.is_some();
+    // A v1 metadata build may need to resolve its dependencies during validation. A v2
+    // metadata build has its own pinned environment, so defer find-links until a fresh solve.
+    let validation_flat_index = if existing_lock
+        .as_ref()
+        .is_some_and(|lock| !lock.locks_builds())
+    {
+        Some(FlatIndex::load(&client, cache, index_locations).await?)
     } else {
-        FlatIndex::load(&client, cache, index_locations).await?
+        None
     };
+    let empty_flat_index = FlatIndex::default();
 
     // Lower the extra build dependencies.
     let extra_build_requires = match &target {
@@ -768,7 +795,7 @@ async fn do_lock(
         &build_constraints,
         interpreter,
         index_locations,
-        &flat_index,
+        validation_flat_index.as_ref().unwrap_or(&empty_flat_index),
         dependency_metadata,
         state.fork().into_inner(),
         *index_strategy,
@@ -787,35 +814,39 @@ async fn do_lock(
         concurrency.clone(),
         preview,
     )
-    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
-
-    if let Some(lock) = existing_lock.as_ref().filter(|lock| lock.locks_builds())
-        && !lock
-            .satisfies_build_inputs(
-                target.install_path(),
-                &extra_build_requires,
-                async |name, path| {
-                    SourceBuild::local_build_requirements(
-                        path,
-                        name,
-                        index_locations,
-                        sources,
-                        cache,
-                        workspace_cache,
-                        client.credentials_cache(),
-                    )
-                    .await
-                    .with_context(|| format!("Failed to read build requirements for `{name}`"))
-                },
-            )
-            .await?
-    {
-        // This reader cannot regenerate a stale build graph.
-        return Err(LockError::StaleBuildLock);
-    }
+    .with_locked_build_dependencies(build_encoding.is_some());
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        let build_lock_matches = if existing_lock.locks_builds() {
+            match existing_lock
+                .satisfies_build_inputs(
+                    target.install_path(),
+                    &extra_build_requires,
+                    async |name, path| {
+                        build_dispatch
+                            .local_build_requirements(name, path)
+                            .await
+                            .map_err(LockError::from)
+                    },
+                )
+                .await
+            {
+                Ok(matches) => matches,
+                Err(err) if check_locked_builds => return Err(err),
+                // A removed directory may no longer be reachable from the current project.
+                Err(err) => {
+                    debug!("Could not validate locked build inputs: {err}");
+                    false
+                }
+            }
+        } else {
+            build_encoding.is_none()
+        };
+        if check_locked_builds && (!build_lock_matches || existing_build_encoding != build_encoding)
+        {
+            return Err(LockError::StaleBuildLock);
+        }
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
         let replay;
@@ -841,6 +872,7 @@ async fn do_lock(
         .with_first_party_packages(&first_party_packages);
         match Box::pin(ValidatedLock::validate(
             existing_lock,
+            build_lock_matches,
             target.install_path(),
             packages,
             &members,
@@ -871,12 +903,6 @@ async fn do_lock(
         ))
         .await
         {
-            Ok(ValidatedLock::Satisfies(lock))
-                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
-                    && !lock.locks_builds() =>
-            {
-                Some(ValidatedLock::Versions(lock))
-            }
             Ok(ValidatedLock::Satisfies(lock)) => Some(ValidatedLock::Satisfies(lock)),
             Ok(_) if check_locked_builds => return Err(LockError::StaleBuildLock),
             Ok(result) => Some(result),
@@ -914,6 +940,13 @@ async fn do_lock(
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
+            // Reuse the audited versions and hashes when only the wire format changes.
+            if let Some(encoding) = build_encoding
+                && existing_build_encoding != Some(encoding)
+            {
+                let updated = lock.clone().with_build_encoding(encoding);
+                return Ok(LockResult::Changed(Some(lock), updated));
+            }
             Ok(LockResult::Unchanged(lock))
         }
 
@@ -923,6 +956,11 @@ async fn do_lock(
             ValidatedLock::Unusable(_) | ValidatedLock::Versions(_) | ValidatedLock::Preferable(_),
         )
         | None => {
+            let flat_index = match &validation_flat_index {
+                Some(flat_index) => flat_index,
+                None => &FlatIndex::load(&client, cache, index_locations).await?,
+            };
+            let build_dispatch = build_dispatch.with_flat_index(flat_index);
             let recorder = if preview.is_enabled(PreviewFeature::ResolutionInputs) {
                 Some(ResolutionRecorder::default())
             } else {
@@ -945,6 +983,7 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
+            let prefer_versions = versions_lock.is_some();
             let LockedRequirements { preferences, git } = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
@@ -985,6 +1024,33 @@ async fn do_lock(
                             .unwrap_or_default()
                     }),
             );
+
+            let previous = existing_lock.map(ValidatedLock::into_lock);
+            let previous_pins = previous
+                .as_ref()
+                .filter(|_| build_encoding.is_some())
+                .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
+                .transpose()?;
+            let build_inputs = if build_encoding.is_some() {
+                let project_domain =
+                    Lock::build_domain(&requires_python, lock_supported_environments.as_markers());
+                Some(BuildLockInputs {
+                    constraints: &build_constraints,
+                    hashes: BuildConstraintHashes::from_constraints(
+                        &build_constraints,
+                        *build_hash_checking,
+                        project_domain,
+                    )?,
+                    previous: previous_pins.as_ref().map(|pins| PreviousBuildLock {
+                        pins,
+                        root: target.install_path(),
+                        project_domain,
+                        prefer_versions,
+                    }),
+                })
+            } else {
+                None
+            };
 
             // Expand the available extras for each workspace member.
             let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
@@ -1036,9 +1102,10 @@ async fn do_lock(
                 interpreter.markers(),
                 conflicts.clone(),
                 &client,
-                &flat_index,
+                flat_index,
                 state.index(),
                 &build_dispatch,
+                build_inputs,
                 concurrency,
                 options,
                 recorder.clone(),
@@ -1052,6 +1119,9 @@ async fn do_lock(
 
             // Notify the user of any resolution diagnostics.
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+            for build in &resolution.builds {
+                uv_resolve_operations::diagnose_resolution(build.graph.diagnostics(), printer)?;
+            }
 
             let manifest = ResolverManifest::new(
                 members,
@@ -1065,7 +1135,6 @@ async fn do_lock(
             )
             .relative_to(target.install_path())?;
 
-            let previous = existing_lock.map(ValidatedLock::into_lock);
             let lock = Lock::from_resolution(
                 &resolution,
                 manifest,
@@ -1091,6 +1160,33 @@ async fn do_lock(
             .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
+
+            let lock = if let Some(encoding) = build_encoding {
+                let lock = lock
+                    .with_build_graphs(
+                        encoding,
+                        resolution
+                            .builds
+                            .iter()
+                            .map(|build| (build.owners.as_slice(), &build.graph)),
+                        target.install_path(),
+                        index_locations,
+                        &extra_build_requires,
+                    )?
+                    .with_missing_registry_hashes(
+                        &client,
+                        target.install_path(),
+                        concurrency.downloads,
+                    )
+                    .await?;
+                if let Some(pins) = previous_pins {
+                    pins.verify(&lock, target.install_path(), &client).await?;
+                }
+                lock.with_compacted_build_domains()?
+                    .with_ordinary_build_roots()?
+            } else {
+                lock
+            };
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())

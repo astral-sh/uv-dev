@@ -585,6 +585,7 @@ pub async fn pip_install(
             &flat_index,
             state.index(),
             &build_dispatch,
+            None,
             &concurrency,
             options,
             None,

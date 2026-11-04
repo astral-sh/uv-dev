@@ -528,6 +528,8 @@ impl ToolLock {
         let Self { root, lock } = self;
         let validated = ValidatedLock::validate(
             lock,
+            // Tool locks contain only a runtime resolution.
+            true,
             &root,
             &BTreeMap::new(),
             &[],

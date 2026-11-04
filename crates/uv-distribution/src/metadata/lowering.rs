@@ -1000,7 +1000,7 @@ fn git_directory_source_from_path(
     install_path: impl AsRef<Path>,
     git_member: &GitWorkspaceMember,
 ) -> Result<RequirementSource, LoweringError> {
-    let git = git_member.git_source.git.clone();
+    let git = git_member.git.clone();
     let install_path = git_path(install_path.as_ref())?;
     let fetch_root = git_path(git_member.fetch_root)?;
     let subdirectory = uv_fs::relative_to(&install_path, fetch_root)
@@ -1026,7 +1026,7 @@ fn git_archive_source_from_path(
     install_path: impl AsRef<Path>,
     git_member: &GitWorkspaceMember,
 ) -> Result<RequirementSource, LoweringError> {
-    let git = git_member.git_source.git.clone();
+    let git = git_member.git.clone();
     let install_path = git_path(install_path.as_ref())?;
     let fetch_root = git_path(git_member.fetch_root)?;
     let install_path =

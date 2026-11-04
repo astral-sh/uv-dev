@@ -16,18 +16,28 @@ pub enum FileHashError {
     UrlToPath,
     // Request and status errors use `WrappedReqwestError`, while errors reading the response body
     // use `io::Error`. Both are download failures.
-    #[error("Failed to download `{0}` to compute missing hashes")]
+    #[error("Failed to download `{0}` to compute artifact hashes")]
     DownloadFile(Box<SafeUrl>, #[source] WrappedReqwestError),
-    #[error("Failed to download `{0}` to compute missing hashes")]
+    #[error("Failed to download `{0}` to compute artifact hashes")]
     StreamFile(Box<SafeUrl>, #[source] std::io::Error),
-    #[error("Failed to read `{0}` to compute missing hashes")]
+    #[error("Failed to read `{0}` to compute artifact hashes")]
     ReadFile(Box<Path>, #[source] std::io::Error),
 }
 
 impl RegistryClient {
     /// Read or download a file and compute its SHA-256 digest without extracting its contents.
     pub async fn hash_file(&self, url: &SafeUrl) -> Result<HashDigest, FileHashError> {
-        let mut hashers = [Hasher::from(HashAlgorithm::Sha256)];
+        let [digest] = self.hash_file_with(url, [HashAlgorithm::Sha256]).await?;
+        Ok(digest)
+    }
+
+    /// Compute several digests from the same byte stream.
+    pub async fn hash_file_with<const N: usize>(
+        &self,
+        url: &SafeUrl,
+        algorithms: [HashAlgorithm; N],
+    ) -> Result<[HashDigest; N], FileHashError> {
+        let mut hashers = algorithms.map(Hasher::from);
         if url.scheme() == "file" {
             let path = url.to_file_path().map_err(|()| FileHashError::UrlToPath)?;
             let file = fs_err::tokio::File::open(&path)
@@ -66,7 +76,6 @@ impl RegistryClient {
                 .await
                 .map_err(|err| FileHashError::StreamFile(Box::new(url.clone()), err))?;
         }
-        let [hasher] = hashers;
-        Ok(HashDigest::from(hasher))
+        Ok(hashers.map(HashDigest::from))
     }
 }

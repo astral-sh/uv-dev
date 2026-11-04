@@ -11,8 +11,8 @@ use uv_configuration::{BuildKind, BuildOptions, BuildOutput, NoSources};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, DistributionId, ExtraBuildRequires,
-    ExtraBuildVariables, IndexCapabilities, IndexLocations, InstalledDist, IsBuildBackendError,
-    PackageConfigSettings, Requirement, SourceDist,
+    ExtraBuildVariables, GitDirectorySourceUrl, IndexCapabilities, IndexLocations, InstalledDist,
+    IsBuildBackendError, PackageConfigSettings, Requirement, SourceDist,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
@@ -182,6 +182,7 @@ pub trait BuildContext {
     /// Callers are responsible for enforcing [`BuildOptions`] for the source distribution itself.
     /// Build dependencies are still resolved and installed using [`Self::build_options`].
     ///
+    /// Git project sources are relative to the checkout at `source`, including subdirectory builds.
     /// `version_id` is for error reporting only.
     /// `dist` is for safety checks and may be null for editable builds.
     fn setup_build<'a>(
@@ -189,7 +190,7 @@ pub trait BuildContext {
         source: &'a Path,
         subdirectory: Option<&'a Path>,
         install_path: &'a Path,
-        stop_discovery_at: Option<&'a Path>,
+        git_source: Option<GitDirectorySourceUrl<'a>>,
         version_id: Option<&'a str>,
         dist: Option<&'a SourceDist>,
         sources: &'a NoSources,

@@ -595,6 +595,7 @@ pub async fn pip_compile(
         &flat_index,
         &top_level_index,
         &build_dispatch,
+        None,
         &concurrency,
         options,
         None,

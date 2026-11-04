@@ -8,7 +8,7 @@ use crate::error::Error;
 use crate::{
     BuiltDist, CachedDirectUrlDist, CachedDist, CachedRegistryDist, DirectUrlBuiltDist,
     DirectUrlSourceDist, DirectorySourceDist, Dist, DistributionId, GitDirectorySourceDist,
-    GitPathBuiltDist, GitPathSourceDist, InstalledDirectUrlDist, InstalledDist,
+    GitPathBuiltDist, GitPathSourceDist, IndexUrl, InstalledDirectUrlDist, InstalledDist,
     InstalledEggInfoDirectory, InstalledEggInfoFile, InstalledLegacyEditable,
     InstalledRegistryDist, InstalledVersion, LocalDist, PackageId, PathBuiltDist, PathSourceDist,
     RegistryBuiltWheel, RegistrySourceDist, ResourceId, SourceDist, VersionId, VersionOrUrlRef,
@@ -22,6 +22,11 @@ pub trait Name {
 /// Metadata that can be resolved from a requirements specification alone (i.e., prior to building
 /// or installing the distribution).
 pub trait DistributionMetadata: Name {
+    /// The registry that supplied this distribution, when its identity includes an index.
+    fn registry_index(&self) -> Option<&IndexUrl> {
+        None
+    }
+
     /// Return a [`uv_pep440::Version`], for registry-based distributions, or a [`url::Url`],
     /// for URL-based distributions.
     fn version_or_url(&self) -> VersionOrUrlRef<'_>;

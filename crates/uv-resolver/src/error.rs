@@ -49,6 +49,12 @@ pub enum ResolveError {
     #[error(transparent)]
     Distribution(#[from] uv_distribution::Error),
 
+    #[error("Failed to resolve build requirements for {}", .0.iter().map(|name| format!("`{name}`")).join(", "))]
+    BuildDependencies(Vec<PackageName>, #[source] Box<Self>),
+
+    #[error("Failed to start resolver thread")]
+    SpawnThread(#[source] std::io::Error),
+
     #[error("The channel closed unexpectedly")]
     ChannelClosed,
 
@@ -143,7 +149,9 @@ impl ResolveError {
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
-            Self::Dependencies(error, ..) => error.is_user_failure(),
+            Self::Dependencies(error, ..) | Self::BuildDependencies(_, error) => {
+                error.is_user_failure()
+            }
             Self::Distribution(error) => error.is_user_failure(),
             Self::ConflictingUrls { .. }
             | Self::ConflictingIndexesForEnvironment { .. }
@@ -157,7 +165,8 @@ impl ResolveError {
             | Self::MismatchedPackageName { .. } => true,
             Self::Dist(_, _, _, error) => error.is_user_failure(),
             Self::Client(error) => error.is_user_failure(),
-            Self::ChannelClosed
+            Self::SpawnThread(_)
+            | Self::ChannelClosed
             | Self::UnregisteredTask(_)
             | Self::InvalidVersion(_)
             | Self::ConflictingDistribution(_) => false,
@@ -171,7 +180,9 @@ impl uv_errors::Hinted for ResolveError {
             Self::NoSolution(no_solution) => uv_errors::Hinted::hints(no_solution.as_ref()),
             Self::Client(error) => uv_errors::Hinted::hints(error),
             Self::Distribution(error) => uv_errors::Hinted::hints(error),
-            Self::Dependencies(error, ..) => uv_errors::Hinted::hints(error.as_ref()),
+            Self::Dependencies(error, ..) | Self::BuildDependencies(_, error) => {
+                uv_errors::Hinted::hints(error.as_ref())
+            }
             _ => uv_errors::Hints::none(),
         }
     }

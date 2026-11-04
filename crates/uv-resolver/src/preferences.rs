@@ -10,8 +10,8 @@ use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
 
-use crate::ResolverEnvironment;
 use crate::universal_marker::UniversalMarker;
+use crate::{ResolverEnvironment, ResolverOutput};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PreferenceError {
@@ -95,6 +95,31 @@ impl Preference {
         }
     }
 
+    /// A selection from this build owner's previous lock, within its original marker domain.
+    pub fn from_build_lock(name: PackageName, version: Version, index: Option<IndexUrl>) -> Self {
+        Self {
+            source: PreferenceSource::BuildLock,
+            ..Self::from_locked(name, version, index, Vec::new())
+        }
+    }
+
+    /// Use runtime selections as soft preferences for a build resolve. Hard pins for
+    /// `match-runtime` are expressed separately as requirements.
+    pub(crate) fn from_runtime(runtime: &ResolverOutput, mode: RuntimePreferenceMode) -> Vec<Self> {
+        runtime
+            .base_dists()
+            .map(|(_, dist)| Self {
+                source: PreferenceSource::Runtime(mode),
+                ..Self::from_locked(
+                    dist.name.clone(),
+                    dist.version.clone(),
+                    dist.index().cloned(),
+                    vec![dist.marker],
+                )
+            })
+            .collect()
+    }
+
     /// Create a [`Preference`] from an installed distribution.
     pub fn from_installed(dist: &InstalledDist) -> Option<Self> {
         let InstalledDistKind::Registry(dist) = &dist.kind else {
@@ -151,16 +176,27 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
     }
 }
 
+/// Which runtime selections to try before falling back to normal build candidate selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimePreferenceMode {
+    All,
+    First,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,
-    /// The preference is from a `uv.ock` file.
+    /// The preference is from a build owner in the lockfile.
+    BuildLock,
+    /// The preference is from a `uv.lock` file.
     Lock,
     /// The preference is from a `requirements.txt` file.
     RequirementsTxt,
     /// The preference is from the current solve.
     Resolver,
+    /// A project runtime selection used as a preference in an isolated build.
+    Runtime(RuntimePreferenceMode),
 }
 
 #[derive(Debug, Clone)]
