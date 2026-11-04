@@ -1180,7 +1180,7 @@ async fn do_lock(
                     )
                     .await?;
                 if let Some(pins) = previous_pins {
-                    pins.verify(&lock)?;
+                    pins.verify(&lock, target.install_path(), &client).await?;
                 }
                 lock.with_compacted_build_domains()?
                     .with_ordinary_build_roots()?

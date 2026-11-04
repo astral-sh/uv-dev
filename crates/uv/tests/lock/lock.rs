@@ -12,7 +12,7 @@ use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
 #[cfg(feature = "test-universal")]
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 #[cfg(feature = "test-universal")]
 use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
@@ -39,6 +39,74 @@ use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
+
+/// Changing an index's hash algorithm also updates artifacts used only in a build.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_build_index_hash_algorithm() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let sha256 = hex::encode(Sha256::digest(&wheel));
+    let sha512 = hex::encode(Sha512::digest(&wheel));
+    let context = context
+        .with_filter((sha256.clone(), "[SHA256]"))
+        .with_filter((sha512.clone(), "[SHA512]"));
+    server
+        .serve_with(
+            filename,
+            &wheel,
+            None,
+            json!({ "hashes": { "sha256": sha256, "sha512": sha512 } }),
+        )
+        .await;
+    let project = formatdoc! {r#"
+        [project]
+        name = "owner"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "index-hash-algorithm"]
+
+        [[tool.uv.index]]
+        name = "fixture"
+        url = "{}"
+        default = true
+        "#, server.index_url()
+    };
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!("{project}hash-algorithm = \"sha256\"\n"))?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    pyproject.write_str(&format!("{project}hash-algorithm = \"sha512\"\n"))?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(diff_snapshot(&original, &context.read("uv.lock"), 1), @r#"
+        --- old
+        +++ new
+        @@ -21,3 +21,3 @@
+         wheels = [
+        -    { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256]", upload-time = "2024-01-01T00:00:00Z" },
+        +    { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha512:[SHA512]", upload-time = "2024-01-01T00:00:00Z" },
+         ]
+        "#);
+    });
+    Ok(())
+}
 
 /// A vendored wheel belongs to the Git revision that builds the project. A fresh cache checks
 /// out that revision at a different path when replaying its isolated build.

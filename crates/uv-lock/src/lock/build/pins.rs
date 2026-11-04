@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use uv_client::RegistryClient;
 use uv_configuration::Upgrade;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{IndexUrl, Name, ResolvedDist, VersionId};
@@ -14,7 +15,10 @@ use uv_pypi_types::HashDigest;
 use uv_resolver_types::UniversalMarker;
 use uv_types::{HashStrategy, LockedArtifactHashes};
 
-use super::{Lock, LockError, Package, PackageId, Source, error};
+use self::hash_algorithm::HashAlgorithmChanges;
+use super::{Lock, LockError, LockErrorKind, Package, PackageId, Source, error};
+
+mod hash_algorithm;
 
 /// Previous build selections, partitioned by exact source owner and marker domain.
 #[derive(Debug, Default)]
@@ -156,11 +160,17 @@ impl BuildLockPins {
 
     /// Verify the completed inventory, including foreign wheels and files whose digest
     /// was unavailable until the writer hashed the archive.
-    pub fn verify(&self, lock: &Lock) -> Result<(), LockError> {
+    pub async fn verify(
+        &self,
+        lock: &Lock,
+        root: &Path,
+        client: &RegistryClient,
+    ) -> Result<(), LockError> {
         let Some(builds) = &lock.builds else {
             return Ok(());
         };
         let project = lock.build_project_domain();
+        let mut changes = HashAlgorithmChanges::new(root, client);
         for universe in &builds.universes {
             let Some(previous) = self.owners.get(&universe.owner) else {
                 continue;
@@ -172,8 +182,12 @@ impl BuildLockPins {
                 }
                 for (id, package) in &universe.packages {
                     let Some(pin) = pins.0.get(id) else { continue };
-                    if !domain.and(*scope).is_disjoint(package_domain(package)) {
-                        pin.verify(package, &universe.owner)?;
+                    if !domain.and(*scope).is_disjoint(package_domain(package))
+                        && let Err(mismatch) = pin.verify(package, &universe.owner)
+                    {
+                        changes
+                            .verify(pin, package, &universe.owner, mismatch)
+                            .await?;
                     }
                 }
             }
