@@ -460,6 +460,9 @@ pub enum PreviewFeature {
     /// project resolution, and installation. See [project build dependency
     /// hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
     BuildDependencyHashes,
+    /// Experiment with locking build dependencies for projects. Isolated builds reject
+    /// additional requirements requested by a build backend after the environment is set up.
+    BuildDependencyLocking,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
 }

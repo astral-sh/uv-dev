@@ -6,6 +6,8 @@ use crate::{BuildVariables, ConfigSettings, ExtraBuildRequirement, Requirement};
 /// configuration.
 #[derive(Default, Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct BuildInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    locked_environment: Option<String>,
     #[serde(default, skip_serializing_if = "ConfigSettings::is_empty")]
     config_settings: ConfigSettings,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -16,6 +18,9 @@ pub struct BuildInfo {
 
 impl CacheKey for BuildInfo {
     fn cache_key(&self, state: &mut CacheKeyHasher) {
+        if let Some(identity) = &self.locked_environment {
+            identity.cache_key(state);
+        }
         self.config_settings.cache_key(state);
         self.extra_build_requires.cache_key(state);
         self.extra_build_variables.cache_key(state);
@@ -29,8 +34,10 @@ impl BuildInfo {
         config_settings: ConfigSettings,
         extra_build_dependencies: Vec<ExtraBuildRequirement>,
         extra_build_variables: Option<BuildVariables>,
+        locked_environment: Option<&str>,
     ) -> Self {
         Self {
+            locked_environment: locked_environment.map(str::to_owned),
             config_settings,
             extra_build_requires: extra_build_dependencies,
             extra_build_variables: extra_build_variables.unwrap_or_default(),
@@ -64,7 +71,8 @@ impl BuildInfo {
 
     /// Returns `true` if the [`BuildInfo`] is empty, meaning it has no configuration settings,
     fn is_empty(&self) -> bool {
-        self.config_settings.is_empty()
+        self.locked_environment.is_none()
+            && self.config_settings.is_empty()
             && self.extra_build_requires.is_empty()
             && self.extra_build_variables.is_empty()
     }

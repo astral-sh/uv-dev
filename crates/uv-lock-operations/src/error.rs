@@ -56,6 +56,15 @@ impl From<FrozenSource> for MissingLockfileSource {
 /// A failure while reading, validating, or resolving a lockfile.
 #[derive(thiserror::Error, DebugNoInline)]
 pub enum LockError {
+    #[error(
+        "The lockfile has no locked build environments. \
+         Regenerate the lockfile with a version of uv that can resolve build environments."
+    )]
+    MissingBuildEnvironments,
+    #[error(
+        "The locked build environments are out of date. Regenerate the lockfile with a version of uv that can resolve build environments."
+    )]
+    StaleBuildLock,
     #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 
@@ -186,6 +195,8 @@ impl From<LockError> for UvError {
         match error {
             error @ (LockError::LockMismatch(..)
             | LockError::LockFormat(..)
+            | LockError::StaleBuildLock
+            | LockError::MissingBuildEnvironments
             | LockError::MissingLockfile(..)
             | LockError::LockWorkspaceMismatch(..)) => Self::user(error),
             LockError::Resolve(error) => Self::from(*error),
@@ -235,7 +246,9 @@ impl Hinted for LockError {
             Self::Resolve(error) => error.hints(),
             Self::Lock(error) => error.hints(),
             Self::PythonSelection(error) => error.hints(),
-            Self::MissingLockfile(..)
+            Self::StaleBuildLock
+            | Self::MissingBuildEnvironments
+            | Self::MissingLockfile(..)
             | Self::UnsupportedLockVersion(..)
             | Self::UnparsableLockVersion(..)
             | Self::LockSerialization(_)

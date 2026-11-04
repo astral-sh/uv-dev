@@ -83,6 +83,10 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
+use build::BuildEncoding;
+
+mod build;
+mod build_inputs;
 mod deserialize;
 pub(crate) mod export;
 mod inputs;
@@ -94,8 +98,20 @@ mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
 
-/// The current version of the lockfile format.
+/// The version of a runtime-only lockfile.
 const VERSION: u32 = 1;
+
+/// Older readers must reject build locks before running a source build with an unlocked backend.
+const BUILD_LOCK_VERSION: u32 = 2;
+
+fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
+    let supported = if locks_builds {
+        BUILD_LOCK_VERSION
+    } else {
+        VERSION
+    };
+    (version != supported).then_some(supported)
+}
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
@@ -338,6 +354,8 @@ pub struct Lock {
     requires_python: RequiresPython,
     /// We discard the lockfile if these options don't match.
     options: ResolverOptions,
+    /// Isolated build graphs, when the lock includes build dependencies.
+    builds: Option<build::BuildLocks>,
     /// The actual locked version and their metadata.
     packages: Vec<Package>,
     /// A map from package ID to index in `packages`.
@@ -2673,49 +2691,8 @@ impl Lock {
         required_environments: Vec<MarkerTree>,
         fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
-        // Put all dependencies for each package in a canonical order and
-        // check for duplicates.
         for package in &mut packages {
-            package.dependencies.sort();
-            for [dep1, dep2] in package.dependencies.array_windows() {
-                if dep1 == dep2 {
-                    return Err(LockErrorKind::DuplicateDependency {
-                        id: package.id.clone(),
-                        dependency: dep1.clone(),
-                    }
-                    .into());
-                }
-            }
-
-            // Perform the same validation for optional dependencies.
-            for (extra, dependencies) in &mut package.optional_dependencies {
-                dependencies.sort();
-                for [dep1, dep2] in dependencies.array_windows() {
-                    if dep1 == dep2 {
-                        return Err(LockErrorKind::DuplicateOptionalDependency {
-                            id: package.id.clone(),
-                            extra: extra.clone(),
-                            dependency: dep1.clone(),
-                        }
-                        .into());
-                    }
-                }
-            }
-
-            // Perform the same validation for dev dependencies.
-            for (group, dependencies) in &mut package.dependency_groups {
-                dependencies.sort();
-                for [dep1, dep2] in dependencies.array_windows() {
-                    if dep1 == dep2 {
-                        return Err(LockErrorKind::DuplicateDevDependency {
-                            id: package.id.clone(),
-                            group: group.clone(),
-                            dependency: dep1.clone(),
-                        }
-                        .into());
-                    }
-                }
-            }
+            package.normalize_dependencies()?;
         }
         packages.sort_by(|dist1, dist2| dist1.id.cmp(&dist2.id));
 
@@ -2803,6 +2780,7 @@ impl Lock {
             }
         }
         let lock = Self {
+            builds: None,
             version,
             revision,
             fork_markers,
@@ -3080,7 +3058,7 @@ impl Lock {
         root: &Path,
         index_locations: &IndexLocations,
     ) -> Result<bool, LockError> {
-        for package in &self.packages {
+        for package in self.packages_in_all_environments() {
             let Some(index) = package.index(root)? else {
                 continue;
             };
@@ -3783,11 +3761,12 @@ impl Lock {
                 Ok(lock) => lock,
                 Err(source) => {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
+                        && let Some(supported) =
+                            unsupported_version(lock.version, lock.build_encoding.is_some())
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
-                            version: lock.version(),
+                            supported,
+                            version: lock.version,
                             source,
                         });
                     }
@@ -3796,9 +3775,9 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION {
+        if let Some(supported) = unsupported_version(lock.version(), lock.locks_builds()) {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported,
                 version: lock.version(),
             });
         }
@@ -4566,6 +4545,14 @@ impl Lock {
                 .collect::<BTreeSet<_>>()
         });
 
+        // Runtime dependencies can add their own named indexes. Isolated builds start with
+        // the indexes configured for the project.
+        let (configured_remotes, configured_locals) = if self.builds.is_some() {
+            (remotes.clone(), locals.clone())
+        } else {
+            (None, None)
+        };
+
         // Add the workspace packages to the queue.
         for root_name in packages.keys() {
             let root = self
@@ -4651,8 +4638,31 @@ impl Lock {
             }
         }
 
-        while let Some(package_index) = queue.pop_front() {
-            let package = self.package(package_index);
+        let mut build_universes = self.builds.iter().flat_map(|builds| &builds.universes);
+        let mut build_packages = None;
+        let mut build_remotes = None;
+        let mut build_locals = None;
+        loop {
+            let (package, runtime_index, remotes, locals) = if let Some(index) = queue.pop_front() {
+                (self.package(index), Some(index), &mut remotes, &mut locals)
+            } else if let Some(package) = build_packages.as_mut().and_then(Iterator::next) {
+                (package, None, &mut build_remotes, &mut build_locals)
+            } else if let Some(universe) = build_universes.next() {
+                // An index declared by the owner or a build dependency belongs to this
+                // environment.
+                build_remotes.clone_from(&configured_remotes);
+                build_locals.clone_from(&configured_locals);
+                for input in universe.inputs.iter().flatten() {
+                    input.record_index(root, &mut build_remotes, &mut build_locals)?;
+                }
+                build_packages = Some(universe.validation_packages());
+                continue;
+            } else {
+                break;
+            };
+            // Build universes retain the declarations for their mutable packages.
+            let allow_missing_package_metadata =
+                runtime_index.is_some() && allow_missing_package_metadata;
             // If the lockfile references an index that was not provided, we can't validate it.
             if let Source::Registry(index) = &package.id.source {
                 match index {
@@ -4771,8 +4781,8 @@ impl Lock {
                             Some(version),
                             package,
                             &mut activated_extras,
-                            &mut remotes,
-                            &mut locals,
+                            remotes,
+                            locals,
                             root,
                             allow_missing_package_metadata,
                         )? {
@@ -4837,8 +4847,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4905,8 +4915,8 @@ impl Lock {
                         None,
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     ) {
@@ -4970,8 +4980,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4982,6 +4992,12 @@ impl Lock {
             } else {
                 return Ok(SatisfiesResult::MissingVersion(&package.id.name));
             }
+
+            // Each build closure already includes its transitive dependencies. Its edges refer
+            // to packages in that universe instead of indices into the runtime package list.
+            let Some(package_index) = runtime_index else {
+                continue;
+            };
 
             // An empty extra has no edge of its own, so revisit packages when a later
             // parent activates additional extras after their first validation.
@@ -6487,6 +6503,9 @@ impl ResolverManifest {
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LockWire {
+    build_encoding: Option<BuildEncoding>,
+    #[serde(default)]
+    build_universes: Vec<build::UniverseWire>,
     version: u32,
     revision: Option<u32>,
     requires_python: RequiresPython,
@@ -6512,7 +6531,13 @@ struct LockWire {
 impl TryFrom<LockWire> for Lock {
     type Error = LockError;
 
-    fn try_from(wire: LockWire) -> Result<Self, LockError> {
+    fn try_from(mut wire: LockWire) -> Result<Self, LockError> {
+        if let Some(encoding) = wire.build_encoding.take() {
+            return build::decode(wire, encoding);
+        }
+        if !wire.build_universes.is_empty() {
+            return Err(LockErrorKind::BuildGraph("Missing build-encoding".into()).into());
+        }
         // Count the number of sources for each package name. When
         // there's only one source for a particular package name (the
         // overwhelmingly common case), we can omit some data (like source and
@@ -6594,20 +6619,12 @@ impl TryFrom<LockWire> for Lock {
     }
 }
 
-/// Like [`Lock`], but limited to the version field. Used for error reporting: by limiting parsing
-/// to the version field, we can verify compatibility for lockfiles that may otherwise be
-/// unparsable.
+/// Read the schema header to diagnose an otherwise unparsable lockfile.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LockVersion {
     version: u32,
-}
-
-impl LockVersion {
-    /// Returns the lockfile version.
-    fn version(&self) -> u32 {
-        self.version
-    }
+    build_encoding: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6636,6 +6653,51 @@ pub struct Package {
 }
 
 impl Package {
+    /// Canonicalize the edges of this package and reject duplicates in each dependency section.
+    fn normalize_dependencies(&mut self) -> Result<(), LockError> {
+        self.dependencies.sort();
+        for [dep1, dep2] in self.dependencies.array_windows() {
+            if dep1 == dep2 {
+                return Err(LockErrorKind::DuplicateDependency {
+                    id: self.id.clone(),
+                    dependency: dep1.clone(),
+                }
+                .into());
+            }
+        }
+
+        // Perform the same validation for optional dependencies.
+        for (extra, dependencies) in &mut self.optional_dependencies {
+            dependencies.sort();
+            for [dep1, dep2] in dependencies.array_windows() {
+                if dep1 == dep2 {
+                    return Err(LockErrorKind::DuplicateOptionalDependency {
+                        id: self.id.clone(),
+                        extra: extra.clone(),
+                        dependency: dep1.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        // Perform the same validation for dev dependencies.
+        for (group, dependencies) in &mut self.dependency_groups {
+            dependencies.sort();
+            for [dep1, dep2] in dependencies.array_windows() {
+                if dep1 == dep2 {
+                    return Err(LockErrorKind::DuplicateDevDependency {
+                        id: self.id.clone(),
+                        group: group.clone(),
+                        dependency: dep1.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }
@@ -7407,6 +7469,10 @@ fn absolute_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, LockErro
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct PackageWire {
+    #[serde(default)]
+    universe: Vec<usize>,
+    #[serde(default)]
+    build_only: bool,
     #[serde(flatten)]
     id: PackageId,
     #[serde(default)]
@@ -9344,6 +9410,8 @@ impl Display for Dependency {
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct DependencyWire {
+    #[serde(default)]
+    universe: Vec<usize>,
     #[serde(flatten)]
     package_id: PackageIdForDependency,
     #[serde(default)]
@@ -9842,6 +9910,8 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
+    #[error("{0}")]
+    BuildGraph(String),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),
@@ -10668,6 +10738,94 @@ mod tests {
             let expr = format!("{}", anstream::adapter::strip_str(&expr));
             insta::assert_snapshot!(expr, @$snapshot);
         }};
+    }
+
+    // The runtime and build share a package row, but only the build depends on the leaf.
+    const EXPLICIT_BUILD_EDGES: &str = r#"
+version = 2
+revision = 5
+requires-python = ">=3.12"
+build-encoding = "dependency"
+
+[[build-universes]]
+owner = { name = "project", version = "1", source = { editable = "." } }
+inputs = []
+roots = [{ name = "shared" }]
+
+[[package]]
+name = "project"
+version = "1"
+source = { editable = "." }
+dependencies = [{ name = "shared" }]
+
+[[package]]
+name = "shared"
+version = "1"
+source = { registry = "https://example.com/simple" }
+dependencies = [{ name = "leaf", universe = [1] }]
+
+[package.optional-dependencies]
+opt = [{ name = "leaf", universe = [1] }]
+both = [{ name = "common", universe = [0] }, { name = "common", universe = [1] }]
+
+[package.dependency-groups]
+dev = [{ name = "leaf", universe = [1] }]
+
+[[package]]
+name = "leaf"
+version = "1"
+source = { registry = "https://example.com/simple" }
+build-only = true
+
+[[package]]
+name = "common"
+version = "1"
+source = { registry = "https://example.com/simple" }
+"#;
+
+    #[test]
+    fn explicit_build_edges_round_trip() {
+        let lock = Lock::from_toml(EXPLICIT_BUILD_EDGES).expect("valid explicit build lock");
+        let encoded = lock.to_toml().expect("lock serializes");
+        let decoded = Lock::from_toml(&encoded).expect("serialized lock parses");
+        let shared = decoded
+            .packages()
+            .iter()
+            .find(|package| package.name().as_str() == "shared")
+            .expect("runtime package");
+        assert!(shared.dependencies.is_empty());
+        assert_eq!(decoded, lock);
+    }
+
+    #[test]
+    fn explicit_build_duplicate_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "dependencies = [{ name = \"leaf\", universe = [1] }]",
+            "dependencies = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error = toml::from_str::<Lock>(&input).expect_err("duplicate build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple`, found duplicate dependency `leaf==1`");
+    }
+
+    #[test]
+    fn explicit_build_duplicate_optional_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "opt = [{ name = \"leaf\", universe = [1] }]",
+            "opt = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error =
+            toml::from_str::<Lock>(&input).expect_err("duplicate optional build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple[opt]`, found duplicate dependency `leaf==1`");
+    }
+
+    #[test]
+    fn explicit_build_duplicate_group_dependencies() {
+        let input = EXPLICIT_BUILD_EDGES.replace(
+            "dev = [{ name = \"leaf\", universe = [1] }]",
+            "dev = [{ name = \"leaf\", universe = [1] }, { name = \"leaf\", universe = [1] }]",
+        );
+        let error = toml::from_str::<Lock>(&input).expect_err("duplicate group build dependency");
+        assert_stripped_snapshot!(error.message(), @"For package `shared==1 @ registry+https://example.com/simple:dev`, found duplicate dependency `leaf==1`");
     }
 
     fn marker_environment() -> MarkerEnvironment {

@@ -1,16 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use anyhow::Context;
 use rustc_hash::FxHashSet;
 use tracing::debug;
 
+use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
-use uv_dispatch::{BuildDispatch, UniversalState};
+use uv_dispatch::{BuildDispatch, BuildLockReplay, UniversalState};
 use uv_distribution::{DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
@@ -166,7 +168,15 @@ impl<'env> LockOperation<'env> {
         match self.mode {
             LockMode::Frozen(source) => {
                 // Read the existing lockfile, but don't attempt to lock the project.
-                Ok(LockResult::Unchanged(target.read_frozen(source).await?))
+                let lock = target.read_frozen(source).await?;
+                if self
+                    .preview
+                    .is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !lock.locks_builds()
+                {
+                    return Err(LockError::MissingBuildEnvironments);
+                }
+                Ok(LockResult::Unchanged(lock))
             }
             LockMode::Locked(interpreter, lock_source) => {
                 // Read the existing lockfile.
@@ -178,6 +188,13 @@ impl<'env> LockOperation<'env> {
                     ));
                 };
 
+                if self
+                    .preview
+                    .is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !existing.locks_builds()
+                {
+                    return Err(LockError::MissingBuildEnvironments);
+                }
                 if self.preview.is_enabled(PreviewFeature::LockfileFormatCheck)
                     && let Some(line) = find_lock_format_error(&existing_contents)
                 {
@@ -708,7 +725,12 @@ async fn do_lock(
     let groups = BTreeMap::new();
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let check_locked_builds = existing_lock.as_ref().is_some_and(Lock::locks_builds);
+    let flat_index = if check_locked_builds {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, cache, index_locations).await?
+    };
 
     // Lower the extra build dependencies.
     let extra_build_requires = match &target {
@@ -764,11 +786,53 @@ async fn do_lock(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
+
+    if let Some(lock) = existing_lock.as_ref().filter(|lock| lock.locks_builds())
+        && !lock
+            .satisfies_build_inputs(
+                target.install_path(),
+                &extra_build_requires,
+                async |name, path| {
+                    SourceBuild::local_build_requirements(
+                        path,
+                        name,
+                        index_locations,
+                        sources,
+                        cache,
+                        workspace_cache,
+                        client.credentials_cache(),
+                    )
+                    .await
+                    .with_context(|| format!("Failed to read build requirements for `{name}`"))
+                },
+            )
+            .await?
+    {
+        // This reader cannot regenerate a stale build graph.
+        return Err(LockError::StaleBuildLock);
+    }
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
+        let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
+        let replay;
+        let validation_build_dispatch = if let Some(lock) = &snapshot {
+            replay = BuildLockReplay::new(
+                lock,
+                target.install_path(),
+                None,
+                interpreter,
+                interpreter.tags().map_err(anyhow::Error::from)?,
+                build_options,
+                extra_build_requires.clone(),
+            )?;
+            validation_build_dispatch.with_build_lock(&replay)
+        } else {
+            validation_build_dispatch
+        };
         let database = DistributionDatabase::new(
             &client,
             &validation_build_dispatch,
@@ -807,7 +871,16 @@ async fn do_lock(
         ))
         .await
         {
+            Ok(ValidatedLock::Satisfies(lock))
+                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
+                    && !lock.locks_builds() =>
+            {
+                Some(ValidatedLock::Versions(lock))
+            }
+            Ok(ValidatedLock::Satisfies(lock)) => Some(ValidatedLock::Satisfies(lock)),
+            Ok(_) if check_locked_builds => return Err(LockError::StaleBuildLock),
             Ok(result) => Some(result),
+            Err(err) if check_locked_builds => return Err(anyhow::Error::from(err).into()),
             Err(LockValidationError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
                 // Resolver errors are not recoverable, as such errors can leave the resolver in a
                 // broken state. Specifically, tasks that fail with an error can be left as pending.

@@ -1900,6 +1900,7 @@
             "build-dependency-check",
             "build-lazy-imports",
             "build-dependency-hashes",
+            "build-dependency-locking",
             "wheel-variants"
           ]
         },

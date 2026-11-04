@@ -7,7 +7,7 @@ use uv_configuration::{
     Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
     ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
 };
-use uv_dispatch::{BuildDispatch, PlatformState};
+use uv_dispatch::{BuildDispatch, BuildLockReplay, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
@@ -16,7 +16,7 @@ use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
@@ -216,10 +216,22 @@ pub async fn sync_from_lock(
     let resolution = apply_editable_mode(resolution, editable);
 
     // Constrain any build requirements marked as `match-runtime = true`.
-    let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
+    let replay = BuildLockReplay::new(
+        target.lock(),
+        target.install_path(),
+        Some(&resolution),
+        venv.interpreter(),
+        &tags,
+        build_options,
+        extra_build_requires.match_runtime(&resolution)?,
+    )?;
 
     // Extract the hashes from the lockfile.
-    let hasher = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
+    let hasher = if target.lock().locks_builds() {
+        HashStrategy::from_locked_resolution(&resolution)?
+    } else {
+        HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?
+    };
 
     // Populate credentials from the target.
     store_credentials_from_target(target, &client_builder)?;
@@ -236,7 +248,7 @@ pub async fn sync_from_lock(
         index_locations,
         config_setting,
         config_settings_package,
-        &extra_build_requires,
+        replay.extra_build_requires(),
         extra_build_variables,
         cache,
         venv,
@@ -299,7 +311,11 @@ pub async fn sync_from_lock(
         .with_constraint_hashes(&build_hasher)?;
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = if target.lock().locks_builds() {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, cache, index_locations).await?
+    };
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -315,7 +331,7 @@ pub async fn sync_from_lock(
         config_setting,
         config_settings_package,
         build_isolation,
-        &extra_build_requires,
+        replay.extra_build_requires(),
         extra_build_variables,
         link_mode,
         build_options,
@@ -326,7 +342,11 @@ pub async fn sync_from_lock(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_locked_build_dependencies(
+        target.lock().locks_builds() || preview.is_enabled(PreviewFeature::BuildDependencyLocking),
+    )
+    .with_build_lock(&replay);
 
     // Run a malware check against OSV before installing.
     maybe_check_malware(

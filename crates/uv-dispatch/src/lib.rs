@@ -16,6 +16,7 @@ use tracing::{debug, instrument, trace};
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
+use uv_cache_key::cache_digest;
 use uv_client::RegistryClient;
 use uv_configuration::{
     BuildKind, BuildOptions, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
@@ -31,6 +32,8 @@ use uv_distribution_types::{
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
+use uv_lock::{Lock, LockError};
+use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -59,6 +62,9 @@ pub enum BuildDispatchError {
 
     #[error(transparent)]
     Resolve(#[from] uv_resolver::ResolveError),
+
+    #[error(transparent)]
+    Lock(#[from] LockError),
 
     #[error(
         "No solution found when resolving: {}",
@@ -97,6 +103,7 @@ impl uv_errors::Hinted for BuildDispatchError {
         match self {
             Self::BuildFrontend(err) => err.hints(),
             Self::Plan(error) => error.hints(),
+            Self::Lock(error) => error.hints(),
             Self::Resolve(err) | Self::ResolveRequirements { source: err, .. } => err.hints(),
             Self::BuildBackend(_)
             | Self::Tags(_)
@@ -120,6 +127,7 @@ impl IsBuildBackendError for BuildDispatchError {
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
             Self::BuildBackend(_)
+            | Self::Lock(_)
             | Self::Tags(_)
             | Self::Join(_)
             | Self::Anyhow(_)
@@ -132,6 +140,7 @@ impl IsBuildBackendError for BuildDispatchError {
     fn is_build_backend_error(&self) -> bool {
         match self {
             Self::BuildBackend(_)
+            | Self::Lock(_)
             | Self::Tags(_)
             | Self::Resolve(_)
             | Self::ResolveRequirements { .. }
@@ -144,6 +153,54 @@ impl IsBuildBackendError for BuildDispatchError {
             | Self::Lookahead(_) => false,
             Self::BuildFrontend(err) => err.is_build_backend_error(),
         }
+    }
+}
+
+/// The replay policy and the disk-cache namespace used by both planning and isolated builds.
+pub struct BuildLockReplay<'a> {
+    lock: &'a Lock,
+    root: &'a Path,
+    runtime: Option<&'a Resolution>,
+    extra_build_requires: ExtraBuildRequires,
+}
+
+impl<'a> BuildLockReplay<'a> {
+    pub fn new(
+        lock: &'a Lock,
+        root: &'a Path,
+        runtime: Option<&'a Resolution>,
+        interpreter: &Interpreter,
+        tags: &Tags,
+        options: &BuildOptions,
+        mut extra_build_requires: ExtraBuildRequires,
+    ) -> Result<Self> {
+        if lock.locks_builds() {
+            let environment = format!("{:?} {tags} {options:?}", interpreter.markers());
+            // Validation has no selected runtime. Only sync knows which conflicts are inactive.
+            let conflicts = runtime.map(|resolution| {
+                resolution
+                    .activated_conflicts()
+                    .iter()
+                    .map(AsRef::<str>::as_ref)
+                    .collect::<Vec<_>>()
+            });
+            extra_build_requires.set_locked_environment(cache_digest(&(
+                lock.to_toml()?,
+                root,
+                environment,
+                conflicts,
+            )));
+        }
+        Ok(Self {
+            lock,
+            root,
+            runtime,
+            extra_build_requires,
+        })
+    }
+
+    pub fn extra_build_requires(&self) -> &ExtraBuildRequires {
+        &self.extra_build_requires
     }
 }
 
@@ -168,7 +225,10 @@ pub struct BuildDispatch<'a> {
     config_settings: &'a ConfigSettings,
     config_settings_package: &'a PackageConfigSettings,
     base_hasher: &'a HashStrategy,
+    build_lock: Option<&'a BuildLockReplay<'a>>,
+    build_owner: Option<&'a SourceDist>,
     build_hash_checking: HashCheckingMode,
+    lock_build_dependencies: bool,
     exclude_newer: ExcludeNewer,
     source_build_context: SourceBuildContext,
     build_extra_env_vars: FxHashMap<OsString, OsString>,
@@ -226,6 +286,9 @@ impl<'a> BuildDispatch<'a> {
             link_mode,
             build_options,
             base_hasher: hasher,
+            lock_build_dependencies: false,
+            build_lock: None,
+            build_owner: None,
             build_hash_checking: match hasher.verification() {
                 HashVerification::Required(_) => HashCheckingMode::Require,
                 HashVerification::Unspecified | HashVerification::IfPresent(_) => {
@@ -242,6 +305,21 @@ impl<'a> BuildDispatch<'a> {
             preview,
             tar_backend: TarBackend::from_env(),
         }
+    }
+
+    /// Use the lock's owner-specific closure for each isolated source build.
+    #[must_use]
+    pub fn with_build_lock(mut self, replay: &'a BuildLockReplay<'a>) -> Self {
+        if replay.lock.locks_builds() {
+            self.extra_build_requires = replay.extra_build_requires();
+            self.shared_state = SharedState {
+                build_arena: BuildArena::default(),
+                ..self.shared_state.fork()
+            };
+            self.lock_build_dependencies = true;
+            self.build_lock = Some(replay);
+        }
+        self
     }
 
     /// Fork the dispatch with a different hash strategy.
@@ -300,6 +378,13 @@ impl<'a> BuildDispatch<'a> {
     fn require_build_hashes(&self) -> bool {
         self.build_hash_checking.is_require()
     }
+
+    /// Require builds for this project resolution or installation to use locked dependencies.
+    #[must_use]
+    pub fn with_locked_build_dependencies(mut self, enabled: bool) -> Self {
+        self.lock_build_dependencies = enabled;
+        self
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -308,6 +393,10 @@ impl BuildContext for BuildDispatch<'_> {
 
     fn tar_backend(&self) -> TarBackend {
         self.tar_backend
+    }
+
+    fn lock_build_dependencies(&self) -> bool {
+        self.lock_build_dependencies
     }
 
     fn interpreter(&self) -> impl Future<Output = &Interpreter> + '_ {
@@ -380,6 +469,23 @@ impl BuildContext for BuildDispatch<'_> {
         hash_override: Option<&'data HashStrategy>,
         build_stack: &'data BuildStack,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
+        if let Some(replay) = self.build_lock {
+            let owner = self
+                .build_owner
+                .ok_or_else(|| anyhow::anyhow!("Missing source package for locked build"))?;
+            let resolution = replay.lock.resolve_build(
+                owner,
+                replay.runtime,
+                requirements,
+                replay.root,
+                &self.interpreter.to_resolver_marker_environment(),
+                self.interpreter.tags()?,
+                self.build_options,
+            )?;
+            let hasher =
+                HashStrategy::from_locked_resolution(&resolution).map_err(anyhow::Error::from)?;
+            return Ok(ResolvedRequirements::new(resolution, hasher));
+        }
         let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
         let marker_env = self.interpreter.to_resolver_marker_environment();
         let resolver_env = ResolverEnvironment::specific(marker_env);
@@ -644,6 +750,20 @@ impl BuildContext for BuildDispatch<'_> {
             }
         }
 
+        // The default backend resolution is shared only among builds with the same pins.
+        let scoped;
+        let context = if self.build_lock.is_some() {
+            scoped = BuildDispatch {
+                build_owner: dist,
+                source_build_context: SourceBuildContext::new(
+                    self.concurrency.builds_semaphore.clone(),
+                ),
+                ..self.clone()
+            };
+            &scoped
+        } else {
+            self
+        };
         let builder = SourceBuild::setup(
             source,
             subdirectory,
@@ -652,8 +772,8 @@ impl BuildContext for BuildDispatch<'_> {
             dist_name,
             dist_version,
             self.interpreter,
-            self,
-            self.source_build_context.clone(),
+            context,
+            context.source_build_context.clone(),
             version_id,
             self.index_locations,
             sources.clone(),
@@ -681,6 +801,9 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
+        if self.build_lock.is_some() {
+            return Ok(None);
+        }
         let source_tree = if let Some(subdir) = subdirectory {
             source.join(subdir)
         } else {

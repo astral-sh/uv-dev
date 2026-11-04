@@ -33,12 +33,14 @@ use uv_cache_key::cache_digest;
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution::BuildRequires;
 use uv_distribution_types::{
-    ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
+    ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Name, Requirement,
+    RequirementSource,
 };
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerEnvironment;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -482,11 +484,22 @@ impl SourceBuild {
                 credentials_cache,
             )
             .await?;
-            // Some packages (such as tqdm 4.66.1) list only extra requires that have already been part of
-            // the pyproject.toml requires (in this case, `wheel`). We can skip doing the whole resolution
-            // and installation again.
-            // TODO(konstin): Do we still need this when we have a fast resolver?
-            if extra_requires
+            // Some backends repeat requirements from `build-system.requires` in the hook.
+            if build_context.lock_build_dependencies() {
+                let declared = pep517_backend
+                    .requirements
+                    .iter()
+                    .chain(&extra_build_dependencies);
+                for requirement in &extra_requires {
+                    check_hook_requirement(
+                        build_kind,
+                        requirement,
+                        declared.clone(),
+                        &resolved_requirements,
+                        interpreter.markers(),
+                    )?;
+                }
+            } else if extra_requires
                 .iter()
                 .any(|req| !pep517_backend.requirements.contains(req))
             {
@@ -669,6 +682,31 @@ impl SourceBuild {
                     .map_err(|err| Error::RequirementsResolve(dependency_sources, err.into()))?
             },
         )
+    }
+
+    /// Read the declared requirements of a mutable project with the same source policy as its build.
+    pub async fn local_build_requirements(
+        path: &Path,
+        package: &PackageName,
+        locations: &IndexLocations,
+        no_sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, Box<Error>> {
+        let (backend, _) = Self::extract_pep517_backend(
+            path,
+            path,
+            Some(package),
+            locations,
+            no_sources,
+            None,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await?;
+        Ok(backend.requirements)
     }
 
     /// Extract the PEP 517 backend from the `pyproject.toml` or `setup.py` file.
@@ -1110,6 +1148,59 @@ impl SourceBuildTrait for SourceBuild {
 
     async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
         Ok(self.build(wheel_dir).await?)
+    }
+}
+
+/// A hook may repeat a direct build requirement with different bounds. Its requested
+/// version and extras must already be available in this build environment.
+fn check_hook_requirement<'a>(
+    kind: BuildKind,
+    requirement: &Requirement,
+    declared: impl Iterator<Item = &'a Requirement> + Clone,
+    resolved: &ResolvedRequirements,
+    markers: &MarkerEnvironment,
+) -> Result<(), Error> {
+    if !requirement.evaluate_markers(Some(markers), &[]) {
+        return Ok(());
+    }
+    let declared = declared
+        .filter(|root| root.name == requirement.name && root.evaluate_markers(Some(markers), &[]));
+    if declared.clone().next().is_none() {
+        return Err(Error::UndeclaredBuildRequirement {
+            kind,
+            name: requirement.name.clone(),
+        });
+    }
+    let version_satisfied = if let RequirementSource::Registry {
+        specifier, index, ..
+    } = &requirement.source
+    {
+        resolved.resolution().distributions().any(|dist| {
+            dist.name() == &requirement.name
+                && index
+                    .as_ref()
+                    .is_none_or(|index| dist.index() == Some(index.url()))
+                && (specifier.is_empty()
+                    || dist
+                        .version()
+                        .is_some_and(|version| specifier.contains(version)))
+        })
+    } else {
+        false
+    };
+    let compatible = declared.filter(|root| version_satisfied || root.source == requirement.source);
+    if compatible.clone().next().is_some()
+        && requirement
+            .extras
+            .iter()
+            .all(|extra| compatible.clone().any(|root| root.extras.contains(extra)))
+    {
+        Ok(())
+    } else {
+        Err(Error::IncompatibleBuildRequirement {
+            kind,
+            requirement: Box::new(requirement.clone()),
+        })
     }
 }
 

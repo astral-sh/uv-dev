@@ -39,6 +39,7 @@ impl BuildSettings<'_> {
             config_settings.into_owned(),
             extra_build_requires.to_vec(),
             extra_build_variables.cloned(),
+            self.extra_build_requires.locked_environment(),
         )
     }
 }

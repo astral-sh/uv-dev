@@ -167,6 +167,11 @@ mod tests {
         project resolution, and installation. See [project build dependency
         hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
 
+        ### `build-dependency-locking` {#build-dependency-locking}
+
+        Experiment with locking build dependencies for projects. Isolated builds reject
+        additional requirements requested by a build backend after the environment is set up.
+
         ### `build-lazy-imports` {#build-lazy-imports}
 
         uv enables lazy imports when invoking build backends on CPython 3.15 and later. This can
