@@ -1731,22 +1731,52 @@ fn lock_build_checks_build_only_local_metadata() -> Result<()> {
     Ok(())
 }
 
-/// Each build uses the configured indexes and any named indexes declared by its owner.
+/// A local runtime dependency keeps using the old index for its leaf after the configured
+/// index changes. The root build needs the new index, and the nested owner has its own index.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_build_checks_build_only_indexes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"1".parse()?).build();
+    let first = context.temp_dir.child("first");
+    let second = context.temp_dir.child("second");
+    first.child(&filename).write_binary(&wheel)?;
+    second.child(&filename).write_binary(&wheel)?;
+    let first_url = SafeUrl::from_file_path(first.path())
+        .map_err(|()| anyhow!("first index path is not a valid file URL"))?;
+    let second_url = SafeUrl::from_file_path(second.path())
+        .map_err(|()| anyhow!("second index path is not a valid file URL"))?;
+    let (leaf_filename, leaf) = WheelBuilder::new(&"leaf".parse()?, &"1".parse()?).build();
+    first
+        .child("leaf")
+        .child(&leaf_filename)
+        .write_binary(&leaf)?;
+    first
+        .child("leaf")
+        .child("index.html")
+        .write_str(&format!(r#"<a href="{leaf_filename}">{leaf_filename}</a>"#))?;
     context
         .temp_dir
-        .child("first")
-        .child(&filename)
-        .write_binary(&wheel)?;
-    context
-        .temp_dir
-        .child("second")
-        .child(&filename)
-        .write_binary(&wheel)?;
+        .child("runtime/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "runtime"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["leaf"]
+
+        [build-system]
+        requires = []
+        build-backend = "unused"
+
+        [tool.uv.sources]
+        leaf = {{ index = "runtime-only" }}
+
+        [[tool.uv.index]]
+        name = "runtime-only"
+        url = "{first_url}"
+        explicit = true
+    "#})?;
     let private = context.temp_dir.child("private");
     private
         .child("backend")
@@ -1780,25 +1810,29 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         url = "{private_url}"
         explicit = true
     "#})?;
-    let manifest = indoc! {r#"
+    let manifest = formatdoc! {r#"
         [project]
         name = "project"
         version = "1"
         requires-python = ">=3.12"
+        dependencies = ["runtime"]
 
         [build-system]
         requires = ["backend==1", "owner"]
         build-backend = "unused"
 
         [tool.uv]
-        find-links = ["first"]
+        find-links = ["{first_url}"]
 
         [tool.uv.sources]
-        owner = { path = "owner" }
+        owner = {{ path = "owner" }}
+        runtime = {{ path = "runtime" }}
     "#};
     let pyproject = context.temp_dir.child("pyproject.toml");
-    pyproject.write_str(manifest)?;
+    pyproject.write_str(&manifest)?;
     let digest = hex::encode(Sha256::digest(&wheel));
+    let leaf_digest = hex::encode(Sha256::digest(&leaf));
+    let first_registry = toml::Value::String(first.path().to_string_lossy().into_owned());
     let registry = toml::Value::String(private.path().to_string_lossy().into_owned());
     let lock = formatdoc! {r#"
         version = 2
@@ -1821,9 +1855,14 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
             {{ kind = "backend", name = "owner", directory = "owner" }},
         ]
         roots = [
-            {{ name = "backend", version = "1", source = {{ registry = "first" }} }},
+            {{ name = "backend", version = "1", source = {{ registry = {first_registry} }} }},
             {{ name = "owner" }},
         ]
+
+        [[build-universes]]
+        owner = {{ name = "runtime", version = "1", source = {{ directory = "runtime" }} }}
+        inputs = []
+        roots = []
 
         [[package]]
         universe = [1]
@@ -1842,13 +1881,32 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         universe = [2]
         name = "backend"
         version = "1"
-        source = {{ registry = "first" }}
+        source = {{ registry = {first_registry} }}
         wheels = [{{ path = "{filename}", hash = "sha256:{digest}" }}]
 
         [[package]]
         name = "project"
         version = "1"
         source = {{ editable = "." }}
+        dependencies = [{{ name = "runtime" }}]
+
+        [package.metadata]
+        requires-dist = [{{ name = "runtime", directory = "runtime" }}]
+
+        [[package]]
+        name = "runtime"
+        version = "1"
+        source = {{ directory = "runtime" }}
+        dependencies = [{{ name = "leaf" }}]
+
+        [package.metadata]
+        requires-dist = [{{ name = "leaf", index = "{first_url}" }}]
+
+        [[package]]
+        name = "leaf"
+        version = "1"
+        source = {{ registry = {first_registry} }}
+        wheels = [{{ path = "leaf/{leaf_filename}", hash = "sha256:{leaf_digest}" }}]
     "#};
     context.temp_dir.child("uv.lock").write_str(&lock)?;
     context
@@ -1857,7 +1915,7 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         .assert()
         .success();
 
-    pyproject.write_str(&manifest.replace(r#"["first"]"#, r#"["second"]"#))?;
+    pyproject.write_str(&manifest.replace(first_url.as_str(), second_url.as_str()))?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
