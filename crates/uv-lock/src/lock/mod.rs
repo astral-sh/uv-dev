@@ -4527,6 +4527,14 @@ impl Lock {
                 .collect::<BTreeSet<_>>()
         });
 
+        // Runtime dependencies can add their own named indexes. Isolated builds start with
+        // the indexes configured for the project.
+        let (configured_remotes, configured_locals) = if self.builds.is_some() {
+            (remotes.clone(), locals.clone())
+        } else {
+            (None, None)
+        };
+
         // Add the workspace packages to the queue.
         for root_name in packages.keys() {
             let root = self
@@ -4622,10 +4630,10 @@ impl Lock {
             } else if let Some(package) = build_packages.as_mut().and_then(Iterator::next) {
                 (package, None, &mut build_remotes, &mut build_locals)
             } else if let Some(universe) = build_universes.next() {
-                // Each build starts with the project's indexes. An index declared by the owner
-                // or one of its dependencies is available in this environment alone.
-                build_remotes.clone_from(&remotes);
-                build_locals.clone_from(&locals);
+                // An index declared by the owner or a build dependency belongs to this
+                // environment.
+                build_remotes.clone_from(&configured_remotes);
+                build_locals.clone_from(&configured_locals);
                 for input in universe.inputs.iter().flatten() {
                     input.record_index(root, &mut build_remotes, &mut build_locals)?;
                 }
