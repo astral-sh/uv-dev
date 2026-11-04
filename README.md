@@ -22,10 +22,13 @@ explanation of the active index cutoff. The configured PyPI entry does not
 replace the implicit default index. The observed output does not establish a
 dependency-confusion or index-strategy problem.
 
-The focused production fix now rejects unknown index fields, so this malformed
-script reports a configuration error before resolution. It does not introduce
-index-scoped package exemptions or change supported exemption precedence. See
-`## Fix` for the updated regression and checkout validation.
+The recorded production fix in astral-sh/uv-dev#3092 rejects unknown index
+fields, so this malformed script reports a configuration error before resolution.
+It does not introduce index-scoped package exemptions or change supported
+exemption precedence. That pull request remains open and unmerged; the validation
+below establishes its tested behavior, not a released fix. A separate open
+proposal, astral-sh/uv#23110, adds index-scoped exemptions and changes unpinned-index
+cutoff hints. See the fix and upstream-proposal sections for their different scopes.
 
 ## Classification
 
@@ -183,7 +186,8 @@ untested.
 
 ## Fix
 
-**Outcome: fixed.** The production change adds Serde's `deny_unknown_fields` to
+**Recorded implementation outcome: fixed in validation; not merged.**
+The open proposal astral-sh/uv-dev#3092 adds Serde's `deny_unknown_fields` to
 `IndexWire` in `crates/uv-distribution-types/src/index.rs`. The unsupported
 `exclude-newer-package` field now produces a TOML parse error, consistent with
 strict validation of the surrounding uv configuration, instead of being discarded
@@ -258,6 +262,33 @@ unpinned index configurations has a separate cause and was not changed. No
 repository manifest, lockfile, workflow, agent configuration, or GitHub state was
 modified.
 
+## Upstream proposal and remaining decision
+
+The issue commenter identifies astral-sh/uv#23110 as a submitted fix. Its open,
+unmerged status and proposed scope were independently checked against the pull
+request body and diff. The diff adds an `exclude_newer_package` map to `Index` and
+`IndexWire`, resolves an index's package override before its index-wide cutoff,
+and uses that lookup in the resolver provider and latest-version client. It also
+changes cutoff-hint generation to fall back to `available_indexes` when
+`fork_indexes` has no package entry, directly targeting the diagnostic gap for
+unpinned indexes.
+
+This proposal would make the report's nested package-exemption syntax supported.
+The recorded fix in astral-sh/uv-dev#3092 instead rejects that syntax as an unknown
+index field. Maintainers therefore need to choose whether to extend index
+configuration or retain the documented top-level exemption and reject misplaced
+keys. The supplied discussion contains no maintainer decision between those
+approaches. The new fix proposal does not change the bug classification or make
+this issue a duplicate.
+
+The inspected diff adds a unit test for parsing an index-scoped exemption and
+falling back to the index cutoff for another package. It does not add an
+end-to-end script-resolution or unpinned-index diagnostic regression. No tests or
+builds of astral-sh/uv#23110 were run here; the successful integration tests and
+runtime round trips recorded above apply to the rejection-based fix, not this
+alternative. The documented top-level exemption remains the reproduced
+workaround while both proposals are unmerged.
+
 ## Supporting implementation evidence
 
 - `docs/concepts/resolution.md` documents package exemptions under `[tool.uv]`
@@ -276,11 +307,20 @@ modified.
   package/global setting. `apply_dependency_source` in
   `crates/uv-resolver/src/resolver/mod.rs` populates those entries from package
   source/index constraints. This is consistent with the missing hint on the
-  report's ordinary index-discovery path; no resolver fix was implemented or
-  tested.
+  report's ordinary index-discovery path. The recorded validation-only fix did
+  not change or test resolver hints; astral-sh/uv#23110 separately proposes changing
+  this path, as described above.
 
 ## Related
 
+- astral-sh/uv#23110 (pull request, open and unmerged) — Proposed directly in
+  response to this issue. Adds index-scoped package exemptions and an
+  available-index fallback for cutoff diagnostics. This differs from rejecting
+  unsupported index keys; its implementation has been inspected but not locally
+  validated in this investigation.
+- astral-sh/uv-dev#3092 (pull request, open and unmerged) — The recorded, tested
+  fix rejects unknown index fields and retains top-level package exemptions. It
+  leaves the separate unpinned-index cutoff diagnostic gap unchanged.
 - astral-sh/uv-dev#3091 (parent regression pull request) — Added the script test
   demonstrating silent acceptance of the misplaced index exemption. The fix
   updates that same regression to require a configuration error.
@@ -319,4 +359,4 @@ configuration error, avoiding silent acceptance and the misleading resolution
 hint for this layout. Focused integration tests and a corrected-script
 add/lock/check round trip pass.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/3092
+Pull request: astral-sh/uv-dev#3092
