@@ -13,12 +13,15 @@ uv version are both “Any.”
 
 The reference to an editor is intentional. The project-layout documentation explicitly explains
 that editors use the project environment for code completion and type hints. The migration guide
-also recommends explicitly creating the environment with uv sync for editor use. No matching
-wording correction or historical fix was found.
+also recommends explicitly creating the environment with uv sync for editor use. A temporary
+project experiment confirmed that uv sync creates .venv and installs a pinned dependency that is
+then importable through .venv/bin/python without invoking uv run. This establishes the environment
+behavior, not any particular editor’s discovery or completion behavior. No matching wording
+correction or historical fix was found.
 
 ## Draft response
 
-“Editor” is intentional here: Python editor integrations use the project environment to resolve imports and provide code completion and type hints. uv sync creates or updates that environment (normally .venv) without running a command, which is useful before you start editing. Configure your editor’s Python integration to use the project’s .venv. This connection is explained at https://docs.astral.sh/uv/concepts/projects/layout/#the-project-environment. The sentence could be clearer as “ensuring the environment your editor uses has the correct versions of dependencies.”
+“Editor” is intentional here: Python editor integrations configured to use the project environment can inspect its installed dependencies to resolve imports and provide code completion and type hints. uv sync creates or updates that environment (normally .venv) without running a command, which is useful before you start editing. Configure your editor’s Python integration to use the project’s .venv. This connection is explained at https://docs.astral.sh/uv/concepts/projects/layout/#the-project-environment. The sentence could be clearer as “ensuring the environment your editor uses has the correct versions of dependencies.”
 
 ## Classification
 
@@ -26,8 +29,84 @@ The reporter asks why the syncing documentation mentions an editor and suggests 
 
 The issue currently carries the bug label, but the report and documentation support classifying it
 as a question. Clarifying the sentence or linking to the project-environment explanation would
-address the ambiguity without changing the documented behavior. No reproduction or version
-information is needed to answer the question.
+address the ambiguity without changing the documented behavior. The conceptual question can be
+answered from the documentation and the environment demonstration below. There is no reported
+command or editor failure to classify as reproduced or not reproduced.
+
+## Reproduction
+
+Outcome: **needs_more_information**. The report asks whether “editor” should be replaced with
+“project”; it supplies no failing command, project configuration, expected-versus-actual editor
+behavior, or named editor. Platform and uv version are “Any,” and no Python version is supplied.
+No behavioral defect is alleged, so a defect reproduction does not apply. The experiment below
+helps answer the conceptual question; it is not a reproduction of an editor failure.
+
+### Observed environment behavior
+
+Used the installed uv executable from PATH:
+`/opt/hostedtoolcache/uv/0.13.6/x86_64/uv`, reporting
+`uv 0.13.6 (x86_64-unknown-linux-gnu)`. Host: Linux 7.0.0-1014-aws, x86_64; interpreter:
+CPython 3.12.3, selected explicitly from the existing Python installation. No uv build or repository
+test execution was needed.
+
+Created `/tmp/uv-23102-oabu0_tn/project/pyproject.toml` with:
+
+```toml
+[project]
+name = "editor-environment-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["idna==3.10"]
+```
+
+There was initially no `.venv` or lockfile. There are no workspaces, dependency groups, optional
+dependencies, uv sources, or build system in this example. All fixture files, uv caches, and
+HOME/XDG/Python-install/temp directories were placed under `/tmp/uv-23102-oabu0_tn`. Commands ran
+with a fresh environment, automatic Python downloads disabled, and configuration discovery
+disabled. No existing project or user environment was changed.
+
+From the fixture directory, the relevant commands were (with `<python>` denoting the explicitly
+selected existing CPython 3.12.3 executable):
+
+```console
+uv sync --python <python> --no-python-downloads --no-config --no-build --default-index https://pypi.org/simple
+.venv/bin/python -c 'import idna; from importlib.metadata import version; print("idna version:", version("idna")); print("idna location:", idna.__file__)'
+```
+
+Both commands exited 0. Sync resolved two packages, created `uv.lock` and `.venv`, and installed
+`idna==3.10`. The direct interpreter probe printed:
+
+```text
+idna version: 3.10
+idna location: /tmp/uv-23102-oabu0_tn/project/.venv/lib/python3.12/site-packages/idna/__init__.py
+```
+
+No application command or `uv run` was required to prepare the environment. An editor integration
+configured to use that environment can inspect these installed dependencies. No editor was
+launched, and this experiment does not establish automatic editor discovery, language-server
+configuration, or completion behavior. The documentation explicitly describes that intended
+connection in `docs/concepts/projects/layout.md` under “The project environment.”
+
+### Existing test coverage and limits
+
+Read the relevant integration-test setup and assertions:
+
+- `crates/uv/tests/sync/sync.rs`, `sync`: creates a Python >=3.12 project depending on iniconfig;
+  snapshots successful resolution and installation of iniconfig 2.0.0 and asserts that `uv.lock`
+  exists. This covers basic manual synchronization, not editor integration.
+- `crates/uv/tests/sync/sync.rs`, `check`: uses the same dependency fixture; snapshots an outdated
+  environment from `uv sync --check`, successful installation by `uv sync`, and then a successful
+  check reporting an up-to-date lockfile and no changes. This covers synchronization state, not
+  editor behavior.
+
+These modules are gated on `test-python` and `test-pypi` in `crates/uv/tests/sync/main.rs`.
+No test was added or run, and no coverage claim is made for an editor failure.
+
+To investigate an actual malfunction, obtain the editor and Python extension/language-server
+versions, selected interpreter/environment path, operating system, uv and Python versions,
+`pyproject.toml` (including any workspace/group/source configuration), exact commands and output,
+and a concrete example of expected versus observed import/completion/type-hint behavior. Those
+inputs are unnecessary for answering the wording question itself.
 
 ## Related
 
@@ -84,5 +163,7 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 
 Answer the environment/editor connection directly using the draft above. A small wording
 clarification or cross-reference is a reasonable documentation follow-up, but no implementation
-change is established by this report. This handoff and draft are for maintainer review; no GitHub
-changes were made.
+change is established by this report. The structured reproduction outcome is
+needs_more_information because no behavioral failure is specified; the successful synchronization
+experiment supports the explanation without claiming to test an editor. This handoff and draft are
+for maintainer review; no GitHub changes or checkout modifications were made.

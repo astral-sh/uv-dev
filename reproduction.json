@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "astral-sh/uv#23102 asks a documentation question and reports no behavioral failure, so defect reproduction does not apply. On Linux with uv 0.13.6 and Python 3.12.3, a temporary project declaring idna==3.10 successfully ran uv sync; .venv/bin/python then imported idna at version 3.10. This demonstrates the environment an editor can use, but no editor integration was tested. Investigating a malfunction would require the editor configuration, selected interpreter, project configuration, commands, and expected versus observed behavior. Updated $RUNNER_TEMP/issue-context/README.md."
+}
