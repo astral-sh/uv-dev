@@ -401,6 +401,12 @@ pub async fn resolve(
             previous: previous_build,
         }) = build_inputs
         {
+            let constraints = Constraints::from_specifications(
+                constraints
+                    .specifications()
+                    .cloned()
+                    .chain(upgrade.constraints().cloned().map(Into::into)),
+            );
             let strategy = BuildForkStrategy::from_env().map_err(anyhow::Error::msg)?;
             let build_recorder = recorder.as_ref().map(|_| ResolutionRecorder::default());
             let runtime_preferences =
@@ -414,10 +420,11 @@ pub async fn resolve(
                         Some(pins) => pins.apply_hashes(hasher.clone()),
                         None => hasher.clone(),
                     };
-                    let hasher = hasher.augment_with_metadata_requirements(requirements.iter())?;
+                    // Static build requirements are direct inputs to this isolated environment.
+                    let hasher = hasher.augment_with_requirements(requirements.iter())?;
                     let (lookaheads, hasher) = LookaheadResolver::new(
                         &requirements,
-                        constraints,
+                        &constraints,
                         &DependencyModifiers::default(),
                         &hasher,
                         index,

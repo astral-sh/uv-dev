@@ -109,6 +109,94 @@ fn lock_build_inputs_exclude_newer() -> Result<()> {
     Ok(())
 }
 
+/// A direct build requirement can provide its wheel's digest during a fresh lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_hashes_declared_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"1".parse()?).build();
+    let path = context.temp_dir.child(filename);
+    path.write_binary(&wheel)?;
+    let url = SafeUrl::from_file_path(path.path()).map_err(|()| anyhow!("invalid wheel URL"))?;
+    let digest = hex::encode(Sha256::digest(&wheel));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend @ {url}#sha256={digest}"]
+        build-backend = "backend"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "build-dependency-hashes"]
+        no-index = true
+        require-build-hashes = true
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// An upgrade bound also applies when the package occurs only in a build environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_bounded_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["ok"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking"]
+        no-index = true
+        find-links = ["links"]
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let before = context.read("uv.lock");
+    links.copy_from(context.workspace_root.join("test/links"), &["ok-2*.whl"])?;
+    let (filename, wheel) = WheelBuilder::new(&"ok".parse()?, &"3".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--upgrade-package", "ok==2"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_snapshot!(diff_snapshot(&before, &context.read("uv.lock"), 2), @r#"
+    --- old
+    +++ new
+    @@ -17,8 +17,8 @@
+     build-only = true
+     name = "ok"
+    -version = "1.0.0"
+    +version = "2.0.0"
+     source = { registry = "links" }
+     wheels = [
+    -    { path = "ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" },
+    +    { path = "ok-2.0.0-py3-none-any.whl", hash = "sha256:8163cd4f0477f8e93b856ac6a517fe5fa0f29339291fe2807d5376df685f6697" },
+     ]
+    "#);
+    Ok(())
+}
+
 /// The Python used to run uv can see only one of the two trusted build constraints.
 #[cfg(feature = "test-universal")]
 #[test]
