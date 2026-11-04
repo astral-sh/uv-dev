@@ -3040,7 +3040,7 @@ impl Lock {
         root: &Path,
         index_locations: &IndexLocations,
     ) -> Result<bool, LockError> {
-        for package in &self.packages {
+        for package in self.packages_in_all_environments() {
             let Some(index) = package.index(root)? else {
                 continue;
             };

@@ -1164,7 +1164,9 @@ async fn do_lock(
                     concurrency.downloads,
                 )
                 .await?;
-                previous_pins.verify(&lock)?;
+                previous_pins
+                    .verify(&lock, target.install_path(), &client)
+                    .await?;
                 let lock = lock
                     .with_compacted_build_domains()?
                     .with_ordinary_build_roots()?;
