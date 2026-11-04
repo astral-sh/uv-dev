@@ -1343,6 +1343,54 @@ fn lock_build_migrates_stale_v2_declarations() -> Result<()> {
         .args(["--offline", "--check"])
         .assert()
         .success();
+    assert_snapshot!(diff_snapshot(&lock, &context.read("uv.lock"), 2), @r#"
+    --- old
+    +++ new
+    @@ -1,6 +1,6 @@
+    -version = 2
+    -build-encoding = "dependency"
+    +version = 4
+     revision = 5
+     requires-python = ">=3.12"
+    +build-encoding = "dependency"
+
+     [options]
+    @@ -9,14 +9,24 @@
+     [[build-universes]]
+     owner = { name = "project", version = "1", source = { editable = "." } }
+    -roots = [{ name = "backend" }]
+    -inputs = [{ kind = "backend", name = "backend", specifier = "==1" }]
+    +inputs = [{ kind = "backend", name = "backend", specifier = "==2" }]
+    +roots = [
+    +    { name = "backend", version = "2", source = { registry = "wheels" } },
+    +]
+
+     [[package]]
+    -universe = [0, 1]
+     name = "backend"
+     version = "1"
+     source = { registry = "wheels" }
+     wheels = [
+    -    { path = "backend-1-py3-none-any.whl" },
+    +    { path = "backend-1-py3-none-any.whl", hash = "sha256:894a5c725034f6a9104a570a888662e22478255ea93dd7d0e0cbc60c54fe96c2" },
+    +]
+    +
+    +[[package]]
+    +build-only = true
+    +name = "backend"
+    +version = "2"
+    +source = { registry = "wheels" }
+    +wheels = [
+    +    { path = "backend-2-py3-none-any.whl", hash = "sha256:c01d11546d34bb76cfe68eec82898e11f67f011a4986d55756cb8283e1632cdf" },
+     ]
+
+    @@ -26,5 +36,5 @@
+     source = { editable = "." }
+     dependencies = [
+    -    { name = "backend" },
+    +    { name = "backend", version = "1", source = { registry = "wheels" } },
+     ]
+    "#);
     Ok(())
 }
 
