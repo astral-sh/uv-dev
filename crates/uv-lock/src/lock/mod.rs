@@ -4613,8 +4613,26 @@ impl Lock {
             }
         }
 
-        while let Some(package_index) = queue.pop_front() {
-            let package = self.package(package_index);
+        // A mutable build dependency can declare an index for other packages in its closure.
+        // Refresh those declarations before checking the registry sources.
+        let mut build_packages = self
+            .build_packages()
+            .filter(|package| !package.id.source.is_immutable())
+            .chain(
+                self.build_packages()
+                    .filter(|package| package.id.source.is_immutable()),
+            );
+        loop {
+            let (package, runtime_index) = if let Some(index) = queue.pop_front() {
+                (self.package(index), Some(index))
+            } else if let Some(package) = build_packages.next() {
+                (package, None)
+            } else {
+                break;
+            };
+            // Build universes retain the declarations for their mutable packages.
+            let allow_missing_package_metadata =
+                runtime_index.is_some() && allow_missing_package_metadata;
             // If the lockfile references an index that was not provided, we can't validate it.
             if let Source::Registry(index) = &package.id.source {
                 match index {
@@ -4944,6 +4962,12 @@ impl Lock {
             } else {
                 return Ok(SatisfiesResult::MissingVersion(&package.id.name));
             }
+
+            // Each build closure already includes its transitive dependencies. Its edges refer
+            // to packages in that universe instead of indices into the runtime package list.
+            let Some(package_index) = runtime_index else {
+                continue;
+            };
 
             // An empty extra has no edge of its own, so revisit packages when a later
             // parent activates additional extras after their first validation.
