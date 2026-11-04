@@ -38,7 +38,7 @@ The reporter reconstructed the release-binary stack and reports a NULL jitter co
 
 Smallgiil's 2026-11-04 comment (ID 6631980054 on astral-sh/uv#22830) reports similar failures with uv 0.13.7 on Windows KVM VMs with eight vCPUs on a Xeon Gold 6248R host. The attached report describes silent `0xC0000409` exits 1–3 seconds after process start during the first TLS handshake, only for commands opening network connections. Rerunning succeeds; the contributor says failures occur almost never on physical machines, without providing physical-machine sample counts.
 
-The contributor's AI-assisted report states that 32 crash dumps showed `__fastfail(7)` in `tree_jitter_initialize_once` after a NULL return from `jent_entropy_collector_alloc`. This is consistent with the original reported failure path, but the dumps were not supplied or independently checked here. No maintainer determination that both reports share an underlying cause appears in the supplied discussion.
+The contributor's AI-assisted report states that 32 crash dumps showed `__fastfail(7)` in `tree_jitter_initialize_once` after a NULL return from `jent_entropy_collector_alloc`. This is consistent with the original reported failure path, but the dumps were not supplied or independently checked here. In comment ID 6635005665 on astral-sh/uv#22830 (2026-11-04 at 15:43 UTC), maintainer zanieb assessed the additional report as looking like the same issue. This supports keeping the report in this discussion; it does not independently confirm the crash-dump attribution or the proposed scheduling/TSC mechanism.
 
 The attachment reports these process-level measurements:
 
