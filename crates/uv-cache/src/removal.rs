@@ -47,13 +47,9 @@ impl Remover {
 
     /// Remove a file or directory and all its contents, returning a [`Removal`] with
     /// the number of files and directories removed, along with a total byte count.
-    pub(crate) fn rm_rf(
-        &self,
-        path: impl AsRef<Path>,
-        skip_locked_file: bool,
-    ) -> io::Result<Removal> {
+    pub(crate) fn rm_rf(&self, path: impl AsRef<Path>, keep_root: bool) -> io::Result<Removal> {
         let mut removal = Removal::new(self.removal_accounting);
-        removal.rm_rf(path.as_ref(), self.reporter.as_deref(), skip_locked_file)?;
+        removal.rm_rf(path.as_ref(), self.reporter.as_deref(), keep_root)?;
         Ok(removal)
     }
 }
@@ -134,7 +130,7 @@ impl Removal {
         &mut self,
         path: &Path,
         reporter: Option<&dyn CleanReporter>,
-        skip_locked_file: bool,
+        keep_root: bool,
     ) -> io::Result<()> {
         let path = uv_fs::verbatim_path(path);
 
@@ -184,7 +180,7 @@ impl Removal {
                         if set_readable(dir).unwrap_or(false) {
                             // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
                             // `walkdir` may give us duplicate entries for the directory.
-                            return self.rm_rf(&path, reporter, skip_locked_file);
+                            return self.rm_rf(&path, reporter, keep_root);
                         }
                     }
                 }
@@ -192,13 +188,10 @@ impl Removal {
 
             let entry = entry?;
 
-            // Keep the root lock in place for other uv processes.
-            if skip_locked_file
-                && entry.file_name() == ".lock"
-                && entry
-                    .path()
-                    .strip_prefix(&path)
-                    .is_ok_and(|suffix| suffix == Path::new(".lock"))
+            // Waiters need the same lock, and future clean operations need the cache tag.
+            if keep_root
+                && entry.depth() == 1
+                && (entry.file_name() == ".lock" || entry.file_name() == "CACHEDIR.TAG")
             {
                 continue;
             }
@@ -218,7 +211,7 @@ impl Removal {
                 remove_dir(entry.path())?;
             } else if entry.file_type().is_dir() {
                 // Keep the root directory containing the lock, too.
-                if skip_locked_file && entry.path() == path.as_ref() {
+                if keep_root && entry.path() == path.as_ref() {
                     continue;
                 }
 

@@ -20,6 +20,22 @@ use uv_static::EnvVars;
 use uv_test::assert_path_missing;
 use uv_test::uv_snapshot;
 
+/// An unrelated nonempty directory can be selected by mistake via `UV_CACHE_DIR`.
+#[test]
+fn clean_untagged_directory() -> Result<()> {
+    let mut context = uv_test::test_context!("3.12");
+    context.cache_dir = context.temp_dir.child("unrelated");
+    let sentinel = context.cache_dir.child("keep.txt");
+    sentinel.write_str("keep")?;
+    uv_snapshot!(context.filters(), context.clean().arg("--force"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Refusing to remove contents of `unrelated` without a valid `CACHEDIR.TAG` file
+    ");
+    assert_eq!(fs_err::read_to_string(&sentinel)?, "keep");
+    Ok(())
+}
+
 /// `cache clean` should remove all packages.
 #[test]
 fn clean_all() -> Result<()> {
@@ -604,6 +620,7 @@ fn clean_handles_verbatim_paths() -> Result<()> {
 
     // Attempt to create a file with a trailing dot (we need to make it verbatim to do so)
     uwsgi_shard.create_dir_all()?;
+    uv_fs::cachedir::ensure_tag(&context.cache_dir)?;
     let invalid_path = uwsgi_shard.child("logging.").to_path_buf();
     let invalid_file = uv_fs::verbatim_path(invalid_path.as_path());
     fs_err::write(&invalid_file, b"")?;

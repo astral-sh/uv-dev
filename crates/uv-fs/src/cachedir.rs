@@ -1,10 +1,28 @@
 //! Vendored from cachedir 0.3.1 to replace `std::fs` with `fs_err`.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::{io, path};
 
 /// The `CACHEDIR.TAG` file header as defined by the [specification](https://bford.info/cachedir/).
 const HEADER: &[u8; 43] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// A valid tag is a regular file beginning with the cache directory signature.
+pub fn is_tagged(directory: &path::Path) -> io::Result<bool> {
+    let tag = directory.join("CACHEDIR.TAG");
+    match fs_err::symlink_metadata(&tag) {
+        Ok(metadata) if !metadata.is_file() => return Ok(false),
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    }
+
+    let mut header = [0; HEADER.len()];
+    match fs_err::File::open(tag)?.read_exact(&mut header) {
+        Ok(()) => Ok(&header == HEADER),
+        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(err) => Err(err),
+    }
+}
 
 /// Adds a tag to the specified `directory`.
 ///
