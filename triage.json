@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10082,
+        "title": "A command to install/get version of the package from `uv.lock`",
+        "url": "https://github.com/astral-sh/uv/issues/10082",
+        "state": "open",
+        "reason": "Canonical match: requests installing a single tool at its uv.lock version in CI without constructing the full project environment or defining a group per tool. Maintainer comments discuss selecting any locked package as the dependency-tree root."
+      },
+      {
+        "kind": "issue",
+        "number": 11453,
+        "title": "uv sync: allow installing only a given package and its dependencies",
+        "url": "https://github.com/astral-sh/uv/issues/11453",
+        "state": "closed",
+        "reason": "Requests the same locked-package-and-dependencies selection for uv sync. Maintainers distinguish this from --only-install-package, which excludes unlisted dependencies. Closed because the reporter accepted an extra per product as a workaround, not because a general selector shipped."
+      },
+      {
+        "kind": "issue",
+        "number": 7186,
+        "title": "Should `uvx` use a project dependency if available?",
+        "url": "https://github.com/astral-sh/uv/issues/7186",
+        "state": "open",
+        "reason": "Overlaps with the reporter's alternative uv tool run --from-project syntax: using a project's selected tool version rather than an independently selected version. Broader discussion includes reusing the project environment and default behavior, whereas this report specifically wants to avoid installing unrelated dependencies."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19907,
+        "title": "Add locked subgraph materialization primitives",
+        "url": "https://github.com/astral-sh/uv/pull/19907",
+        "state": "merged",
+        "reason": "Referenced from astral-sh/uv#10082 and merged June 23, 2026. Adds materialization of exact locked package subgraphs and cached installation without resolving again. Explicitly a refactor with no user-visible behavior change; it does not add the requested general CLI selector."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19884,
+        "title": "Use locked ty versions in uv check",
+        "url": "https://github.com/astral-sh/uv/pull/19884",
+        "state": "merged",
+        "reason": "Follow-up to astral-sh/uv#19907, merged June 24, 2026. Installs only the exact locked ty subgraph into a cached environment when uv check cannot use the project environment. This is a concrete implementation for ty, not arbitrary packages through uv run or uv tool run."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests separately for single/specific-package installation, only-package, only-install-package, project-locked tool versions, from-project, lockfile/tool usage, and only-group/no-group/with interactions; also searched the exact check-jsonschema identifier. Conceptual searches covered arbitrary dependency-tree roots, isolated project tools, selective synchronization, task runners, and locked subgraph materialization. Followed issue comments and timeline references from astral-sh/uv#10082 to astral-sh/uv#19907 and astral-sh/uv#19884, and from astral-sh/uv#7186 through project-tool discussions. Inspected but ruled out astral-sh/uv#5815 (the installed tool's own lockfile, rather than the caller's project lockfile), astral-sh/uv#22353 (exporting runtime dependencies, resolved with --no-default-groups), and astral-sh/uv#8292 (whole-group selection, already supported). Broader astral-sh/uv#5903, astral-sh/uv#3560, astral-sh/uv#12533, and astral-sh/uv#13268 concern task definitions or declarative tool management rather than this focused selector. Checked current CLI, group-selection documentation, --with resolution code, and installation filters; no general implementing PR was identified."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#10082 already tracks the same underlying request: run or install one project-locked tool for CI without installing unrelated project dependencies or creating a group per tool. The requested syntax is an API variant of that capability. Group exclusion precedence is documented, and --with uses lockfile version preferences, so the reported workaround does not establish a correctness bug. The merged related PRs implement internal primitives and ty-specific behavior, not a previously shipped general feature; there is no established regression.",
+  "summary": "astral-sh/uv#10082 is the closest existing discussion. astral-sh/uv#11453 covers the equivalent sync request, and astral-sh/uv#7186 covers project-aware tool execution. Merged astral-sh/uv#19907 and astral-sh/uv#19884 provide supporting machinery and a ty-specific implementation, without a general package selector.",
+  "draft_response": "This is already tracked in astral-sh/uv#10082: installing a single tool at its project-locked version in CI without installing the rest of the environment. Please add your use case there so we can keep the API discussion together. Your suggested `uv tool run --from-project` interface also overlaps with astral-sh/uv#7186.\n\nThe group flags in your workaround follow the documented rule that exclusions take precedence over inclusions. However, `--with` performs a separate resolution using locked versions as preferences; it does not guarantee installation of the exact locked dependency graph."
+}
