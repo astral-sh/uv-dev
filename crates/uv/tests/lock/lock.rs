@@ -279,7 +279,7 @@ fn lock_build_checks_build_only_local_metadata() -> Result<()> {
     Ok(())
 }
 
-/// The configured indexes apply to wheels used only in isolated builds.
+/// Each build uses the configured indexes and any named indexes declared by its owner.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_build_checks_build_only_indexes() -> Result<()> {
@@ -295,9 +295,24 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         .child("second")
         .child(&filename)
         .write_binary(&wheel)?;
-    let manifest = indoc! {r#"
+    let private = context.temp_dir.child("private");
+    private
+        .child("backend")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    private
+        .child("backend")
+        .child("index.html")
+        .write_str(&format!(r#"<a href="{filename}">{filename}</a>"#))?;
+    let private_url = SafeUrl::from_file_path(private.path())
+        .map_err(|()| anyhow!("private index path is not a valid file URL"))?;
+    context
+        .temp_dir
+        .child("owner")
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
-        name = "project"
+        name = "owner"
         version = "1"
         requires-python = ">=3.12"
 
@@ -305,13 +320,34 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         requires = ["backend==1"]
         build-backend = "unused"
 
+        [tool.uv.sources]
+        backend = {{ index = "private" }}
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "{private_url}"
+        explicit = true
+    "#})?;
+    let manifest = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend==1", "owner"]
+        build-backend = "unused"
+
         [tool.uv]
-        no-index = true
         find-links = ["first"]
+
+        [tool.uv.sources]
+        owner = { path = "owner" }
     "#};
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(manifest)?;
     let digest = hex::encode(Sha256::digest(&wheel));
+    let registry = toml::Value::String(private.path().to_string_lossy().into_owned());
     let lock = formatdoc! {r#"
         version = 2
         revision = 5
@@ -322,12 +358,36 @@ fn lock_build_checks_build_only_indexes() -> Result<()> {
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[build-universes]]
+        owner = {{ name = "owner", version = "1", source = {{ directory = "owner" }} }}
+        inputs = [{{ kind = "backend", name = "backend", specifier = "==1", local-index = "private" }}]
+        roots = [{{ name = "backend", version = "1", source = {{ registry = {registry} }} }}]
+
+        [[build-universes]]
         owner = {{ name = "project", version = "1", source = {{ editable = "." }} }}
-        inputs = [{{ kind = "backend", name = "backend", specifier = "==1" }}]
-        roots = [{{ name = "backend" }}]
+        inputs = [
+            {{ kind = "backend", name = "backend", specifier = "==1" }},
+            {{ kind = "backend", name = "owner", directory = "owner" }},
+        ]
+        roots = [
+            {{ name = "backend", version = "1", source = {{ registry = "first" }} }},
+            {{ name = "owner" }},
+        ]
 
         [[package]]
         universe = [1]
+        name = "backend"
+        version = "1"
+        source = {{ registry = {registry} }}
+        wheels = [{{ path = "backend/{filename}", hash = "sha256:{digest}" }}]
+
+        [[package]]
+        universe = [2]
+        name = "owner"
+        version = "1"
+        source = {{ directory = "owner" }}
+
+        [[package]]
+        universe = [2]
         name = "backend"
         version = "1"
         source = {{ registry = "first" }}

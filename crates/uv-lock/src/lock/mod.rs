@@ -4630,20 +4630,25 @@ impl Lock {
             }
         }
 
-        // A mutable build dependency can declare an index for other packages in its closure.
-        // Refresh those declarations before checking the registry sources.
-        let mut build_packages = self
-            .build_packages()
-            .filter(|package| !package.id.source.is_immutable())
-            .chain(
-                self.build_packages()
-                    .filter(|package| package.id.source.is_immutable()),
-            );
+        let mut build_universes = self.builds.iter().flat_map(|builds| &builds.universes);
+        let mut build_packages = None;
+        let mut build_remotes = None;
+        let mut build_locals = None;
         loop {
-            let (package, runtime_index) = if let Some(index) = queue.pop_front() {
-                (self.package(index), Some(index))
-            } else if let Some(package) = build_packages.next() {
-                (package, None)
+            let (package, runtime_index, remotes, locals) = if let Some(index) = queue.pop_front() {
+                (self.package(index), Some(index), &mut remotes, &mut locals)
+            } else if let Some(package) = build_packages.as_mut().and_then(Iterator::next) {
+                (package, None, &mut build_remotes, &mut build_locals)
+            } else if let Some(universe) = build_universes.next() {
+                // Each build starts with the project's indexes. An index declared by the owner
+                // or one of its dependencies is available in this environment alone.
+                build_remotes.clone_from(&remotes);
+                build_locals.clone_from(&locals);
+                for input in universe.inputs.iter().flatten() {
+                    input.record_index(root, &mut build_remotes, &mut build_locals)?;
+                }
+                build_packages = Some(universe.validation_packages());
+                continue;
             } else {
                 break;
             };
@@ -4768,8 +4773,8 @@ impl Lock {
                             Some(version),
                             package,
                             &mut activated_extras,
-                            &mut remotes,
-                            &mut locals,
+                            remotes,
+                            locals,
                             root,
                             allow_missing_package_metadata,
                         )? {
@@ -4834,8 +4839,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4902,8 +4907,8 @@ impl Lock {
                         None,
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     ) {
@@ -4967,8 +4972,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {

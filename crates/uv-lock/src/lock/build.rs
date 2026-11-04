@@ -76,14 +76,6 @@ fn error(reason: impl Into<String>) -> LockError {
 }
 
 impl Lock {
-    /// Packages selected in the isolated build environments, including transitive dependencies.
-    pub(super) fn build_packages(&self) -> impl Iterator<Item = &Package> {
-        self.builds
-            .iter()
-            .flat_map(|builds| &builds.universes)
-            .flat_map(|universe| universe.packages.values())
-    }
-
     /// The supported environment, including exclusions within the Python range.
     pub(super) fn build_project_domain(&self) -> MarkerTree {
         let mut project =
@@ -228,6 +220,18 @@ impl BuildMarkerEnvironment<'_> {
 }
 
 impl Universe {
+    /// Refresh mutable declarations before checking the registry sources they can select.
+    pub(super) fn validation_packages(&self) -> impl Iterator<Item = &Package> {
+        self.packages
+            .values()
+            .filter(|package| !package.id.source.is_immutable())
+            .chain(
+                self.packages
+                    .values()
+                    .filter(|package| package.id.source.is_immutable()),
+            )
+    }
+
     fn resolve(
         &self,
         requirements: &[Requirement],
