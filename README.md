@@ -19,13 +19,24 @@ then importable through .venv/bin/python without invoking uv run. This establish
 behavior, not any particular editor’s discovery or completion behavior. No matching wording
 correction or historical fix was found.
 
+Maintainer zanieb has now confirmed the intended distinction in astral-sh/uv#23102
+(comment 6635554960): uv run syncs automatically, so a separate uv sync is unnecessary for
+that workflow. Explicit uv sync populates the virtual environment with packages needed by
+language-server (LSP) integrations in an editor. This directly answers the conceptual question;
+it does not report a defect or establish a documentation-change decision.
+
 ## Draft response
+
+This earlier draft is retained as background; the maintainer has since supplied the explanation.
 
 “Editor” is intentional here: Python editor integrations configured to use the project environment can inspect its installed dependencies to resolve imports and provide code completion and type hints. uv sync creates or updates that environment (normally .venv) without running a command, which is useful before you start editing. Configure your editor’s Python integration to use the project’s .venv. This connection is explained at https://docs.astral.sh/uv/concepts/projects/layout/#the-project-environment. The sentence could be clearer as “ensuring the environment your editor uses has the correct versions of dependencies.”
 
 ## Classification
 
 The reporter asks why the syncing documentation mentions an editor and suggests substituting project. The project-layout documentation explicitly explains that editors use the project environment for code completion and type hints, and the migration guide independently recommends uv sync for editor use. The wording describes intended behavior; no incorrect behavior, regression, or established documentation error is reported. The related discussions do not track this specific clarification.
+
+The maintainer clarification also supports the question classification: the editor reference
+describes the intended use of manual synchronization, rather than an incorrect term.
 
 The issue currently carries the bug label, but the report and documentation support classifying it
 as a question. Clarifying the sentence or linking to the project-environment explanation would
@@ -122,6 +133,10 @@ inputs are unnecessary for answering the wording question itself.
 
 ## Supporting evidence
 
+- astral-sh/uv#23102, comment 6635554960 by maintainer zanieb (2026-11-04), explicitly
+  identifies editor LSP integrations as the reason to populate the environment with uv sync
+  when automatic synchronization through uv run is not being invoked. The supplied full issue
+  discussion identifies the commenter as a repository member.
 - docs/concepts/projects/sync.md:3–5 defines syncing as installing a subset of locked packages into
   the project environment. Lines 9–10 explain that uv run automatically locks and syncs before
   running a command. Lines 67–77 contain the manual uv sync command and disputed editor sentence.
@@ -161,9 +176,11 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 
 ## Handoff
 
-Answer the environment/editor connection directly using the draft above. A small wording
-clarification or cross-reference is a reasonable documentation follow-up, but no implementation
-change is established by this report. The structured reproduction outcome is
-needs_more_information because no behavioral failure is specified; the successful synchronization
-experiment supports the explanation without claiming to test an editor. This handoff and draft are
-for maintainer review; no GitHub changes or checkout modifications were made.
+The maintainer has answered the environment/editor connection in the issue discussion. No
+additional public response is prepared. A small wording clarification or cross-reference remains a
+possible documentation follow-up, but the maintainer has not committed to one, and no implementation
+change is established by this report. The classification remains question. The structured
+reproduction outcome remains needs_more_information because no behavioral failure is specified;
+the successful synchronization experiment supports the explanation without claiming to test an
+editor. The new comment supplies no failing reproduction, affected version or platform, or editor
+configuration. No GitHub changes or checkout modifications were made.
