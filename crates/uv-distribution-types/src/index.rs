@@ -736,7 +736,7 @@ impl<'a> From<&'a IndexUrl> for IndexMetadataRef<'a> {
 
 /// Wire type for deserializing an [`Index`] with validation.
 #[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct IndexWire {
     name: Option<IndexName>,
     url: IndexUrl,

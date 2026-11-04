@@ -7159,9 +7159,9 @@ fn add_script_settings() -> Result<()> {
     Ok(())
 }
 
-/// An index-scoped package exemption is silently ignored when adding to a script.
+/// Package exemptions belong under `tool.uv`, rather than inside an index table.
 #[test]
-fn add_script_index_exclude_newer_package_ignored() -> Result<()> {
+fn add_script_index_exclude_newer_package_invalid() -> Result<()> {
     let context = uv_test::test_context!("3.15");
 
     let script = context.temp_dir.child("script.py");
@@ -7188,15 +7188,14 @@ fn add_script_index_exclude_newer_package_ignored() -> Result<()> {
         .arg("iniconfig==2.0.0")
         .arg("--script")
         .arg("script.py"), @"
-    exit_code: 1 (failure)
+    exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to add dependencies
-      cause: No solution found when resolving dependencies
-      cause: Because there is no version of iniconfig==2.0.0 and you require iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
+    error: TOML parse error at line 4, column 1
+      |
+    4 | [tool.uv]
+      | ^^^^^^^^^
+    unknown field `exclude-newer-package`, expected one of `name`, `url`, `explicit`, `default`, `format`, `publish-url`, `authenticate`, `ignore-error-codes`, `cache-control`, `hash-algorithm`, `exclude-newer`
 
-    hint: `iniconfig` was found on https://pypi.org/simple, but not at the requested version (iniconfig==2.0.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
-
-    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
 
     Ok(())
