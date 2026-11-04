@@ -19507,6 +19507,56 @@ fn locked_build_rejects_package_outside_closure() -> Result<()> {
     Ok(())
 }
 
+/// A wheel used only by the isolated build can require a different Python ABI.
+#[test]
+fn locked_build_incompatible_wheel_hint() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    let (filename, wheel) = WheelBuilder::new(&"build-dependency".parse()?, &"1.0.0".parse()?)
+        .tag("cp310-cp310-any")
+        .build();
+    let hash = hex::encode(Sha256::digest(&wheel));
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    let input = formatdoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        build-encoding = "dependency"
+
+        [[build-universes]]
+        owner = {{ name = "project", version = "0.1.0", source = {{ editable = "." }} }}
+        roots = [{{ name = "build-dependency" }}]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ editable = "." }}
+
+        [[package]]
+        name = "build-dependency"
+        version = "1.0.0"
+        source = {{ registry = "wheels" }}
+        wheels = [{{ path = "{filename}", hash = "sha256:{hash}" }}]
+    "#};
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&Lock::from_toml(&input)?.to_toml()?)?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--no-editable", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: Distribution `build-dependency==1.0.0 @ registry+wheels` can't be installed because it doesn't have a source distribution or wheel for the current platform
+
+    hint: You're using CPython 3.12 (`cp312`), but `build-dependency` (v1.0.0) only has wheels with the following Python ABI tag: `cp310`
+    ");
+    Ok(())
+}
+
 /// A backend cannot add a requirement to a locked build environment, even if a wheel is available.
 #[test]
 fn locked_build_dependency_from_hook() -> Result<()> {
