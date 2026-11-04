@@ -23,7 +23,28 @@ mod hash_algorithm;
 /// Previous build selections, partitioned by exact source owner and marker domain.
 #[derive(Debug, Default)]
 pub struct BuildLockPins {
-    owners: BTreeMap<PackageId, Vec<(MarkerTree, BuildPins)>>,
+    owners: BTreeMap<OwnerKey, Vec<(MarkerTree, BuildPins)>>,
+}
+
+/// A mutable project can change its declared version between locks. Its directory and name
+/// identify the build environment whose selections can be reused.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum OwnerKey {
+    Directory(PackageName, Box<Path>),
+    Exact(PackageId),
+}
+
+impl OwnerKey {
+    fn new(owner: PackageId, root: &Path) -> Result<Self, LockError> {
+        if let Some(directory) = owner.source.mutable_build_directory() {
+            Ok(Self::Directory(
+                owner.name,
+                super::absolute_path(root, directory)?.into_boxed_path(),
+            ))
+        } else {
+            Ok(Self::Exact(owner))
+        }
+    }
 }
 
 /// The selections that a batch of owners can share in one build solve.
@@ -112,7 +133,7 @@ impl Lock {
                 scopes.extend(rest);
             }
             pins.owners
-                .entry(universe.owner.clone())
+                .entry(OwnerKey::new(universe.owner.clone(), root)?)
                 .or_default()
                 .extend(scopes);
         }
@@ -134,7 +155,7 @@ impl BuildLockPins {
             return Ok(vec![(scope, None)]);
         }
         let owner = PackageId::build_owner(owner, root)?;
-        let Some(previous) = self.owners.get(&owner) else {
+        let Some(previous) = self.owners.get(&OwnerKey::new(owner, root)?) else {
             return Ok(vec![(scope, None)]);
         };
         let mut remaining = scope.combined().and(project);
@@ -166,13 +187,17 @@ impl BuildLockPins {
         root: &Path,
         client: &RegistryClient,
     ) -> Result<(), LockError> {
+        if self.owners.is_empty() {
+            return Ok(());
+        }
         let Some(builds) = &lock.builds else {
             return Ok(());
         };
         let project = lock.build_project_domain();
         let mut changes = HashAlgorithmChanges::new(root, client);
         for universe in &builds.universes {
-            let Some(previous) = self.owners.get(&universe.owner) else {
+            let owner = OwnerKey::new(universe.owner.clone(), root)?;
+            let Some(previous) = self.owners.get(&owner) else {
                 continue;
             };
             let domain = project.and(universe.marker.combined());

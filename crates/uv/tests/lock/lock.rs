@@ -608,6 +608,68 @@ fn lock_build_encoding_reuses_versions() -> Result<()> {
     Ok(())
 }
 
+/// Bumping the version of a mutable owner keeps its compatible backend selection even when
+/// a newer wheel has appeared on the index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_relock_owner_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "owner"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "backend"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking"]
+        no-index = true
+        find-links = ["links"]
+    "#};
+    pyproject.write_str(project)?;
+    let links = context.temp_dir.child("links");
+    let backend = "backend".parse()?;
+    let (filename, wheel) = WheelBuilder::new(&backend, &"1".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    let (filename, wheel) = WheelBuilder::new(&backend, &"2".parse()?).build();
+    links.child(filename).write_binary(&wheel)?;
+    pyproject.write_str(&project.replace(r#"version = "1""#, r#"version = "2""#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Updated owner v1 -> v2
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(diff_snapshot(&locked, &context.read("uv.lock"), 1), @r#"
+        --- old
+        +++ new
+        @@ -9,3 +9,3 @@
+         [[build-universes]]
+        -owner = { name = "owner", version = "1", source = { editable = "." } }
+        +owner = { name = "owner", version = "2", source = { editable = "." } }
+         inputs = [{ kind = "backend", name = "backend", specifier = ">=1" }]
+        @@ -26,3 +26,3 @@
+         name = "owner"
+        -version = "1"
+        +version = "2"
+         source = { editable = "." }
+        "#);
+    });
+    Ok(())
+}
+
 /// A dirty runtime solve can select a newer version of the owner's backend. Keep the
 /// compatible build pin until the user explicitly upgrades that package.
 #[cfg(feature = "test-universal")]
