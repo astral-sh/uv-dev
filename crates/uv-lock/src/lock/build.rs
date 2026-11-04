@@ -76,6 +76,16 @@ fn error(reason: impl Into<String>) -> LockError {
 }
 
 impl Lock {
+    /// Iterate over packages selected for the runtime environment or an isolated build.
+    pub(super) fn packages_in_all_environments(&self) -> impl Iterator<Item = &Package> {
+        self.packages.iter().chain(
+            self.builds
+                .iter()
+                .flat_map(|builds| &builds.universes)
+                .flat_map(|universe| universe.packages.values()),
+        )
+    }
+
     /// The supported environment, including exclusions within the Python range.
     pub(super) fn build_project_domain(&self) -> MarkerTree {
         let mut project =
