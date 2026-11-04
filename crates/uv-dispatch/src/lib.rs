@@ -27,12 +27,12 @@ use uv_configuration::{
     NoSources, Reinstall,
 };
 use uv_configuration::{BuildOutput, Concurrency};
-use uv_distribution::DistributionDatabase;
+use uv_distribution::{DistributionDatabase, GitWorkspaceMember};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
-    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
-    PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
+    GitDirectorySourceUrl, Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError,
+    Name, PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
@@ -717,7 +717,7 @@ impl BuildContext for BuildDispatch<'_> {
         source: &'data Path,
         subdirectory: Option<&'data Path>,
         install_path: &'data Path,
-        stop_discovery_at: Option<&'data Path>,
+        git_source: Option<GitDirectorySourceUrl<'data>>,
         version_id: Option<&'data str>,
         dist: Option<&'data SourceDist>,
         sources: &'data NoSources,
@@ -775,11 +775,15 @@ impl BuildContext for BuildDispatch<'_> {
         } else {
             self
         };
+        let git_member = git_source.map(|source_url| GitWorkspaceMember {
+            fetch_root: source,
+            git: source_url.git,
+        });
         let builder = SourceBuild::setup(
             source,
             subdirectory,
             install_path,
-            stop_discovery_at,
+            git_member.as_ref(),
             dist_name,
             dist_version,
             self.interpreter,

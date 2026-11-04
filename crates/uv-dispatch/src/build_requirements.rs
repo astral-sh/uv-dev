@@ -22,10 +22,7 @@ impl BuildDispatch<'_> {
         path: &Path,
     ) -> Result<Vec<Requirement>> {
         self.static_build_requirements(
-            &BuildSourceTree {
-                project_root: path.to_path_buf(),
-                stop_discovery_at: None,
-            },
+            &BuildSourceTree::directory(path.to_path_buf()),
             name,
             &self.sources,
         )
