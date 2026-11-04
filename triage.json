@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10813,
+        "title": "How can I install project dependencies from an existing pyproject.toml?",
+        "url": "https://github.com/astral-sh/uv/issues/10813",
+        "state": "closed",
+        "reason": "Related documentation clarification: a later comment quotes the exact same syncing paragraph. A maintainer explains that uv sync installs project dependencies into .venv and uv run synchronizes automatically. The discussion concerns discovering and understanding dependency installation, rather than whether editors use the environment, so it is not a duplicate."
+      },
+      {
+        "kind": "issue",
+        "number": 9637,
+        "title": "Selecting .venv/bin/python as an active interpreter in VSCode doesn't enable IDE features",
+        "url": "https://github.com/astral-sh/uv/issues/9637",
+        "state": "closed",
+        "reason": "Adjacent editor-integration evidence: this discussion connects the selected .venv interpreter to import resolution, completion, and type hints. Maintainers describe uv environments as standards-compliant and direct the actual selection failure to VS Code. This report asks about documentation wording and does not report that integration failure."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Literal searches covered the quoted sentence, correct versions of dependencies, syncing-the-environment, and editor/sync/documentation wording. Conceptual searches covered IDEs, project environments, virtual environments, code completions, and language servers; fix-oriented PR searches covered editor integration, sync documentation, and clarify sync. Inspected astral-sh/uv#10813 and its comments, followed its documentation-feedback connection to astral-sh/uv#5605, and inspected astral-sh/uv#9637 and astral-sh/uv#8040. Ruled out astral-sh/uv#5605 as a duplicate because it is a broad feedback tracker whose linked sync request concerns explaining installation steps; astral-sh/uv#8040 requests generated Pyright configuration. No matching pull request or prior fix for the reported wording was found."
+  },
+  "type": "question",
+  "type_reason": "The reporter asks why the syncing documentation mentions an editor and suggests substituting project. The project-layout documentation explicitly explains that editors use the project environment for code completion and type hints, and the migration guide independently recommends uv sync for editor use. The wording describes intended behavior; no incorrect behavior, regression, or established documentation error is reported. The related discussions do not track this specific clarification.",
+  "summary": "astral-sh/uv#10813 discusses uv sync documentation and quotes the same paragraph; astral-sh/uv#9637 covers a separate editor-interpreter integration failure. Neither is a duplicate. Existing documentation explains why editors use the project environment.",
+  "draft_response": "“Editor” is intentional here: Python editor integrations use the project environment to resolve imports and provide code completion and type hints. uv sync creates or updates that environment (normally .venv) without running a command, which is useful before you start editing. Configure your editor’s Python integration to use the project’s .venv. This connection is explained at https://docs.astral.sh/uv/concepts/projects/layout/#the-project-environment. The sentence could be clearer as “ensuring the environment your editor uses has the correct versions of dependencies.”"
+}
