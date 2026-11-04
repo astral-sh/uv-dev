@@ -10,6 +10,11 @@ The checkout now contains a focused fix and updated regression coverage. Generat
 scripts, `.gitignore`, `pyvenv.cfg`, and Python 3.9 distutils patch files are atomically replaced,
 leaving existing destination-link targets unchanged. All 13 focused debug integration tests pass.
 
+An additional proposed fix, astral-sh/uv#23104, is open and unmerged as of November 4,
+2026. Its implementation uses unlinking followed by exclusive creation, rather than the
+atomic replacement approach recorded below. The existing validation results apply to the
+recorded atomic replacement fix, not to this additional proposal.
+
 Before the fix, the reported behavior was reproduced with the installed uv 0.13.6 on Ubuntu 24.04.5 Linux
 x86_64 and CPython 3.12.3. Given an existing `v/bin/activate` symlink to a synthetic file
 outside `v`, `uv venv --allow-existing v` succeeds, leaves the symlink in place, and replaces
@@ -178,6 +183,7 @@ command coverage was added for callers sharing the same virtualenv writer.
 
 ## Related
 
+- astral-sh/uv#23104 — Open, non-draft proposed fix submitted for this issue. The inspected diff removes existing destination entries with `uv_fs::remove_symlink` and opens replacements with `create_new(true)` for activation scripts, `.gitignore`, `pyvenv.cfg`, and the conditional distutils patch files. Its Unix Python 3.12 integration test checks unchanged external targets and replacement of the activation, `.gitignore`, and configuration symlinks. It does not exercise the Python 3.9 patch-file branch. No comments or reviews were present when inspected; it is unmerged. This response PR does not change the bug classification.
 - astral-sh/uv-dev#3063 — Parent regression pull request. Its three tests initially passed while asserting external-target overwrites; all are updated in this fix.
 - astral-sh/uv#23055 — Builtin creation follows linked environment directories (open issue). Companion report for uv 0.13.6 and `uv venv --allow-existing`: a pre-existing directory symlink redirects generated subtrees outside the environment. This report instead concerns individual destination-file symlinks; replacing those files does not address traversal through linked parent directories.
 - astral-sh/uv#5152 — Uv script install into .venv overwrites python (closed issue). Confirmed historical example of a generated script following an existing file symlink and overwriting its external target. It involved installing a console entry point named python during `uv sync`, rather than generating virtual-environment files, and was fixed by astral-sh/uv#5165.
@@ -231,6 +237,30 @@ test functions or repeated option matrices.
 helpers. Installer-generated files use a separate atomic writer. None required changes.
 Directory-link traversal remains a separate concern tracked by astral-sh/uv#23055; this
 fix does not attempt to change that behavior.
+
+### Additional proposed fix
+
+The new issue comment identifies astral-sh/uv#23104. Direct inspection of its GitHub diff
+confirms new `create_file` and `write_file` helpers: they remove the destination entry,
+ignore a not-found removal error, and open the new file with `create_new(true)` before
+writing. All five generated-file families identified above use these helpers. Exclusive
+creation prevents following an existing final-path symlink, but the remove/create/write
+sequence does not provide the atomic replacement used in the recorded fix.
+
+The proposal adds `allow_existing_replaces_generated_file_symlinks`, a Unix-only Python
+3.12 test that places three destination links, runs `uv venv --allow-existing`, verifies
+complete external sentinel preservation, and checks that the destinations are no longer
+symlinks. These are source-inspected assertions, not newly executed test results. The test
+does not cover Python 3.9 patch-file regeneration or the consumer checks recorded for the
+atomic replacement fix. Review should compare the approaches and coverage with
+astral-sh/uv-dev#3066. Neither final-file approach addresses linked parent directories in
+astral-sh/uv#23055.
+
+As of November 4, 2026, astral-sh/uv#23104 is open, non-draft, and unmerged, with no
+comments or reviews returned by the direct PR view. The comment and proposed code do not
+establish maintainer acceptance, release availability, or successful validation of that PR.
+This context update only inspected the supplied discussion, retained findings, and the PR;
+it did not rerun tests or change the checkout or GitHub.
 
 ### Validation
 
