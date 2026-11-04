@@ -4612,8 +4612,31 @@ impl Lock {
             }
         }
 
-        while let Some(package_index) = queue.pop_front() {
-            let package = self.package(package_index);
+        let mut build_universes = self.builds.iter().flat_map(|builds| &builds.universes);
+        let mut build_packages = None;
+        let mut build_remotes = None;
+        let mut build_locals = None;
+        loop {
+            let (package, runtime_index, remotes, locals) = if let Some(index) = queue.pop_front() {
+                (self.package(index), Some(index), &mut remotes, &mut locals)
+            } else if let Some(package) = build_packages.as_mut().and_then(Iterator::next) {
+                (package, None, &mut build_remotes, &mut build_locals)
+            } else if let Some(universe) = build_universes.next() {
+                // Each build starts with the project's indexes. An index declared by the owner
+                // or one of its dependencies is available in this environment alone.
+                build_remotes.clone_from(&remotes);
+                build_locals.clone_from(&locals);
+                for input in universe.inputs.iter().flatten() {
+                    input.record_index(root, &mut build_remotes, &mut build_locals)?;
+                }
+                build_packages = Some(universe.validation_packages());
+                continue;
+            } else {
+                break;
+            };
+            // Build universes retain the declarations for their mutable packages.
+            let allow_missing_package_metadata =
+                runtime_index.is_some() && allow_missing_package_metadata;
             // If the lockfile references an index that was not provided, we can't validate it.
             if let Source::Registry(index) = &package.id.source {
                 match index {
@@ -4732,8 +4755,8 @@ impl Lock {
                             Some(version),
                             package,
                             &mut activated_extras,
-                            &mut remotes,
-                            &mut locals,
+                            remotes,
+                            locals,
                             root,
                             allow_missing_package_metadata,
                         )? {
@@ -4798,8 +4821,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4866,8 +4889,8 @@ impl Lock {
                         None,
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     ) {
@@ -4931,8 +4954,8 @@ impl Lock {
                         Some(&metadata.version),
                         package,
                         &mut activated_extras,
-                        &mut remotes,
-                        &mut locals,
+                        remotes,
+                        locals,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4943,6 +4966,12 @@ impl Lock {
             } else {
                 return Ok(SatisfiesResult::MissingVersion(&package.id.name));
             }
+
+            // Each build closure already includes its transitive dependencies. Its edges refer
+            // to packages in that universe instead of indices into the runtime package list.
+            let Some(package_index) = runtime_index else {
+                continue;
+            };
 
             // An empty extra has no edge of its own, so revisit packages when a later
             // parent activates additional extras after their first validation.

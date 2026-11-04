@@ -1122,6 +1122,224 @@ fn lock_build_migrates_stale_v2_declarations() -> Result<()> {
     Ok(())
 }
 
+/// A local backend can change its runtime requirements without changing its build requirements.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_checks_build_only_local_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend"]
+        build-backend = "unused"
+
+        [tool.uv.sources]
+        backend = { path = "backend" }
+    "#})?;
+    let backend = context.temp_dir.child("backend").child("pyproject.toml");
+    let manifest = indoc! {r#"
+        [project]
+        name = "backend"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = []
+        build-backend = "unused"
+    "#};
+    backend.write_str(manifest)?;
+
+    let lock = indoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        build-encoding = "dependency"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[build-universes]]
+        owner = { name = "project", version = "1", source = { editable = "." } }
+        inputs = [{ kind = "backend", name = "backend", directory = "backend" }]
+        roots = [{ name = "backend" }]
+
+        [[build-universes]]
+        owner = { name = "backend", version = "1", source = { directory = "backend" } }
+        inputs = []
+        roots = []
+
+        [[package]]
+        universe = [1]
+        name = "backend"
+        version = "1"
+        source = { directory = "backend" }
+
+        [[package]]
+        name = "project"
+        version = "1"
+        source = { editable = "." }
+    "#};
+    context.temp_dir.child("uv.lock").write_str(lock)?;
+    context
+        .lock()
+        .args(["--offline", "--check"])
+        .assert()
+        .success();
+
+    backend.write_str(&manifest.replace("dependencies = []", r#"dependencies = ["added"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Each build uses the configured indexes and any named indexes declared by its owner.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_checks_build_only_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"backend".parse()?, &"1".parse()?).build();
+    context
+        .temp_dir
+        .child("first")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("second")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    let private = context.temp_dir.child("private");
+    private
+        .child("backend")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    private
+        .child("backend")
+        .child("index.html")
+        .write_str(&format!(r#"<a href="{filename}">{filename}</a>"#))?;
+    let private_url = SafeUrl::from_file_path(private.path())
+        .map_err(|()| anyhow!("private index path is not a valid file URL"))?;
+    context
+        .temp_dir
+        .child("owner")
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "owner"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend==1"]
+        build-backend = "unused"
+
+        [tool.uv.sources]
+        backend = {{ index = "private" }}
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "{private_url}"
+        explicit = true
+    "#})?;
+    let manifest = indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["backend==1", "owner"]
+        build-backend = "unused"
+
+        [tool.uv]
+        find-links = ["first"]
+
+        [tool.uv.sources]
+        owner = { path = "owner" }
+    "#};
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(manifest)?;
+    let digest = hex::encode(Sha256::digest(&wheel));
+    let registry = toml::Value::String(private.path().to_string_lossy().into_owned());
+    let lock = formatdoc! {r#"
+        version = 2
+        revision = 5
+        requires-python = ">=3.12"
+        build-encoding = "dependency"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[build-universes]]
+        owner = {{ name = "owner", version = "1", source = {{ directory = "owner" }} }}
+        inputs = [{{ kind = "backend", name = "backend", specifier = "==1", local-index = "private" }}]
+        roots = [{{ name = "backend", version = "1", source = {{ registry = {registry} }} }}]
+
+        [[build-universes]]
+        owner = {{ name = "project", version = "1", source = {{ editable = "." }} }}
+        inputs = [
+            {{ kind = "backend", name = "backend", specifier = "==1" }},
+            {{ kind = "backend", name = "owner", directory = "owner" }},
+        ]
+        roots = [
+            {{ name = "backend", version = "1", source = {{ registry = "first" }} }},
+            {{ name = "owner" }},
+        ]
+
+        [[package]]
+        universe = [1]
+        name = "backend"
+        version = "1"
+        source = {{ registry = {registry} }}
+        wheels = [{{ path = "backend/{filename}", hash = "sha256:{digest}" }}]
+
+        [[package]]
+        universe = [2]
+        name = "owner"
+        version = "1"
+        source = {{ directory = "owner" }}
+
+        [[package]]
+        universe = [2]
+        name = "backend"
+        version = "1"
+        source = {{ registry = "first" }}
+        wheels = [{{ path = "{filename}", hash = "sha256:{digest}" }}]
+
+        [[package]]
+        name = "project"
+        version = "1"
+        source = {{ editable = "." }}
+    "#};
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    context
+        .lock()
+        .args(["--offline", "--check"])
+        .assert()
+        .success();
+
+    pyproject.write_str(&manifest.replace(r#"["first"]"#, r#"["second"]"#))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]

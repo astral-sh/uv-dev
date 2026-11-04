@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexUrl, Requirement, RequirementSource, RequiresPython,
+    ExtraBuildRequires, IndexUrl, Requirement, RequirementSource, RequiresPython, UrlString,
 };
 use uv_fs::{PortablePath, try_relative_to_if};
 use uv_normalize::PackageName;
@@ -38,6 +38,31 @@ enum BuildInputKind {
 }
 
 impl BuildInput {
+    /// Include named indexes from the owner's checked build declarations in this environment.
+    pub(super) fn record_index(
+        &self,
+        root: &Path,
+        remotes: &mut Option<BTreeSet<UrlString>>,
+        locals: &mut Option<BTreeSet<Box<Path>>>,
+    ) -> Result<(), LockError> {
+        if let RequirementSource::Registry {
+            index: Some(index), ..
+        } = &self.requirement.source
+        {
+            Lock::record_index(index, remotes, locals, root);
+        }
+        if let Some(path) = &self.local_index
+            && let Some(locals) = locals
+        {
+            // Build declarations use lock-relative paths. A package retains the spelling of
+            // its index, including an absolute path when the owner supplied a file URL.
+            let path = Path::new(path);
+            locals.insert(path.into());
+            locals.insert(absolute_path(root, path)?.into_boxed_path());
+        }
+        Ok(())
+    }
+
     fn normalize(
         mut self,
         root: &Path,

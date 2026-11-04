@@ -683,6 +683,18 @@ impl BuildMarkerEnvironment<'_> {
 }
 
 impl Universe {
+    /// Refresh mutable declarations before checking the registry sources they can select.
+    pub(super) fn validation_packages(&self) -> impl Iterator<Item = &Package> {
+        self.packages
+            .values()
+            .filter(|package| !package.id.source.is_immutable())
+            .chain(
+                self.packages
+                    .values()
+                    .filter(|package| package.id.source.is_immutable()),
+            )
+    }
+
     fn accepts_source(&self, owner: &SourceDist) -> bool {
         match &self.ordinary_owner {
             Some(OrdinaryOwner::Archive(hash)) => {
