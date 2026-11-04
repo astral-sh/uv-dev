@@ -34,6 +34,38 @@ The reporter attributes the corrected environment summary to AI and has not inde
 
 The reporter reconstructed the release-binary stack and reports a NULL jitter collector in five captured failures. Some intermediate frames were inferred. The explanation that VM timing noise causes jitter health-test failures remains a hypothesis; neither the maintainer comment nor these observations establish an OS entropy shortage.
 
+## Additional VM report and affinity workaround
+
+Smallgiil's 2026-11-04 comment (ID 6631980054 on astral-sh/uv#22830) reports similar failures with uv 0.13.7 on Windows KVM VMs with eight vCPUs on a Xeon Gold 6248R host. The attached report describes silent `0xC0000409` exits 1–3 seconds after process start during the first TLS handshake, only for commands opening network connections. Rerunning succeeds; the contributor says failures occur almost never on physical machines, without providing physical-machine sample counts.
+
+The contributor's AI-assisted report states that 32 crash dumps showed `__fastfail(7)` in `tree_jitter_initialize_once` after a NULL return from `jent_entropy_collector_alloc`. This is consistent with the original reported failure path, but the dumps were not supplied or independently checked here. No maintainer determination that both reports share an underlying cause appears in the supplied discussion.
+
+The attachment reports these process-level measurements:
+
+| Concurrent uv processes | Affinity pinned | CPU busy-loop processes | Runs | Crashes |
+| --- | --- | --- | --- | --- |
+| 1 | No | 0 | 300 | 0 |
+| 1 | No | 8 | 200 | 26 |
+| 8 | No | 0 | 400 | 38 |
+| 8 | Yes | 0 | 400 | 0 |
+| 8 | Yes | 8 | 400 | 0 |
+
+Pinning each concurrent uv process to a separate vCPU is therefore a reported runtime workaround, with no crashes observed in these finite pinned samples. The report gives the Windows Command Prompt example `start "" /b /wait /affinity 1 uv.exe ...` to restrict one uv process to the first logical CPU. This limits that process to a single CPU and has not been validated here.
+
+The report attributes the failures to thread migration across vCPUs with unsynchronized TSC readings during jitter startup tests. Affinity results support investigating scheduling and timing, but do not independently establish TSC skew, migration during the failing test, or the precise failed health check. CPU-only contention reproduced this contributor's failure, whereas the original reporter did not reproduce with CPU-only load; preserve that environment-dependent difference when comparing results.
+
+### Attached reproduction details
+
+The three attachments were read as text, without executing their contents:
+
+- Report: https://github.com/user-attachments/files/34374237/README.md
+- Unpinned script: https://github.com/user-attachments/files/34374252/jitter-repro.ps1.txt
+- Pinned script: https://github.com/user-attachments/files/34374253/jitter-pinned.ps1.txt
+
+Both scripts write `req.txt` containing `six` beside the script and invoke `uv pip compile` with `--no-cache`, `--python 3.11`, `--index-url https://pypi.org/simple`, and `-q` by default. The unpinned script accepts `-Runs`, `-Parallel`, and `-Burners`, launches batches of uv processes, saves failed-command output under `logs`, and prints an exit-code histogram. The pinned script accepts `-RunsPerCpu`, `-Cpus`, and `-Burners`; each PowerShell worker sets its own `ProcessorAffinity` before launching child uv processes, which inherit that affinity. It creates and removes `pinned-out` beside the script. Both can start CPU busy-loop processes.
+
+The attached examples use 400 unpinned runs with eight concurrent processes, and 50 runs per CPU across eight pinned workers with eight busy-loop processes. The unpinned script's aggregate crash counter includes all exception exits at or above `0xC0000000`, while the pinned script counts only `0xC0000409`; compare the unpinned exit-code histogram when validating equivalent outcomes. Neither script nor the affinity command was run here.
+
 ## Classification
 
 Intermittent termination without diagnostics during HTTPS operations is incorrect behavior, so the classification remains bug. The reported stack and controlled rebuild results align with an existing upstream Windows jitter-initialization abort. Exact attribution and the reason collector initialization fails remain unverified here.
@@ -57,7 +89,7 @@ The previously inspected checkout pins aws-lc-rs 1.18.0, aws-lc-sys 0.44.0, and 
 
 `AWS_LC_SYS_NO_JITTER_ENTROPY=1` is an upstream-documented build-time workaround. Setting it when launching an existing uv executable does not change that binary. The reporter's comparison supports investigating this path, but does not establish the suitability of an entropy-source change for every environment. The maintainer has not endorsed a uv build change in the supplied discussion.
 
-Useful next work is to characterize the affected long-lived shell-runner VM under concurrent jobs, recording host/guest load, guest uptime, and exact hypervisor versions. A matched workload comparison with runners using fresh VMs could help separate lifecycle effects from other configuration differences; the current observations do not isolate those factors. A candidate uv build incorporating the upstream recovery change also needs validation against the reported workload, including collector-allocation failure. The reporter has offered to help verify a candidate build. Dependency uptake through aws-lc-sys remains necessary before the inspected upstream proposal can be treated as an official uv fix.
+Useful next work is to characterize the affected long-lived shell-runner VM under concurrent jobs, recording host/guest load, guest uptime, and exact hypervisor versions. A matched workload comparison with runners using fresh VMs could help separate lifecycle effects from other configuration differences; the current observations do not isolate those factors. The additional eight-vCPU report supplies an affinity comparison worth reproducing with matched workloads and exit-code accounting; scheduling/TSC instrumentation would be needed to test its proposed mechanism. A candidate uv build incorporating the upstream recovery change also needs validation against the reported workload, including collector-allocation failure. The reporter has offered to help verify a candidate build. Dependency uptake through aws-lc-sys remains necessary before the inspected upstream proposal can be treated as an official uv fix.
 
 ## Search coverage and limits
 
@@ -65,4 +97,4 @@ The earlier investigation used authenticated GitHub searches across open and clo
 
 Inspected alternatives excluded as different mechanisms included astral-sh/uv#12612 (SecuPrint injection), astral-sh/uv#17898 (reported Rust panic), astral-sh/uv#18735 (download timeouts), and astral-sh/uv#18890 (certificate validation).
 
-This update incorporates the supplied issue discussion through the reporter's corrected 2026-10-24 environment account and correction notice. No reproduction, build, or fresh upstream status check was performed for this update.
+This update incorporates the supplied discussion through Smallgiil's 2026-11-04 report and a read-only review of its three attachments. No reproduction, build, or fresh upstream status check was performed for this update.
