@@ -4,10 +4,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, mem};
 
+use glob::Pattern;
 use itertools::Itertools;
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
+    Array, ArrayOfTables, DocumentMut, Formatted, InlineTable, Item, RawString, Table, TomlError,
+    Value,
 };
 
 use uv_cache_key::CanonicalUrl;
@@ -133,8 +135,9 @@ impl PyProjectTomlMut {
             .as_array_mut()
             .ok_or(Error::MalformedWorkspace)?;
 
-        // Add the path to the workspace.
-        members.push(PortablePath::from(path.as_ref()).to_string());
+        // Workspace members are glob patterns, so escape the literal project path.
+        let path = PortablePath::from(path.as_ref()).to_string();
+        members.push(Pattern::escape(&path));
 
         reformat_array_multiline(members);
 
@@ -625,6 +628,8 @@ impl PyProjectTomlMut {
             }
         });
 
+        let new_group = existing_group.is_none();
+
         // If the group doesn't exist, create it.
         let group = match existing_group {
             Some(value) => value,
@@ -637,22 +642,20 @@ impl PyProjectTomlMut {
 
         let added = add_dependency(req, group, source.is_some(), raw)?;
 
-        // To avoid churn in pyproject.toml, we only sort new group keys if the
-        // existing keys were sorted.
-        if was_sorted {
-            dependency_groups.sort_values();
-        }
+        // Only inserting a key changes the table layout. Formatting after an array edit
+        // would clear the comments between inline groups.
+        if new_group {
+            if was_sorted {
+                dependency_groups.sort_values();
+            }
 
-        // If `dependency-groups` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
-        if let Some(dependency_groups) = self
-            .doc
-            .get_mut("dependency-groups")
-            .and_then(Item::as_inline_table_mut)
-        {
-            dependency_groups.fmt();
+            if let Some(dependency_groups) = self
+                .doc
+                .get_mut("dependency-groups")
+                .and_then(Item::as_inline_table_mut)
+            {
+                dependency_groups.fmt();
+            }
         }
 
         if let Some(source) = source {
@@ -679,26 +682,17 @@ impl PyProjectTomlMut {
             .map(|k| k.get())
             .is_sorted();
 
-        // Check if the group already exists.
-        let group_exists = dependency_groups
+        if dependency_groups
             .iter()
-            .any(|(key, _value)| GroupName::from_str(key).is_ok_and(|g| g == *group));
-
-        // If the group doesn't exist, create it.
-        if !group_exists {
-            dependency_groups.insert(group.as_ref(), Item::Value(Value::Array(Array::new())));
-
-            // To avoid churn in pyproject.toml, we only sort new group keys if the
-            // existing keys were sorted.
-            if was_sorted {
-                dependency_groups.sort_values();
-            }
+            .any(|(key, _value)| GroupName::from_str(key).is_ok_and(|g| g == *group))
+        {
+            return Ok(());
         }
 
-        // If `dependency-groups` is an inline table, reformat it.
-        //
-        // Reformatting can drop comments between keys, but you can't put comments
-        // between items in an inline table anyway.
+        dependency_groups.insert(group.as_ref(), Item::Value(Value::Array(Array::new())));
+        if was_sorted {
+            dependency_groups.sort_values();
+        }
         if let Some(dependency_groups) = self
             .doc
             .get_mut("dependency-groups")
@@ -1090,6 +1084,8 @@ impl PyProjectTomlMut {
             .map(|tool_uv| tool_uv.as_table_mut().ok_or(Error::MalformedSources))
             .transpose()?
             .and_then(|tool_uv| tool_uv.get_mut("sources"))
+            // An empty inline table has no source to remove.
+            .filter(|item| !item.as_inline_table().is_some_and(InlineTable::is_empty))
             .map(|sources| sources.as_table_mut().ok_or(Error::MalformedSources))
             .transpose()?
         {

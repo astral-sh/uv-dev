@@ -33,7 +33,7 @@ use uv_test::archive::{generate_source_archive, write_tar_gz};
 #[cfg(feature = "test-universal")]
 use uv_test::package_server::PackageServer;
 #[cfg(feature = "test-universal")]
-use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
+use uv_test::packse::{PackseServer, WheelBuilder};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
@@ -9176,7 +9176,7 @@ fn lock_requires_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels"
 
         [root]
@@ -9197,7 +9197,6 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
         sdist = false
         wheel_tags = ["cp313-cp313-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -9303,7 +9302,7 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels_future() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels-future"
 
         [root]
@@ -9317,7 +9316,6 @@ fn lock_requires_python_fork_wheels_future() -> Result<()> {
 
         [packages.b.versions."1.0.0"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -9343,7 +9341,7 @@ fn lock_requires_python_fork_wheels_future() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels-compatible"
 
         [root]
@@ -9370,7 +9368,6 @@ fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-freebsd_13_x86_64", "cp313-cp313-freebsd_13_x86_64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -9396,7 +9393,7 @@ fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_wheels_stable_abi() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-wheels-stable-abi"
 
         [root]
@@ -9408,7 +9405,6 @@ fn lock_requires_python_wheels_stable_abi() -> Result<()> {
         sdist = false
         wheel_tags = ["cp313-abi3-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -15802,10 +15798,10 @@ async fn lock_multiple_indexes_same_realm_different_credentials_trailing_slash()
 
 /// Resolve against an index that uses relative links.
 #[cfg(feature = "test-universal")]
-#[tokio::test]
-async fn lock_relative_index() -> Result<()> {
+#[test]
+fn lock_relative_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let server = PackseServer::new("simple/single-package.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -15814,12 +15810,12 @@ async fn lock_relative_index() -> Result<()> {
         name = "foo"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["a"]
 
         [tool.uv]
-        index-url = "{proxy_uri}/relative/simple"
+        index-url = "{index_url}"
         "#,
-        proxy_uri = proxy.uri()
+        index_url = server.relative_index_url()
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -15843,24 +15839,24 @@ async fn lock_relative_index() -> Result<()> {
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/relative/simple/" }
+        sdist = { url = "http://[LOCALHOST]/relative/files/a-2.0.0.tar.gz", hash = "sha256:9610291c2bd57390019f58ca72d0dd4584bb9e7073fa347633ed8bc7267fccfe", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/relative/files/a-2.0.0-py3-none-any.whl", hash = "sha256:833374310e0a15880f3be9e6d082f527c9ac70129b2054d733da9b754315361f", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
         name = "foo"
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "a" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "http://[LOCALHOST]/relative/simple" }
-        sdist = { url = "http://[LOCALHOST]/files/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
+        requires-dist = [{ name = "a" }]
         "#
         );
     });
@@ -15872,14 +15868,16 @@ async fn lock_relative_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Use a fresh cache so the wheel is fetched from the URL in the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-cache").arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + a==2.0.0
     ");
+
+    context.assert_installed("a", "2.0.0");
 
     Ok(())
 }
@@ -22675,7 +22673,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
 #[test]
 fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.13");
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "nested-group-conditional-registry-constraint"
 
         [root]
@@ -22694,7 +22692,6 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         second = []
         third = []
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -40953,7 +40950,7 @@ fn lock_omit_wheels_exclude_newer() -> Result<()> {
 #[test]
 fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
     // The cutoff falls between the 2024-03-25 and 2024-03-27 uploads.
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "post-cutoff-attached-artifacts"
 
         [root]
@@ -40969,7 +40966,6 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
         sdist = { upload_time = "2024-03-27T00:00:00Z" }
         wheel = { upload_time = "2024-03-25T00:00:00Z" }
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
         .with_exclude_newer("2024-03-26T00:00:00Z")
         .with_filters(
@@ -44088,7 +44084,7 @@ fn lock_unsupported_wheel_url_required_platform() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_python_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-python-fork"
 
         [root]
@@ -44104,7 +44100,6 @@ fn lock_required_environment_python_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-win_amd64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -44198,7 +44193,7 @@ fn lock_required_environment_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_macos_release() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-macos-release"
 
         [root]
@@ -44214,7 +44209,6 @@ fn lock_required_environment_macos_release() -> Result<()> {
         sdist = false
         wheel_tags = ["py3-none-macosx_26_0_arm64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -44337,7 +44331,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_macos_release_python_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-macos-release-python-fork"
 
         [root]
@@ -44353,7 +44347,6 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-macosx_14_0_arm64", "cp313-cp313-macosx_26_0_arm64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -44456,7 +44449,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_generic_python_wheel() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-generic-python-wheel"
 
         [root]
@@ -44468,7 +44461,6 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
         sdist = false
         wheel_tags = ["py310-none-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = indoc! {r#"
         [project]
@@ -44516,7 +44508,7 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_wheel_url_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-wheel-url-fork"
 
         [root]
@@ -44528,7 +44520,6 @@ fn lock_required_environment_wheel_url_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["py3-none-manylinux_2_17_aarch64.macosx_11_0_x86_64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -45214,7 +45205,7 @@ fn lock_frozen_warning() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_version_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-version-constraints"
 
         [root]
@@ -45232,7 +45223,6 @@ fn lock_resolution_inputs_version_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -45690,7 +45680,7 @@ fn lock_resolution_inputs_individual_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_extra_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-extra-constraints"
 
         [root]
@@ -45710,7 +45700,6 @@ fn lock_resolution_inputs_extra_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -45778,7 +45767,7 @@ fn lock_resolution_inputs_extra_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-recursive-extra-constraints"
 
         [root]
@@ -45799,7 +45788,6 @@ fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -45972,7 +45960,7 @@ fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_constraint_markers() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-constraint-markers"
 
         [root]
@@ -45990,7 +45978,6 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -46299,7 +46286,7 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_source_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-source-constraints"
 
         [root]
@@ -46317,7 +46304,6 @@ fn lock_resolution_inputs_source_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -46513,7 +46499,7 @@ fn lock_resolution_inputs_source_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-prerelease-constraints"
 
         [root]
@@ -46531,7 +46517,6 @@ fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
         [packages.b.versions."1.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -46708,7 +46693,7 @@ fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_local_source_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-local-prerelease"
 
         [root]
@@ -46719,7 +46704,6 @@ fn lock_resolution_inputs_local_source_constraints() -> Result<()> {
         [packages.b.versions."1.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let (filename, wheel) = WheelBuilder::new(&"provider".parse()?, &"1.0.0".parse()?)
         .requires(&["b==1.0.0a1".parse()?])
@@ -47075,7 +47059,7 @@ fn lock_resolution_inputs_prune_unused_inputs() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_shadowed_override() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-shadowed-override"
         [root]
         [expected]
@@ -47083,7 +47067,6 @@ fn lock_resolution_inputs_shadowed_override() -> Result<()> {
         [packages.child.versions."1.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
 
     let pyproject = context.temp_dir.child("pyproject.toml");
@@ -47229,7 +47212,7 @@ fn lock_resolution_inputs_new_exclusion() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_empty_scopes() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-empty-scopes"
         [root]
         [expected]
@@ -47237,7 +47220,6 @@ fn lock_resolution_inputs_empty_scopes() -> Result<()> {
         [packages.child.versions."1.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -47768,7 +47750,7 @@ fn lock_resolution_inputs_candidate_policy_override() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-refresh-new-exclusion"
 
         [root]
@@ -47781,7 +47763,6 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
         [packages.child.versions."2.0.0rc1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(indoc! {r#"
@@ -47850,7 +47831,7 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_backtracking() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-backtracking"
 
         [root]
@@ -47871,7 +47852,6 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
         [packages.leaf.versions."1.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -48370,7 +48350,7 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "prerelease-constraint-policy"
 
         [root]
@@ -48388,7 +48368,6 @@ fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
         [packages.b.versions."2.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -48518,7 +48497,7 @@ fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-package-prerelease"
 
         [root]
@@ -48536,7 +48515,6 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
         [packages.b.versions."2.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()

@@ -4,13 +4,9 @@ on:
   workflow_call:
     inputs:
       free-runners:
-        description: "Whether the selected runners use the free tier"
-        required: true
+        description: "Use only standard GitHub runners"
         type: boolean
-      runners:
-        description: "Resolved runner roles from select-runners"
-        required: true
-        type: string
+        default: false
       base-sha:
         description: "The base SHA used to determine changed files"
         required: false
@@ -26,6 +22,9 @@ on:
       free-runners:
         description: "Whether only free runners were selected"
         value: ${{ jobs.plan.outputs.free-runners }}
+      cargo-vet-workspaces:
+        description: "JSON array of Cargo workspace directories to vet"
+        value: ${{ jobs.plan.outputs.cargo-vet-workspaces }}
       test-code:
         description: "Whether code tests should run"
         value: ${{ jobs.plan.outputs.test-code }}
@@ -92,10 +91,13 @@ env:
 
 jobs:
   plan:
-    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2 }}
+    # Workspace discovery runs before vet, so keep it off Depot's cross-branch cache.
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
+    cache-mode: none
     outputs:
-      runners: ${{ inputs.runners }}
-      free-runners: ${{ inputs.free-runners }}
+      runners: ${{ steps.runners.outputs.runners }}
+      free-runners: ${{ steps.runners.outputs.free-only }}
+      cargo-vet-workspaces: ${{ steps.cargo-vet.outputs.workspaces }}
       test-code: ${{ steps.plan.outputs.test_code }}
       review-security: ${{ steps.plan.outputs.review_security }}
       check-schema: ${{ steps.plan.outputs.check_schema }}
@@ -116,18 +118,37 @@ jobs:
       build-docker: ${{ steps.plan.outputs.build_docker }}
       push-docker: ${{ steps.plan.outputs.push_docker }}
     steps:
+      - name: "Select runners"
+        id: runners
+        uses: astral-sh/github-actions/select-runners@d50d08cb8e679878ab643cbd115a801c252a312e
+        with:
+          free-only: ${{ inputs.free-runners && 'true' || '' }}
+          required: >-
+            ubuntu-x86_64-2 ubuntu-x86_64-2-slim ubuntu-x86_64-4 ubuntu-x86_64-4-github
+            ubuntu-x86_64-8 ubuntu-x86_64-8-github ubuntu-x86_64-16 ubuntu-aarch64-2
+            ubuntu-aarch64-4 macos-aarch64-8 windows-x86_64-4 windows-x86_64-16
+            windows-aarch64-8
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head-sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: $/.github/actions/setup-uv-toolchain
         with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.5"
-          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+          enable-cache: auto
+
+      - name: "Find Cargo workspaces to vet"
+        id: cargo-vet
+        # Classify explicit PR revisions without executing scripts from their checkout.
+        if: ${{ inputs.base-sha == '' && inputs.head-sha == '' }}
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ github.workspace }}/crates/uv-python-managed/download-metadata.json
+        run: uv run --script scripts/cargo-vet-workspaces.py >> "$GITHUB_OUTPUT"
 
       - name: "Plan"
         id: plan

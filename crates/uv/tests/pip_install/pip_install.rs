@@ -28,6 +28,7 @@ use wiremock::{
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
+use uv_python_interpreter::PyVenvConfiguration;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::{generate_source_archive, write_tar_gz};
@@ -35,8 +36,6 @@ use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(feature = "test-universal")]
-use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, copy_dir_ignore, download_to_disk, get_bin,
@@ -2993,11 +2992,13 @@ fn install_extra_index_url_has_priority() {
 async fn install_deduplicated_indices() {
     let context = uv_test::test_context!("3.12");
 
+    let index = PackseServer::new("simple/single-package.toml");
     let redirect_server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/sniffio"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}a/", index.index_url())),
         )
         .expect(1)
         .mount(&redirect_server)
@@ -3005,7 +3006,7 @@ async fn install_deduplicated_indices() {
 
     uv_snapshot!(context
         .pip_install()
-        .arg("sniffio")  // Use a zero-dependency package
+        .arg("a")
         .arg("--index")
         .arg(redirect_server.uri())
         .arg("--default-index")
@@ -3018,7 +3019,7 @@ async fn install_deduplicated_indices() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + sniffio==1.3.1
+     + a==2.0.0
     ");
 }
 
@@ -4525,7 +4526,7 @@ fn install_build_policy_cache() {
 #[cfg(feature = "test-universal")]
 #[test]
 fn exclude_newer_does_not_reuse_cached_wheel() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "exclude-newer-cached-wheel"
 
         [root]
@@ -4537,7 +4538,6 @@ fn exclude_newer_does_not_reuse_cached_wheel() -> Result<()> {
         sdist = { upload_time = "2024-03-24T00:00:00Z" }
         wheel = { upload_time = "2024-03-24T12:00:00Z" }
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
 
     // Cache the published wheel, then clear the environment but keep the cache.
@@ -11575,6 +11575,14 @@ fn install_relocatable() -> Result<()> {
         .assert()
         .success();
 
+    // CPython development builds record a local version in pyvenv.cfg.
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    pyvenv_cfg.write_str(&PyVenvConfiguration::set(
+        &context.read(&pyvenv_cfg),
+        "version_info",
+        "3.12.0+dev",
+    ))?;
+
     // Install a package with a hello-world console script entrypoint.
     // (we use black_editable because it's convenient, but we don't actually install it as editable)
     context
@@ -12470,6 +12478,7 @@ fn build_tag() {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("build-tag")
+        .arg("--no-index")
         .arg("--find-links")
         .arg(context.workspace_root.join("test/links/")), @"
     exit_code: 0 (success)
@@ -12890,19 +12899,43 @@ fn static_metadata_already_installed() -> Result<()> {
 }
 
 /// `circular-one` depends on `circular-two` as a build dependency, but `circular-two` depends on
-/// `circular-one` was a runtime dependency.
+/// `circular-one` as a runtime dependency.
 #[test]
-fn cyclic_build_dependency() {
-    let context = uv_test::test_context!("3.13").with_exclude_newer("2025-01-02T00:00:00Z");
+fn cyclic_build_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let packages = context.temp_dir.child("packages");
+    packages.create_dir_all()?;
+
+    let version = "0.2.0".parse()?;
+    let (filename, wheel) = WheelBuilder::new(&"circular-one".parse()?, &version).build();
+    fs::write(packages.join(filename), wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"circular-two".parse()?, &version)
+        .requires(&["circular-one".parse()?])
+        .build();
+    fs::write(packages.join(filename), wheel)?;
+
+    let pyproject = indoc! {r#"
+        [project]
+        name = "circular-one"
+        version = "0.2.0"
+
+        [build-system]
+        requires = ["circular-two"]
+        build-backend = "circular_two"
+    "#};
+    write_tar_gz(
+        File::create(packages.join("circular_one-0.2.0.tar.gz"))?,
+        &[("circular_one-0.2.0/pyproject.toml", pyproject)],
+    )?;
+    let links = FindLinksServer::new(packages.path());
 
     // Installing with `--no-binary circular-one` should fail, since we'll end up in a recursive
     // build.
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.url())
         .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match")
         .arg("--no-binary")
         .arg("circular-one"), @"
     exit_code: 1 (failure)
@@ -12916,11 +12949,10 @@ fn cyclic_build_dependency() {
 
     // Installing without `--no-binary circular-one` should succeed, since we can use the wheel.
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match"), @"
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.url())
+        .arg("circular-one"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -12929,6 +12961,8 @@ fn cyclic_build_dependency() {
      + circular-one==0.2.0
     "
     );
+
+    Ok(())
 }
 
 #[test]
