@@ -1137,6 +1137,7 @@ async fn do_lock(
                     flat_index,
                     &build_dispatch,
                     &build_constraints,
+                    upgrade,
                     &runtime_hasher,
                     *build_hash_checking,
                     target.install_path(),

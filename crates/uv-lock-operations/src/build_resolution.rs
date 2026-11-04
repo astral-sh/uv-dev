@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, trace};
 
 use uv_client::RegistryClient;
-use uv_configuration::{Concurrency, Constraints, DependencyModifiers, HashCheckingMode};
+use uv_configuration::{Concurrency, Constraints, DependencyModifiers, HashCheckingMode, Upgrade};
 use uv_dispatch::{BuildDispatch, SourceBuildRequirements};
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DistributionMetadata, Requirement, ResolutionRecorder};
@@ -68,6 +68,7 @@ pub(crate) async fn resolve_builds(
     flat_index: &FlatIndex,
     dispatch: &BuildDispatch<'_>,
     constraints: &Constraints,
+    upgrade: &Upgrade,
     runtime_hasher: &HashStrategy,
     build_hash_checking: HashCheckingMode,
     root: &Path,
@@ -90,6 +91,12 @@ pub(crate) async fn resolve_builds(
     let preferences = Preference::from_runtime(runtime, mode);
     let build_hashes =
         BuildConstraintHashes::from_constraints(constraints, build_hash_checking, project_domain)?;
+    let constraints = Constraints::from_specifications(
+        constraints
+            .specifications()
+            .cloned()
+            .chain(upgrade.constraints().cloned().map(Into::into)),
+    );
     let build_recorder = recorder.map(|_| ResolutionRecorder::default());
 
     let solve = async |owners: &[SourceBuildRequirements],
@@ -118,13 +125,12 @@ pub(crate) async fn resolve_builds(
             .unique()
             .collect::<Vec<Requirement>>();
 
-        // Metadata from a source archive can verify its direct URL requirements but
-        // cannot authorize a new artifact when hashes are required.
+        // Static build requirements are direct inputs to this isolated environment.
         let hasher = match pins {
             Some(pins) => pins.apply_hashes(build_hasher.clone()),
             None => build_hasher.clone(),
         }
-        .augment_with_metadata_requirements(requirements.iter())?;
+        .augment_with_requirements(requirements.iter())?;
         // A failed solve can leave pending metadata requests. Give each attempt its own
         // index so an individual retry cannot wait on a cancelled fetch from the group.
         let index = InMemoryIndex::default();
@@ -137,7 +143,7 @@ pub(crate) async fn resolve_builds(
         let modifiers = DependencyModifiers::default();
         let (lookaheads, hasher) = LookaheadResolver::new(
             &requirements,
-            constraints,
+            &constraints,
             &modifiers,
             &hasher,
             &index,
@@ -217,10 +223,15 @@ pub(crate) async fn resolve_builds(
                 (owner.owner.version_id(), owner.owner.index().cloned())
             });
             let batches = resolve_scope(owners, strategy, async |owners| {
-                solve(owners, scope, pins, hasher).await
+                solve(owners, scope, pins, hasher).await.map_err(|error| {
+                    if let [owner] = owners {
+                        error.with_resolution_context(format!("`{}`'s build", owner.owner))
+                    } else {
+                        error.with_resolution_context("build")
+                    }
+                })
             })
-            .await
-            .map_err(|error| error.with_resolution_context("build"))?;
+            .await?;
             for (owners, (graph, hasher)) in batches {
                 debug!(
                     "Resolved build requirements for {}: [{}]",

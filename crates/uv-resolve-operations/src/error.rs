@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use itertools::Itertools;
@@ -32,7 +33,7 @@ pub enum Error {
     Requirements(#[from] uv_requirements::Error),
     #[error("Failed to resolve {context} requirement")]
     RequirementsWithContext {
-        context: &'static str,
+        context: Cow<'static, str>,
         #[source]
         source: uv_requirements::Error,
     },
@@ -106,14 +107,17 @@ impl Error {
 
     /// Set the command-specific context for a resolution failure.
     #[must_use]
-    pub fn with_resolution_context(self, context: &'static str) -> Self {
+    pub fn with_resolution_context(self, context: impl Into<Cow<'static, str>>) -> Self {
         match self.with_default_resolution_context() {
             Self::NoSolution { header, source } => Self::NoSolution {
                 header: header.with_context(context),
                 source,
             },
             Self::Requirements(source) | Self::RequirementsWithContext { source, .. } => {
-                Self::RequirementsWithContext { context, source }
+                Self::RequirementsWithContext {
+                    context: context.into(),
+                    source,
+                }
             }
             error @ (Self::Resolve(_)
             | Self::Hash(_)
