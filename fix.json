@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Reject unknown index fields so a misplaced exclude-newer-package exemption produces a configuration error instead of silently applying the cutoff and showing a misleading resolution hint. Update the parent script regression to assert that error; correctly scoped package exemptions continue to work.",
+  "validation": [
+    "Updated parent regression passes after confirming failure before the production fix.",
+    "Existing add_script_settings and add_index integration tests pass.",
+    "Both lock_exclude_newer_index integration tests pass.",
+    "Corrected script add → lock → lock --check round trip passes.",
+    "cargo fmt --all and cargo fmt --all --check pass.",
+    "git diff --check passes."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3092"
+}

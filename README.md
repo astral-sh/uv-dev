@@ -6,10 +6,10 @@ Issue: astral-sh/uv#23103
 
 The reported failure is reproducible with the installed uv 0.13.6 on Ubuntu 24.04.5
 LTS, using CPython 3.15.2 and the original `uv==0.13.7` requirement. The reporter
-uses uv 0.13.7 on Fedora 44 with Python 3.15.2; that uv version and Fedora were
-not directly tested.
+uses uv 0.13.7 on Fedora 44 with Python 3.15.2; the released executable and Fedora
+were not directly tested.
 
-The final PEP 723 example places `exclude-newer-package.uv = false` inside
+In the baseline, the final PEP 723 example places `exclude-newer-package.uv = false` inside
 `[[tool.uv.index]]`. TOML therefore attaches the exemption to the index, where
 that setting is unsupported and silently ignored. The index cutoff excludes the
 requested release. Moving only the exemption into `[tool.uv]`, before the index
@@ -21,6 +21,11 @@ looking on a subsequent index, with PyPI shown as both indexes, and omits an
 explanation of the active index cutoff. The configured PyPI entry does not
 replace the implicit default index. The observed output does not establish a
 dependency-confusion or index-strategy problem.
+
+The focused production fix now rejects unknown index fields, so this malformed
+script reports a configuration error before resolution. It does not introduce
+index-scoped package exemptions or change supported exemption precedence. See
+`## Fix` for the updated regression and checkout validation.
 
 ## Classification
 
@@ -37,6 +42,7 @@ precedence. No duplicate was identified in the related-issue investigation.
 ## Reproduction
 
 **Outcome: reproducible**, with the configuration-scope qualification above.
+The recorded outputs below describe the baseline behavior before the fix.
 
 ### Environment and isolation
 
@@ -165,24 +171,102 @@ ordinary, unpinned index-discovery diagnostic reproduced here.
 Also read `crates/uv/tests/project/edit.rs`, test `add_script_settings`. Its
 fixture sets inline `resolution = "lowest-direct"`, adds `anyio>=3`, and snapshots
 the updated script and lockfile. It covers honoring inline script configuration,
-but not cutoff scope or this diagnostic. Targeted searches under
-`crates/uv/tests/` and `crates/uv-client/tests/it/` found no direct test for this
-misplaced-key scenario.
+but not cutoff scope or this diagnostic. The parent regression in
+`crates/uv/tests/project/edit.rs` directly covers the misplaced-key scenario;
+its updated expectation and validation are described below.
 
-No repository tests or builds were run. Runtime confirmation uses the installed
-uv 0.13.6, not a checkout build or uv 0.13.7. All four command outcomes were
-observed directly; the exact reported uv release and Fedora platform remain
+The original reproduction used the installed uv 0.13.6 and did not run
+repository tests. All four command outcomes above were observed directly. The
+fix investigation additionally builds and tests the checkout in the debug/test
+profile; the exact released uv 0.13.7 executable and Fedora platform remain
 untested.
+
+## Fix
+
+**Outcome: fixed.** The production change adds Serde's `deny_unknown_fields` to
+`IndexWire` in `crates/uv-distribution-types/src/index.rs`. The unsupported
+`exclude-newer-package` field now produces a TOML parse error, consistent with
+strict validation of the surrounding uv configuration, instead of being discarded
+and letting dependency resolution report an unrelated-looking index failure.
+The supported exemption remains under `[tool.uv]`.
+
+The original regression from astral-sh/uv-dev#3091 was retained in
+`crates/uv/tests/project/edit.rs`, renamed to
+`edit::add_script_index_exclude_newer_package_invalid`, and updated to snapshot
+exit status 2 and the unknown-field error. Its fixture still uses the reported
+PEP 723 layout, preview feature, index cutoff, and misplaced exemption, with
+`iniconfig==2.0.0` as a stable release after the cutoff. Its existing module-level
+`test-python` and `test-pypi` feature gates remain applicable.
+
+The original test passed while asserting silent acceptance and a misleading
+resolution failure. Before changing production code, changing its expectation
+to a configuration error made it fail with the original exit status 1 and PyPI
+fallback hint. With unknown-field validation enabled, the updated regression
+passes and identifies `exclude-newer-package` as an unknown index field. Serde
+reports the enclosing `[tool.uv]` span for this flattened script configuration.
+
+Scope inspection included the adjacent inline-script settings test, the existing
+index-cutoff/override tests in `crates/uv/tests/lock/lock.rs`, the index serializer,
+and the index-table producer in `crates/uv-project-edit/src/lib.rs`. The writer
+emits supported index fields; internal `origin` metadata is skipped during
+serialization. The existing lock fixtures correctly scope package exemptions and
+do not need changes. No distinct additional failure from this cause was
+demonstrated, so no additional regression scenarios were added.
+
+Successful focused validation, all using unoptimized debug/test builds:
+
+```console
+cargo test --locked -p uv --test project edit::add_script_index_exclude_newer_package_invalid -- --exact
+cargo test --locked -p uv --test project edit::add_script_settings -- --exact
+cargo test --locked -p uv --test project edit::add_index -- --exact
+cargo test --locked -p uv --test lock lock_exclude_newer_index -- --nocapture
+cargo fmt --all
+cargo fmt --all --check
+git diff --check
+```
+
+The lock filter ran both `lock::lock_exclude_newer_index_disable` and
+`lock::lock_exclude_newer_index_value`. They verify valid index overrides and
+package-over-index precedence. `edit::add_index` exercises writing index
+configuration and reading it on a subsequent add operation.
+
+A separate corrected PEP 723 fixture was tested with `target/debug/uv` (version
+0.13.7) and CPython 3.15.2, using isolated subprocess configuration and caches
+under `/tmp/uv-23103-fix-coxrlqfn`. It places
+`exclude-newer-package.iniconfig = false` under `[tool.uv]` while retaining the
+index's `exclude-newer = "2022-01-01"`. These explicit producer/consumer
+round-trip commands all exited 0:
+
+```console
+uv add 'iniconfig==2.0.0' --script script.py
+uv lock --script script.py
+uv lock --check --script script.py
+```
+
+The generated script retained the top-level exemption and acquired the pinned
+dependency; the generated lockfile contains iniconfig 2.0.0. This confirms that
+correctly scoped exemptions survive metadata writes and subsequent reads.
+
+The pinned Rust toolchain lacked rustfmt, and its installation was read-only.
+The matching official Rust 1.99.0 formatter component was downloaded and extracted
+under `/tmp/uv-rustfmt-1pnbppyn`; its binaries were prepended to `PATH` for the
+formatting commands. No repository toolchain configuration was changed.
+
+This fix prevents the reported malformed configuration from reaching the
+misleading resolver diagnostic. Cutoff-hint generation for otherwise valid,
+unpinned index configurations has a separate cause and was not changed. No
+repository manifest, lockfile, workflow, agent configuration, or GitHub state was
+modified.
 
 ## Supporting implementation evidence
 
 - `docs/concepts/resolution.md` documents package exemptions under `[tool.uv]`
   and explicitly states that they take precedence over global and index values.
   `docs/concepts/indexes.md` repeats that precedence.
-- `crates/uv-distribution-types/src/index.rs`, `IndexWire`, has an
-  `exclude_newer` field but no `exclude_newer_package` field or
-  `deny_unknown_fields`. This agrees with the observed silent acceptance of the
-  misplaced key.
+- `crates/uv-distribution-types/src/index.rs`, `IndexWire`, supports
+  `exclude_newer` but not `exclude_newer_package`. Its missing unknown-field
+  validation caused the observed silent acceptance of the misplaced key. The
+  fix adds `deny_unknown_fields` to this deserialization wire type.
 - `crates/uv-configuration/src/exclude_newer.rs`,
   `exclude_newer_package_for_index_with_source`, checks the package override
   before the index/global cutoff. The corrected-script result directly confirms
@@ -197,6 +281,9 @@ untested.
 
 ## Related
 
+- astral-sh/uv-dev#3091 (parent regression pull request) — Added the script test
+  demonstrating silent acceptance of the misplaced index exemption. The fix
+  updates that same regression to require a configuration error.
 - astral-sh/uv#18839 (pull request, merged) — Added `exclude-newer` to
   `[[tool.uv.index]]` on April 8, 2026, with package > index > global precedence.
   It does not add `exclude-newer-package` inside index tables. The existing
@@ -219,14 +306,17 @@ astral-sh/uv#21211 and astral-sh/uv#21227 (uv check tool selection),
 astral-sh/uv#19266 (pre-release hint), astral-sh/uv#12340 (version bounds), and
 astral-sh/uv#22951 (promoting existing configuration warnings to errors). None
 establishes a duplicate for the behavior reproduced here. The last discussion
-concerns settings that already produce a warning; this nested key produces none.
+concerns settings that already produce a warning. The baseline accepted this
+nested key without warning; the proposed fix reports a configuration error.
 
 ## Suggested maintainer response
 
-The failure reproduces with the supplied layout on uv 0.13.6 and Python 3.15.2.
 `exclude-newer-package` belongs under `[tool.uv]`, before `[[tool.uv.index]]`.
-Moving that line makes `uv add 'uv==0.13.7' --script ...` succeed with the index
-cutoff still enabled. Package exemptions do override index cutoffs when scoped
-correctly. The unknown nested setting is silently ignored, and the failure
-message omits the index cutoff while suggesting another PyPI index; those are
-separate validation and diagnostic concerns for follow-up.
+Moving the line makes the reported add operation succeed with the index cutoff
+still enabled. Package exemptions correctly override index cutoffs when scoped
+there. The proposed fix rejects the unsupported index-level field with a TOML
+configuration error, avoiding silent acceptance and the misleading resolution
+hint for this layout. Focused integration tests and a corrected-script
+add/lock/check round trip pass.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3092
