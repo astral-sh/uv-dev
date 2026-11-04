@@ -6,13 +6,13 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::debug;
 
-use uv_distribution_types::{DistributionId, Identifier, Name, Requirement};
+use uv_distribution_types::{DistributionId, Identifier, IndexUrl, Name, Requirement};
 use uv_pep440::Version;
 use uv_resolver_types::{
     BuildResolution, ResolverOutput, SourceBuildRequirements, UniversalMarker,
 };
 use uv_static::EnvVars;
-use uv_types::{BuildContext, HashStrategy, HashVerification, InstalledPackagesProvider};
+use uv_types::{BuildContext, HashStrategy, InstalledPackagesProvider};
 
 use super::{
     DefaultResolverProvider, InMemoryIndex, ReporterGuard, Resolver, ResolverEnvironment,
@@ -117,15 +117,12 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
                 let scope = owners[0].marker;
                 let env = ResolverEnvironment::universal(vec![scope.combined()]);
                 // A URL can be trusted by one root but carry different hashes in another.
-                let index = match (hasher.verification(), pins) {
-                    (HashVerification::Unspecified, None) => state.index.fork_versions(),
-                    (HashVerification::IfPresent(_) | HashVerification::Required(_), _)
-                    | (HashVerification::Unspecified, Some(_)) => InMemoryIndex::default(),
-                };
+                let index = InMemoryIndex::default();
+                let active = hashes.active_domain(scope);
                 let requirements = owners
                     .iter()
                     .flat_map(|owner| &owner.requirements)
-                    .filter(|requirement| !requirement.marker.is_disjoint(scope.pep508()))
+                    .filter(|requirement| !requirement.marker.is_disjoint(active))
                     .cloned()
                     .collect();
                 let (mut manifest, hasher, locked) =
@@ -288,7 +285,8 @@ struct BuildGroup<'a, P> {
 
 struct PendingBuilds<'a, P> {
     /// A source build can recur through another build dependency. Only visit new marker regions.
-    covered: FxHashMap<(DistributionId, Option<Version>), UniversalMarker>,
+    /// Two registries can advertise the same digest but own separate build environments.
+    covered: FxHashMap<(DistributionId, Option<Version>, Option<IndexUrl>), UniversalMarker>,
     groups: Vec<BuildGroup<'a, P>>,
     hashes: &'a BuildConstraintHashes,
 }
@@ -316,6 +314,7 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
                         .distribution_id()
                         .cmp(&right.owner.distribution_id())
                 })
+                .then_with(|| left.owner.index().cmp(&right.owner.index()))
         });
         for (owner, pins) in owners {
             let covered = self
@@ -323,6 +322,7 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
                 .entry((
                     owner.owner.distribution_id(),
                     owner.owner.version().cloned(),
+                    owner.owner.index().cloned(),
                 ))
                 .or_insert(UniversalMarker::FALSE);
             for &fork in runtime_forks {

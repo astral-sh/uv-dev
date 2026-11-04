@@ -73,12 +73,17 @@ impl BuildConstraintHashes {
         Ok(Self { domain, regions })
     }
 
+    /// Environments where both the project and the build owner are supported.
+    pub(crate) fn active_domain(&self, scope: UniversalMarker) -> MarkerTree {
+        scope.pep508().and(self.domain)
+    }
+
     /// Limit a build owner's scope to regions with a single trusted hash policy.
     pub(crate) fn for_scope(
         &self,
         scope: UniversalMarker,
     ) -> impl Iterator<Item = (UniversalMarker, &HashStrategy)> {
-        let active = scope.pep508().and(self.domain);
+        let active = self.active_domain(scope);
         self.regions.iter().filter_map(move |(region, hasher)| {
             if region.is_disjoint(active) {
                 return None;

@@ -889,7 +889,92 @@ fn lock_build_forks_split_transitive_source_conflict() -> Result<()> {
     Ok(())
 }
 
-/// A dependency used on older Pythons need not be buildable on newer Pythons.
+/// Each registry owns a separate build environment even when both list identical sdist bytes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_forks_same_sdist_different_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"shared".parse()?, &"1".parse()?, "", None)?;
+    let digest = hex::encode(Sha256::digest(&archive));
+    let first = context.temp_dir.child("first/shared");
+    first.child("shared-1.tar.gz").write_binary(&archive)?;
+    first.child("index.html").write_str(&formatdoc! {r#"
+        <a href="shared-1.tar.gz#sha256={digest}" data-upload-time="2020-01-01T00:00:00Z">shared-1.tar.gz</a>
+    "#})?;
+    context
+        .temp_dir
+        .child("second/shared")
+        .copy_from(&first, &["*"])?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "alpha"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["shared"]
+        build-backend = "shared"
+
+        [tool.uv.workspace]
+        members = ["beta"]
+
+        [tool.uv.sources]
+        shared = { index = "first" }
+
+        [[tool.uv.index]]
+        name = "first"
+        url = "first"
+        explicit = true
+
+        [[tool.uv.index]]
+        name = "second"
+        url = "second"
+        explicit = true
+    "#})?;
+    context
+        .temp_dir
+        .child("beta/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "beta"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["shared"]
+        build-backend = "shared"
+
+        [tool.uv.sources]
+        shared = { index = "second" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "build-dependency-locking", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let packages = lock["package"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("expected locked packages"))?;
+    let registries = packages
+        .iter()
+        .filter(|package| {
+            package["name"].as_str() == Some("shared") && package.contains_key("build-roots")
+        })
+        .map(|package| package["source"]["registry"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(registries, [Some("first"), Some("second")]);
+    Ok(())
+}
+
+/// A build requirement must overlap both its owner's marker and the project's Python range.
+/// Lookahead would try to fetch the direct wheel even with no supported Python to use it.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_build_forks_limit_owner_markers() -> Result<()> {
@@ -917,14 +1002,17 @@ fn lock_build_forks_limit_owner_markers() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["unavailable; python_version >= '3.13'"]
+        requires = [
+            "unavailable; python_version >= '3.13'",
+            "old @ https://example.org/old-1-py3-none-any.whl ; python_version < '3.12'",
+        ]
         build-backend = "legacy"
     "#})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "per-package")
         .env("RUST_LOG", "uv_resolver::resolver::build_forks=debug")
-        .arg("--preview-features").arg("build-dependency-locking").arg("--no-index"), @"
+        .args(["--preview-features", "build-dependency-locking", "--no-index", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Solving build requirements owners=legacy scope=python_full_version < '3.13'
