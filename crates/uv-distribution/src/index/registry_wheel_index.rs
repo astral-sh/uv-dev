@@ -243,6 +243,7 @@ impl<'a> RegistryWheelIndex<'a> {
                                     if wheel.satisfies(hasher.archive_policy_for_package(
                                         &wheel.filename.name,
                                         &wheel.filename.version,
+                                        index.url(),
                                     )) {
                                         entries.push(IndexEntry {
                                             size: wheel.size,
@@ -269,6 +270,7 @@ impl<'a> RegistryWheelIndex<'a> {
                                     if wheel.satisfies(hasher.archive_policy_for_package(
                                         &wheel.filename.name,
                                         &wheel.filename.version,
+                                        index.url(),
                                     )) {
                                         entries.push(IndexEntry {
                                             size: wheel.size,
@@ -356,6 +358,7 @@ impl<'a> RegistryWheelIndex<'a> {
                                 if revision.satisfies(hasher.archive_policy_for_package(
                                     &wheel.filename.name,
                                     &wheel.filename.version,
+                                    index.url(),
                                 )) {
                                     let wheel = CachedWheel::from_entry(
                                         wheel,

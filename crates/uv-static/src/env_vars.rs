@@ -709,6 +709,22 @@ impl EnvVars {
     #[attr_added_in("0.11.22")]
     pub const UV_INTERNAL__BUILD_DIR: &'static str = "UV_INTERNAL__BUILD_DIR";
 
+    /// Select the lockfile encoding for resolved build environments.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_INTERNAL__BUILD_LOCK_ENCODING: &'static str = "UV_INTERNAL__BUILD_LOCK_ENCODING";
+
+    /// Select grouped or per-package resolution for separate source builds.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_INTERNAL__BUILD_RESOLUTION: &'static str = "UV_INTERNAL__BUILD_RESOLUTION";
+
+    /// Select how many runtime version preferences to try when resolving source builds.
+    #[attr_hidden]
+    #[attr_added_in("0.13.8")]
+    pub const UV_INTERNAL__BUILD_RUNTIME_PREFERENCES: &'static str =
+        "UV_INTERNAL__BUILD_RUNTIME_PREFERENCES";
+
     /// Set to `1` to include Git metadata in development builds.
     /// Release builds include Git metadata by default.
     #[attr_hidden]

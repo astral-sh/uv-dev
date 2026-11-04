@@ -18,7 +18,6 @@ workspace = true
 [dependencies]
 uv-python-interpreter = { workspace = true }
 uv-auth = { workspace = true }
-uv-build-frontend = { workspace = true }
 uv-cache = { workspace = true }
 uv-client = { workspace = true }
 uv-command-support = { workspace = true }
@@ -43,6 +42,7 @@ uv-resolve-operations = { workspace = true }
 uv-resolver = { workspace = true }
 uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
+uv-static = { workspace = true }
 uv-types = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }

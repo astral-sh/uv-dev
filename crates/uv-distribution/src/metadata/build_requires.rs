@@ -13,7 +13,7 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace, WorkspaceCache,
 };
 
-use crate::metadata::{LoweredRequirement, MetadataError};
+use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
 
 /// Lowered requirements from a `[build-system.requires]` field in a `pyproject.toml` file.
 #[derive(Debug, Clone)]
@@ -45,6 +45,7 @@ impl BuildRequires {
         sources: &NoSources,
         editable: bool,
         stop_discovery_at: Option<&Path>,
+        git_member: Option<&GitWorkspaceMember<'_>>,
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
         credentials_cache: &CredentialsCache,
@@ -71,6 +72,7 @@ impl BuildRequires {
         Self::from_project_workspace(
             metadata,
             &project_workspace,
+            git_member,
             locations,
             sources,
             editable,
@@ -85,6 +87,7 @@ impl BuildRequires {
     async fn from_project_workspace(
         metadata: uv_pypi_types::BuildRequires,
         project_workspace: &ProjectWorkspace,
+        git_member: Option<&GitWorkspaceMember<'_>>,
         locations: &IndexLocations,
         sources: &NoSources,
         editable: bool,
@@ -144,7 +147,7 @@ impl BuildRequires {
                     None,
                     locations,
                     project_workspace.workspace(),
-                    None,
+                    git_member,
                     editable,
                     cache,
                     workspace_cache,

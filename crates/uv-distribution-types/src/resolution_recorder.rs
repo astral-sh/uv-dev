@@ -28,8 +28,7 @@ pub struct ResolutionLookups {
 /// Tracks which settings are consulted while resolving runtime dependencies.
 ///
 /// All copies share the same record, including across resolver branches and parallel metadata
-/// requests. Build dependencies are not tracked, even when a build is needed to get metadata
-/// for a runtime dependency.
+/// requests. Locked build environments also contribute upload cutoffs and static metadata lookups.
 #[derive(Debug, Default, Clone)]
 pub struct ResolutionRecorder(Arc<Mutex<ResolutionLookups>>);
 
@@ -75,6 +74,16 @@ impl ResolutionRecorder {
     /// Record a package version request before checking the version cache.
     pub fn exclude_newer(&self, name: &PackageName) {
         self.lookups().exclude_newer.insert(name.clone());
+    }
+
+    /// Locked build graphs also consult package-specific upload cutoffs and static metadata.
+    /// Build constraints and overrides belong to the isolated build environment.
+    pub fn record_build_lookups(&self, build: ResolutionLookups) {
+        let mut lookups = self.lookups();
+        lookups.exclude_newer.extend(build.exclude_newer);
+        lookups
+            .dependency_metadata
+            .extend(build.dependency_metadata);
     }
 
     /// Record a static metadata lookup before checking for a matching declaration.

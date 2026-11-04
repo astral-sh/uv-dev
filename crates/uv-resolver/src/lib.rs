@@ -1,8 +1,9 @@
+pub use build_constraint_hashes::BuildConstraintHashes;
 pub use error::{ErrorTree, NoSolutionError, NoSolutionHeader, ResolveError};
 pub use exclusions::Exclusions;
 pub use flat_index::{FlatDistributions, FlatIndex};
 pub use manifest::Manifest;
-pub use preferences::{Preference, PreferenceError, Preferences};
+pub use preferences::{Preference, PreferenceError, Preferences, RuntimePreferenceMode};
 pub use prioritized_distribution::{HashComparison, PrioritizedDist, SourceDistCompatibility};
 pub use pubgrub::PubGrubHint;
 pub use python_requirement::PythonRequirement;
@@ -22,7 +23,7 @@ pub use uv_configuration::{
     serialize_exclude_newer_package_with_spans,
 };
 pub use uv_distribution_types::{ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue};
-pub use uv_resolver_types::{Flexibility, Options, OptionsBuilder};
+pub use uv_resolver_types::{Flexibility, Options, OptionsBuilder, SourceBuildRequirements};
 pub use version_map::VersionMap;
 pub use yanks::AllowedYanks;
 
@@ -37,6 +38,7 @@ type FxHashbrownSet<T> = hashbrown::HashSet<T, rustc_hash::FxBuildHasher>;
 
 type FxHashbrownMap<K, V> = hashbrown::HashMap<K, V, rustc_hash::FxBuildHasher>;
 
+mod build_constraint_hashes;
 mod candidate_selector;
 mod dependency_provider;
 mod error;

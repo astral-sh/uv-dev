@@ -6,7 +6,8 @@ use thiserror::Error;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
-use uv_distribution_types::{GitDirectorySourceUrl, IndexLocations, Requirement};
+use uv_distribution_types::{IndexLocations, Requirement};
+use uv_git_types::GitUrl;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
@@ -209,5 +210,6 @@ pub struct GitWorkspaceMember<'a> {
     /// The root of the checkout, which may be the root of the workspace or may be above the
     /// workspace root.
     pub fetch_root: &'a Path,
-    pub git_source: &'a GitDirectorySourceUrl<'a>,
+    /// The repository and revision of the checkout.
+    pub git: &'a GitUrl,
 }

@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Context;
 use rustc_hash::FxHashSet;
 use tracing::debug;
 
-use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
@@ -37,6 +35,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
+use crate::build_resolution::{BuildResolutionStrategy, build_encoding, resolve_builds};
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
@@ -318,6 +317,15 @@ async fn do_lock(
     preview: Preview,
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
+    // A routine project update must keep the build policy recorded in its lock.
+    let existing_build_encoding = existing_lock.as_ref().and_then(Lock::build_encoding);
+    let build_encoding = if existing_build_encoding.is_some()
+        || preview.is_enabled(PreviewFeature::BuildDependencyLocking)
+    {
+        Some(build_encoding(existing_build_encoding)?)
+    } else {
+        None
+    };
 
     // Extract the project settings.
     let ResolverSettings {
@@ -716,7 +724,7 @@ async fn do_lock(
     // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
     let resolution_build_hasher = match mode {
         LockMode::Locked(..) => locked_hasher.with_constraint_hashes(&build_hasher)?,
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher,
+        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher.clone(),
     };
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
@@ -724,13 +732,19 @@ async fn do_lock(
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
 
-    // Resolve the flat indexes from `--find-links`.
-    let check_locked_builds = existing_lock.as_ref().is_some_and(Lock::locks_builds);
-    let flat_index = if check_locked_builds {
-        FlatIndex::default()
+    let check_locked_builds =
+        matches!(mode, LockMode::Locked(_, _)) && existing_build_encoding.is_some();
+    // A v1 metadata build may need to resolve its dependencies during validation. A v2
+    // metadata build has its own pinned environment, so defer find-links until a fresh solve.
+    let validation_flat_index = if existing_lock
+        .as_ref()
+        .is_some_and(|lock| !lock.locks_builds())
+    {
+        Some(FlatIndex::load(&client, cache, index_locations).await?)
     } else {
-        FlatIndex::load(&client, cache, index_locations).await?
+        None
     };
+    let empty_flat_index = FlatIndex::default();
 
     // Lower the extra build dependencies.
     let extra_build_requires = match &target {
@@ -768,7 +782,7 @@ async fn do_lock(
         &build_constraints,
         interpreter,
         index_locations,
-        &flat_index,
+        validation_flat_index.as_ref().unwrap_or(&empty_flat_index),
         dependency_metadata,
         state.fork().into_inner(),
         *index_strategy,
@@ -787,35 +801,39 @@ async fn do_lock(
         concurrency.clone(),
         preview,
     )
-    .with_locked_build_dependencies(preview.is_enabled(PreviewFeature::BuildDependencyLocking));
-
-    if let Some(lock) = existing_lock.as_ref().filter(|lock| lock.locks_builds())
-        && !lock
-            .satisfies_build_inputs(
-                target.install_path(),
-                &extra_build_requires,
-                async |name, path| {
-                    SourceBuild::local_build_requirements(
-                        path,
-                        name,
-                        index_locations,
-                        sources,
-                        cache,
-                        workspace_cache,
-                        client.credentials_cache(),
-                    )
-                    .await
-                    .with_context(|| format!("Failed to read build requirements for `{name}`"))
-                },
-            )
-            .await?
-    {
-        // This reader cannot regenerate a stale build graph.
-        return Err(LockError::StaleBuildLock);
-    }
+    .with_locked_build_dependencies(build_encoding.is_some());
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        let build_lock_matches = if existing_lock.locks_builds() {
+            match existing_lock
+                .satisfies_build_inputs(
+                    target.install_path(),
+                    &extra_build_requires,
+                    async |name, path| {
+                        build_dispatch
+                            .local_build_requirements(name, path)
+                            .await
+                            .map_err(LockError::from)
+                    },
+                )
+                .await
+            {
+                Ok(matches) => matches,
+                Err(err) if check_locked_builds => return Err(err),
+                // A removed directory may no longer be reachable from the current project.
+                Err(err) => {
+                    debug!("Could not validate locked build inputs: {err}");
+                    false
+                }
+            }
+        } else {
+            build_encoding.is_none()
+        };
+        if check_locked_builds && (!build_lock_matches || existing_build_encoding != build_encoding)
+        {
+            return Err(LockError::StaleBuildLock);
+        }
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let snapshot = existing_lock.locks_builds().then(|| existing_lock.clone());
         let replay;
@@ -841,6 +859,7 @@ async fn do_lock(
         .with_first_party_packages(&first_party_packages);
         match Box::pin(ValidatedLock::validate(
             existing_lock,
+            build_lock_matches,
             target.install_path(),
             packages,
             &members,
@@ -871,12 +890,6 @@ async fn do_lock(
         ))
         .await
         {
-            Ok(ValidatedLock::Satisfies(lock))
-                if preview.is_enabled(PreviewFeature::BuildDependencyLocking)
-                    && !lock.locks_builds() =>
-            {
-                Some(ValidatedLock::Versions(lock))
-            }
             Ok(ValidatedLock::Satisfies(lock)) => Some(ValidatedLock::Satisfies(lock)),
             Ok(_) if check_locked_builds => return Err(LockError::StaleBuildLock),
             Ok(result) => Some(result),
@@ -914,6 +927,13 @@ async fn do_lock(
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
+            // Reuse the audited versions and hashes when only the wire format changes.
+            if let Some(encoding) = build_encoding
+                && existing_build_encoding != Some(encoding)
+            {
+                let updated = lock.clone().with_build_encoding(encoding);
+                return Ok(LockResult::Changed(Some(lock), updated));
+            }
             Ok(LockResult::Unchanged(lock))
         }
 
@@ -923,6 +943,11 @@ async fn do_lock(
             ValidatedLock::Unusable(_) | ValidatedLock::Versions(_) | ValidatedLock::Preferable(_),
         )
         | None => {
+            let flat_index = match &validation_flat_index {
+                Some(flat_index) => flat_index,
+                None => &FlatIndex::load(&client, cache, index_locations).await?,
+            };
+            let build_dispatch = build_dispatch.with_flat_index(flat_index);
             let recorder = if preview.is_enabled(PreviewFeature::ResolutionInputs) {
                 Some(ResolutionRecorder::default())
             } else {
@@ -998,7 +1023,7 @@ async fn do_lock(
                 .collect();
 
             // Resolve the requirements.
-            let (resolution, _) = uv_resolve_operations::resolve(
+            let (resolution, runtime_hasher) = uv_resolve_operations::resolve(
                 member_requirements
                     .into_iter()
                     .chain(target.group_requirements())
@@ -1032,11 +1057,11 @@ async fn do_lock(
                 upgrade,
                 None,
                 resolver_env,
-                python_requirement,
+                python_requirement.clone(),
                 interpreter.markers(),
                 conflicts.clone(),
                 &client,
-                &flat_index,
+                flat_index,
                 state.index(),
                 &build_dispatch,
                 concurrency,
@@ -1047,12 +1072,17 @@ async fn do_lock(
             )
             .await?;
 
-            // Print the success message after completing resolution.
-            logger.on_complete(resolution.len(), start, printer)?;
+            let report_resolution = || -> Result<(), LockError> {
+                logger.on_complete(resolution.len(), start, printer)?;
+                uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+                Ok(())
+            };
+            if build_encoding.is_none() {
+                // Runtime resolution is complete even if constructing the lockfile fails.
+                report_resolution()?;
+            }
 
-            // Notify the user of any resolution diagnostics.
-            uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
-
+            let prefer_locked = versions_lock.is_some();
             let manifest = ResolverManifest::new(
                 members,
                 requirements,
@@ -1091,6 +1121,60 @@ async fn do_lock(
             .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
+
+            let lock = if let Some(encoding) = build_encoding {
+                let previous_pins = previous
+                    .as_ref()
+                    .map(|lock| lock.build_pins(target.install_path(), hash_upgrade))
+                    .transpose()?
+                    .unwrap_or_default();
+                let builds = Box::pin(resolve_builds(
+                    &resolution,
+                    BuildResolutionStrategy::from_env()?,
+                    &python_requirement,
+                    interpreter.markers(),
+                    &client,
+                    flat_index,
+                    &build_dispatch,
+                    &build_constraints,
+                    upgrade,
+                    &runtime_hasher,
+                    *build_hash_checking,
+                    target.install_path(),
+                    Lock::build_domain(lock.requires_python(), lock.supported_environments()),
+                    &previous_pins,
+                    prefer_locked,
+                    concurrency,
+                    recorder.as_ref(),
+                ))
+                .await?;
+                debug!("Resolved {} build environments", builds.len());
+                let mut lock = lock.with_build_graphs(
+                    encoding,
+                    builds
+                        .iter()
+                        .map(|(owners, graph)| (owners.as_slice(), graph)),
+                    target.install_path(),
+                    index_locations,
+                    &extra_build_requires,
+                )?;
+                lock.generate_missing_registry_hashes(
+                    target.install_path(),
+                    &client,
+                    concurrency.downloads,
+                )
+                .await?;
+                previous_pins
+                    .verify(&lock, target.install_path(), &client)
+                    .await?;
+                let lock = lock
+                    .with_compacted_build_domains()?
+                    .with_ordinary_build_roots()?;
+                report_resolution()?;
+                lock
+            } else {
+                lock
+            };
 
             let lock = if let Some(recorder) = recorder {
                 lock.prune_unused(recorder.take())

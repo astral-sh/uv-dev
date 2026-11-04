@@ -48,7 +48,7 @@ use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
-use crate::source::SourceDistributionBuilder;
+use crate::source::{BuildSourceTree, SourceDistributionBuilder};
 use crate::{
     Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist, check_supported_wheel_variant,
 };
@@ -208,6 +208,35 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             ));
         }
         Ok(computed_hashes)
+    }
+
+    /// Materialize the source tree for static build requirement discovery.
+    pub async fn build_source_tree(
+        &self,
+        dist: &SourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<BuildSourceTree, Error> {
+        // Check the declared digest on cache hits as well as on fresh downloads.
+        let url_hashes;
+        let hashes = match dist {
+            SourceDist::Registry(dist) => hashes.with_index_hashes(dist.file.hashes.as_slice()),
+            SourceDist::DirectUrl(dist) => {
+                url_hashes = parse_url_hashes(&dist.url);
+                match url_hashes.as_ref() {
+                    Some(digests) if !hashes.requires_validation() => {
+                        ArchiveHashPolicy::All(digests.as_slice())
+                    }
+                    _ => hashes,
+                }
+            }
+            SourceDist::Path(_)
+            | SourceDist::GitPath(_)
+            | SourceDist::Directory(_)
+            | SourceDist::GitDirectory(_) => hashes,
+        };
+        self.builder
+            .build_source_tree(dist, hashes, &self.client)
+            .await
     }
 
     /// Either fetch the wheel or fetch and build the source distribution
@@ -641,8 +670,15 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Box the full-wheel futures to keep their state out of metadata-only requests.
         // Fetch the entire wheel only when we need to compute a hash for resolution.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hash_policy == ArchiveHashPolicy::Generate {
+        if hash_policy == ArchiveHashPolicy::Generate || hashes.verify_wheel {
             let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
+            if hashes.verify_wheel && !hash_policy.matches(wheel.hashes.as_slice()) {
+                return Err(Error::hash_mismatch(
+                    dist.to_string(),
+                    hash_policy.digests(),
+                    wheel.hashes.as_slice(),
+                ));
+            }
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) =
                 self.dependency_metadata(dist.name(), Some(dist.version()))

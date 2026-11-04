@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -140,6 +141,30 @@ pub enum ResolveError {
 }
 
 impl ResolveError {
+    /// Whether two requirements selected different sources for the same package.
+    pub fn is_source_conflict(&self) -> bool {
+        match self {
+            Self::Dependencies(error, ..) => error.is_source_conflict(),
+            Self::ConflictingUrls { .. }
+            | Self::ConflictingIndexesForEnvironment { .. }
+            | Self::ConflictingIndexes(..) => true,
+            Self::Distribution(_)
+            | Self::DisallowedUrl { .. }
+            | Self::DistributionType(_)
+            | Self::NoSolution(_)
+            | Self::UnhashedPackage(_)
+            | Self::PackageUnavailable(_)
+            | Self::ConflictMarker(_)
+            | Self::MismatchedPackageName { .. }
+            | Self::Dist(..)
+            | Self::Client(_)
+            | Self::ChannelClosed
+            | Self::UnregisteredTask(_)
+            | Self::InvalidVersion(_)
+            | Self::ConflictingDistribution(_) => false,
+        }
+    }
+
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
@@ -1766,7 +1791,7 @@ pub struct NoSolutionHeader {
     /// The [`ResolverEnvironment`] that caused the failure.
     env: ResolverEnvironment,
     /// The additional context for the resolution failure.
-    context: Option<&'static str>,
+    context: Option<Cow<'static, str>>,
 }
 
 impl NoSolutionHeader {
@@ -1777,15 +1802,15 @@ impl NoSolutionHeader {
 
     /// Set the context for the resolution failure.
     #[must_use]
-    pub fn with_context(mut self, context: &'static str) -> Self {
-        self.context = Some(context);
+    pub fn with_context(mut self, context: impl Into<Cow<'static, str>>) -> Self {
+        self.context = Some(context.into());
         self
     }
 }
 
 impl std::fmt::Display for NoSolutionHeader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match (self.context, self.env.end_user_fork_display()) {
+        match (self.context.as_deref(), self.env.end_user_fork_display()) {
             (None, None) => write!(f, "No solution found when resolving dependencies"),
             (Some(context), None) => {
                 write!(f, "No solution found when resolving {context} dependencies")

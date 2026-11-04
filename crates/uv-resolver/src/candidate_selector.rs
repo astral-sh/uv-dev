@@ -13,7 +13,7 @@ use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_types::InstalledPackagesProvider;
 
-use crate::preferences::{Entry, PreferenceSource, Preferences};
+use crate::preferences::{Entry, PreferenceSource, Preferences, RuntimePreferenceMode};
 use crate::prerelease::{PrereleaseSelection, PrereleaseStrategy};
 use crate::prioritized_distribution::{
     CompatibleDist, IncompatibleDist, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
@@ -221,7 +221,14 @@ impl CandidateSelector {
                     let marker = entry.marker();
 
                     // Prefer preferences that match the current environment.
-                    let matches_env = env.included_by_marker(marker.pep508());
+                    let matches_env = if let PreferenceSource::Runtime(_) = entry.source()
+                        && marker.has_conflict_marker()
+                        && let Some(fork) = env.try_universal_markers()
+                    {
+                        !fork.is_disjoint(*marker)
+                    } else {
+                        env.included_by_marker(marker.pep508())
+                    };
 
                     // Prefer the latest (or earliest) version.
                     let version = if highest {
@@ -230,14 +237,27 @@ impl CandidateSelector {
                         Either::Right(std::cmp::Reverse(entry.pin().version()))
                     };
 
-                    std::cmp::Reverse((matches_env, version))
+                    let first_runtime =
+                        entry.source() == PreferenceSource::Runtime(RuntimePreferenceMode::First);
+                    std::cmp::Reverse((
+                        entry.source() == PreferenceSource::BuildLock,
+                        first_runtime,
+                        matches_env,
+                        version,
+                    ))
                 });
 
-                Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
-                )
+                // Limit runtime preferences after ranking by fork and resolution mode, but
+                // before checking the package's range or wheel compatibility.
+                let mut tried_runtime = false;
+                Either::Right(preferences.into_iter().filter_map(move |entry| {
+                    if let PreferenceSource::Runtime(RuntimePreferenceMode::First) = entry.source()
+                        && std::mem::replace(&mut tried_runtime, true)
+                    {
+                        return None;
+                    }
+                    Some((entry.pin().version(), entry.source()))
+                }))
             }
         };
 
@@ -322,7 +342,9 @@ impl CandidateSelector {
                     // current solve, accept it unless pre-releases are completely banned.
                     PrereleaseSelection::PreferStable => match source {
                         PreferenceSource::Resolver => false,
-                        PreferenceSource::Lock
+                        PreferenceSource::BuildLock
+                        | PreferenceSource::Lock
+                        | PreferenceSource::Runtime(_)
                         | PreferenceSource::Environment
                         | PreferenceSource::RequirementsTxt => true,
                     },
