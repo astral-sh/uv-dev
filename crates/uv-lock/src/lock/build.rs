@@ -14,7 +14,7 @@ use uv_client::RegistryClient;
 use uv_configuration::BuildOptions;
 use uv_distribution_types::{
     Edge, ExtraBuildRequires, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython,
-    Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist,
+    Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist, satisfies_require_hashes,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{
@@ -22,7 +22,7 @@ use uv_pep508::{
     MarkerValueVersion,
 };
 use uv_platform_tags::Tags;
-use uv_pypi_types::{HashAlgorithm, HashDigest};
+use uv_pypi_types::HashDigest;
 use uv_resolver_types::{
     ResolutionGraphNode, ResolverOutput, SourceBuildRequirements, UniversalMarker,
 };
@@ -85,7 +85,7 @@ impl OrdinaryOwner {
             return Some(Self::Directory);
         }
         let hash = sdist?.hash()?;
-        (matches!(owner.source, Source::Registry(_)) && strong_hash(hash))
+        (matches!(owner.source, Source::Registry(_)) && satisfies_require_hashes(hash))
             .then(|| Self::Archive(hash.clone()))
     }
 }
@@ -601,11 +601,11 @@ impl<'a> OrdinaryGraph<'a> {
                 || package
                     .sdist
                     .as_ref()
-                    .is_some_and(|s| s.hash().is_none_or(|hash| !strong_hash(hash)))
+                    .is_some_and(|s| s.hash().is_none_or(|hash| !satisfies_require_hashes(hash)))
                 || package
                     .wheels
                     .iter()
-                    .any(|wheel| !wheel.hash.as_ref().is_some_and(strong_hash))
+                    .any(|wheel| !wheel.hash.as_ref().is_some_and(satisfies_require_hashes))
                 || package
                     .dependencies
                     .iter()
@@ -617,16 +617,6 @@ impl<'a> OrdinaryGraph<'a> {
             }
         }
         Ok(Some(universe))
-    }
-}
-
-fn strong_hash(hash: &HashDigest) -> bool {
-    match hash.algorithm() {
-        HashAlgorithm::Md5 => false,
-        HashAlgorithm::Sha256
-        | HashAlgorithm::Sha384
-        | HashAlgorithm::Sha512
-        | HashAlgorithm::Blake2b256 => true,
     }
 }
 
