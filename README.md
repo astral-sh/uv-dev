@@ -14,6 +14,10 @@ The reporter runs `uv run -p 3.14 napari` from a fresh checkout of napari at rev
 Python 3.14 wheel, and attempts a source build even though newer NumPy releases offer wheels.
 Python 3.13 runs, but also receives older NumPy and Numba versions.
 
+A community commenter also reports the NumPy 2.2.6 selection on macOS ARM64 with uv 0.13.7
+and Python 3.14.7. They report that limiting resolution to Apple Silicon selects newer NumPy
+and Numba versions; the exact configuration and resulting versions were not supplied.
+
 The reported trigger is an optional Numba requirement capped at 0.62.1 on macOS Intel.
 The attached log supports cross-platform preference reuse: the resolver solves that platform
 first, selects Numba 0.61.2 and NumPy 2.2.6, and subsequently selects those versions as
@@ -34,7 +38,9 @@ The platform-specific upper bound holding other platforms to an older shared ver
 
 The duplicate classification centralizes the existing platform-selection discussion; it does
 not imply that selecting an unusable scientific-package version is desirable. No reproduction
-was executed, and no claim is made that the historical Python-version fix regressed.
+was executed during this investigation; the macOS ARM64 reproduction is a community report.
+The additional platform and reported resolution-scope workaround support the cross-platform
+interpretation without establishing that the historical Python-version fix regressed.
 astral-sh/uv#9988 was closed with a required-environments example for PyTorch, but that example
 does not provide a general wheel-only guarantee for packages that also publish source
 distributions. The continuing limitation here is the reuse of versions across overlapping
@@ -52,7 +58,8 @@ platform ranges.
 
 ### Report and dependency declarations
 
-The event payload and live issue body agree, and the issue had no comments when inspected.
+The event payload and issue body agree. The supplied full discussion includes one community
+comment with an additional affected platform and a reported resolution-scope workaround.
 The reporter's linked napari `pyproject.toml` declares `requires-python = ">=3.11"`,
 `numpy>=1.25`, and `scipy>=1.14.0`. The `optional-numba` extra declares:
 
@@ -67,6 +74,27 @@ was not available to inspect. The supplied log directly shows resolution, rather
 establishing that an old committed lockfile alone caused the selection.
 
 Source: https://raw.githubusercontent.com/napari/napari/8ad9a217b4dbcae0241907376cfef4d0edfcedae/pyproject.toml
+
+### Additional affected platform and reported workaround
+
+A community comment by sainimal1ba-hue on astral-sh/uv#23087 (November 4, 2026) reports:
+
+- On macOS ARM64, uv 0.13.7 with Python 3.14.7 selects NumPy 2.2.6 when running
+  `uv run -p 3.14 napari`, despite the host not being an Intel Mac.
+- Limiting resolution to Apple Silicon selects newer NumPy and Numba versions. This is a
+  reported workaround for a narrower target environment, not a demonstrated solution for a
+  project that needs to retain its full platform support.
+
+The commenter did not provide the exact resolution-limiting configuration, replacement package
+versions, a new verbose log, or an explicit checkout revision for their test. Their attribution
+to the Intel-only Numba cap combined with testing constraints is an interpretation; the comment
+does not identify those testing constraints or independently establish their contribution.
+The original attachment and source analysis remain the evidence for preference reuse.
+
+This report extends the affected hosts beyond Windows and supplies a useful comparison for
+investigation: universal resolution versus resolution limited to Apple Silicon. It has not been
+independently reproduced during this investigation. The commenter asks whether a resolver fix
+would be welcome, but the supplied discussion contains no maintainer decision authorizing one.
 
 ### Attached resolver log
 
@@ -135,6 +163,9 @@ Additional candidates were inspected to distinguish similar symptoms:
 ## Scope and validation
 
 This handoff is based on read-only GitHub queries, the reporter's attachment, the referenced napari
-metadata, and the checked-out uv documentation/source. No packages were installed and no builds or
+metadata, the checked-out uv documentation/source, and the supplied issue/comment snapshots.
+The supplied full discussion includes the new comment; the older issue-context snapshot has none.
+The comment adds user-reported findings, not an independently executed reproduction.
+No packages were installed and no builds or
 tests were run. No files in the checkout or GitHub objects were changed. Only this temporary
 issue-context README was updated; unrelated existing checkout changes were left untouched.
