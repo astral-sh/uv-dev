@@ -39,6 +39,23 @@ The issue currently carries the enhancement label, but duplicate is the recommen
 - In the current checkout, `crates/uv-tool/src/lib.rs:144` defines `InstalledTools::tool_dir` using a `PackageName` and joins that package name to the tools root. `tools()` and `get_tool_receipt()` also use package names. `crates/uv-cli/src/lib.rs:5475` defines `ToolInstallArgs` with editable-install support but no alias or suffix option. This supports the reported current limitation.
 - `docs/concepts/tools.md` distinguishes temporary tool execution from persistent tool installation and documents replacing an installed tool's constraints through another installation. Version-qualified `uvx` execution does not provide the requested independently named persistent installations.
 
+## Workarounds and limitations
+
+A community comment by powercoconola on November 4, 2026 suggests temporarily replacing the installed version or using separate development directories. These suggestions do not change the duplicate classification or establish native alias support.
+
+For separate persistent installations, configure both `UV_TOOL_DIR` (environments and receipts) and `UV_TOOL_BIN_DIR` (exposed executables) to development-specific absolute paths. The comment calls the second variable `UV_BIN_DIR`; the supported tool variable is `UV_TOOL_BIN_DIR`, as documented in `docs/reference/storage.md` under Tools and Tool executables and used by `InstalledTools::from_settings` and `tool_executable_dir` in `crates/uv-tool/src/lib.rs`.
+
+For example, on a POSIX shell, using separate absolute paths chosen by the user:
+
+```sh
+UV_TOOL_DIR=/absolute/path/dev-tools UV_TOOL_BIN_DIR=/absolute/path/dev-bin uv tool install --editable /absolute/path/project
+UV_TOOL_DIR=/absolute/path/dev-tools UV_TOOL_BIN_DIR=/absolute/path/dev-bin uv tool list
+```
+
+Use the same directory settings for subsequent management commands, including upgrade and uninstall. Executables retain their original names; invoke the development executable by its explicit path or select its directory through `PATH`. This separates installation state and executable destinations but does not provide distinct command names in a shared executable directory or alias-based management. This workflow is supported by the configuration source and documentation; it was not exercised in this investigation.
+
+The alternative suggestion, installing a development release and then running `uv tool install <package>@latest`, switches the single installation rather than keeping both versions. `@latest` selects the latest available release and does not necessarily restore the exact previously installed version or its configuration; retain the original version and installation arguments if exact restoration matters. Reinstallation and `@latest` syntax are documented in `docs/concepts/tools.md`.
+
 ## Search coverage and exclusions
 
 Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered --alias, uv tool install, editable installations, different sources, tool list/upgrade/uninstall, and entry-point collisions. Conceptual searches covered suffixes, renaming, multiple versions/installations, side-by-side tools, independent environments, and area:uv-tool. Followed astral-sh/uv#6365 comments and timeline to its prior duplicate, implementation PRs, and the design in astral-sh/uv#3560; inspected PR comments and reviews. PR keyword searches returned no matches, so linked PRs were retrieved directly and their states verified; no merged implementation was identified. Ruled out astral-sh/uv#14118, which concerns project command aliases, and astral-sh/uv#15384, which concerns project-specific tool version selection. Checked the current CLI and package-keyed tool storage separately from capability searches.
