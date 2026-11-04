@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13800,
+        "title": "Recommended way to work with tools locally",
+        "url": "https://github.com/astral-sh/uv/issues/13800",
+        "state": "closed",
+        "reason": "Same core request: make a CLI from a local repository available everywhere while retaining local development. A maintainer recommends `uv tool install -e .`, and the reporter confirms that it solves the request. This is the canonical local-tool workflow discussion."
+      },
+      {
+        "kind": "issue",
+        "number": 14984,
+        "title": "Is this the right command to start a script from within its own dedicated project venv?",
+        "url": "https://github.com/astral-sh/uv/issues/14984",
+        "state": "open",
+        "reason": "Closely related support question about using `uv run --project /script/ ...` from another project's directory while selecting the script's own environment. It concerns a Python script and active-environment behavior rather than exposing a packaged command on PATH; it has no maintainer answer."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11553,
+        "title": "[docs] Add shebang section for scripts",
+        "url": "https://github.com/astral-sh/uv/pull/11553",
+        "state": "merged",
+        "reason": "Added the exact script-shebang documentation cited by the reporter. Its discussion includes a maintainer's shell wrapper using `exec uv run --script \"$@\"`. This supports the wrapper pattern, but covers running script files rather than installing a local project's command."
+      },
+      {
+        "kind": "issue",
+        "number": 7242,
+        "title": "Allow installation of scripts, e.g., `uv tool install --script <path>` or `uv script install`",
+        "url": "https://github.com/astral-sh/uv/issues/7242",
+        "state": "open",
+        "reason": "Adjacent request for globally installing standalone Python scripts; maintainers support the idea but require design. The closed global-CLI question astral-sh/uv#10997 points here. Unlike this report's existing project command, it concerns scripts that are not installable tool packages, so it is not the duplicate target."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using the authenticated gh CLI. Literal searches covered uv run with wrapper, --project, command, anywhere, and shebang; conceptual searches covered global/local CLIs, editable tool installation, PATH, shims, and documentation. PR searches returned no hits; references in issue comments led to merged PRs astral-sh/uv#11553, astral-sh/uv#17423, and astral-sh/uv#20225, which were inspected directly. Followed astral-sh/uv#10997 to astral-sh/uv#7242 and the script-discovery discussions astral-sh/uv#12193 and astral-sh/uv#14585 to their implementation and stabilization: script-relative project discovery became default in uv 0.12.0, but this report specifies --project and reports no failure or regression. Ruled out the plausible wrapper-title match astral-sh/uv#6662 because it concerns bootstrapping/versioning uv itself; also distinguished task definitions in astral-sh/uv#5903, venv-layout symlinks in astral-sh/uv#15800, and alternate script interpreters in astral-sh/uv#18115. Checked CLI help, tools/project documentation, tool-install implementation, and existing editable-tool tests."
+  },
+  "type": "duplicate",
+  "type_reason": "The central request—invoking a local project's CLI from anywhere without entering the project—is already answered in astral-sh/uv#13800 with editable tool installation. The wrapper example and documentation suggestion add detail to that workflow and can be discussed there. The reporter says the wrapper works; no incorrect uv behavior or regression is established.",
+  "summary": "astral-sh/uv#13800 covers the same local CLI workflow and recommends editable tool installation. astral-sh/uv#14984 discusses using a project's environment from elsewhere; astral-sh/uv#11553 documents script shebangs, while astral-sh/uv#7242 separately tracks installing standalone scripts.",
+  "draft_response": "For an installable project that exposes this command, the recommended workflow is `uv tool install --editable /home/me/path/to/project`, as discussed in astral-sh/uv#13800. That exposes its commands globally and reflects local source changes; use `uv tool update-shell` if the tool executable directory is not on PATH. It uses a separate tool environment, with dependencies managed separately from the project's environment.\n\nYour wrapper is also a reasonable choice when you want to use the project's own environment:\n\n```sh\n#!/bin/sh\nexec uv run --project /home/me/path/to/project command \"$@\"\n```\n\nQuote `\"$@\"` to preserve arguments containing spaces or wildcard characters. `exec` avoids retaining an extra shell process. `--project` retains the caller's working directory, and `uv run` checks and syncs the project environment before running the command. The wrapper depends on the checkout remaining at that path.\n\nThe shebang documentation added in astral-sh/uv#11553 covers script files; a project-command example would clarify a different workflow. Please continue the local-tool discussion in astral-sh/uv#13800."
+}
