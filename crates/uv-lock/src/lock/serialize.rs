@@ -53,25 +53,24 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         SimplifiedMarkerTree::new(&lock.requires_python, lock.fork_markers_union())
             .as_simplified_marker_tree();
 
+    // An unconditional entry still requires artifact coverage; an empty list adds no such requirement.
     if !lock.supported_environments.is_empty() {
-        let markers = lock
-            .supported_environments
-            .iter()
-            .copied()
-            .map(|marker| SimplifiedMarkerTree::new(&lock.requires_python, marker))
-            .filter_map(SimplifiedMarkerTree::try_to_string);
+        let markers = lock.supported_environments.iter().copied().map(|marker| {
+            SimplifiedMarkerTree::new(&lock.requires_python, marker)
+                .try_to_string()
+                .unwrap_or_else(|| "python_version >= '0'".to_string())
+        });
         writer.key_multiline_array("supported-markers", markers, |writer, marker| {
             writer.value(&marker)
         })?;
     }
 
     if !lock.required_environments.is_empty() {
-        let markers = lock
-            .required_environments
-            .iter()
-            .copied()
-            .map(|marker| SimplifiedMarkerTree::new(&lock.requires_python, marker))
-            .filter_map(SimplifiedMarkerTree::try_to_string);
+        let markers = lock.required_environments.iter().copied().map(|marker| {
+            SimplifiedMarkerTree::new(&lock.requires_python, marker)
+                .try_to_string()
+                .unwrap_or_else(|| "python_version >= '0'".to_string())
+        });
         writer.key_multiline_array("required-markers", markers, |writer, marker| {
             writer.value(&marker)
         })?;
