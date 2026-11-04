@@ -32,7 +32,7 @@ use uv_distribution_types::{
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
-use uv_lock::Lock;
+use uv_lock::{Lock, LockError};
 use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
@@ -62,6 +62,9 @@ pub enum BuildDispatchError {
 
     #[error(transparent)]
     Resolve(#[from] uv_resolver::ResolveError),
+
+    #[error(transparent)]
+    Lock(#[from] LockError),
 
     #[error(
         "No solution found when resolving: {}",
@@ -100,6 +103,7 @@ impl uv_errors::Hinted for BuildDispatchError {
         match self {
             Self::BuildFrontend(err) => err.hints(),
             Self::Plan(error) => error.hints(),
+            Self::Lock(error) => error.hints(),
             Self::Resolve(err) | Self::ResolveRequirements { source: err, .. } => err.hints(),
             Self::BuildBackend(_)
             | Self::Tags(_)
@@ -123,6 +127,7 @@ impl IsBuildBackendError for BuildDispatchError {
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
             Self::BuildBackend(_)
+            | Self::Lock(_)
             | Self::Tags(_)
             | Self::Join(_)
             | Self::Anyhow(_)
@@ -135,6 +140,7 @@ impl IsBuildBackendError for BuildDispatchError {
     fn is_build_backend_error(&self) -> bool {
         match self {
             Self::BuildBackend(_)
+            | Self::Lock(_)
             | Self::Tags(_)
             | Self::Resolve(_)
             | Self::ResolveRequirements { .. }
@@ -467,18 +473,15 @@ impl BuildContext for BuildDispatch<'_> {
             let owner = self
                 .build_owner
                 .ok_or_else(|| anyhow::anyhow!("Missing source package for locked build"))?;
-            let resolution = replay
-                .lock
-                .resolve_build(
-                    owner,
-                    replay.runtime,
-                    requirements,
-                    replay.root,
-                    &self.interpreter.to_resolver_marker_environment(),
-                    self.interpreter.tags()?,
-                    self.build_options,
-                )
-                .map_err(anyhow::Error::from)?;
+            let resolution = replay.lock.resolve_build(
+                owner,
+                replay.runtime,
+                requirements,
+                replay.root,
+                &self.interpreter.to_resolver_marker_environment(),
+                self.interpreter.tags()?,
+                self.build_options,
+            )?;
             let hasher =
                 HashStrategy::from_locked_resolution(&resolution).map_err(anyhow::Error::from)?;
             return Ok(ResolvedRequirements::new(resolution, hasher));

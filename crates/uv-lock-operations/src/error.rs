@@ -57,7 +57,8 @@ impl From<FrozenSource> for MissingLockfileSource {
 #[derive(thiserror::Error, DebugNoInline)]
 pub enum LockError {
     #[error(
-        "The lockfile has no locked build environments. Run `uv lock --preview-features build-dependency-locking` to record them."
+        "The lockfile has no locked build environments. \
+         Regenerate the lockfile with a version of uv that can resolve build environments."
     )]
     MissingBuildEnvironments,
     #[error(
