@@ -40,6 +40,131 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// A vendored wheel belongs to the Git revision that builds the project. A fresh cache checks
+/// out that revision at a different path when replaying its isolated build.
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[test]
+fn lock_build_git_vendored_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_python_names();
+    let repository = context.temp_dir.child("repository");
+    let provider = repository.child("packages/provider");
+    let vendor = repository.child("vendor");
+    vendor.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        vendor.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    provider.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "provider"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["ok"]
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.sources]
+        ok = { path = "../../vendor/ok-1.0.0-py3-none-any.whl" }
+    "#})?;
+    let (filename, wheel) = WheelBuilder::new(&"provider".parse()?, &"1.0.0".parse()?).build();
+    provider.child(filename).write_binary(&wheel)?;
+    provider.child("backend.py").write_str(indoc! {r#"
+        import shutil
+        from pathlib import Path
+
+        import ok
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["ok"]
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            wheel = Path(__file__).with_name("provider-1.0.0-py3-none-any.whl")
+            shutil.copy(wheel, wheel_directory)
+            return wheel.name
+    "#})?;
+
+    Command::new("git")
+        .current_dir(&repository)
+        .arg("init")
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(&repository)
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(&repository)
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+    let revision = Command::new("git")
+        .current_dir(&repository)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    let revision = std::str::from_utf8(&revision.stdout)?.trim();
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let context = context.with_filter((revision, "[REV]"));
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider"]
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking"]
+
+        [tool.uv.sources]
+        provider = {{ git = "{repository_url}", subdirectory = "packages/provider" }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--no-cache", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    let packages = lock.parse::<toml_edit::DocumentMut>()?;
+    let vendored = packages["package"]
+        .as_array_of_tables()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("ok"))
+        })
+        .ok_or_else(|| anyhow!("missing vendored build dependency"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(vendored["source"].to_string().trim(), @r#"{ git = "file://[TEMP_DIR]/repository/?path=vendor%2Fok-1.0.0-py3-none-any.whl#[REV]" }"#);
+    });
+
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--no-cache", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + provider==1.0.0 (from git+file://[TEMP_DIR]/repository/@[REV]#subdirectory=packages/provider)
+    ");
+
+    Ok(())
+}
+
 /// A cutoff for a discarded build candidate can select an older backend even though
 /// neither the backend nor its discarded dependency occurs in the runtime graph.
 #[cfg(feature = "test-universal")]

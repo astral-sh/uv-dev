@@ -226,7 +226,38 @@ fn validate_revision(
 /// The source directory of the project and the boundary for looking up its workspace.
 pub struct BuildSourceTree {
     pub project_root: PathBuf,
-    pub stop_discovery_at: Option<PathBuf>,
+    boundary: Option<BuildSourceBoundary>,
+}
+
+enum BuildSourceBoundary {
+    Archive(PathBuf),
+    Git(Fetch),
+}
+
+impl BuildSourceTree {
+    pub fn directory(project_root: PathBuf) -> Self {
+        Self {
+            project_root,
+            boundary: None,
+        }
+    }
+
+    pub fn stop_discovery_at(&self) -> Option<&Path> {
+        match self.boundary.as_ref()? {
+            BuildSourceBoundary::Archive(root) => Some(root),
+            BuildSourceBoundary::Git(checkout) => Some(checkout.path()),
+        }
+    }
+
+    pub fn git_member(&self) -> Option<GitWorkspaceMember<'_>> {
+        match self.boundary.as_ref()? {
+            BuildSourceBoundary::Archive(_) => None,
+            BuildSourceBoundary::Git(checkout) => Some(GitWorkspaceMember {
+                fetch_root: checkout.path(),
+                git: checkout.git(),
+            }),
+        }
+    }
 }
 
 /// Fetch and build a source distribution from a remote source, or from a local cache.
@@ -465,7 +496,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         client: &ManagedClient<'_>,
     ) -> Result<BuildSourceTree, Error> {
         let source = BuildableSource::Dist(dist);
-        let (project_root, stop_discovery_at) =
+        let (project_root, boundary) =
             match SourceLocation::new(&source, self.build_context.cache())? {
                 SourceLocation::Remote {
                     url,
@@ -489,7 +520,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     let root = entry.into_path_buf();
                     (
                         subdirectory.map_or(root.clone(), |path| root.join(path)),
-                        Some(root),
+                        Some(BuildSourceBoundary::Archive(root)),
                     )
                 }
                 SourceLocation::Archive {
@@ -514,7 +545,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                             .await?;
                     }
                     let root = entry.into_path_buf();
-                    (root.clone(), Some(root))
+                    (root.clone(), Some(BuildSourceBoundary::Archive(root)))
                 }
                 SourceLocation::GitArchive(resource) => {
                     let (shard, revision, fetch) = self
@@ -532,7 +563,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         )
                         .await?;
                     }
-                    (root.clone(), Some(root))
+                    (root.clone(), Some(BuildSourceBoundary::Archive(root)))
                 }
                 SourceLocation::GitDirectory(resource) => {
                     if hashes.requires_validation() {
@@ -555,7 +586,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         resource
                             .subdirectory
                             .map_or_else(|| root.to_path_buf(), |subdir| root.join(subdir)),
-                        Some(root.to_path_buf()),
+                        Some(BuildSourceBoundary::Git(fetch)),
                     )
                 }
                 SourceLocation::Directory(resource) => {
@@ -567,7 +598,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             };
         Ok(BuildSourceTree {
             project_root,
-            stop_discovery_at,
+            boundary,
         })
     }
 
@@ -2323,7 +2354,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         let git_member = GitWorkspaceMember {
             fetch_root: fetch.path(),
-            git_source: resource,
+            git: resource.git,
         };
 
         // If the metadata is static, return it.
@@ -2384,7 +2415,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                         let git_member = GitWorkspaceMember {
                             fetch_root: fetch.path(),
-                            git_source: resource,
+                            git: resource.git,
                         };
                         return Ok(ArchiveMetadata::from(
                             Metadata::from_workspace(
@@ -2849,20 +2880,26 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok(archive.persist(target).await?.hashes)
     }
 
-    /// For Git directories, we check them out into the cache, so we need to avoid workspace
-    /// discovery that goes outside the cache.
-    fn stop_discovery_at<'path>(
-        source: &BuildableSource<'_>,
-        source_root: &'path Path,
-    ) -> Option<&'path Path> {
-        if matches!(
-            source,
-            BuildableSource::Dist(SourceDist::GitDirectory(_))
-                | BuildableSource::Url(SourceUrl::GitDirectory(_))
-        ) {
-            Some(source_root)
-        } else {
-            None
+    /// Git builds resolve project sources relative to this checkout.
+    fn git_directory<'source>(
+        source: &'source BuildableSource<'_>,
+    ) -> Option<GitDirectorySourceUrl<'source>> {
+        match source {
+            BuildableSource::Dist(SourceDist::GitDirectory(dist)) => Some(dist.into()),
+            BuildableSource::Url(SourceUrl::GitDirectory(url)) => Some(url.clone()),
+            BuildableSource::Dist(
+                SourceDist::Registry(_)
+                | SourceDist::DirectUrl(_)
+                | SourceDist::Path(_)
+                | SourceDist::GitPath(_)
+                | SourceDist::Directory(_),
+            )
+            | BuildableSource::Url(
+                SourceUrl::Direct(_)
+                | SourceUrl::Path(_)
+                | SourceUrl::GitPath(_)
+                | SourceUrl::Directory(_),
+            ) => None,
         }
     }
 
@@ -2953,7 +2990,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_root.to_path_buf()
             };
 
-            let stop_discovery_at = Self::stop_discovery_at(source, source_root);
+            let git_source = Self::git_directory(source);
 
             let build_key = BuildKey {
                 base_python: base_python.into_boxed_path(),
@@ -2981,7 +3018,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         source_root,
                         subdirectory,
                         &install_path,
-                        stop_discovery_at,
+                        git_source,
                         Some(&source.to_string()),
                         source.as_dist(),
                         &no_sources,
@@ -3106,7 +3143,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             source_root.to_path_buf()
         };
 
-        let stop_discovery_at = Self::stop_discovery_at(source, source_root);
+        let git_source = Self::git_directory(source);
 
         // Set up the builder.
         let mut builder = self
@@ -3115,7 +3152,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 source_root,
                 subdirectory,
                 &install_path,
-                stop_discovery_at,
+                git_source,
                 Some(&source.to_string()),
                 source.as_dist(),
                 &no_sources,
