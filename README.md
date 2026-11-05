@@ -24,7 +24,16 @@ first, selects Numba 0.61.2 and NumPy 2.2.6, and subsequently selects those vers
 preferences in other platform branches. The attached run ends with a no-build installation
 error, rather than showing an executed NumPy source build.
 
-## Draft response
+Maintainer charliermarsh recommends combining `no-build-package = ["numpy"]` with a
+`required-environments` entry for Windows AMD64 and Python 3.14 to require a compatible
+NumPy wheel. The exact configuration is recorded below; no confirmation of its outcome
+or independent reproduction is available in the supplied discussion.
+
+## Earlier triage draft
+
+This existing draft predates the maintainer's configuration guidance below. Its explicit
+version-bound workaround is not the only option: the maintainer recommends a wheel requirement
+for NumPy and the target environment. The draft is retained as prior triage context.
 
 Your log shows the macOS Intel branch selecting Numba 0.61.2, which requires NumPy <2.3, then reusing NumPy 2.2.6 as a preference on other platforms. This matches the behavior discussed in astral-sh/uv#9988 and astral-sh/uv#9515: overlapping platform-specific ranges can share an older version.
 
@@ -41,14 +50,17 @@ not imply that selecting an unusable scientific-package version is desirable. No
 was executed during this investigation; the macOS ARM64 reproduction is a community report.
 The additional platform and reported resolution-scope workaround support the cross-platform
 interpretation without establishing that the historical Python-version fix regressed.
-astral-sh/uv#9988 was closed with a required-environments example for PyTorch, but that example
-does not provide a general wheel-only guarantee for packages that also publish source
-distributions. The continuing limitation here is the reuse of versions across overlapping
-platform ranges.
+astral-sh/uv#9988 was closed with a required-environments example for PyTorch. That setting
+alone does not provide a general wheel-only guarantee for packages that also publish source
+distributions. The maintainer now recommends combining it with `no-build-package = ["numpy"]`
+for this report, explicitly requiring a NumPy wheel for the target environment. This supplies
+a configuration-based way to address wheel availability without establishing a change to the
+default reuse of versions across overlapping platform ranges. The duplicate classification
+is unchanged; the comment does not announce a resolver fix or accept a proposed contribution.
 
 ## Related
 
-- astral-sh/uv#9988 (issue, closed) — Dependency Resolver Ignores Platform-Specific Version Constraints. Closest match: a macOS Intel-only upper bound selects an older package across other platforms despite looser requirements there. Maintainers discuss disjoint version constraints. Its required-environments workaround concerns wheel-only packages and does not guarantee compatible wheels for NumPy, which publishes source distributions.
+- astral-sh/uv#9988 (issue, closed) — Dependency Resolver Ignores Platform-Specific Version Constraints. Closest match: a macOS Intel-only upper bound selects an older package across other platforms despite looser requirements there. Maintainers discuss disjoint version constraints. Its required-environments example concerns wheel-only packages; for this report, a maintainer recommends additionally setting no-build-package for NumPy to require a compatible wheel despite its published source distributions.
 - astral-sh/uv#9515 (issue, closed) — Specifying different dependency versions for different platforms. Predecessor to astral-sh/uv#9988 with the same overlapping platform-specific ranges. A maintainer explicitly confirms that uv reuses the older version when it satisfies both ranges and recommends disjoint bounds to require different versions.
 - astral-sh/uv#14588 (issue, open) — New `--fork-strategy` option to prioritize the latest version for each Python implementation. Adjacent request for independently selecting newer versions instead of sharing an older version across environments. It concerns CPython versus PyPy, whereas this report concerns operating-system/architecture branches and a transitive NumPy constraint.
 - astral-sh/uv#8492 (issue, closed) — Fork when wheels only support a specific range. Historical NumPy source-build symptom on newer Python when older-Python support held back dependency versions. Closed by astral-sh/uv#9827; the implemented fix splits on Requires-Python lower bounds, unlike this report's platform-driven version reuse.
@@ -58,8 +70,8 @@ platform ranges.
 
 ### Report and dependency declarations
 
-The event payload and issue body agree. The supplied full discussion includes one community
-comment with an additional affected platform and a reported resolution-scope workaround.
+The event payload and issue body agree. The supplied discussion includes a community report of an additional affected platform and
+a resolution-scope workaround, plus maintainer guidance specifying a NumPy wheel requirement.
 The reporter's linked napari `pyproject.toml` declares `requires-python = ">=3.11"`,
 `numpy>=1.25`, and `scipy>=1.14.0`. The `optional-numba` extra declares:
 
@@ -94,7 +106,34 @@ The original attachment and source analysis remain the evidence for preference r
 This report extends the affected hosts beyond Windows and supplies a useful comparison for
 investigation: universal resolution versus resolution limited to Apple Silicon. It has not been
 independently reproduced during this investigation. The commenter asks whether a resolver fix
-would be welcome, but the supplied discussion contains no maintainer decision authorizing one.
+would be welcome. The maintainer subsequently recommends the configuration below; the supplied
+discussion contains no maintainer decision accepting a resolver contribution.
+
+### Maintainer-recommended wheel requirement
+
+Maintainer charliermarsh on astral-sh/uv#23087 (November 5, 2026) recommends the following
+project configuration:
+
+```toml
+[tool.uv]
+no-build-package = ["numpy"]
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64' and python_version == '3.14'",
+]
+```
+
+The maintainer explains that this combination requires a NumPy wheel and requires it to be
+compatible with the specified Windows AMD64/Python 3.14 environment. The combination is the
+important addition: `required-environments` alone does not exclude NumPy's source distribution,
+and the original attachment shows that an installation-time no-build rejection alone did not
+produce a usable selection.
+
+This is a maintainer-recommended configuration for the originally reported target, not a
+request to restrict universal resolution to Windows or to remove macOS Intel support. It is
+distinct from the community-reported Apple Silicon-only resolution workaround. The supplied
+comment does not give an analogous macOS ARM64 configuration, selected package versions, or
+an execution log, and the discussion contains no confirmation that the recommendation was
+tried successfully. It does not establish newest-version selection on every platform.
 
 ### Attached resolver log
 
@@ -164,8 +203,9 @@ Additional candidates were inspected to distinguish similar symptoms:
 
 This handoff is based on read-only GitHub queries, the reporter's attachment, the referenced napari
 metadata, the checked-out uv documentation/source, and the supplied issue/comment snapshots.
-The supplied full discussion includes the new comment; the older issue-context snapshot has none.
-The comment adds user-reported findings, not an independently executed reproduction.
-No packages were installed and no builds or
-tests were run. No files in the checkout or GitHub objects were changed. Only this temporary
+The supplied full discussion includes the maintainer's configuration recommendation; the older
+issue-context snapshot has no comments. The community reproduction and maintainer workaround
+have not been independently executed during this investigation. The configuration's TOML syntax
+was checked locally; that check does not verify resolution or installation.
+No packages were installed and no builds or tests were run. No files in the checkout or GitHub objects were changed. Only this temporary
 issue-context README was updated; unrelated existing checkout changes were left untouched.
