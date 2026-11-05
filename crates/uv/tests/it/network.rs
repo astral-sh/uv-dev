@@ -19,6 +19,7 @@ use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 use tokio_stream::wrappers::ReceiverStream;
 use wiremock::matchers::{any, method};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -611,6 +612,23 @@ async fn python_install_io_error() {
       cause: error sending request for url (http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst)
       cause: client error (SendRequest)
       cause: connection closed before message completed
+    ");
+}
+
+#[test]
+fn concurrent_downloads_exceeds_maximum() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filter((Semaphore::MAX_PERMITS.to_string(), "[MAX_PERMITS]"));
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["cache", "dir"])
+        .env(
+            EnvVars::UV_CONCURRENT_DOWNLOADS,
+            (Semaphore::MAX_PERMITS + 1).to_string(),
+        ), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The `concurrent-downloads` setting must be at most [MAX_PERMITS]
     ");
 }
 
