@@ -70,14 +70,9 @@ pub type SourceCache = FxHashMap<RequirementsInput, String>;
 
 /// We emit one of those for each `requirements.txt` entry.
 enum RequirementsTxtStatement {
-    /// `-r` inclusion filename
-    Requirements {
-        filename: String,
-        start: usize,
-        end: usize,
-    },
-    /// `-c` inclusion filename
-    Constraint {
+    /// A `-r` or `-c` inclusion.
+    Include {
+        kind: IncludeKind,
         filename: String,
         start: usize,
         end: usize,
@@ -102,6 +97,81 @@ enum RequirementsTxtStatement {
     OnlyBinary(NoBuild),
     /// An unsupported option (e.g., `--trusted-host`).
     UnsupportedOption(UnsupportedOption),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum IncludeKind {
+    Requirements,
+    Constraints,
+}
+
+struct Include {
+    kind: IncludeKind,
+    start: usize,
+    end: usize,
+}
+
+struct RequirementsFile<'a> {
+    input: RequirementsInput,
+    content: Cow<'a, str>,
+    cursor: usize,
+    mode: IncludeKind,
+    data: RequirementsTxt,
+}
+
+impl<'a> RequirementsFile<'a> {
+    fn new(input: RequirementsInput, content: Cow<'a, str>, mode: IncludeKind) -> Self {
+        Self {
+            input,
+            content,
+            cursor: 0,
+            mode,
+            data: RequirementsTxt::default(),
+        }
+    }
+
+    fn merge(&mut self, child: Self, include: &Include) -> Result<(), RequirementsTxtParserError> {
+        match include.kind {
+            IncludeKind::Requirements => {
+                if child.data.index_url.is_some()
+                    && self.data.index_url.is_some()
+                    && child.data.index_url != self.data.index_url
+                {
+                    let (line, column) = calculate_row_column(&self.content, self.cursor);
+                    return Err(RequirementsTxtParserError::Parser {
+                        message: "Nested `requirements` file contains conflicting `--index-url`"
+                            .to_string(),
+                        line,
+                        column,
+                    });
+                }
+                self.data.update_from(child.data);
+            }
+            IncludeKind::Constraints => {
+                if !child.data.editables.is_empty() {
+                    return Err(RequirementsTxtParserError::EditableConstraint {
+                        file: child.input,
+                    });
+                }
+                for entry in child.data.requirements {
+                    match entry.requirement {
+                        RequirementsTxtRequirement::Named(requirement) => {
+                            self.data.constraints.push(requirement);
+                        }
+                        RequirementsTxtRequirement::Unnamed(_) => {
+                            return Err(RequirementsTxtParserError::UnnamedConstraint {
+                                start: include.start,
+                                end: include.end,
+                            });
+                        }
+                    }
+                }
+                self.data.constraints.extend(child.data.constraints);
+                self.data.require_hashes |= child.data.require_hashes;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A [Requirement] with additional metadata from the `requirements.txt`, currently only hashes but in
@@ -192,15 +262,12 @@ impl RequirementsTxt {
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
         let requirements_txt = requirements_txt.into();
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
-            constraints: &mut FxHashSet::default(),
-        };
+        let content = Self::read_file(&requirements_txt, client_builder, cache).await?;
         Self::parse_impl(
-            &requirements_txt,
-            working_dir,
+            Cow::Owned(content),
+            requirements_txt,
+            working_dir.as_ref(),
             client_builder,
-            &mut visited,
             cache,
         )
         .await
@@ -215,40 +282,22 @@ impl RequirementsTxt {
         client_builder: &BaseClientBuilder<'_>,
         source_contents: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
-        let requirements_txt = requirements_txt.into();
-        let working_dir = working_dir.as_ref();
-
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
-            constraints: &mut FxHashSet::default(),
-        };
-
-        Self::parse_inner(
-            content,
-            working_dir,
+        Self::parse_impl(
+            Cow::Borrowed(content),
+            requirements_txt.into(),
+            working_dir.as_ref(),
             client_builder,
-            &requirements_txt,
-            &mut visited,
             source_contents,
         )
         .await
-        .map_err(|err| RequirementsTxtFileError {
-            file: Box::new(requirements_txt),
-            error: err,
-        })
     }
 
-    /// See module level documentation
     #[instrument(skip_all, fields(requirements_txt = %requirements_txt.user_display()))]
-    async fn parse_impl(
+    async fn read_file(
         requirements_txt: &RequirementsInput,
-        working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
-        visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtFileError> {
-        let working_dir = working_dir.as_ref();
-
+    ) -> Result<String, RequirementsTxtFileError> {
         let content = if let Some(content) = cache.get(requirements_txt) {
             // Use cached content if available.
             content.clone()
@@ -271,6 +320,7 @@ impl RequirementsTxt {
                 RequirementsInput::Remote(url) => {
                     #[cfg(not(feature = "http"))]
                     {
+                        let _ = (url, client_builder);
                         return Err(RequirementsTxtFileError {
                             file: Box::new(requirements_txt.clone()),
                             error: RequirementsTxtParserError::Io(io::Error::new(
@@ -317,21 +367,7 @@ impl RequirementsTxt {
             content
         };
 
-        let data = Self::parse_inner(
-            &content,
-            working_dir,
-            client_builder,
-            requirements_txt,
-            visited,
-            cache,
-        )
-        .await
-        .map_err(|err| RequirementsTxtFileError {
-            file: Box::new(requirements_txt.clone()),
-            error: err,
-        })?;
-
-        Ok(data)
+        Ok(content)
     }
 
     /// See module level documentation.
@@ -340,20 +376,78 @@ impl RequirementsTxt {
     /// the current working directory. However, relative paths to sub-files (e.g., `-r ../requirements.txt`)
     /// are resolved against the directory of the containing `requirements.txt` file, to match
     /// `pip`'s behavior.
-    async fn parse_inner(
-        content: &str,
+    async fn parse_impl(
+        content: Cow<'_, str>,
+        requirements_txt: RequirementsInput,
         working_dir: &Path,
         client_builder: &BaseClientBuilder<'_>,
-        requirements_txt: &RequirementsInput,
-        visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtParserError> {
-        let mut s = Scanner::new(content);
+    ) -> Result<Self, RequirementsTxtFileError> {
+        let current = RequirementsFile::new(requirements_txt, content, IncludeKind::Requirements);
+        let mut parents = Vec::new();
+        Self::parse_files(current, working_dir, client_builder, cache, &mut parents)
+            .await
+            .map_err(|error| error.wrap_parents(parents))
+    }
 
-        let mut data = Self::default();
-        while let Some(statement) = parse_entry(&mut s, content, working_dir, requirements_txt)? {
+    async fn parse_files<'a>(
+        mut current: RequirementsFile<'a>,
+        working_dir: &Path,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &mut SourceCache,
+        parents: &mut Vec<(RequirementsFile<'a>, Include)>,
+    ) -> Result<Self, RequirementsTxtFileError> {
+        let mut requirements = FxHashSet::default();
+        let mut constraints = FxHashSet::default();
+        loop {
+            let Some((sub_file, include)) = Self::parse_until_include(&mut current, working_dir)
+                .map_err(|error| RequirementsTxtFileError::new(error, &current.input))?
+            else {
+                let Some((mut parent, include)) = parents.pop() else {
+                    return Ok(current.data);
+                };
+                parent
+                    .merge(current, &include)
+                    .map_err(|error| RequirementsTxtFileError::new(error, &parent.input))?;
+                current = parent;
+                continue;
+            };
+
+            // A `-r` inside a constraints file is still tracked as a constraint.
+            let mode = if current.mode == IncludeKind::Constraints {
+                IncludeKind::Constraints
+            } else {
+                include.kind
+            };
+            let visited = match mode {
+                IncludeKind::Requirements => &mut requirements,
+                IncludeKind::Constraints => &mut constraints,
+            };
+            if !visited.insert(visited_file(&sub_file)) {
+                continue;
+            }
+            parents.push((current, include));
+            let content = Self::read_file(&sub_file, client_builder, cache).await?;
+            current = RequirementsFile::new(sub_file, Cow::Owned(content), mode);
+        }
+    }
+
+    /// Parse statements in one file until reaching an include or the end of the file.
+    fn parse_until_include(
+        current: &mut RequirementsFile<'_>,
+        working_dir: &Path,
+    ) -> Result<Option<(RequirementsInput, Include)>, RequirementsTxtParserError> {
+        let content = &current.content;
+        let requirements_txt = &current.input;
+        let data = &mut current.data;
+        let mut scanner = Scanner::new(content);
+        scanner.jump(current.cursor);
+        while let Some(statement) =
+            parse_entry(&mut scanner, content, working_dir, requirements_txt)?
+        {
             match statement {
-                RequirementsTxtStatement::Requirements {
+                RequirementsTxtStatement::Include {
+                    kind,
                     filename,
                     start,
                     end,
@@ -366,123 +460,8 @@ impl RequirementsTxt {
                             start,
                             end,
                         })?;
-                    match visited {
-                        VisitedFiles::Requirements { requirements, .. } => {
-                            if !requirements.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                        }
-                        // Treat any nested requirements or constraints as constraints. This differs
-                        // from `pip`, which seems to treat `-r` requirements in constraints files as
-                        // _requirements_, but we don't want to support that.
-                        VisitedFiles::Constraints { constraints } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                        }
-                    }
-                    let sub_requirements = Box::pin(Self::parse_impl(
-                        &sub_file,
-                        working_dir,
-                        client_builder,
-                        visited,
-                        cache,
-                    ))
-                    .await
-                    .map_err(|err| RequirementsTxtParserError::Subfile {
-                        source: Box::new(err),
-                        start,
-                        end,
-                    })?;
-
-                    // Disallow conflicting `--index-url` in nested `requirements` files.
-                    if sub_requirements.index_url.is_some()
-                        && data.index_url.is_some()
-                        && sub_requirements.index_url != data.index_url
-                    {
-                        let (line, column) = calculate_row_column(content, s.cursor());
-                        return Err(RequirementsTxtParserError::Parser {
-                            message:
-                                "Nested `requirements` file contains conflicting `--index-url`"
-                                    .to_string(),
-                            line,
-                            column,
-                        });
-                    }
-
-                    // Add each to the correct category.
-                    data.update_from(sub_requirements);
-                }
-                RequirementsTxtStatement::Constraint {
-                    filename,
-                    start,
-                    end,
-                } => {
-                    let filename = expand_env_vars(&filename);
-                    let sub_file = requirements_txt
-                        .resolve(filename.as_ref(), working_dir)
-                        .map_err(|source| RequirementsTxtParserError::RequirementsInput {
-                            source: Box::new(source),
-                            start,
-                            end,
-                        })?;
-
-                    // Switch to constraints mode, if we aren't in it already.
-                    let mut visited = match visited {
-                        VisitedFiles::Requirements { constraints, .. } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                            VisitedFiles::Constraints { constraints }
-                        }
-                        VisitedFiles::Constraints { constraints } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                            VisitedFiles::Constraints { constraints }
-                        }
-                    };
-
-                    let sub_constraints = Box::pin(Self::parse_impl(
-                        &sub_file,
-                        working_dir,
-                        client_builder,
-                        &mut visited,
-                        cache,
-                    ))
-                    .await
-                    .map_err(|err| RequirementsTxtParserError::Subfile {
-                        source: Box::new(err),
-                        start,
-                        end,
-                    })?;
-
-                    if !sub_constraints.editables.is_empty() {
-                        return Err(RequirementsTxtParserError::EditableConstraint {
-                            file: sub_file,
-                        });
-                    }
-
-                    // Treat any nested requirements or constraints as constraints. This differs
-                    // from `pip`, which seems to treat `-r` requirements in constraints files as
-                    // _requirements_, but we don't want to support that.
-                    for entry in sub_constraints.requirements {
-                        match entry.requirement {
-                            RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(requirement);
-                            }
-                            RequirementsTxtRequirement::Unnamed(_) => {
-                                return Err(RequirementsTxtParserError::UnnamedConstraint {
-                                    start,
-                                    end,
-                                });
-                            }
-                        }
-                    }
-                    for constraint in sub_constraints.constraints {
-                        data.constraints.push(constraint);
-                    }
-                    data.require_hashes |= sub_constraints.require_hashes;
+                    current.cursor = scanner.cursor();
+                    return Ok(Some((sub_file, Include { kind, start, end })));
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
                     data.requirements.push(requirement_entry);
@@ -492,7 +471,7 @@ impl RequirementsTxt {
                 }
                 RequirementsTxtStatement::IndexUrl(url) => {
                     if data.index_url.is_some() {
-                        let (line, column) = calculate_row_column(content, s.cursor());
+                        let (line, column) = calculate_row_column(content, scanner.cursor());
                         return Err(RequirementsTxtParserError::Parser {
                             message: "Multiple `--index-url` values provided".to_string(),
                             line,
@@ -551,7 +530,7 @@ impl RequirementsTxt {
                 },
             }
         }
-        Ok(data)
+        Ok(None)
     }
 
     /// Merge the data from a nested `requirements` file (`other`) into this one.
@@ -681,7 +660,8 @@ fn parse_entry(
             .flatten()
             .unwrap_or_else(|| filename.to_string());
         let end = s.cursor();
-        RequirementsTxtStatement::Requirements {
+        RequirementsTxtStatement::Include {
+            kind: IncludeKind::Requirements,
             filename,
             start,
             end,
@@ -693,7 +673,8 @@ fn parse_entry(
             .flatten()
             .unwrap_or_else(|| filename.to_string());
         let end = s.cursor();
-        RequirementsTxtStatement::Constraint {
+        RequirementsTxtStatement::Include {
+            kind: IncludeKind::Constraints,
             filename,
             start,
             end,
@@ -1137,6 +1118,41 @@ pub struct RequirementsTxtFileError {
     error: RequirementsTxtParserError,
 }
 
+impl RequirementsTxtFileError {
+    fn new(error: RequirementsTxtParserError, file: &RequirementsInput) -> Self {
+        Self {
+            file: Box::new(file.clone()),
+            error,
+        }
+    }
+
+    fn wrap_parents(mut self, parents: Vec<(RequirementsFile<'_>, Include)>) -> Self {
+        for (parent, include) in parents.into_iter().rev() {
+            self = Self {
+                file: Box::new(parent.input),
+                error: RequirementsTxtParserError::Subfile {
+                    source: Box::new(self),
+                    start: include.start,
+                    end: include.end,
+                },
+            };
+        }
+        self
+    }
+}
+
+impl Drop for RequirementsTxtFileError {
+    fn drop(&mut self) {
+        // Detach each nested error before dropping its source to keep the destructor stack flat.
+        while let RequirementsTxtParserError::Subfile { source, .. } = &mut self.error {
+            self.error = std::mem::replace(
+                &mut source.error,
+                RequirementsTxtParserError::Io(io::ErrorKind::Other.into()),
+            );
+        }
+    }
+}
+
 /// Error parsing requirements.txt, error disambiguation
 #[derive(Debug)]
 pub enum RequirementsTxtParserError {
@@ -1466,23 +1482,6 @@ impl RequirementsTxtParserError {
     }
 }
 
-/// Avoid infinite recursion through recursive inclusions, while also being mindful of nested
-/// requirements and constraint inclusions.
-#[derive(Debug)]
-enum VisitedFiles<'a> {
-    /// The requirements are included as regular requirements, and can recursively include both
-    /// requirements and constraints.
-    Requirements {
-        requirements: &'a mut FxHashSet<RequirementsInput>,
-        constraints: &'a mut FxHashSet<RequirementsInput>,
-    },
-    /// The requirements are included as constraints, all recursive inclusions are considered
-    /// constraints.
-    Constraints {
-        constraints: &'a mut FxHashSet<RequirementsInput>,
-    },
-}
-
 /// Return a stable identity for a requirements input without changing the input used to read it.
 fn visited_file(input: &RequirementsInput) -> RequirementsInput {
     match input {
@@ -1549,9 +1548,11 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_client::{BaseClientBuilder, Connectivity};
+    use uv_configuration::RequirementsInput;
     use uv_fs::Simplified;
 
-    use crate::{RequirementsTxt, calculate_row_column, eat_option};
+    use crate::{RequirementsTxt, SourceCache, calculate_row_column, eat_option};
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2962,6 +2963,37 @@ mod test {
 
         // Assert line and columns are expected
         assert_eq!(line_column, expected, "Issues with input: {input}");
+    }
+
+    #[tokio::test]
+    async fn deeply_nested_inclusion() -> Result<()> {
+        let working_dir = tempdir()?;
+        let mut cache = SourceCache::default();
+        cache.insert(
+            RequirementsInput::Local(working_dir.path().join("0.txt")),
+            "-c 1.txt".to_string(),
+        );
+        for depth in 1..2048 {
+            cache.insert(
+                RequirementsInput::Local(working_dir.path().join(format!("{depth}.txt"))),
+                format!("-r {}.txt\n", depth + 1),
+            );
+        }
+        cache.insert(
+            RequirementsInput::Local(working_dir.path().join("2048.txt")),
+            "example".to_string(),
+        );
+
+        let parsed = RequirementsTxt::parse_with_cache(
+            working_dir.path().join("0.txt"),
+            working_dir.path(),
+            &BaseClientBuilder::default().connectivity(Connectivity::Offline),
+            &mut cache,
+        )
+        .await?;
+        assert_eq!(parsed.constraints.len(), 1);
+        assert_eq!(parsed.constraints[0].to_string(), "example");
+        Ok(())
     }
 
     /// Test different kinds of recursive inclusions with requirements and constraints
