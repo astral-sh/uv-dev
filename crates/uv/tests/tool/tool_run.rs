@@ -1,15 +1,20 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
+use uv_cache::{Cache, CacheBucket, WheelCache};
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
+use walkdir::WalkDir;
 
 #[test]
 fn tool_run_args() {
@@ -769,6 +774,133 @@ fn tool_run_cache() {
      + pathspec==0.12.1
      + platformdirs==4.2.0
     ");
+}
+
+/// Concurrent cache misses publish distinct archives under the same environment key.
+#[tokio::test]
+async fn tool_run_concurrent_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_env(EnvVars::UV_LOCK_TIMEOUT, "60");
+
+    let (filename, bytes) = WheelBuilder::new(&"tool".parse()?, &"0.1.0".parse()?)
+        .entry_points(&["tool".to_string()])
+        .build();
+    let wheel = context.temp_dir.child(&filename);
+    wheel.write_binary(&bytes)?;
+    let url = SafeUrl::from_file_path(wheel.path())
+        .map_err(|()| anyhow!("failed to convert wheel path to file URL"))?;
+
+    // Metadata can be read from the wheel without taking its extraction lock. Holding that lock
+    // prevents either command from publishing an environment before both have created one.
+    let cache = Cache::from_path(context.cache_dir.path());
+    let lock_entry = cache.entry(
+        CacheBucket::Wheels,
+        WheelCache::Url(&url).wheel_dir("tool"),
+        "0.1.0-py3-none-any.lock",
+    );
+    let lock = lock_entry.lock().await?;
+    fs_err::create_dir_all(cache.bucket(CacheBucket::Builds))?;
+
+    thread::scope(|scope| -> Result<()> {
+        scope.spawn(|| {
+            uv_snapshot!(context.filters(), context.tool_run()
+                .arg("--no-index")
+                .arg("--from")
+                .arg(&filename)
+                .arg("tool"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            Hello from tool!
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + tool==0.1.0 (from file://[TEMP_DIR]/tool-0.1.0-py3-none-any.whl)
+            ");
+        });
+        scope.spawn(|| {
+            uv_snapshot!(context.filters(), context.tool_run()
+                .arg("--no-index")
+                .arg("--from")
+                .arg(&filename)
+                .arg("tool"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            Hello from tool!
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + tool==0.1.0 (from file://[TEMP_DIR]/tool-0.1.0-py3-none-any.whl)
+            ");
+        });
+
+        let start = Instant::now();
+        let both_created = loop {
+            let environments = context
+                .cache_files(CacheBucket::Builds)?
+                .into_iter()
+                .filter(|path| path.ends_with("pyvenv.cfg"))
+                .count();
+            if environments == 2 {
+                break true;
+            }
+            if start.elapsed() > Duration::from_secs(30) {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        drop(lock);
+        assert!(both_created, "both commands should reach wheel preparation");
+        Ok(())
+    })?;
+
+    // Both runs succeed, but retaining two environments for a single cache key wastes disk space:
+    // astral-sh/uv#23115. Only one archive remains reachable through the environment cache.
+    let environments = context
+        .cache_files(CacheBucket::Archive)?
+        .into_iter()
+        .filter(|path| path.ends_with("pyvenv.cfg"))
+        .map(fs_err::canonicalize)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(environments.len(), 2);
+    let links = WalkDir::new(cache.bucket(CacheBucket::Environments))
+        .min_depth(2)
+        .max_depth(2)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(links.len(), 1);
+    let linked_environment = cache.resolve_link(links[0].path())?;
+    assert!(environments.contains(&linked_environment.join("pyvenv.cfg")));
+
+    // A later invocation reuses the linked environment and leaves the orphan on disk.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--no-index")
+        .arg("--from")
+        .arg(&filename)
+        .arg("tool"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tool!
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(
+        context
+            .cache_files(CacheBucket::Archive)?
+            .into_iter()
+            .filter(|path| path.ends_with("pyvenv.cfg"))
+            .map(fs_err::canonicalize)
+            .collect::<Result<Vec<_>, _>>()?,
+        environments
+    );
+    assert_eq!(cache.resolve_link(links[0].path())?, linked_environment);
+
+    Ok(())
 }
 
 #[test]
