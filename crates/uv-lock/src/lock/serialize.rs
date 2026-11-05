@@ -173,7 +173,7 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         .builds
         .iter()
         .flat_map(|builds| &builds.universes)
-        .filter(|u| u.ordinary_owner.is_some())
+        .filter(|owner| owner.uses_ordinary_roots())
         .map(|u| (&u.owner, u))
         .collect();
     for (package, scope) in packages {
