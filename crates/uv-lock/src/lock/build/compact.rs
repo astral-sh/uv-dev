@@ -1,6 +1,6 @@
 //! The compact build layout stores one package row per identity and overlays build-specific views.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
@@ -411,7 +411,7 @@ pub(in crate::lock) fn decode(mut wire: LockWire) -> Result<Lock, LockError> {
             };
             let universe = Universe {
                 cluster: Some(index),
-                direct_names: None,
+                declaration: None,
                 ordinary_owner: None,
                 owner,
                 marker: UniversalMarker::from_combined(marker),
@@ -498,8 +498,8 @@ pub(super) fn bind_owners(
     Ok(())
 }
 
-/// Combine disjoint solves for the same owners when an ordinary marker projection can express
-/// every original graph. Different package artifacts require separate scopes.
+/// Combine disjoint solves when a marker projection can reconstruct every owner's graph.
+/// Different package artifacts require separate scopes.
 pub(super) fn factor_domains(
     universes: &mut Vec<Universe>,
     project: MarkerTree,
@@ -526,16 +526,28 @@ pub(super) fn factor_domains(
             family.push(cluster);
         }
     }
-    universes.extend(
-        families
-            .into_values()
-            .flatten()
-            .flatten()
-            .map(|mut universe| {
-                universe.direct_names = None;
-                universe
-            }),
-    );
+    let mut by_roots = BTreeMap::<Vec<Dependency>, Vec<Vec<Universe>>>::new();
+    for cluster in families.into_values().flatten() {
+        let Some(first) = cluster.first() else {
+            continue;
+        };
+        let candidates = by_roots.entry(first.roots.clone()).or_default();
+        let mut merged = false;
+        for candidate in candidates.iter_mut() {
+            if let Some(combined) = combine_rosters(candidate, &cluster, project, python)? {
+                *candidate = combined;
+                merged = true;
+                break;
+            }
+        }
+        if !merged {
+            candidates.push(cluster);
+        }
+    }
+    universes.extend(by_roots.into_values().flatten().flatten().map(|mut owner| {
+        owner.declaration = None;
+        owner
+    }));
     sort_universes(universes);
     Ok(())
 }
@@ -553,8 +565,15 @@ fn combine_domains(
     // match runtime. Keep those declaration families separate.
     if left.iter().zip(right).any(|(left, right)| {
         left.inputs != right.inputs
-            || left.direct_names.is_none()
-            || left.direct_names != right.direct_names
+            || left.declaration.is_none()
+            || left
+                .declaration
+                .as_ref()
+                .map(|declaration| &declaration.names)
+                != right
+                    .declaration
+                    .as_ref()
+                    .map(|declaration| &declaration.names)
     }) || first.marker.has_conflict_marker()
         || second.marker.has_conflict_marker()
     {
@@ -619,13 +638,166 @@ fn combine_domains(
     }
     Ok(Some(
         left.iter()
-            .map(|owner| Universe {
-                owner: owner.owner.clone(),
-                inputs: owner.inputs.clone(),
+            .zip(right)
+            .map(|(left, right)| Universe {
+                owner: left.owner.clone(),
+                inputs: left.inputs.clone(),
+                declaration: left
+                    .declaration
+                    .clone()
+                    .zip(right.declaration.as_ref())
+                    .map(|(mut left, right)| {
+                        left.representative &= right.representative;
+                        if left.requirements != right.requirements {
+                            left.requirements = None;
+                        }
+                        left
+                    }),
                 ..representative.clone()
             })
             .collect(),
     ))
+}
+
+fn combine_rosters(
+    left: &[Universe],
+    right: &[Universe],
+    project: MarkerTree,
+    python: &RequiresPython,
+) -> Result<Option<Vec<Universe>>, LockError> {
+    let Some(graph) = left.first() else {
+        return Ok(None);
+    };
+    let left_marker = roster_marker(left.iter());
+    let right_marker = roster_marker(right.iter());
+    if left_marker.has_conflict_marker()
+        || right_marker.has_conflict_marker()
+        || !left_marker
+            .combined()
+            .and(project)
+            .is_disjoint(right_marker.combined())
+        || left
+            .iter()
+            .chain(right)
+            .any(|owner| !same_graph(graph, owner))
+    {
+        return Ok(None);
+    }
+
+    let mut owners: BTreeMap<_, _> = left
+        .iter()
+        .map(|owner| (&owner.owner, (owner, None)))
+        .collect();
+    let mut shared = 0;
+    let mut common_representative = false;
+    for owner in right {
+        let (other, second) = match owners.entry(&owner.owner) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                entry.insert((owner, None));
+                continue;
+            }
+        };
+        let Some((left, right)) = other.declaration.as_ref().zip(owner.declaration.as_ref()) else {
+            return Ok(None);
+        };
+        if other.inputs != owner.inputs
+            || left.requirements.is_none()
+            || left.requirements != right.requirements
+        {
+            return Ok(None);
+        }
+        shared += 1;
+        common_representative |= left.representative && right.representative;
+        *second = Some(owner);
+    }
+    // A superset already accepted the whole roster. Incomparable rosters need a common
+    // representative, whose unchanged declarations cover both accepted solves.
+    if shared != left.len().min(right.len()) && !common_representative {
+        return Ok(None);
+    }
+
+    let mut marker = left_marker;
+    marker.or(right_marker);
+    let mut has_full_owner = false;
+    let mut projected = BTreeSet::new();
+    let mut combined = Vec::with_capacity(owners.len());
+    for (owner, other) in owners.into_values() {
+        let mut owner = owner.clone();
+        let mut representative = false;
+        if let Some(other) = other {
+            owner.marker.or(other.marker);
+            representative = other
+                .declaration
+                .as_ref()
+                .is_some_and(|declaration| declaration.representative);
+        }
+        if let Some(declaration) = &mut owner.declaration {
+            declaration.representative &= representative;
+        }
+        if owner.marker == marker {
+            has_full_owner = true;
+        } else if projected.insert(owner.marker)
+            && !same_graph(
+                graph,
+                &graph
+                    .clone()
+                    .project(owner.marker.combined().and(project), python)?,
+            )
+        {
+            return Ok(None);
+        }
+        owner.cluster = graph.cluster;
+        combined.push(owner);
+    }
+    Ok(has_full_owner.then_some(combined))
+}
+
+fn roster_marker<'a>(owners: impl IntoIterator<Item = &'a Universe>) -> UniversalMarker {
+    let mut marker = UniversalMarker::FALSE;
+    for owner in owners {
+        marker.or(owner.marker);
+    }
+    marker
+}
+
+fn same_graph(left: &Universe, right: &Universe) -> bool {
+    left.roots == right.roots && left.packages == right.packages
+}
+
+/// A shared descriptor can use a full-domain owner's graph if every narrower owner's view
+/// can be reconstructed by the reader. This also recognizes such descriptors after loading.
+pub(in crate::lock) fn shared_view<'a>(
+    owners: &[&'a Universe],
+    project: MarkerTree,
+    python: &RequiresPython,
+) -> Result<Option<&'a Universe>, LockError> {
+    let marker = roster_marker(owners.iter().copied());
+    let Some(graph) = owners.iter().copied().find(|owner| owner.marker == marker) else {
+        return Ok(None);
+    };
+    if owners.iter().all(|owner| owner.marker == marker) {
+        return Ok(None);
+    }
+    let mut projected = BTreeMap::new();
+    for owner in owners {
+        let view = if owner.marker == marker {
+            graph
+        } else {
+            match projected.entry(owner.marker) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(
+                    graph
+                        .clone()
+                        .project(owner.marker.combined().and(project), python)?,
+                ),
+            }
+        };
+        if !same_graph(view, owner) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(graph))
 }
 
 fn gated_package(package: &Package, domain: MarkerTree, python: &RequiresPython) -> Package {
