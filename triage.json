@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 4917,
+        "title": "`uv pip install https://...zip` fails where `pip install` works",
+        "url": "https://github.com/astral-sh/uv/issues/4917",
+        "state": "closed",
+        "reason": "The same metadata-name mismatch occurred when a GitHub archive filename was mistaken for a distribution name. A maintainer confirmed the bug; astral-sh/uv#4928 fixed GitHub archive URLs specifically. The new report concerns a local archive and additionally a literal # in its filename, so this is historical context rather than an established regression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4928,
+        "title": "Avoid inferring package name for GitHub Archives",
+        "url": "https://github.com/astral-sh/uv/pull/4928",
+        "state": "merged",
+        "reason": "Merged on 2024-07-09 to fix astral-sh/uv#4917. Its diff skips filename-based name inference only for github.com URLs containing an archive path segment. That exception remains in the checkout and does not cover the reported local .tar.gz file."
+      },
+      {
+        "kind": "issue",
+        "number": 2501,
+        "title": "uv fails to install wheel from path with fragment",
+        "url": "https://github.com/astral-sh/uv/issues/2501",
+        "state": "closed",
+        "reason": "Also produced Distribution not found for a local path containing #, but the reporter intended #hash=somehash as a URL fragment. Here #10458 is part of the actual archive filename: the intended interpretation is the opposite."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2502,
+        "title": "Allow direct file path requirements to include fragments",
+        "url": "https://github.com/astral-sh/uv/pull/2502",
+        "state": "merged",
+        "reason": "Merged on 2024-03-18 to fix astral-sh/uv#2501 by separating the path at # and restoring the suffix as a URL fragment. The checkout still splits supplied paths this way, explaining the relevant parsing behavior; the PR did not add support for literal # characters in filenames."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Decomposed the report into literal-# local-path lookup failure and renamed-source-archive metadata-name mismatch. Literal searches included Distribution not found, does not match given name, metadata name, filename contains, and the cited astral-sh/uv#4917; conceptual and fix-oriented searches covered hash/number sign/pound, fragments, special characters, percent encoding, renamed/local/source archives, sdist filenames, and name inference, removing package, version, and platform details. Inspected candidate bodies, maintainer comments, timelines, and the diffs of astral-sh/uv#4928 and astral-sh/uv#2502. Ruled out astral-sh/uv#7714 (stale PKG-INFO), astral-sh/uv#9743 and astral-sh/uv#2727 (Git subdirectory metadata selection), astral-sh/uv#14345 (commas in wheel RECORD entries), astral-sh/uv#17526 (HTTP Content-Disposition), and astral-sh/uv#19883 (PEP 625 conformance roadmap) as canonical matches. No existing discussion or fix covering the literal-# filename failure was found."
+  },
+  "type": "bug",
+  "type_reason": "The checkout's unnamed local-path parser splits at the first # before filesystem lookup, treating part of the actual filename as a URL fragment; this supports the reported incorrect missing-distribution error. Separately, the renamed archive is parsed at its final hyphen, producing the reported incorrect inferred package name. The historical fixes address intentional URL fragments and GitHub archive URLs, respectively; neither establishes that this local-file behavior was previously fixed. No existing canonical issue or pull request covering this case was found.",
+  "summary": "astral-sh/uv#4917 and astral-sh/uv#4928 explain the related GitHub-archive name-inference fix; astral-sh/uv#2501 and astral-sh/uv#2502 explain intentional path-fragment handling. Neither pair covers a literal # in a local archive filename.",
+  "draft_response": "The path parser currently treats the first `#` in a supplied path as a URL fragment, so it looks for a truncated filename. Removing `#` exposes a separate problem: uv infers `aprict-0-0-38-cupy-issue` from the archive filename. The fix for astral-sh/uv#4917 in astral-sh/uv#4928 applies specifically to GitHub archive URLs, so it does not cover this local archive.\n\nAs a workaround, try supplying the package name and an absolute file URL: `uv pip install 'aprict @ file:///absolute/path/aprict-0.0.38-cupy-issue-%2310458.tar.gz'`. Replace `/absolute/path` with your directory and encode any `#` there as `%23` too. This should avoid both parsing problems, though it has not been verified against your archive."
+}
