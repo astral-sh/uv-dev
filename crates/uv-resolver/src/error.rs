@@ -141,30 +141,6 @@ pub enum ResolveError {
 }
 
 impl ResolveError {
-    /// Whether two requirements selected different sources for the same package.
-    pub fn is_source_conflict(&self) -> bool {
-        match self {
-            Self::Dependencies(error, ..) => error.is_source_conflict(),
-            Self::ConflictingUrls { .. }
-            | Self::ConflictingIndexesForEnvironment { .. }
-            | Self::ConflictingIndexes(..) => true,
-            Self::Distribution(_)
-            | Self::DisallowedUrl { .. }
-            | Self::DistributionType(_)
-            | Self::NoSolution(_)
-            | Self::UnhashedPackage(_)
-            | Self::PackageUnavailable(_)
-            | Self::ConflictMarker(_)
-            | Self::MismatchedPackageName { .. }
-            | Self::Dist(..)
-            | Self::Client(_)
-            | Self::ChannelClosed
-            | Self::UnregisteredTask(_)
-            | Self::InvalidVersion(_)
-            | Self::ConflictingDistribution(_) => false,
-        }
-    }
-
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {

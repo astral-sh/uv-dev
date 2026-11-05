@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fmt;
 
 use either::Either;
@@ -11,7 +13,8 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
-use super::build::{EncodedPackage, OrdinaryRoot, Section, Universe};
+use super::build::compact::{Identities, shared_view};
+use super::build::{BuildLocks, EncodedPackage, OrdinaryRoot, Section, Universe};
 use super::{
     Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
     PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
@@ -109,13 +112,26 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         writer.raw("]\n");
     }
 
-    if let Some(builds) = &lock.builds {
+    let compact = lock.version == super::COMPACT_BUILD_LOCK_VERSION;
+    if let Some(builds) = &lock.builds
+        && !compact
+    {
         writer.key_value("build-encoding", builds.encoding.name())?;
     }
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
+    if compact {
+        return write_compact(writer, lock);
+    }
 
-    let encoded = lock.builds.as_ref().map(|builds| builds.packages(lock));
+    let scopes = lock.builds.as_ref().map(BuildLocks::scopes);
+    let encoded = lock
+        .builds
+        .as_ref()
+        .zip(scopes.as_ref())
+        .map(|(builds, scopes)| builds.packages(lock, scopes))
+        .transpose()
+        .map_err(|error| WriteError::Serialize(toml_edit::ser::Error::Custom(error.to_string())))?;
     let packages = match encoded.as_ref() {
         Some(rows) => Either::Left(rows.iter().map(|row| (&row.package, Some(row)))),
         None => Either::Right(lock.packages.iter().map(|package| (package, None))),
@@ -127,13 +143,16 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             .entry(package.id.name.clone())
             .or_default() += 1;
     }
-    if let Some(builds) = &lock.builds {
-        for universe in builds
-            .universes
-            .iter()
-            .filter(|u| u.ordinary_owner.is_none())
-        {
+    if let Some(scopes) = scopes {
+        for owners in scopes {
             writer.array_of_tables(&["build-universes"])?;
+            if lock.version == super::CLUSTER_BUILD_LOCK_VERSION {
+                write_cluster(writer, &owners, &dist_count_by_name)?;
+                continue;
+            }
+            let [universe] = owners.as_slice() else {
+                return Err(WriteError::Format);
+            };
             writer.key_start("owner")?;
             let mut first = true;
             writer.start_inline_table();
@@ -162,7 +181,7 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         .builds
         .iter()
         .flat_map(|builds| &builds.universes)
-        .filter(|u| u.ordinary_owner.is_some())
+        .filter(|owner| owner.uses_ordinary_roots())
         .map(|u| (&u.owner, u))
         .collect();
     for (package, scope) in packages {
@@ -182,6 +201,389 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     }
 
     Ok(())
+}
+
+fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
+    let builds = lock.builds.as_ref().ok_or(WriteError::Format)?;
+    let scopes = builds.scopes();
+    let mut rows: BTreeMap<_, _> = lock
+        .packages
+        .iter()
+        .map(|package| (&package.id, Cow::Borrowed(package)))
+        .collect();
+    let build_packages = || {
+        scopes
+            .iter()
+            .flatten()
+            .flat_map(|owner| owner.packages.values())
+    };
+    let mut wheel_bases = BTreeMap::<_, &[Wheel]>::new();
+    for package in build_packages() {
+        let base = rows.entry(&package.id).or_insert(Cow::Borrowed(package));
+        if !lock.by_id.contains_key(&package.id) && package.wheels.len() > base.wheels.len() {
+            let wheels = wheel_bases.entry(&package.id).or_insert(&package.wheels);
+            if package.wheels.len() > wheels.len() {
+                *wheels = &package.wheels;
+            }
+        }
+    }
+    // A build-only row can store a richer observed wheel list when every other view can
+    // recover its exact list with filename references. Keep the first view's other fields.
+    for package in build_packages() {
+        if let Entry::Occupied(candidate) = wheel_bases.entry(&package.id) {
+            let wheels = *candidate.get();
+            if package.wheels != wheels
+                && !package
+                    .wheels
+                    .iter()
+                    .all(|wheel| wheel_reference(wheels, wheel))
+            {
+                candidate.remove();
+            }
+        }
+    }
+    for (id, wheels) in wheel_bases {
+        rows.get_mut(id).ok_or(WriteError::Format)?.to_mut().wheels = wheels.to_vec();
+    }
+    let identities = Identities::new(rows.keys().copied());
+    let mut counts = FxHashMap::default();
+    for id in rows.keys() {
+        *counts.entry(id.name.clone()).or_default() += 1;
+    }
+    let project = lock.build_project_domain();
+    for owners in scopes {
+        let shared = shared_view(&owners, project, &lock.requires_python)
+            .map_err(|error| toml_edit::ser::Error::Custom(error.to_string()))?;
+        // An owner without a full-domain graph needs a distinct descriptor for each root view.
+        let mut views = BTreeMap::<_, Vec<&Universe>>::new();
+        if let Some(shared) = shared {
+            views.insert((shared.marker, shared.roots.as_slice()), owners);
+        } else {
+            for owner in owners {
+                views
+                    .entry((owner.marker, owner.roots.as_slice()))
+                    .or_default()
+                    .push(owner);
+            }
+        }
+        for ((marker, roots), owners) in views {
+            writer.array_of_tables(&["build-cluster"])?;
+            if let Some(marker) = marker.combined().try_to_string() {
+                writer.key_value("marker", marker)?;
+            }
+            writer.key_compact_array("roots", roots, |writer, root| {
+                write_compact_ref(writer, &root.package_id, Some(root), &identities)
+            })?;
+            writer.key_compact_array("owners", &owners, |writer, owner| {
+                write_compact_ref(writer, &owner.owner, None, &identities)
+            })?;
+            let common_inputs = owners.first().and_then(|first| {
+                owners
+                    .iter()
+                    .all(|owner| owner.inputs == first.inputs)
+                    .then_some(&first.inputs)
+            });
+            if let Some(inputs) = common_inputs {
+                if inputs.as_ref().is_none_or(|inputs| !inputs.is_empty()) {
+                    write_compact_inputs(writer, inputs.as_ref())?;
+                }
+            }
+            for owner in &owners {
+                let write_inputs =
+                    common_inputs.is_none() && owner.inputs.as_ref().is_none_or(|i| !i.is_empty());
+                if owner.marker == marker && !write_inputs {
+                    continue;
+                }
+                writer.array_of_tables(&["build-cluster", "owner"])?;
+                writer.key_start("ref")?;
+                write_compact_ref(writer, &owner.owner, None, &identities)?;
+                writer.raw("\n");
+                if owner.marker != marker {
+                    let marker = owner
+                        .marker
+                        .combined()
+                        .try_to_string()
+                        .ok_or(WriteError::Format)?;
+                    writer.key_value("marker", marker)?;
+                }
+                if write_inputs {
+                    write_compact_inputs(writer, owner.inputs.as_ref())?;
+                }
+            }
+            let mut packages = BTreeMap::new();
+            if let Some(shared) = shared {
+                packages.extend(shared.packages.iter());
+            } else {
+                for package in owners.iter().flat_map(|owner| owner.packages.values()) {
+                    if let Some(previous) = packages.insert(&package.id, package)
+                        && previous != package
+                    {
+                        return Err(WriteError::Format);
+                    }
+                }
+            }
+            for (id, package) in packages {
+                if rows[id].as_ref() != package {
+                    write_compact_patch(
+                        writer,
+                        package,
+                        rows[id].as_ref(),
+                        &lock.requires_python,
+                        &counts,
+                        &identities,
+                    )?;
+                }
+            }
+        }
+    }
+    for (id, package) in rows {
+        let package = package.as_ref();
+        // The runtime row is always authoritative. Build-only records cannot add runtime edges
+        // or artifacts to a runtime package with the same identity.
+        let build_only = !lock.by_id.contains_key(id);
+        let row = EncodedPackage {
+            package: package.clone(),
+            build_only,
+            universes: Vec::new(),
+            edges: BTreeMap::new(),
+        };
+        write_package(
+            writer,
+            package,
+            &lock.requires_python,
+            MarkerTree::TRUE,
+            &counts,
+            Some(&row),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_compact_inputs(
+    writer: &mut LockWriter,
+    inputs: Option<&BTreeSet<super::build_inputs::BuildInput>>,
+) -> Result<(), WriteError> {
+    match inputs {
+        Some(inputs) => write_serialized_array(writer, "inputs", inputs),
+        None => writer.key_value("inputs", false),
+    }
+}
+
+fn write_compact_ref(
+    writer: &mut LockWriter,
+    id: &PackageId,
+    edge: Option<&Dependency>,
+    identities: &Identities<'_>,
+) -> Result<(), WriteError> {
+    let candidates = identities.named(&id.name);
+    if !candidates.contains(&id) {
+        return Err(WriteError::Serialize(toml_edit::ser::Error::Custom(
+            format!("Missing locked package row for `{id}`"),
+        )));
+    }
+    let extra = edge
+        .map(|edge| &edge.extra)
+        .filter(|extra| !extra.is_empty());
+    let marker = edge.and_then(|edge| edge.simplified_marker.try_to_string());
+    if candidates.len() == 1 && extra.is_none() && marker.is_none() {
+        return writer.value(id.name.as_ref());
+    }
+    let mut first = true;
+    writer.start_inline_table();
+    writer.inline_value(&mut first, "name", id.name.as_ref())?;
+    if candidates.len() > 1 {
+        let same_version = candidates
+            .iter()
+            .filter(|other| other.version == id.version)
+            .count();
+        let same_source = candidates
+            .iter()
+            .filter(|other| other.source == id.source)
+            .count();
+        if same_version == 1 || same_source > 1 {
+            if let Some(version) = &id.version {
+                writer.inline_value(&mut first, "version", version.to_string())?;
+            } else {
+                writer.inline_value(&mut first, "version", false)?;
+            }
+        }
+        if same_version > 1 {
+            writer.inline_key_start(&mut first, "source")?;
+            write_source_inline(writer, &id.source)?;
+        }
+    }
+    if let Some(extra) = extra {
+        writer.inline_key_start(&mut first, "extra")?;
+        writer.array(extra, |writer, extra| writer.value(extra.as_ref()))?;
+    }
+    if let Some(marker) = marker {
+        writer.inline_value(&mut first, "marker", marker)?;
+    }
+    writer.finish_inline_table(first);
+    Ok(())
+}
+
+fn write_compact_patch(
+    writer: &mut LockWriter,
+    package: &Package,
+    base: &Package,
+    requires_python: &RequiresPython,
+    counts: &FxHashMap<PackageName, u64>,
+    identities: &Identities<'_>,
+) -> Result<(), WriteError> {
+    writer.array_of_tables(&["build-cluster", "package"])?;
+    writer.key_start("ref")?;
+    write_compact_ref(writer, &package.id, None, identities)?;
+    writer.raw("\n");
+    if package.default_groups != base.default_groups {
+        if let Some(groups) = &package.default_groups {
+            writer.key_value("default-groups", serialize_value(groups)?)?;
+        } else {
+            writer.key_value("default-groups", false)?;
+        }
+    }
+    if package.fork_markers != base.fork_markers {
+        let markers = simplified_universal_markers(&package.fork_markers, requires_python);
+        writer.key_multiline_array("resolution-markers", markers, |writer, marker| {
+            writer.value(marker)
+        })?;
+    }
+    let edge = |writer: &mut LockWriter, dependency: &Dependency| {
+        write_dependency_inline(writer, dependency, MarkerTree::TRUE, counts, None)
+    };
+    if package.dependencies != base.dependencies {
+        writer.key_multiline_array("dependencies", &package.dependencies, edge)?;
+    }
+    if package.sdist != base.sdist {
+        if let Some(sdist) = &package.sdist {
+            writer.key_start("sdist")?;
+            write_source_dist_inline(writer, sdist)?;
+            writer.raw("\n");
+        } else {
+            writer.key_value("sdist", false)?;
+        }
+    }
+    if package.wheels != base.wheels {
+        writer.key_multiline_array("wheels", &package.wheels, |writer, wheel| {
+            if wheel_reference(&base.wheels, wheel) {
+                writer.value(wheel.filename.to_string())
+            } else {
+                write_wheel_inline(writer, wheel)
+            }
+        })?;
+    }
+    if package.optional_dependencies != base.optional_dependencies {
+        write_compact_dependency_groups(
+            writer,
+            "optional-dependencies",
+            &package.optional_dependencies,
+            edge,
+        )?;
+    }
+    if package.dependency_groups != base.dependency_groups {
+        write_compact_dependency_groups(
+            writer,
+            "dev-dependencies",
+            &package.dependency_groups,
+            edge,
+        )?;
+    }
+    if package.group_requires_python != base.group_requires_python {
+        writer.key_start("group-requires-python")?;
+        let mut first = true;
+        writer.start_inline_table();
+        for (group, metadata) in &package.group_requires_python {
+            if let Some(python) = &metadata.requires_python {
+                writer.inline_value(&mut first, group.as_ref(), serialize_value(python)?)?;
+            }
+        }
+        writer.finish_inline_table(first);
+        writer.raw("\n");
+    }
+    if package.metadata != base.metadata {
+        if package.metadata == super::PackageMetadata::default() {
+            writer.key_start("metadata")?;
+            writer.raw("{}\n");
+        } else {
+            write_package_metadata(
+                writer,
+                &package.metadata,
+                &["build-cluster", "package", "metadata"],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn wheel_reference(base: &[Wheel], wheel: &Wheel) -> bool {
+    let mut candidates = base.iter().filter(|old| old.filename == wheel.filename);
+    candidates.next() == Some(wheel) && candidates.next().is_none()
+}
+
+fn write_compact_dependency_groups<K: AsRef<str>>(
+    writer: &mut LockWriter,
+    key: &str,
+    groups: &BTreeMap<K, Vec<Dependency>>,
+    edge: impl Fn(&mut LockWriter, &Dependency) -> Result<(), WriteError>,
+) -> Result<(), WriteError> {
+    writer.key_start(key)?;
+    let mut first = true;
+    writer.start_inline_table();
+    for (name, dependencies) in groups {
+        writer.inline_key_start(&mut first, name.as_ref())?;
+        writer.array(dependencies, &edge)?;
+    }
+    writer.finish_inline_table(first);
+    writer.raw("\n");
+    Ok(())
+}
+
+fn write_cluster(
+    writer: &mut LockWriter,
+    owners: &[&Universe],
+    dist_count_by_name: &FxHashMap<PackageName, u64>,
+) -> Result<(), WriteError> {
+    // Deduplicate roots only within this accepted solve. The scope itself is established by
+    // the writer's grouping, including when separate solves selected the same roots.
+    let root_sets: BTreeSet<_> = owners.iter().map(|owner| owner.roots.as_slice()).collect();
+    let root_indices: BTreeMap<_, _> = root_sets.iter().copied().zip(0u64..).collect();
+    writer.key_multiline_array("root-sets", root_sets, |writer, roots| {
+        writer.array(roots, |writer, dependency| {
+            write_dependency_inline(
+                writer,
+                dependency,
+                MarkerTree::TRUE,
+                dist_count_by_name,
+                None,
+            )
+        })
+    })?;
+    writer.key_multiline_array("owners", owners, |writer, owner| {
+        let mut first = true;
+        writer.start_inline_table();
+        writer.inline_key_start(&mut first, "owner")?;
+        let mut first_id = true;
+        writer.start_inline_table();
+        write_package_id(
+            writer,
+            &owner.owner,
+            None,
+            PackageIdLocation::Inline(&mut first_id),
+        )?;
+        writer.finish_inline_table(first_id);
+        if let Some(marker) = owner.marker.combined().try_to_string() {
+            writer.inline_value(&mut first, "marker", marker)?;
+        }
+        writer.inline_value(&mut first, "root-set", root_indices[owner.roots.as_slice()])?;
+        if let Some(inputs) = &owner.inputs
+            && !inputs.is_empty()
+        {
+            writer.inline_value(&mut first, "inputs", serialize_value(inputs)?)?;
+        }
+        writer.finish_inline_table(first);
+        Ok(())
+    })
 }
 
 fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(), WriteError> {
@@ -451,12 +853,20 @@ fn write_package(
         }
     }
 
-    let metadata = &package.metadata;
+    write_package_metadata(writer, &package.metadata, &["package", "metadata"])?;
+    Ok(())
+}
+
+fn write_package_metadata(
+    writer: &mut LockWriter,
+    metadata: &super::PackageMetadata,
+    path: &[&str],
+) -> Result<(), WriteError> {
     let has_metadata = !metadata.requires_dist.is_empty()
         || !metadata.dependency_groups.is_empty()
         || !metadata.provides_extra.is_empty();
     if has_metadata {
-        writer.table(&["package", "metadata"])?;
+        writer.table(path)?;
         write_serialized_non_empty_array(writer, "requires-dist", &metadata.requires_dist)?;
         if !metadata.provides_extra.is_empty() {
             writer.key_start("provides-extras")?;
@@ -467,7 +877,7 @@ fn write_package(
         }
 
         if !metadata.dependency_groups.is_empty() {
-            writer.table(&["package", "metadata", "requires-dev"])?;
+            writer.table(&[path, &["requires-dev"]].concat())?;
             for (group, requirements) in &metadata.dependency_groups {
                 write_serialized_array(writer, group.as_ref(), requirements)?;
             }
@@ -831,6 +1241,30 @@ impl LockWriter {
     {
         self.key_start(key)?;
         self.multiline_array(values, write_value)
+    }
+
+    fn key_compact_array<I, T, F>(
+        &mut self,
+        key: &str,
+        values: I,
+        mut write_value: F,
+    ) -> Result<(), WriteError>
+    where
+        I: IntoIterator<Item = T, IntoIter: Clone>,
+        F: FnMut(&mut Self, T) -> Result<(), WriteError>,
+    {
+        const LINE_WIDTH: usize = 100;
+        let values = values.into_iter();
+        let start = self.output.len();
+        self.key_start(key)?;
+        self.array(values.clone(), &mut write_value)?;
+        if self.output.len() - start > LINE_WIDTH {
+            self.output.truncate(start);
+            self.key_multiline_array(key, values, write_value)?;
+        } else {
+            self.raw("\n");
+        }
+        Ok(())
     }
 
     fn multiline_array<I, T, F>(&mut self, values: I, mut write_value: F) -> Result<(), WriteError>
