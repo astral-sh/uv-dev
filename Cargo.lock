@@ -7780,6 +7780,7 @@ dependencies = [
  "arcstr",
  "astral-pubgrub",
  "either",
+ "fs-err",
  "futures",
  "hashbrown 0.17.1",
  "indexmap",
