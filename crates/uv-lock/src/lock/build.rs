@@ -29,12 +29,13 @@ use uv_resolver_types::{
 
 use super::build_inputs::BuildInput;
 use super::{
-    BUILD_LOCK_VERSION, CLUSTER_BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock,
-    LockError, LockErrorKind, LockWire, Package, PackageId, PackageWire, RegistrySource,
-    ResolverManifest, Source, SourceDist as LockedSourceDist, TagPolicy, absolute_path,
-    implicit_constraints_marker,
+    BUILD_LOCK_VERSION, CLUSTER_BUILD_LOCK_VERSION, COMPACT_BUILD_LOCK_VERSION, Dependency,
+    DependencyWire, HashedDist, Lock, LockError, LockErrorKind, LockWire, Package, PackageId,
+    PackageWire, RegistrySource, ResolverManifest, Source, SourceDist as LockedSourceDist,
+    TagPolicy, absolute_path, implicit_constraints_marker,
 };
 
+pub(super) mod compact;
 mod pins;
 pub use pins::{BuildLockPins, BuildPins};
 
@@ -63,6 +64,7 @@ pub enum BuildLayout {
     #[default]
     Owner,
     Cluster,
+    Compact,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,13 +77,15 @@ pub(super) struct BuildLocks {
 pub(super) struct Universe {
     /// A scope shared by owners from the same accepted build solve.
     cluster: Option<usize>,
+    /// Direct names before marker projection, used only to factor freshly solved domains.
+    direct_names: Option<BTreeSet<PackageName>>,
     /// Provenance established by the locked package rows.
     ordinary_owner: Option<OrdinaryOwner>,
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
     pub(super) inputs: Option<BTreeSet<BuildInput>>,
-    packages: BTreeMap<PackageId, Package>,
+    pub(super) packages: BTreeMap<PackageId, Package>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -187,7 +191,7 @@ impl Lock {
         for (cluster, (owners, resolution)) in groups.into_iter().enumerate() {
             let start = universes.len();
             self.append_build_group(owners, resolution, root, indexes, extras, &mut universes)?;
-            if layout == BuildLayout::Cluster {
+            if layout != BuildLayout::Owner {
                 let members = &mut universes[start..];
                 if let Some(first) = members.first()
                     && members.iter().any(|member| member.marker != first.marker)
@@ -196,8 +200,17 @@ impl Lock {
                         "An accepted build cluster must have one marker domain",
                     ));
                 }
-                for member in members {
+                for (member, declaration) in members.iter_mut().zip(owners) {
                     member.cluster = Some(cluster);
+                    if layout == BuildLayout::Compact {
+                        member.direct_names = Some(
+                            declaration
+                                .requirements
+                                .iter()
+                                .map(|req| req.name.clone())
+                                .collect(),
+                        );
+                    }
                 }
             }
         }
@@ -205,9 +218,14 @@ impl Lock {
         self.version = match layout {
             BuildLayout::Owner => BUILD_LOCK_VERSION,
             BuildLayout::Cluster => CLUSTER_BUILD_LOCK_VERSION,
+            BuildLayout::Compact => COMPACT_BUILD_LOCK_VERSION,
         };
         self.builds = Some(BuildLocks {
-            encoding,
+            encoding: if layout == BuildLayout::Compact {
+                BuildEncoding::Dependency
+            } else {
+                encoding
+            },
             universes,
         });
         Ok(self)
@@ -302,6 +320,7 @@ impl Lock {
             )?;
             universes.push(Universe {
                 cluster: None,
+                direct_names: None,
                 ordinary_owner: None,
                 inputs: Some(inputs),
                 owner,
@@ -441,6 +460,9 @@ impl Lock {
             })
             .collect();
         sort_universes(&mut builds.universes);
+        if self.version == COMPACT_BUILD_LOCK_VERSION {
+            compact::factor_domains(&mut builds.universes, project, &self.requires_python)?;
+        }
         Ok(self)
     }
 
@@ -463,7 +485,7 @@ impl Lock {
     pub fn with_ordinary_build_roots(mut self) -> Result<Self, LockError> {
         if !matches!(
             self.version,
-            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION | COMPACT_BUILD_LOCK_VERSION
         ) {
             return Ok(self);
         }
@@ -476,7 +498,13 @@ impl Lock {
             .iter()
             .chain(builds.universes.iter().flat_map(|u| u.packages.values()))
         {
-            let files = (&package.sdist, &package.wheels);
+            let wheels = if self.version == COMPACT_BUILD_LOCK_VERSION {
+                // The owner's source digest is independent of the wheels allowed in a view.
+                &[][..]
+            } else {
+                package.wheels.as_slice()
+            };
+            let files = (&package.sdist, wheels);
             owner_artifacts
                 .entry(&package.id)
                 .and_modify(|known| {
@@ -493,7 +521,10 @@ impl Lock {
                 Some((id.clone(), OrdinaryOwner::new(id, sdist.as_ref())?))
             })
             .collect();
-        if self.version == CLUSTER_BUILD_LOCK_VERSION {
+        if matches!(
+            self.version,
+            CLUSTER_BUILD_LOCK_VERSION | COMPACT_BUILD_LOCK_VERSION
+        ) {
             // An explicit scope still binds its owner to the archive recorded in the lock.
             for universe in &mut builds.universes {
                 universe.ordinary_owner = proven.get(&universe.owner).cloned();
@@ -534,10 +565,10 @@ impl Lock {
 
     /// The package-table layout recorded in the lock.
     pub fn build_layout(&self) -> BuildLayout {
-        if self.version == CLUSTER_BUILD_LOCK_VERSION {
-            BuildLayout::Cluster
-        } else {
-            BuildLayout::Owner
+        match self.version {
+            CLUSTER_BUILD_LOCK_VERSION => BuildLayout::Cluster,
+            COMPACT_BUILD_LOCK_VERSION => BuildLayout::Compact,
+            _ => BuildLayout::Owner,
         }
     }
 
@@ -666,6 +697,7 @@ impl<'a> OrdinaryGraph<'a> {
         })?;
         let universe = Universe {
             cluster: None,
+            direct_names: None,
             ordinary_owner: Some(provenance.clone()),
             owner: owner.clone(),
             marker: UniversalMarker::TRUE,
@@ -1329,6 +1361,7 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
             })?;
             universes.push(Universe {
                 cluster: clustered.then_some(index),
+                direct_names: None,
                 ordinary_owner: None,
                 inputs: descriptor
                     .inputs

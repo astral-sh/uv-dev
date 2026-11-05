@@ -108,14 +108,18 @@ const EXPLICIT_BUILD_LOCK_VERSION: u32 = 2;
 const BUILD_LOCK_VERSION: u32 = 4;
 // Version 5 is reserved for the experimental archive-backed owner layout.
 const CLUSTER_BUILD_LOCK_VERSION: u32 = 6;
+const COMPACT_BUILD_LOCK_VERSION: u32 = 7;
 
 fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
     if locks_builds {
         (!matches!(
             version,
-            EXPLICIT_BUILD_LOCK_VERSION | BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+            EXPLICIT_BUILD_LOCK_VERSION
+                | BUILD_LOCK_VERSION
+                | CLUSTER_BUILD_LOCK_VERSION
+                | COMPACT_BUILD_LOCK_VERSION
         ))
-        .then_some(CLUSTER_BUILD_LOCK_VERSION)
+        .then_some(COMPACT_BUILD_LOCK_VERSION)
     } else {
         (version != VERSION).then_some(VERSION)
     }
@@ -6491,6 +6495,8 @@ struct LockWire {
     build_encoding: Option<BuildEncoding>,
     #[serde(default)]
     build_universes: Vec<build::UniverseWire>,
+    #[serde(default, rename = "build-cluster")]
+    build_clusters: Vec<build::compact::ClusterWire>,
     version: u32,
     revision: Option<u32>,
     requires_python: RequiresPython,
@@ -6517,6 +6523,15 @@ impl TryFrom<LockWire> for Lock {
     type Error = LockError;
 
     fn try_from(mut wire: LockWire) -> Result<Self, LockError> {
+        if wire.version == COMPACT_BUILD_LOCK_VERSION {
+            return build::compact::decode(wire);
+        }
+        if !wire.build_clusters.is_empty() {
+            return Err(LockErrorKind::BuildGraph(
+                "Build clusters require lockfile version 7".into(),
+            )
+            .into());
+        }
         if let Some(encoding) = wire.build_encoding.take() {
             return build::decode(wire, encoding);
         }
