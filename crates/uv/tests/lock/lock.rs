@@ -146,7 +146,7 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
-        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "clustered")
+        .env(EnvVars::UV_INTERNAL__BUILD_RESOLUTION, "separate-grouped")
         .args(["--offline", "--preview-features=build-dependency-locking"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -209,7 +209,7 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
-        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "per-package")
+        .env(EnvVars::UV_INTERNAL__BUILD_RESOLUTION, "separate-per-package")
         .args(["--offline", "--preview-features=build-dependency-locking"]), @"
     exit_code: 0 (success)
     ----- stderr -----
