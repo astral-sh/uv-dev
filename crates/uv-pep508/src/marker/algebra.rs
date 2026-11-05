@@ -448,18 +448,80 @@ impl InternerGuard<'_> {
     /// Returns a decision node representing the conjunction of two nodes known not to have a
     /// trivial conjunction.
     pub(crate) fn and_nontrivial(&mut self, xi: NodeId, yi: NodeId) -> NodeId {
+        self.and_nontrivial_at_depth(xi, yi, 0)
+    }
+
+    fn and_nontrivial_at_depth(&mut self, xi: NodeId, yi: NodeId, depth: usize) -> NodeId {
         debug_assert!(
             xi.and_trivial(yi).is_none(),
             "`and_nontrivial` requires a non-trivial conjunction"
         );
 
         // Conjunction is commutative, so either operand order shares one entry.
-        let key = if xi < yi { (xi, yi) } else { (yi, xi) };
+        let key = Self::conjunction_key(xi, yi);
         if let Some(result) = self.state.cache.get(&key) {
             return *result;
         }
 
-        let (x, y) = (self.shared.node(xi), self.shared.node(yi));
+        // Most marker trees are shallow, so avoid allocating a worklist for them. Deep trees
+        // switch to an explicit stack before recursion can exhaust the thread stack.
+        if depth == 64 {
+            return self.and_iterative(key);
+        }
+
+        let (variable, children, conflicts) =
+            Self::expand_conjunction(self.shared, xi, yi, |x, y| {
+                x.and_trivial(y)
+                    .unwrap_or_else(|| self.and_nontrivial_at_depth(x, y, depth + 1))
+            });
+        self.finish_conjunction(key, variable, children, conflicts)
+    }
+
+    fn and_iterative(&mut self, root: (NodeId, NodeId)) -> NodeId {
+        let mut pending = vec![root];
+        while let Some(key @ (xi, yi)) = pending.last().copied() {
+            if self.state.cache.contains_key(&key) {
+                pending.pop();
+                continue;
+            }
+
+            // Leave this pair on the stack while computing any missing child conjunctions.
+            let children_start = pending.len();
+            let (variable, children, conflicts) =
+                Self::expand_conjunction(self.shared, xi, yi, |x, y| {
+                    if let Some(result) = x.and_trivial(y) {
+                        return result;
+                    }
+                    let child = Self::conjunction_key(x, y);
+                    if let Some(&result) = self.state.cache.get(&child) {
+                        return result;
+                    }
+                    pending.push(child);
+                    // This expansion is discarded while any child is missing.
+                    NodeId::FALSE
+                });
+            if pending.len() == children_start {
+                pending.pop();
+                self.finish_conjunction(key, variable, children, conflicts);
+            } else {
+                // Process children in expansion order on the LIFO worklist.
+                pending[children_start..].reverse();
+            }
+        }
+        self.state.cache[&root]
+    }
+
+    fn conjunction_key(xi: NodeId, yi: NodeId) -> (NodeId, NodeId) {
+        if xi < yi { (xi, yi) } else { (yi, xi) }
+    }
+
+    fn expand_conjunction(
+        shared: &InternerShared,
+        xi: NodeId,
+        yi: NodeId,
+        mut apply: impl FnMut(NodeId, NodeId) -> NodeId,
+    ) -> (Variable, EdgeBuilder, bool) {
+        let (x, y) = (shared.node(xi), shared.node(yi));
 
         // Determine whether the conjunction _could_ contain a conflict.
         //
@@ -473,23 +535,33 @@ impl InternerGuard<'_> {
         let (func, children) = match x.var.cmp(&y.var) {
             // X is higher order than Y, apply Y to every child of X.
             Ordering::Less => {
-                let children = x.children.map(xi, |node| self.and(node, yi));
+                let children = x.children.map(xi, |node| apply(node, yi));
                 (x.var.clone(), children)
             }
             // Y is higher order than X, apply X to every child of Y.
             Ordering::Greater => {
-                let children = y.children.map(yi, |node| self.and(node, xi));
+                let children = y.children.map(yi, |node| apply(node, xi));
                 (y.var.clone(), children)
             }
             // X and Y represent the same variable, merge their children.
             Ordering::Equal => {
-                let children = x.children.apply(xi, &y.children, yi, |x, y| self.and(x, y));
+                let children = x.children.apply(xi, &y.children, yi, apply);
                 (x.var.clone(), children)
             }
         };
 
+        (func, children, conflicts)
+    }
+
+    fn finish_conjunction(
+        &mut self,
+        key: (NodeId, NodeId),
+        variable: Variable,
+        children: EdgeBuilder,
+        conflicts: bool,
+    ) -> NodeId {
         // Create the output node.
-        let node = self.create_node(func, children);
+        let node = self.create_node(variable, children);
 
         // If the node includes known incompatibilities, map it to `false`.
         let node = if conflicts {
@@ -603,43 +675,79 @@ impl InternerGuard<'_> {
         i: NodeId,
         f: &impl Fn(&Variable) -> Option<bool>,
     ) -> NodeId {
-        self.restrict_by_cached(i, f, &mut None)
-    }
+        enum Step {
+            Visit(NodeId),
+            Cache(NodeId),
+            Rebuild(NodeId),
+        }
 
-    /// Restrict each signed node once, including unchanged shared subgraphs.
-    fn restrict_by_cached(
-        &mut self,
-        i: NodeId,
-        f: &impl Fn(&Variable) -> Option<bool>,
-        cache: &mut Option<FxHashMap<NodeId, NodeId>>,
-    ) -> NodeId {
         if matches!(i, NodeId::TRUE | NodeId::FALSE) {
             return i;
         }
-        // Nodes reached before caching begins lie on a unique prefix.
-        let cache_result = cache.is_some();
-        if let Some(&result) = cache.as_ref().and_then(|cache| cache.get(&i)) {
-            return result;
-        }
 
-        let node = self.shared.node(i);
-        let result = if let Edges::Boolean { high, low } = node.children
-            && let Some(value) = f(&node.var)
-        {
-            let node = if value { high } else { low };
-            self.restrict_by_cached(node.negate(i), f, cache)
-        } else {
-            // A single path cannot revisit a node. Start caching when traversal first branches.
-            if cache.is_none() && node.children.has_multiple_nonterminal_children() {
-                *cache = Some(FxHashMap::default());
+        let mut cache: Option<FxHashMap<NodeId, NodeId>> = None;
+        let mut pending = SmallVec::new();
+        pending.push(Step::Visit(i));
+        let mut result = i;
+        while let Some(step) = pending.pop() {
+            match step {
+                Step::Visit(i) => {
+                    if let Some(&cached) = cache.as_ref().and_then(|cache| cache.get(&i)) {
+                        result = cached;
+                        continue;
+                    }
+
+                    // Nodes reached before caching begins lie on a unique prefix.
+                    if cache.is_some() {
+                        pending.push(Step::Cache(i));
+                    }
+                    let node = self.shared.node(i);
+                    if let Edges::Boolean { high, low } = node.children
+                        && let Some(value) = f(&node.var)
+                    {
+                        result = if value { high } else { low }.negate(i);
+                        if !result.is_true() && !result.is_false() {
+                            pending.push(Step::Visit(result));
+                        }
+                        continue;
+                    }
+
+                    // A single path cannot revisit a node. Start caching when traversal branches.
+                    if cache.is_none() && node.children.has_multiple_nonterminal_children() {
+                        cache = Some(FxHashMap::default());
+                    }
+                    pending.push(Step::Rebuild(i));
+                    pending.extend(
+                        node.children
+                            .nodes_in_map_order()
+                            .rev()
+                            .filter(|child| !child.is_true() && !child.is_false())
+                            .map(|child| Step::Visit(child.negate(i))),
+                    );
+                }
+                Step::Cache(i) => {
+                    if let Some(cache) = &mut cache {
+                        cache.insert(i, result);
+                    }
+                }
+                Step::Rebuild(i) => {
+                    let node = self.shared.node(i);
+                    let children = node.children.map(i, |child| {
+                        if child.is_true() || child.is_false() {
+                            child
+                        } else {
+                            // An uncached node belongs to the unique prefix, whose only
+                            // nonterminal child is the most recently computed result.
+                            cache
+                                .as_ref()
+                                .and_then(|cache| cache.get(&child))
+                                .copied()
+                                .unwrap_or(result)
+                        }
+                    });
+                    result = self.create_node(node.var.clone(), children);
+                }
             }
-            let children = node
-                .children
-                .map(i, |node| self.restrict_by_cached(node, f, cache));
-            self.create_node(node.var.clone(), children)
-        };
-        if cache_result && let Some(cache) = cache {
-            cache.insert(i, result);
         }
         result
     }
@@ -1950,6 +2058,13 @@ impl Edges {
         }
         mapped
     }
+    /// Returns children in the order that [`Self::map`] invokes its callback.
+    fn nodes_in_map_order(&self) -> impl DoubleEndedIterator<Item = NodeId> + '_ {
+        match self {
+            Self::Boolean { high, low } => Either::Left([*low, *high].into_iter()),
+            Self::Version { .. } | Self::String { .. } => Either::Right(self.nodes()),
+        }
+    }
 }
 
 impl<VersionEdges, StringEdges> Edges<VersionEdges, StringEdges>
@@ -1974,7 +2089,7 @@ where
     }
 
     /// Returns an iterator over all direct children of this node.
-    pub(crate) fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub(crate) fn nodes(&self) -> impl DoubleEndedIterator<Item = NodeId> + '_ {
         match self {
             Self::Version { edges: map } => {
                 Either::Left(Either::Left(map.as_ref().iter().map(|(_, node)| *node)))
