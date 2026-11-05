@@ -75,8 +75,8 @@ pub(super) struct BuildLocks {
 pub(super) struct Universe {
     /// A scope shared by owners from the same accepted build solve.
     cluster: Option<usize>,
-    /// Provenance for an owner whose roots use the ordinary package graph.
-    pub(super) ordinary_owner: Option<OrdinaryOwner>,
+    /// Provenance established by the locked package rows.
+    ordinary_owner: Option<OrdinaryOwner>,
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
@@ -85,7 +85,7 @@ pub(super) struct Universe {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum OrdinaryOwner {
+enum OrdinaryOwner {
     Archive(HashDigest),
     Directory,
 }
@@ -458,10 +458,13 @@ impl Lock {
         self
     }
 
-    /// Reuse ordinary packages only when reading the compact roots reconstructs the solved
-    /// environment exactly, including every artifact and each outgoing dependency.
+    /// Establish provenance from matching owner artifact rows. In the owner layout, reuse
+    /// ordinary packages only if compact roots reconstruct the entire solved environment.
     pub fn with_ordinary_build_roots(mut self) -> Result<Self, LockError> {
-        if self.version != BUILD_LOCK_VERSION {
+        if !matches!(
+            self.version,
+            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+        ) {
             return Ok(self);
         }
         let Some(mut builds) = self.builds.take() else {
@@ -490,6 +493,14 @@ impl Lock {
                 Some((id.clone(), OrdinaryOwner::new(id, sdist.as_ref())?))
             })
             .collect();
+        if self.version == CLUSTER_BUILD_LOCK_VERSION {
+            // An explicit scope still binds its owner to the archive recorded in the lock.
+            for universe in &mut builds.universes {
+                universe.ordinary_owner = proven.get(&universe.owner).cloned();
+            }
+            self.builds = Some(builds);
+            return Ok(self);
+        }
         let mut counts = BTreeMap::new();
         for universe in &builds.universes {
             *counts.entry(universe.owner.clone()).or_insert(0usize) += 1;
@@ -755,6 +766,10 @@ impl Universe {
             )
     }
 
+    pub(super) fn uses_ordinary_roots(&self) -> bool {
+        self.cluster.is_none() && self.ordinary_owner.is_some()
+    }
+
     fn accepts_source(&self, owner: &SourceDist) -> bool {
         match &self.ordinary_owner {
             Some(OrdinaryOwner::Archive(hash)) => {
@@ -978,7 +993,7 @@ impl BuildLocks {
         let explicit = self
             .universes
             .iter()
-            .filter(|owner| owner.ordinary_owner.is_none());
+            .filter(|owner| !owner.uses_ordinary_roots());
         let mut scopes = Vec::<Vec<&Universe>>::new();
         let mut clusters = FxHashMap::default();
         for owner in explicit {
@@ -1352,7 +1367,11 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
         encoding,
         universes,
     });
-    Ok(runtime)
+    if clustered {
+        runtime.with_ordinary_build_roots()
+    } else {
+        Ok(runtime)
+    }
 }
 
 #[cfg(test)]
@@ -1427,11 +1446,12 @@ mod tests {
 
     fn build_lock(encoding: BuildEncoding) -> Result<Lock, Box<dyn Error>> {
         let build = graph("b", "2")?;
-        lock_with_roots(encoding, &build, &build.requirements)
+        lock_with_roots(encoding, BuildLayout::Owner, &build, &build.requirements)
     }
 
     fn lock_with_roots(
         encoding: BuildEncoding,
+        layout: BuildLayout,
         build: &ResolverOutput,
         roots: &[Requirement],
     ) -> Result<Lock, Box<dyn Error>> {
@@ -1456,7 +1476,7 @@ mod tests {
         )?
         .with_build_graphs(
             encoding,
-            BuildLayout::Owner,
+            layout,
             [(owners.as_slice(), build)],
             &root,
             &indexes,
@@ -1506,7 +1526,8 @@ mod tests {
                 &indexes,
                 &ExtraBuildRequires::default(),
             )?
-            .with_compacted_build_domains()?;
+            .with_compacted_build_domains()?
+            .with_ordinary_build_roots()?;
             let encoded = lock.to_toml()?;
             assert_eq!(encoded.matches("[[build-universes]]").count(), 1);
             let parsed = Lock::from_toml(&encoded)?;
@@ -1554,8 +1575,13 @@ mod tests {
     fn ordinary_build_roots() -> Result<(), Box<dyn Error>> {
         let roots = [requirement("c==1")?];
         let build = graph("b", "1")?;
-        let explicit = lock_with_roots(BuildEncoding::Dependency, &build, &roots)?
-            .with_compacted_build_domains()?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Owner,
+            &build,
+            &roots,
+        )?
+        .with_compacted_build_domains()?;
         let compact = explicit.clone().with_ordinary_build_roots()?;
         let encoded = compact.to_toml()?;
         assert!(!encoded.contains("[[build-universes]]"));
@@ -1597,10 +1623,47 @@ mod tests {
         );
 
         let different_pin = graph("b", "2")?;
-        let explicit = lock_with_roots(BuildEncoding::Dependency, &different_pin, &roots)?
-            .with_compacted_build_domains()?
-            .with_ordinary_build_roots()?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Owner,
+            &different_pin,
+            &roots,
+        )?
+        .with_compacted_build_domains()?
+        .with_ordinary_build_roots()?;
         assert!(explicit.to_toml()?.contains("[[build-universes]]"));
+        Ok(())
+    }
+
+    /// Explicit cluster scopes still bind an owner to its locked source archive.
+    #[test]
+    fn cluster_scope_checks_owner_archive() -> Result<(), Box<dyn Error>> {
+        let roots = [requirement("c==1")?];
+        let build = graph("b", "1")?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Cluster,
+            &build,
+            &roots,
+        )?
+        .with_compacted_build_domains()?;
+        let encoded = explicit.to_toml()?;
+        let guarded = explicit.with_ordinary_build_roots()?;
+        assert_eq!(guarded.to_toml()?, encoded);
+        let parsed = Lock::from_toml(&encoded)?;
+        assert_eq!(parsed, guarded);
+
+        let universe = &parsed.builds.as_ref().expect("builds").universes[0];
+        let owner = parsed.find_by_name(&"a".parse()?)?.expect("source owner");
+        let mut archive = owner
+            .to_source_dist(&std::env::current_dir()?, FirstParty::No)?
+            .expect("sdist");
+        assert!(universe.accepts_source(&archive));
+        let SourceDist::Registry(claimed) = &mut archive else {
+            return Err("expected a registry source".into());
+        };
+        claimed.file.hashes = vec![format!("sha256:{}", "7".repeat(64)).parse()?].into();
+        assert!(!universe.accepts_source(&archive));
         Ok(())
     }
 
