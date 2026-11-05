@@ -1,3 +1,4 @@
+use anyhow::Context;
 use tracing::debug;
 
 use crate::{
@@ -236,7 +237,11 @@ impl CachedEnvironment {
             cache_digest(&canonicalize_executable(interpreter.sys_executable())?);
 
         // Search in the content-addressed cache.
-        let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
+        let cache_entry = cache.entry(
+            CacheBucket::Environments,
+            interpreter_hash,
+            &resolution_hash,
+        );
 
         if let Ok(root) = cache.resolve_link(cache_entry.path()) {
             if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
@@ -274,6 +279,19 @@ impl CachedEnvironment {
             preview,
         )
         .await?;
+
+        // Another process may have populated this entry while we were installing. Serialize
+        // publication and reuse its environment rather than leaving an unreferenced archive.
+        let lock_entry = cache_entry.with_file(format!("{resolution_hash}.lock"));
+        let _lock = lock_entry
+            .lock()
+            .await
+            .context("Failed to acquire cached environment lock")?;
+        if let Ok(root) = cache.resolve_link(cache_entry.path())
+            && let Ok(environment) = PythonEnvironment::from_root(root, cache)
+        {
+            return Ok(Self(environment));
+        }
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
