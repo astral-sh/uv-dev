@@ -271,13 +271,218 @@ fn lock_build_compact_conditional_roots() -> Result<()> {
         .ok_or_else(|| anyhow!("missing build clusters"))?;
     assert_eq!(clusters.len(), 1);
     assert_snapshot!(wire["build-cluster"][0]["owners"].to_string().trim(), @r#"["project"]"#);
-    assert_snapshot!(wire["build-cluster"][0]["roots"].to_string().trim(), @r#"[{ name = "flit-core", version = "3.12.0", marker = "python_full_version < '3.13'" }, { name = "flit-core", version = "4.1.0", marker = "python_full_version >= '3.13'" }]"#);
+    assert_snapshot!(wire["build-cluster"][0]["roots"].to_string().trim(), @r#"
+    [
+        { name = "flit-core", version = "3.12.0", marker = "python_full_version < '3.13'" },
+        { name = "flit-core", version = "4.1.0", marker = "python_full_version >= '3.13'" },
+    ]
+    "#);
     uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
     assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// A conditional hash splits the solves without changing the selected artifact.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_compact_factors_owner_rosters() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    let (filename, wheel) = WheelBuilder::new(&"builder".parse()?, &"1".parse()?).build();
+    let digest = hex::encode(Sha256::digest(&wheel));
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project-with-a-full-width-build-environment"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["dependency-with-a-python-specific-build-environment; python_version < '3.13'"]
+
+        [build-system]
+        requires = ["builder>=1"]
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "build-dependency-hashes"]
+        no-index = true
+        find-links = ["wheels"]
+        build-constraint-dependencies = [
+            {{ requirement = "builder==1; python_version < '3.13'", hashes = ["sha256:{digest}"] }},
+        ]
+
+        [tool.uv.sources]
+        dependency-with-a-python-specific-build-environment = {{ path = "narrow" }}
+    "#})?;
+    let narrow = context.temp_dir.child("narrow");
+    narrow.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency-with-a-python-specific-build-environment"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["builder>=1"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    for (directory, name) in [
+        (
+            context.temp_dir.path(),
+            "project-with-a-full-width-build-environment",
+        ),
+        (
+            narrow.path(),
+            "dependency-with-a-python-specific-build-environment",
+        ),
+    ] {
+        let (filename, wheel) = WheelBuilder::new(&name.parse()?, &"1".parse()?).build();
+        fs_err::write(directory.join(&filename), wheel)?;
+        fs_err::write(
+            directory.join("backend.py"),
+            formatdoc! {r#"
+            from importlib.metadata import version
+            from pathlib import Path
+            from shutil import copyfile
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                assert version("builder") == "1"
+                wheel = Path(__file__).with_name("{filename}")
+                copyfile(wheel, Path(wheel_directory) / wheel.name)
+                return wheel.name
+        "#},
+        )?;
+    }
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    assert_eq!(uv_lock::Lock::from_toml(&locked)?.to_toml()?, locked);
+    let wire = locked.parse::<toml_edit::DocumentMut>()?;
+    let clusters = wire["build-cluster"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing build clusters"))?;
+    assert_eq!(clusters.len(), 1);
+    let cluster = &wire["build-cluster"][0];
+    assert!(cluster.get("marker").is_none());
+    assert_snapshot!(cluster["roots"].to_string().trim(), @r#"["builder"]"#);
+    assert_snapshot!(cluster["owners"].to_string().trim(), @r#"
+    [
+        "dependency-with-a-python-specific-build-environment",
+        "project-with-a-full-width-build-environment",
+    ]
+    "#);
+    let overrides = cluster["owner"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing owner overrides"))?;
+    assert_eq!(overrides.len(), 1);
+    assert_snapshot!(cluster["owner"][0]["ref"].to_string().trim(), @r#""dependency-with-a-python-specific-build-environment""#);
+    assert_snapshot!(cluster["owner"][0]["marker"].to_string().trim(), @r#""python_full_version < '3.13'""#);
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline", "--no-cache", "--no-editable"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + dependency-with-a-python-specific-build-environment==1 (from file://[TEMP_DIR]/narrow)
+     + project-with-a-full-width-build-environment==1 (from file://[TEMP_DIR]/)
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Equal roots cannot share a roster if a wheel is available in only one of the solves.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_compact_preserves_rosters_with_distinct_artifacts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    let name = "builder".parse()?;
+    let version = "1".parse()?;
+    let builder = WheelBuilder::new(&name, &version);
+    let (filename, wheel) = builder.build();
+    let digest = hex::encode(Sha256::digest(&wheel));
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = builder.tag("py3-none-win_amd64").build();
+    let windows_digest = hex::encode(Sha256::digest(&wheel));
+    wheels.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["narrow; sys_platform == 'linux'"]
+
+        [build-system]
+        requires = ["builder>=1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        preview-features = ["build-dependency-locking", "build-dependency-hashes"]
+        no-index = true
+        find-links = ["wheels"]
+        build-constraint-dependencies = [
+            {{ requirement = "builder==1; sys_platform == 'linux'", hashes = ["sha256:{digest}"] }},
+        ]
+
+        [tool.uv.sources]
+        narrow = {{ path = "narrow" }}
+    "#})?;
+    context
+        .temp_dir
+        .child("narrow/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "narrow"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["builder>=1"]
+        build-backend = "unused"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    assert_eq!(uv_lock::Lock::from_toml(&locked)?.to_toml()?, locked);
+    let wire = locked.parse::<toml_edit::DocumentMut>()?;
+    let clusters = wire["build-cluster"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing build clusters"))?;
+    assert_eq!(clusters.len(), 2);
+    let linux = &wire["build-cluster"][0];
+    let other = &wire["build-cluster"][1];
+    assert_snapshot!(linux["marker"].to_string().trim(), @r#""sys_platform == 'linux'""#);
+    assert_snapshot!(linux["owners"].to_string().trim(), @r#"["narrow", "project"]"#);
+    assert_snapshot!(linux["roots"].to_string().trim(), @r#"["builder"]"#);
+    assert_snapshot!(other["marker"].to_string().trim(), @r#""sys_platform != 'linux'""#);
+    assert_snapshot!(other["owners"].to_string().trim(), @r#"["project"]"#);
+    assert_snapshot!(other["roots"].to_string().trim(), @r#"["builder"]"#);
+    let context = context.with_filter((windows_digest, "[WINDOWS_HASH]"));
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(other["package"][0]["wheels"].to_string().trim(), @r#"
+        [
+            "builder-1-py3-none-any.whl",
+            { path = "builder-1-py3-none-win_amd64.whl", hash = "sha256:[WINDOWS_HASH]" },
+        ]
+        "#);
+    });
     Ok(())
 }
 
@@ -1767,7 +1972,12 @@ fn lock_build_forks_same_sdist_different_indexes() -> Result<()> {
         .map(|cluster| cluster["owners"].to_string().trim().to_owned())
         .filter(|owners| owners.contains("shared"))
         .collect::<Vec<_>>();
-    assert_snapshot!(owners.join("\n"), @r#"[{ name = "shared", source = { registry = "first" } }, { name = "shared", source = { registry = "second" } }]"#);
+    assert_snapshot!(owners.join("\n"), @r#"
+    [
+        { name = "shared", source = { registry = "first" } },
+        { name = "shared", source = { registry = "second" } },
+    ]
+    "#);
     Ok(())
 }
 

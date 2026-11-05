@@ -11,7 +11,7 @@ use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use uv_client::RegistryClient;
-use uv_configuration::BuildOptions;
+use uv_configuration::{BuildOptions, NormalizedRequirements};
 use uv_distribution_types::{
     Edge, ExtraBuildRequires, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython,
     Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist, satisfies_require_hashes,
@@ -77,8 +77,8 @@ pub(super) struct BuildLocks {
 pub(super) struct Universe {
     /// A scope shared by owners from the same accepted build solve.
     cluster: Option<usize>,
-    /// Direct names before marker projection, used only to factor freshly solved domains.
-    direct_names: Option<BTreeSet<PackageName>>,
+    /// Static declarations before marker projection, used only for freshly solved domains.
+    declaration: Option<BuildDeclaration>,
     /// Provenance established by the locked package rows.
     ordinary_owner: Option<OrdinaryOwner>,
     pub(super) owner: PackageId,
@@ -86,6 +86,13 @@ pub(super) struct Universe {
     pub(super) roots: Vec<Dependency>,
     pub(super) inputs: Option<BTreeSet<BuildInput>>,
     pub(super) packages: BTreeMap<PackageId, Package>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BuildDeclaration {
+    names: BTreeSet<PackageName>,
+    requirements: Option<NormalizedRequirements>,
+    representative: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,16 +207,19 @@ impl Lock {
                         "An accepted build cluster must have one marker domain",
                     ));
                 }
-                for (member, declaration) in members.iter_mut().zip(owners) {
+                for (index, (member, declaration)) in members.iter_mut().zip(owners).enumerate() {
                     member.cluster = Some(cluster);
                     if layout == BuildLayout::Compact {
-                        member.direct_names = Some(
-                            declaration
+                        member.declaration = Some(BuildDeclaration {
+                            names: declaration
                                 .requirements
                                 .iter()
                                 .map(|req| req.name.clone())
                                 .collect(),
-                        );
+                            requirements: Some(declaration.requirements.clone().into()),
+                            // The accepted solve's declarations come from the first owner.
+                            representative: index == 0,
+                        });
                     }
                 }
             }
@@ -320,7 +330,7 @@ impl Lock {
             )?;
             universes.push(Universe {
                 cluster: None,
-                direct_names: None,
+                declaration: None,
                 ordinary_owner: None,
                 inputs: Some(inputs),
                 owner,
@@ -694,7 +704,7 @@ impl<'a> OrdinaryGraph<'a> {
         })?;
         let universe = Universe {
             cluster: None,
-            direct_names: None,
+            declaration: None,
             ordinary_owner: Some(provenance.clone()),
             owner: owner.clone(),
             marker: UniversalMarker::TRUE,
@@ -1358,7 +1368,7 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
             })?;
             universes.push(Universe {
                 cluster: clustered.then_some(index),
-                direct_names: None,
+                declaration: None,
                 ordinary_owner: None,
                 inputs: descriptor
                     .inputs

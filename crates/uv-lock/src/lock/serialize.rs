@@ -12,7 +12,7 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
-use super::build::compact::Identities;
+use super::build::compact::{Identities, shared_view};
 use super::build::{BuildLocks, EncodedPackage, OrdinaryRoot, Section, Universe};
 use super::{
     Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
@@ -222,31 +222,33 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
     for id in rows.keys() {
         *counts.entry(id.name.clone()).or_default() += 1;
     }
+    let project = lock.build_project_domain();
     for owners in scopes {
-        // A shared solve normally gives every owner the same roots. Keep a distinct descriptor
-        // for each root view if owners of the same solve require different projections.
+        let shared = shared_view(&owners, project, &lock.requires_python)
+            .map_err(|error| toml_edit::ser::Error::Custom(error.to_string()))?;
+        // An owner without a full-domain graph needs a distinct descriptor for each root view.
         let mut views = BTreeMap::<_, Vec<&Universe>>::new();
-        for owner in owners {
-            views
-                .entry((owner.marker, owner.roots.as_slice()))
-                .or_default()
-                .push(owner);
+        if let Some(shared) = shared {
+            views.insert((shared.marker, shared.roots.as_slice()), owners);
+        } else {
+            for owner in owners {
+                views
+                    .entry((owner.marker, owner.roots.as_slice()))
+                    .or_default()
+                    .push(owner);
+            }
         }
         for ((marker, roots), owners) in views {
             writer.array_of_tables(&["build-cluster"])?;
             if let Some(marker) = marker.combined().try_to_string() {
                 writer.key_value("marker", marker)?;
             }
-            writer.key_start("roots")?;
-            writer.array(roots, |writer, root| {
+            writer.key_compact_array("roots", roots, |writer, root| {
                 write_compact_ref(writer, &root.package_id, Some(root), &identities)
             })?;
-            writer.raw("\n");
-            writer.key_start("owners")?;
-            writer.array(&owners, |writer, owner| {
+            writer.key_compact_array("owners", &owners, |writer, owner| {
                 write_compact_ref(writer, &owner.owner, None, &identities)
             })?;
-            writer.raw("\n");
             let common_inputs = owners.first().and_then(|first| {
                 owners
                     .iter()
@@ -257,24 +259,39 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
                 if inputs.as_ref().is_none_or(|inputs| !inputs.is_empty()) {
                     write_compact_inputs(writer, inputs.as_ref())?;
                 }
-            } else {
-                for owner in &owners {
-                    if owner.inputs.as_ref().is_some_and(BTreeSet::is_empty) {
-                        continue;
-                    }
-                    writer.array_of_tables(&["build-cluster", "owner"])?;
-                    writer.key_start("ref")?;
-                    write_compact_ref(writer, &owner.owner, None, &identities)?;
-                    writer.raw("\n");
+            }
+            for owner in &owners {
+                let write_inputs =
+                    common_inputs.is_none() && owner.inputs.as_ref().is_none_or(|i| !i.is_empty());
+                if owner.marker == marker && !write_inputs {
+                    continue;
+                }
+                writer.array_of_tables(&["build-cluster", "owner"])?;
+                writer.key_start("ref")?;
+                write_compact_ref(writer, &owner.owner, None, &identities)?;
+                writer.raw("\n");
+                if owner.marker != marker {
+                    let marker = owner
+                        .marker
+                        .combined()
+                        .try_to_string()
+                        .ok_or(WriteError::Format)?;
+                    writer.key_value("marker", marker)?;
+                }
+                if write_inputs {
                     write_compact_inputs(writer, owner.inputs.as_ref())?;
                 }
             }
             let mut packages = BTreeMap::new();
-            for package in owners.iter().flat_map(|owner| owner.packages.values()) {
-                if let Some(previous) = packages.insert(&package.id, package)
-                    && previous != package
-                {
-                    return Err(WriteError::Format);
+            if let Some(shared) = shared {
+                packages.extend(shared.packages.iter());
+            } else {
+                for package in owners.iter().flat_map(|owner| owner.packages.values()) {
+                    if let Some(previous) = packages.insert(&package.id, package)
+                        && previous != package
+                    {
+                        return Err(WriteError::Format);
+                    }
                 }
             }
             for (id, package) in packages {
@@ -1194,6 +1211,30 @@ impl LockWriter {
     {
         self.key_start(key)?;
         self.multiline_array(values, write_value)
+    }
+
+    fn key_compact_array<I, T, F>(
+        &mut self,
+        key: &str,
+        values: I,
+        mut write_value: F,
+    ) -> Result<(), WriteError>
+    where
+        I: IntoIterator<Item = T, IntoIter: Clone>,
+        F: FnMut(&mut Self, T) -> Result<(), WriteError>,
+    {
+        const LINE_WIDTH: usize = 100;
+        let values = values.into_iter();
+        let start = self.output.len();
+        self.key_start(key)?;
+        self.array(values.clone(), &mut write_value)?;
+        if self.output.len() - start > LINE_WIDTH {
+            self.output.truncate(start);
+            self.key_multiline_array(key, values, write_value)?;
+        } else {
+            self.raw("\n");
+        }
+        Ok(())
     }
 
     fn multiline_array<I, T, F>(&mut self, values: I, mut write_value: F) -> Result<(), WriteError>
