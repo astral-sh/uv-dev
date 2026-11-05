@@ -12,7 +12,7 @@ use uv_types::HashStrategy;
 use crate::pubgrub::Range;
 
 /// Owners whose direct requirements can be solved using one member's declarations.
-pub struct BuildCluster {
+pub(crate) struct BuildCluster {
     representative: SourceBuildRequirements,
     others: Vec<SourceBuildRequirements>,
     by_name: Vec<usize>,
@@ -44,11 +44,11 @@ impl BuildCluster {
         }
     }
 
-    pub fn representative(&self) -> &SourceBuildRequirements {
+    pub(crate) fn representative(&self) -> &SourceBuildRequirements {
         &self.representative
     }
 
-    pub fn owners(&self) -> impl Iterator<Item = &SourceBuildRequirements> {
+    pub(crate) fn owners(&self) -> impl Iterator<Item = &SourceBuildRequirements> {
         std::iter::once(&self.representative).chain(&self.others)
     }
 
@@ -165,7 +165,7 @@ fn yanked_pin(specifiers: &VersionSpecifiers) -> Option<&Version> {
 
 /// Plans and retains build graphs for a single lock operation. Only the same marker scope,
 /// previous pins and trusted hash policy can reuse a solved representative.
-pub struct BuildClusters<'a, P, G> {
+pub(crate) struct BuildClusters<'a, P, G> {
     grouped: bool,
     resolved: Vec<(BuildCluster, G)>,
     reusable: BTreeMap<(UniversalMarker, Option<&'a P>), Vec<ReusableBuild<'a>>>,
@@ -177,7 +177,7 @@ struct ReusableBuild<'a> {
 }
 
 impl<'a, P: Ord, G> BuildClusters<'a, P, G> {
-    pub fn new(grouped: bool) -> Self {
+    pub(crate) fn new(grouped: bool) -> Self {
         Self {
             grouped,
             resolved: Vec::new(),
@@ -185,7 +185,7 @@ impl<'a, P: Ord, G> BuildClusters<'a, P, G> {
         }
     }
 
-    pub fn plan(
+    pub(crate) fn plan(
         &mut self,
         scope: UniversalMarker,
         pins: Option<&'a P>,
@@ -224,7 +224,7 @@ impl<'a, P: Ord, G> BuildClusters<'a, P, G> {
         pending
     }
 
-    pub fn record(
+    pub(crate) fn record(
         &mut self,
         scope: UniversalMarker,
         pins: Option<&'a P>,
@@ -244,7 +244,7 @@ impl<'a, P: Ord, G> BuildClusters<'a, P, G> {
         self.resolved.push((cluster, graph));
     }
 
-    pub fn into_builds(self) -> impl Iterator<Item = (Vec<SourceBuildRequirements>, G)> {
+    pub(crate) fn into_builds(self) -> impl Iterator<Item = (Vec<SourceBuildRequirements>, G)> {
         self.resolved
             .into_iter()
             .map(|(cluster, graph)| (cluster.into_owners().collect(), graph))

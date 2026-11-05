@@ -18,10 +18,9 @@ use super::{
     DefaultResolverProvider, InMemoryIndex, ReporterGuard, Resolver, ResolverEnvironment,
     ResolverState, RootFork,
 };
+use crate::build_clusters::{BuildCluster, BuildClusters};
 use crate::preferences::{Preference, Preferences, RuntimePreferenceMode};
-use crate::{
-    AllowedYanks, BuildCluster, BuildClusters, BuildConstraintHashes, Manifest, ResolveError,
-};
+use crate::{AllowedYanks, BuildConstraintHashes, Manifest, ResolveError};
 
 /// Which source packages can share an isolated build resolution.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
