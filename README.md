@@ -6,11 +6,13 @@ Classification: bug
 
 ## Summary
 
-The reporter starts eight identical `uvx pycowsay --help` processes concurrently against a fresh cache and observes eight environment archives; subsequent sequential runs reuse one of them. Sequential cold-cache control runs reportedly create one environment. The issue reports the same behavior on uv 0.13.7 and 0.12.13, using macOS arm64, and with httpie and mcp-proxy-for-aws as additional tools.
+Reproduced the primary behavior from astral-sh/uv#23115 using the installed uv 0.13.6 on Linux x86_64 with system CPython 3.12.3. Eight concurrent `uvx pycowsay --help` invocations against an empty isolated cache all succeeded and created two environment archives containing the same pycowsay 0.0.0.2 installation and identical `pyvenv.cfg` files. Exactly one nested environment link referenced one archive; no cache symlink referenced the other. Three later sequential invocations reused the referenced archive and left both archives present. Three sequential invocations against a separate empty cache created only one environment. Explicit pruning after the processes exited removed both cached environments.
 
-The reporter separately describes cache growth from new dependency resolutions: 157 reportedly identical environments and 1,166 environments with differing resolutions, among 1,323 cached tool environments. The reported 235 GB total and approximately 202 GB environment footprint are reporter measurements, not independently verified physical-space accounting.
+The report observed eight archives from eight processes on uv 0.13.7 and 0.12.13, macOS arm64, and uv-managed Python 3.14.7. The number of duplicate builds is timing-dependent; this reproduction confirms the redundant-build and orphaned-archive behavior on a different uv version, platform, and interpreter. It does not independently verify those exact reported environments or the additional httpie and mcp-proxy-for-aws workloads.
 
-No exact duplicate found. astral-sh/uv#17399 covers a different script-creation race; merged astral-sh/uv#5509 explains the archive/link design. Open astral-sh/uv#20116 and the cache-management issues cover the separate retention and automatic-cleanup request.
+The reporter separately describes cache growth from new dependency resolutions: 157 reportedly identical environments and 1,166 environments with differing resolutions, among 1,323 cached tool environments. The reported 235 GB total and approximately 202 GB environment footprint remain reporter measurements, not independently verified physical-space accounting.
+
+No exact duplicate was identified in the existing related-issue investigation. astral-sh/uv#17399 covers a different script-creation race; merged astral-sh/uv#5509 explains the archive/link design. Open astral-sh/uv#20116 and the cache-management issues cover the separate retention and automatic-cleanup request.
 
 ## Report decomposition
 
@@ -22,15 +24,83 @@ No exact duplicate found. astral-sh/uv#17399 covers a different script-creation 
 
 ## Draft response
 
-The source supports the race you describe: concurrent cache misses can each build an environment, save it under a fresh archive ID, and replace the same cache link. There is no per-key creation lock in that path. This is a bug distinct from the inline-script failure in astral-sh/uv#17399.
+The concurrent duplicate-environment behavior reproduces with uv 0.13.6 on Linux x86_64 and Python 3.12.3: eight simultaneous pycowsay runs produced two identical environment archives, with only one referenced by the environment cache. Three subsequent sequential runs reused that archive and left the extra one on disk. A separate sequential cold-cache control created one environment. The exact duplicate count depends on timing; the reported macOS and Python versions were not tested.
 
-The next step is to test concurrent creation for one resolved environment key and coordinate those builds so they reuse one environment. For now, run `uv cache prune` after stopping long-running `uvx` processes; pruning otherwise waits for them.
+This is distinct from the inline-script failure in astral-sh/uv#17399. A focused fix should coordinate creation for one resolved environment key while keeping running commands usable. Explicit `uv cache prune` removed both environments after the test processes exited; pruning also removes the currently cached tool environment, so the next invocation will recreate it. Cache pruning requires an exclusive cache lock and can wait for long-running commands.
 
-Cleanup of superseded resolutions is a separate retention concern tracked in astral-sh/uv#9790 and astral-sh/uv#5731. astral-sh/uv#20116 proposes automatic pruning, including unused cached tool environments, but remains unmerged.
+Cleanup of superseded resolutions is a separate retention concern tracked in astral-sh/uv#9790 and astral-sh/uv#5731. astral-sh/uv#20116 proposes automatic pruning, including unused cached tool environments, but remains unmerged in the existing issue-context investigation.
 
 ## Classification
 
-The checkout source permits concurrent misses for the same resolved environment key to build independently, persist under fresh archive IDs, and replace the same cache link without reclaiming the displaced archive. This establishes the reported redundant-build/orphan behavior without requiring a new reproduction. No inspected issue or PR tracks that specific uvx failure closely enough to centralize it. The script race in astral-sh/uv#17399 is distinct, and astral-sh/uv#5509 fixed in-use mutation rather than duplicate creation. The secondary retention request overlaps existing enhancements but does not change the primary bug classification.
+Bug: observed concurrent successful tool runs create redundant cached environments for the same interpreter and package resolution, and leave a completed environment unreferenced after all commands exit. Later runs reuse only the linked archive. The sequential control isolates concurrent creation as the relevant trigger for this fixture. Source inspection is consistent with the observed behavior; behavioral reproduction, rather than source inspection alone, establishes this finding.
+
+No inspected issue or PR tracks that specific uvx behavior closely enough to centralize it. The script race in astral-sh/uv#17399 is distinct, and astral-sh/uv#5509 fixed in-use mutation rather than duplicate creation. The secondary retention request overlaps existing enhancements but does not change the primary bug classification.
+
+## Reproduction
+
+**Outcome: reproducible.** All reproduction files, logs, caches, and tool directories were created under `/home/runner/work/_temp/uv-23115-jarEPm`. No repository files were modified.
+
+### Environment and fixture
+
+- Installed executables: `/opt/hostedtoolcache/uv/0.13.6/x86_64/uv` and its `uvx` shortcut, discovered on `PATH`; no checkout binary was used or built.
+- `uv --version`: `uv 0.13.6 (x86_64-unknown-linux-gnu)`.
+- Host: Linux 7.0.0-1017-azure x86_64; `/usr/bin/python3`: CPython 3.12.3.
+- PyPI resolved the report's small pycowsay fixture to pycowsay 0.0.0.2, with no dependencies. `--no-build` restricted the test to wheels.
+- Subprocesses received a fresh allowlisted environment, temporary tool/config/data/cache paths, `--no-config`, an explicit interpreter, disabled Python downloads, and the public PyPI index. Existing user tool installations and cache contents were excluded.
+
+### Commands and procedure
+
+The saved reproducer was executed once:
+
+```sh
+python3 /home/runner/work/_temp/uv-23115-jarEPm/reproduce.py
+```
+
+It used a thread barrier to launch eight subprocesses concurrently against an initially nonexistent shared cache. Each subprocess ran this command from the temporary reproduction directory, using the installed `uvx` executable:
+
+```sh
+uvx --no-config --cache-dir /home/runner/work/_temp/uv-23115-jarEPm/concurrent-cache \
+  --python /usr/bin/python3 --no-managed-python --no-python-downloads \
+  --default-index https://pypi.org/simple --no-build -v pycowsay --help
+```
+
+After waiting for all eight processes to exit, the reproducer counted `archive-v0/*/pyvenv.cfg` files and inspected every `environments-v2/*/*` symlink and its resolved archive target. It then issued three explicit sequential invocations with the same command and cache, followed by three explicit sequential invocations using a separate initially nonexistent `sequential-cache`. Each subprocess's stdout and stderr were saved separately; structured results are in `/home/runner/work/_temp/uv-23115-jarEPm/results.json`.
+
+### Observed results
+
+| Phase | Exit codes | Environment archives | Nested environment links | Unreferenced environment archives |
+| --- | --- | --- | --- | --- |
+| Eight concurrent cold-cache runs | All 0 | 2 | 1 | 1 |
+| Three later sequential runs using that cache | All 0 | 2 | 1 | 1 |
+| Three sequential runs using a separate cold cache | All 0 | 1 | 1 | 0 |
+| Explicit prune of concurrent cache after commands exited | 0 | 0 | 0 | 0 |
+
+The concurrent cache contained:
+
+- `archive-v0/0J8ggJ2QLnBwF5IU`: completed environment used by concurrent process 7; no cache symlink referenced it after all concurrent processes exited.
+- `archive-v0/MqfnKdB7i4FDyOuC`: completed environment used by concurrent process 6 and the other six concurrent commands; referenced by `environments-v2/a18ede1e7dd8e4d9/e86b9f3586855392`.
+
+Both contained only pycowsay 0.0.0.2 as the installed distribution and byte-identical `pyvenv.cfg` files. Two concurrent processes logged installation; the other six found the completed linked environment. All three later sequential runs checked `MqfnKdB7i4FDyOuC`, logged no installation, and left the archive inventory and environment link unchanged. The control installed on its first run and reused its single archive on the next two.
+
+An additional scan of every cache symlink confirmed that the displaced archive had no reference elsewhere in the cache. The saved `check_prune.py` then executed:
+
+```sh
+uv --no-config --cache-dir /home/runner/work/_temp/uv-23115-jarEPm/concurrent-cache cache prune -v
+```
+
+Pruning logged removal of the cached environment entry and both environment archives, reported `Removed 63 files (152.0KiB)`, and left zero environment archives and zero environment links. The retained sequential-control cache and saved logs provide post-run evidence; the concurrent environment archives themselves were removed by this cleanup check.
+
+The report's top-level `ls environments-v2` count measures interpreter-hash directories, not resolved-environment links. This reproduction inspected the actual nested link. Eight archives are not required to demonstrate the race; two archives for one key already establish the reported duplication. Large real-world disk usage, automatic removal of superseded resolutions, and indefinite retention were not independently measured. Observed retention covers the completed concurrent run and three subsequent sequential runs before explicit pruning.
+
+### Existing test coverage
+
+The checkout organizes the relevant integration tests under `crates/uv/tests/tool/` and `crates/uv/tests/build/`, rather than the older `crates/uv/tests/it/` layout. Relevant setup and assertions were read:
+
+- `crates/uv/tests/tool/tool_run.rs`, `tool_run_cache`: uses tool directories and Python 3.11/3.12, snapshots an initial black installation followed by sequential cache reuse, refresh reuse, distinct interpreter environments, reuse after switching back, and an extra environment with `--with`. It does not launch concurrent commands or count duplicate archives.
+- `crates/uv/tests/build/cache_prune.rs`, `prune_cached_env`: runs pytest 8.0.0 through `tool run`, then snapshots verbose pruning of its environment cache entry and dangling archive. It covers explicit environment cleanup, not concurrent creation.
+- Both modules are gated by `test-python` and `test-pypi` in their suite entry points. Searches of the tool tests, relevant cache tests, and `crates/uv-client/tests/it/` did not identify a test of this same-key concurrent environment-creation scenario. The client's HTTP cache concurrency tests concern a different cache layer.
+
+No integration tests were added or run, and no build was needed. A follow-up regression test should exercise overlapping cold-cache creation, count actual environment archives and nested links, and verify subsequent reuse. The exact reported macOS/uv/Python combinations remain untested; additional reporter information is not needed to establish the reproduced primary behavior.
 
 ## Related
 
@@ -47,10 +117,10 @@ The checkout source permits concurrent misses for the same resolved environment 
 - `crates/uv-tool-commands/src/run.rs:1189` calls `CachedEnvironment::from_spec` for cached tool execution.
 - `crates/uv-environment-operations/src/environment.rs:238` constructs the cache entry from the interpreter hash and resolution hash. It checks the link, returns an existing environment if valid, otherwise creates and syncs a temporary environment. Through line 282 there is no per-key lock spanning lookup, construction, and publication, and no second lookup that discards a redundant build.
 - `crates/uv-environment-operations/src/environment.rs:279` calls `Cache::persist` and returns the newly created archive root to the caller. Consequently, a process can execute from an archive even after another writer replaces the cache link; absence of a link alone is not proof the archive is unused by a running command.
-- `crates/uv-cache/src/lib.rs:411` allocates a fresh `ArchiveId`, moves the completed directory into the archive bucket, and creates the cache link. The Unix link implementation at line 951 replaces the symlink. It does not remove the previous target. These operations support the reported same-key race directly; atomic publication prevents partially built environments from becoming visible, but does not deduplicate complete builds.
+- `crates/uv-cache/src/lib.rs:411` allocates a fresh `ArchiveId`, moves the completed directory into the archive bucket, and creates the cache link. The Unix link implementation at line 951 replaces the symlink. It does not remove the previous target. These operations are consistent with the reproduced same-key duplication; atomic publication prevents partially built environments from becoming visible, but this path does not deduplicate complete builds.
 - `crates/uv-cache/src/lib.rs:712` removes cached environment entries during explicit pruning; line 807 then finds references and removes unreferenced archives. `crates/uv/src/commands/cache_prune.rs:29` acquires the exclusive cache lock or waits, consistent with pruning blocking behind long-running uv processes. This is cleanup, not coordination between concurrent cache writers.
-- The reproduction's top-level `ls environments-v2` count measures interpreter-hash directories for this cached-tool layout, not the number of resolved environments. The source still supports one nested resolution link being repeatedly replaced. A regression test should inspect that nested link and its archive target instead of relying on the top-level count.
-- `docs/concepts/cache.md:128` documents concurrent cache readers and writers; its clearing-cache section documents periodic explicit pruning. Source inspection establishes the creation gap; no commands from the issue body were executed, no affected release was reproduced, and no disk-footprint measurements were independently validated.
+- The reproduction's top-level `ls environments-v2` count measures interpreter-hash directories for this cached-tool layout, not the number of resolved environments. The source still supports one nested resolution link being repeatedly replaced. The reproduction inspected that nested link and its archive target instead of relying on the top-level count.
+- `docs/concepts/cache.md:128` documents concurrent cache readers and writers; its clearing-cache section documents periodic explicit pruning. The isolated reproduction above confirms redundant environments on installed uv 0.13.6. The exact reported releases and large disk-footprint measurements were not independently validated. Source inspection provides supporting implementation context rather than substituting for observed behavior.
 
 ## Historical fixes and proposal status
 
@@ -73,10 +143,10 @@ Separated concurrent cold-cache duplication from superseded-version retention an
 
 ## Maintainer next step and validation
 
-Keep the concurrent cached-tool creation bug focused on lookup/build/publication for one interpreter-and-resolution key. A follow-up fix should coordinate that operation and verify that concurrent cold-cache invocations share one completed environment, that a later invocation reuses it, and that commands already running remain usable. Inspect the nested environment link and actual environment archives. The supplied reproduction and source findings are enough to start that work; no additional reporter information is necessary for classification.
+Keep the concurrent cached-tool creation bug focused on lookup/build/publication for one interpreter-and-resolution key. A follow-up fix should coordinate that operation and verify that concurrent cold-cache invocations share one completed environment, that a later invocation reuses it, and that commands already running remain usable. Inspect the nested environment link and actual environment archives. The isolated reproduction confirms the primary behavior without requiring additional reporter configuration.
 
-Discuss automatic retention separately with the existing cache-management issues and astral-sh/uv#20116. Manual `uv cache prune` after stopping long-running uvx commands is the current concrete workaround. No implementation, builds, or tests were performed during this triage.
+Discuss automatic retention separately with the existing cache-management issues and astral-sh/uv#20116. Manual `uv cache prune` after tool processes exit was verified to remove the duplicated archives, including the currently linked environment. No implementation changes, builds, or repository test-suite runs were performed.
 
 ## Handoff boundaries
 
-Only this README and a temporary structured result were written under the runner temporary directory. The checkout's pre-existing changes were left intact. GitHub access was read-only; no issue, pull request, label, or comment was changed.
+Only this README and reproduction artifacts under the runner temporary directory were written. The checkout's pre-existing changes were left intact. Reproduction used the installed uv executable with isolated temporary caches and tool directories. No GitHub action, issue, pull request, label, or comment was changed, and no credentials were inspected or exposed.

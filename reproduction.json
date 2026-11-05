@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.13.6 and CPython 3.12.3, launched eight concurrent `uvx --no-config --cache-dir <fresh-temporary-cache> --python /usr/bin/python3 --no-managed-python --no-python-downloads --default-index https://pypi.org/simple --no-build -v pycowsay --help` processes. All succeeded, creating two identical pycowsay 0.0.0.2 environments with only one nested environments-v2 link; the other archive had no cache references. Three subsequent sequential runs reused the linked environment and retained the orphan. A separate sequential cold-cache control created one environment. Explicit cache pruning removed both environments. This confirms the reported behavior, although the duplicate count differed and the reported macOS/version combinations were not tested. Updated $RUNNER_TEMP/issue-context/README.md with findings and existing test coverage. No checkout or GitHub changes were made."
+}
