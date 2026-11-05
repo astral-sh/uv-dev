@@ -51,11 +51,13 @@ use crate::distribution_database::ManagedClient;
 use crate::error::Error;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
+use crate::source::location::SourceLocation;
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
 use crate::{FirstPartyPackages, Reporter, RequiresDist};
 
 mod built_wheel_metadata;
+mod location;
 mod revision;
 mod validated_archive;
 
@@ -287,159 +289,64 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let built_wheel_metadata = match &source {
-            BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                // For registry source distributions, shard by package, then version, for
-                // convenience in debugging.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
-                        .wheel_dir(dist.name.as_ref())
-                        .join(dist.version.to_string()),
-                );
-
-                let url = dist.file.url.to_url()?;
-
-                // If the URL is a file URL, use the local path directly.
-                if url.scheme() == "file" {
-                    let path = url
-                        .to_file_path()
-                        .map_err(|()| Error::NonFileUrl(url.clone()))?;
-                    return self
-                        .archive(
-                            source,
-                            &PathSourceUrl {
-                                url: &url,
-                                path: Cow::Owned(path),
-                                ext: dist.ext,
-                            },
-                            &cache_shard,
-                            tags,
-                            hashes,
-                        )
-                        .boxed_local()
-                        .await;
-                }
-
+        match SourceLocation::new(source, self.build_context.cache())? {
+            SourceLocation::Remote {
+                url,
+                index,
+                subdirectory,
+                ext,
+                shard,
+            } => {
                 self.url(
                     source,
                     &url,
-                    Some(&dist.index),
-                    &cache_shard,
-                    None,
-                    dist.ext,
+                    index,
+                    &shard,
+                    subdirectory,
+                    ext,
                     tags,
                     hashes,
                     client,
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => {
-                // For direct URLs, cache directly under the hash of the URL itself.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Url(&dist.url).root(),
-                );
-
-                self.url(
-                    source,
-                    &dist.url,
-                    None,
-                    &cache_shard,
-                    dist.subdirectory.as_deref(),
-                    dist.ext,
-                    tags,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Dist(SourceDist::GitDirectory(dist)) => {
-                self.git_source_tree(
-                    source,
-                    &GitDirectorySourceUrl::from(dist),
-                    tags,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Dist(SourceDist::GitPath(dist)) => {
-                self.git_archive(source, &GitPathSourceUrl::from(dist), tags, hashes, client)
-                    .boxed_local()
-                    .await?
-            }
-            BuildableSource::Dist(SourceDist::Directory(dist)) => {
-                self.source_tree(source, &DirectorySourceUrl::from(dist), tags, hashes)
-                    .boxed_local()
-                    .await?
-            }
-            BuildableSource::Dist(SourceDist::Path(dist)) => {
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Path(&dist.url).root(),
-                );
+            SourceLocation::Archive {
+                url,
+                path,
+                ext,
+                shard,
+            } => {
                 self.archive(
                     source,
-                    &PathSourceUrl::from(dist),
-                    &cache_shard,
+                    &PathSourceUrl {
+                        url: &url,
+                        path,
+                        ext,
+                    },
+                    &shard,
                     tags,
                     hashes,
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Url(SourceUrl::Direct(resource)) => {
-                // For direct URLs, cache directly under the hash of the URL itself.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Url(resource.url).root(),
-                );
-
-                self.url(
-                    source,
-                    resource.url,
-                    None,
-                    &cache_shard,
-                    resource.subdirectory,
-                    resource.ext,
-                    tags,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Url(SourceUrl::GitDirectory(resource)) => {
-                self.git_source_tree(source, resource, tags, hashes, client)
+            SourceLocation::GitDirectory(resource) => {
+                self.git_source_tree(source, &resource, tags, hashes, client)
                     .boxed_local()
-                    .await?
+                    .await
             }
-            BuildableSource::Url(SourceUrl::GitPath(resource)) => {
-                self.git_archive(source, resource, tags, hashes, client)
+            SourceLocation::GitArchive(resource) => {
+                self.git_archive(source, &resource, tags, hashes, client)
                     .boxed_local()
-                    .await?
+                    .await
             }
-            BuildableSource::Url(SourceUrl::Directory(resource)) => {
-                self.source_tree(source, resource, tags, hashes)
+            SourceLocation::Directory(resource) => {
+                self.source_tree(source, &resource, tags, hashes)
                     .boxed_local()
-                    .await?
+                    .await
             }
-            BuildableSource::Url(SourceUrl::Path(resource)) => {
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Path(resource.url).root(),
-                );
-                self.archive(source, resource, &cache_shard, tags, hashes)
-                    .boxed_local()
-                    .await?
-            }
-        };
-
-        Ok(built_wheel_metadata)
+        }
     }
 
     /// Download a [`SourceDist`] and determine its metadata. This typically involves building the
@@ -451,164 +358,73 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        let metadata = match &source {
-            BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                // For registry source distributions, shard by package, then version.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
-                        .wheel_dir(dist.name.as_ref())
-                        .join(dist.version.to_string()),
-                );
-
-                let url = dist.file.url.to_url()?;
-
-                // If the URL is a file URL, use the local path directly.
-                if url.scheme() == "file" {
-                    let path = url
-                        .to_file_path()
-                        .map_err(|()| Error::NonFileUrl(url.clone()))?;
-                    return self
-                        .archive_metadata(
-                            source,
-                            &PathSourceUrl {
-                                url: &url,
-                                path: Cow::Owned(path),
-                                ext: dist.ext,
-                            },
-                            &cache_shard,
-                            hashes,
-                        )
-                        .boxed_local()
-                        .await;
-                }
-
+        match SourceLocation::new(source, self.build_context.cache())? {
+            SourceLocation::Remote {
+                url,
+                index,
+                subdirectory,
+                ext,
+                shard,
+            } => {
                 self.url_metadata(
                     source,
                     &url,
-                    Some(&dist.index),
-                    &cache_shard,
-                    None,
-                    dist.ext,
+                    index,
+                    &shard,
+                    subdirectory,
+                    ext,
                     hashes,
                     client,
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => {
-                // For direct URLs, cache directly under the hash of the URL itself.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Url(&dist.url).root(),
-                );
-
-                self.url_metadata(
+            SourceLocation::Archive {
+                url,
+                path,
+                ext,
+                shard,
+            } => {
+                self.archive_metadata(
                     source,
-                    &dist.url,
-                    None,
-                    &cache_shard,
-                    dist.subdirectory.as_deref(),
-                    dist.ext,
+                    &PathSourceUrl {
+                        url: &url,
+                        path,
+                        ext,
+                    },
+                    &shard,
                     hashes,
-                    client,
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Dist(SourceDist::GitDirectory(dist)) => {
+            SourceLocation::GitDirectory(resource) => {
                 self.git_source_tree_metadata(
                     source,
-                    &GitDirectorySourceUrl::from(dist),
+                    &resource,
                     hashes,
                     client,
                     client.unmanaged.credentials_cache(),
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Dist(SourceDist::GitPath(dist)) => {
-                self.git_archive_metadata(source, &GitPathSourceUrl::from(dist), hashes, client)
+            SourceLocation::GitArchive(resource) => {
+                self.git_archive_metadata(source, &resource, hashes, client)
                     .boxed_local()
-                    .await?
+                    .await
             }
-            BuildableSource::Dist(SourceDist::Directory(dist)) => {
+            SourceLocation::Directory(resource) => {
                 self.source_tree_metadata(
                     source,
-                    &DirectorySourceUrl::from(dist),
+                    &resource,
                     hashes,
                     client.unmanaged.credentials_cache(),
                 )
                 .boxed_local()
-                .await?
+                .await
             }
-            BuildableSource::Dist(SourceDist::Path(dist)) => {
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Path(&dist.url).root(),
-                );
-                self.archive_metadata(source, &PathSourceUrl::from(dist), &cache_shard, hashes)
-                    .boxed_local()
-                    .await?
-            }
-            BuildableSource::Url(SourceUrl::Direct(resource)) => {
-                // For direct URLs, cache directly under the hash of the URL itself.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Url(resource.url).root(),
-                );
-
-                self.url_metadata(
-                    source,
-                    resource.url,
-                    None,
-                    &cache_shard,
-                    resource.subdirectory,
-                    resource.ext,
-                    hashes,
-                    client,
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Url(SourceUrl::GitDirectory(resource)) => {
-                self.git_source_tree_metadata(
-                    source,
-                    resource,
-                    hashes,
-                    client,
-                    client.unmanaged.credentials_cache(),
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Url(SourceUrl::GitPath(resource)) => {
-                self.git_archive_metadata(source, resource, hashes, client)
-                    .boxed_local()
-                    .await?
-            }
-            BuildableSource::Url(SourceUrl::Directory(resource)) => {
-                self.source_tree_metadata(
-                    source,
-                    resource,
-                    hashes,
-                    client.unmanaged.credentials_cache(),
-                )
-                .boxed_local()
-                .await?
-            }
-            BuildableSource::Url(SourceUrl::Path(resource)) => {
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Path(resource.url).root(),
-                );
-                self.archive_metadata(source, resource, &cache_shard, hashes)
-                    .boxed_local()
-                    .await?
-            }
-        };
-
-        Ok(metadata)
+        }
     }
 
     /// Determine the [`ConfigSettings`] for the given package name.
