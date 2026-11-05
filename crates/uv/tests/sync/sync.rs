@@ -19004,6 +19004,100 @@ fn locked_build_owner_wheel_and_sdist() -> Result<()> {
     Ok(())
 }
 
+/// Registry archives can have different locations in the runtime and build views. Changing the
+/// runtime archive and its digest must not bypass the build owner's original digest.
+#[test]
+fn locked_build_compact_rejects_replaced_owner_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1"]
+
+        [build-system]
+        requires = ["shared==1"]
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    let name = "shared".parse()?;
+    let version = "1".parse()?;
+    let archive = generate_source_archive(&name, &version, "", None)?;
+    let trusted_hash = hex::encode(Sha256::digest(&archive));
+    let wheels = context.temp_dir.child("wheels");
+    let runtime = wheels.child("shared-1.tar.gz");
+    runtime.write_binary(&archive)?;
+    wheels
+        .child("build/shared-1.tar.gz")
+        .write_binary(&archive)?;
+
+    let lock = formatdoc! {r#"
+        version = 7
+        revision = 5
+        requires-python = ">=3.12"
+
+        [[build-cluster]]
+        roots = ["shared"]
+        owners = ["project"]
+        inputs = [{{ kind = "backend", name = "shared", specifier = "==1" }}]
+
+        [[build-cluster.package]]
+        ref = "shared"
+        sdist = {{ path = "build/shared-1.tar.gz", hash = "sha256:{trusted_hash}" }}
+
+        [[build-cluster]]
+        roots = []
+        owners = ["shared"]
+
+        [[package]]
+        name = "project"
+        version = "1"
+        source = {{ editable = "." }}
+        dependencies = [{{ name = "shared" }}]
+
+        [[package]]
+        name = "shared"
+        version = "1"
+        source = {{ registry = "wheels" }}
+        sdist = {{ path = "shared-1.tar.gz", hash = "sha256:{trusted_hash}" }}
+    "#};
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(&lock)?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline", "--no-cache", "--no-install-project"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared==1
+    ");
+
+    let marker = context.temp_dir.child("replacement-backend-executed");
+    let replacement = generate_source_archive(&name, &version, "", Some(marker.path()))?;
+    let replacement_hash = hex::encode(Sha256::digest(&replacement));
+    runtime.write_binary(&replacement)?;
+    lockfile.write_str(&lock.replace(
+        &format!(r#"path = "shared-1.tar.gz", hash = "sha256:{trusted_hash}""#),
+        &format!(r#"path = "shared-1.tar.gz", hash = "sha256:{replacement_hash}""#),
+    ))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--no-cache", "--no-install-project", "--reinstall-package", "shared",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      cause: Ambiguous source archive digests for compact build owner `shared==1 @ registry+wheels`
+    ");
+    assert!(!marker.exists());
+    Ok(())
+}
+
 /// A runtime-matched build requirement inherits the wheel selected by a path source.
 #[test]
 fn match_runtime_wheel_source() -> Result<()> {

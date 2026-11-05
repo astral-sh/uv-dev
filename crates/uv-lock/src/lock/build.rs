@@ -483,9 +483,15 @@ impl Lock {
     /// Establish provenance from matching owner artifact rows. In the owner layout, reuse
     /// ordinary packages only if compact roots reconstruct the entire solved environment.
     pub fn with_ordinary_build_roots(mut self) -> Result<Self, LockError> {
+        if self.version == COMPACT_BUILD_LOCK_VERSION {
+            if let Some(builds) = &mut self.builds {
+                compact::bind_owners(&self.packages, &mut builds.universes)?;
+            }
+            return Ok(self);
+        }
         if !matches!(
             self.version,
-            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION | COMPACT_BUILD_LOCK_VERSION
+            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
         ) {
             return Ok(self);
         }
@@ -498,13 +504,7 @@ impl Lock {
             .iter()
             .chain(builds.universes.iter().flat_map(|u| u.packages.values()))
         {
-            let wheels = if self.version == COMPACT_BUILD_LOCK_VERSION {
-                // The owner's source digest is independent of the wheels allowed in a view.
-                &[][..]
-            } else {
-                package.wheels.as_slice()
-            };
-            let files = (&package.sdist, wheels);
+            let files = (&package.sdist, package.wheels.as_slice());
             owner_artifacts
                 .entry(&package.id)
                 .and_modify(|known| {
@@ -521,10 +521,7 @@ impl Lock {
                 Some((id.clone(), OrdinaryOwner::new(id, sdist.as_ref())?))
             })
             .collect();
-        if matches!(
-            self.version,
-            CLUSTER_BUILD_LOCK_VERSION | COMPACT_BUILD_LOCK_VERSION
-        ) {
+        if self.version == CLUSTER_BUILD_LOCK_VERSION {
             // An explicit scope still binds its owner to the archive recorded in the lock.
             for universe in &mut builds.universes {
                 universe.ordinary_owner = proven.get(&universe.owner).cloned();
