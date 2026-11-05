@@ -776,7 +776,7 @@ fn tool_run_cache() {
     ");
 }
 
-/// Concurrent cache misses publish distinct archives under the same environment key.
+/// Concurrent cache misses should retain a single completed environment for the same key.
 #[tokio::test]
 async fn tool_run_concurrent_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -858,25 +858,38 @@ async fn tool_run_concurrent_cache() -> Result<()> {
         Ok(())
     })?;
 
-    // Both runs succeed, but retaining two environments for a single cache key wastes disk space:
-    // astral-sh/uv#23115. Only one archive remains reachable through the environment cache.
+    // Both runs succeed and share the single archive referenced by the environment cache.
     let environments = context
         .cache_files(CacheBucket::Archive)?
         .into_iter()
         .filter(|path| path.ends_with("pyvenv.cfg"))
         .map(fs_err::canonicalize)
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(environments.len(), 2);
+    assert_eq!(environments.len(), 1);
+    assert_eq!(
+        context
+            .cache_files(CacheBucket::Builds)?
+            .into_iter()
+            .filter(|path| path.ends_with("pyvenv.cfg"))
+            .count(),
+        0
+    );
     let links = WalkDir::new(cache.bucket(CacheBucket::Environments))
         .min_depth(2)
         .max_depth(2)
         .into_iter()
+        .filter_entry(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_none_or(|extension| extension != "lock")
+        })
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(links.len(), 1);
     let linked_environment = cache.resolve_link(links[0].path())?;
     assert!(environments.contains(&linked_environment.join("pyvenv.cfg")));
 
-    // A later invocation reuses the linked environment and leaves the orphan on disk.
+    // A later invocation reuses the same environment without retaining a redundant archive.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--no-index")
         .arg("--from")
