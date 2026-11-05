@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Concurrent cold-cache tool runs could retain duplicate, unreferenced environments. A per-key publication lock and second cache lookup now let losing processes reuse the published environment and discard their temporary builds. The updated regression verifies one retained archive, temporary-environment cleanup, and subsequent reuse. Concurrent temporary build work remains possible.",
+  "validation": [
+    "cargo test --locked -p uv --test tool tool_run::tool_run_concurrent_cache -- --exact",
+    "cargo test --locked -p uv --test tool tool_run::tool_run_cache -- --exact",
+    "cargo test --locked -p uv --test build cache_prune::prune_cached_env -- --exact",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3095"
+}
