@@ -401,7 +401,8 @@ fn lock_build_compact_factors_owner_rosters() -> Result<()> {
     Ok(())
 }
 
-/// Equal roots cannot share a roster if a wheel is available in only one of the solves.
+/// Equal roots stay in separate scopes when only one can use a Windows wheel. The common
+/// build-only row can store both wheels while the Linux scope names its narrower list.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_build_compact_preserves_rosters_with_distinct_artifacts() -> Result<()> {
@@ -474,15 +475,39 @@ fn lock_build_compact_preserves_rosters_with_distinct_artifacts() -> Result<()> 
     assert_snapshot!(other["marker"].to_string().trim(), @r#""sys_platform != 'linux'""#);
     assert_snapshot!(other["owners"].to_string().trim(), @r#"["project"]"#);
     assert_snapshot!(other["roots"].to_string().trim(), @r#"["builder"]"#);
-    let context = context.with_filter((windows_digest, "[WINDOWS_HASH]"));
+    assert!(other.get("package").is_none());
+    assert_snapshot!(linux["package"][0]["ref"].to_string().trim(), @r#""builder""#);
+    assert_snapshot!(linux["package"][0]["wheels"].to_string().trim(), @r#"
+    [
+        "builder-1-py3-none-any.whl",
+    ]
+    "#);
+    let base = wire["package"]
+        .as_array_of_tables()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("builder"))
+        })
+        .ok_or_else(|| anyhow!("missing common builder row"))?;
+    assert_eq!(base["build-only"].as_bool(), Some(true));
+    let context = context
+        .with_filter((digest, "[COMMON_HASH]"))
+        .with_filter((windows_digest, "[WINDOWS_HASH]"));
     insta::with_settings!({filters => context.filters()}, {
-        assert_snapshot!(other["package"][0]["wheels"].to_string().trim(), @r#"
+        assert_snapshot!(base["wheels"].to_string().trim(), @r#"
         [
-            "builder-1-py3-none-any.whl",
+            { path = "builder-1-py3-none-any.whl", hash = "sha256:[COMMON_HASH]" },
             { path = "builder-1-py3-none-win_amd64.whl", hash = "sha256:[WINDOWS_HASH]" },
         ]
         "#);
     });
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
     Ok(())
 }
 

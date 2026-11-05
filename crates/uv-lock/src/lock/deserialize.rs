@@ -1197,6 +1197,54 @@ version = "1.0.0"
     }
 
     #[test]
+    fn compact_wheels_with_distinct_hashes_keep_full_records()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let input = indoc! {r#"
+            version = 7
+            requires-python = ">=3.12"
+
+            [[build-cluster]]
+            roots = ["backend"]
+            owners = ["alpha"]
+
+            [[build-cluster]]
+            roots = ["backend"]
+            owners = ["beta"]
+
+            [[build-cluster.package]]
+            ref = "backend"
+            wheels = [
+                { path = "backend-1-py3-none-any.whl", hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222" },
+                { path = "backend-1-py3-none-win_amd64.whl", hash = "sha256:3333333333333333333333333333333333333333333333333333333333333333" },
+            ]
+
+            [[package]]
+            name = "alpha"
+            version = "1"
+            source = { editable = "alpha" }
+
+            [[package]]
+            build-only = true
+            name = "backend"
+            version = "1"
+            source = { registry = "links" }
+            wheels = [
+                { path = "backend-1-py3-none-any.whl", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" },
+            ]
+
+            [[package]]
+            name = "beta"
+            version = "1"
+            source = { editable = "beta" }
+        "#};
+        let lock = Lock::from_toml(input)?;
+        let written = lock.to_toml()?;
+        assert_eq!(written, input);
+        assert_eq!(Lock::from_toml(&written)?, lock);
+        Ok(())
+    }
+
+    #[test]
     fn syntax_errors_preserve_real_byte_offsets() {
         let input =
             CANONICAL_LOCK.replace("requires-python = \">=3.12\"", "requires-python = '>=3.12'");

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fmt;
 
 use either::Either;
@@ -208,14 +209,41 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
     let mut rows: BTreeMap<_, _> = lock
         .packages
         .iter()
-        .map(|package| (&package.id, package))
+        .map(|package| (&package.id, Cow::Borrowed(package)))
         .collect();
-    for package in scopes
-        .iter()
-        .flatten()
-        .flat_map(|owner| owner.packages.values())
-    {
-        rows.entry(&package.id).or_insert(package);
+    let build_packages = || {
+        scopes
+            .iter()
+            .flatten()
+            .flat_map(|owner| owner.packages.values())
+    };
+    let mut wheel_bases = BTreeMap::<_, &[Wheel]>::new();
+    for package in build_packages() {
+        let base = rows.entry(&package.id).or_insert(Cow::Borrowed(package));
+        if !lock.by_id.contains_key(&package.id) && package.wheels.len() > base.wheels.len() {
+            let wheels = wheel_bases.entry(&package.id).or_insert(&package.wheels);
+            if package.wheels.len() > wheels.len() {
+                *wheels = &package.wheels;
+            }
+        }
+    }
+    // A build-only row can store a richer observed wheel list when every other view can
+    // recover its exact list with filename references. Keep the first view's other fields.
+    for package in build_packages() {
+        if let Entry::Occupied(candidate) = wheel_bases.entry(&package.id) {
+            let wheels = *candidate.get();
+            if package.wheels != wheels
+                && !package
+                    .wheels
+                    .iter()
+                    .all(|wheel| wheel_reference(wheels, wheel))
+            {
+                candidate.remove();
+            }
+        }
+    }
+    for (id, wheels) in wheel_bases {
+        rows.get_mut(id).ok_or(WriteError::Format)?.to_mut().wheels = wheels.to_vec();
     }
     let identities = Identities::new(rows.keys().copied());
     let mut counts = FxHashMap::default();
@@ -295,11 +323,11 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
                 }
             }
             for (id, package) in packages {
-                if rows[id] != package {
+                if rows[id].as_ref() != package {
                     write_compact_patch(
                         writer,
                         package,
-                        rows[id],
+                        rows[id].as_ref(),
                         &lock.requires_python,
                         &counts,
                         &identities,
@@ -309,6 +337,7 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
         }
     }
     for (id, package) in rows {
+        let package = package.as_ref();
         // The runtime row is always authoritative. Build-only records cannot add runtime edges
         // or artifacts to a runtime package with the same identity.
         let build_only = !lock.by_id.contains_key(id);
@@ -437,11 +466,7 @@ fn write_compact_patch(
     }
     if package.wheels != base.wheels {
         writer.key_multiline_array("wheels", &package.wheels, |writer, wheel| {
-            let mut candidates = base
-                .wheels
-                .iter()
-                .filter(|old| old.filename == wheel.filename);
-            if candidates.next() == Some(wheel) && candidates.next().is_none() {
+            if wheel_reference(&base.wheels, wheel) {
                 writer.value(wheel.filename.to_string())
             } else {
                 write_wheel_inline(writer, wheel)
@@ -489,6 +514,11 @@ fn write_compact_patch(
         }
     }
     Ok(())
+}
+
+fn wheel_reference(base: &[Wheel], wheel: &Wheel) -> bool {
+    let mut candidates = base.iter().filter(|old| old.filename == wheel.filename);
+    candidates.next() == Some(wheel) && candidates.next().is_none()
 }
 
 fn write_compact_dependency_groups<K: AsRef<str>>(
