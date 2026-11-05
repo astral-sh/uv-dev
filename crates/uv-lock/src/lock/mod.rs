@@ -85,7 +85,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
-pub use build::{BuildEncoding, BuildLockPins, BuildPins};
+pub use build::{BuildEncoding, BuildLayout, BuildLockPins, BuildPins};
 
 mod build;
 mod build_inputs;
@@ -107,17 +107,19 @@ const VERSION: u32 = 1;
 const EXPLICIT_BUILD_LOCK_VERSION: u32 = 2;
 // Version 3 is reserved for the incompatible shared package-table layout.
 const BUILD_LOCK_VERSION: u32 = 4;
+// Version 5 is reserved for the experimental archive-backed owner layout.
+const CLUSTER_BUILD_LOCK_VERSION: u32 = 6;
 
 fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
-    if locks_builds && version == EXPLICIT_BUILD_LOCK_VERSION {
-        return None;
-    }
-    let supported = if locks_builds {
-        BUILD_LOCK_VERSION
+    if locks_builds {
+        (!matches!(
+            version,
+            EXPLICIT_BUILD_LOCK_VERSION | BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+        ))
+        .then_some(CLUSTER_BUILD_LOCK_VERSION)
     } else {
-        VERSION
-    };
-    (version != supported).then_some(supported)
+        (version != VERSION).then_some(VERSION)
+    }
 }
 
 /// An error returned when parsing a lockfile.

@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{BuildEncoding, GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{BuildEncoding, BuildLayout, GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -338,6 +338,26 @@ async fn do_lock(
         Some(encoding)
     } else {
         None
+    };
+
+    let existing_build_layout = existing_lock
+        .as_ref()
+        .map(Lock::build_layout)
+        .unwrap_or_default();
+    let build_layout = if build_encoding.is_some() {
+        match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT).as_deref() {
+            Ok("cluster") => BuildLayout::Cluster,
+            Ok("owner") => BuildLayout::Owner,
+            Err(std::env::VarError::NotPresent) => existing_build_layout,
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(anyhow::anyhow!(
+                    "Expected `owner` or `cluster` for UV_INTERNAL__BUILD_LOCK_LAYOUT"
+                )
+                .into());
+            }
+        }
+    } else {
+        BuildLayout::Owner
     };
 
     // Extract the project settings.
@@ -818,7 +838,10 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
-        let build_lock_matches = if existing_lock.locks_builds() {
+        // Per-owner lockfiles do not record which owners shared a solve.
+        let build_lock_matches = if existing_build_layout != build_layout {
+            false
+        } else if existing_lock.locks_builds() {
             match existing_lock
                 .satisfies_build_inputs(
                     target.install_path(),
@@ -1165,6 +1188,7 @@ async fn do_lock(
                 let lock = lock
                     .with_build_graphs(
                         encoding,
+                        build_layout,
                         resolution
                             .builds
                             .iter()

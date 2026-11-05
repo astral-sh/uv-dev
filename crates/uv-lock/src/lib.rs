@@ -3,7 +3,7 @@
 mod lock;
 
 pub use lock::{
-    BuildEncoding, BuildLockPins, BuildPins, CanonicalLockError, DependencySelection,
+    BuildEncoding, BuildLayout, BuildLockPins, BuildPins, CanonicalLockError, DependencySelection,
     GroupMetadata, Installable, InstallableRootKind, Lock, LockError, LockParseError, Metadata,
     Package, PackageMap, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport,
     RequirementsTxtExport, ResolverManifest, SatisfiesResult, SelectedDependency, TreeDisplay,

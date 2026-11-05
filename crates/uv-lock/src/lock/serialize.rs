@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use either::Either;
@@ -115,7 +116,14 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
 
-    let encoded = lock.builds.as_ref().map(|builds| builds.packages(lock));
+    let scopes = lock.builds.as_ref().map(|builds| builds.scopes());
+    let encoded = lock
+        .builds
+        .as_ref()
+        .zip(scopes.as_ref())
+        .map(|(builds, scopes)| builds.packages(lock, scopes))
+        .transpose()
+        .map_err(|error| WriteError::Serialize(toml_edit::ser::Error::Custom(error.to_string())))?;
     let packages = match encoded.as_ref() {
         Some(rows) => Either::Left(rows.iter().map(|row| (&row.package, Some(row)))),
         None => Either::Right(lock.packages.iter().map(|package| (package, None))),
@@ -127,13 +135,16 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             .entry(package.id.name.clone())
             .or_default() += 1;
     }
-    if let Some(builds) = &lock.builds {
-        for universe in builds
-            .universes
-            .iter()
-            .filter(|u| u.ordinary_owner.is_none())
-        {
+    if let Some(scopes) = scopes {
+        for owners in scopes {
             writer.array_of_tables(&["build-universes"])?;
+            if lock.version == super::CLUSTER_BUILD_LOCK_VERSION {
+                write_cluster(writer, &owners, &dist_count_by_name)?;
+                continue;
+            }
+            let [universe] = owners.as_slice() else {
+                return Err(WriteError::Format);
+            };
             writer.key_start("owner")?;
             let mut first = true;
             writer.start_inline_table();
@@ -182,6 +193,53 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     }
 
     Ok(())
+}
+
+fn write_cluster(
+    writer: &mut LockWriter,
+    owners: &[&Universe],
+    dist_count_by_name: &FxHashMap<PackageName, u64>,
+) -> Result<(), WriteError> {
+    // Deduplicate roots only within this accepted solve. The scope itself is established by
+    // the writer's grouping, including when separate solves selected the same roots.
+    let root_sets: BTreeSet<_> = owners.iter().map(|owner| owner.roots.as_slice()).collect();
+    let root_indices: BTreeMap<_, _> = root_sets.iter().copied().zip(0u64..).collect();
+    writer.key_multiline_array("root-sets", root_sets, |writer, roots| {
+        writer.array(roots, |writer, dependency| {
+            write_dependency_inline(
+                writer,
+                dependency,
+                MarkerTree::TRUE,
+                dist_count_by_name,
+                None,
+            )
+        })
+    })?;
+    writer.key_multiline_array("owners", owners, |writer, owner| {
+        let mut first = true;
+        writer.start_inline_table();
+        writer.inline_key_start(&mut first, "owner")?;
+        let mut first_id = true;
+        writer.start_inline_table();
+        write_package_id(
+            writer,
+            &owner.owner,
+            None,
+            PackageIdLocation::Inline(&mut first_id),
+        )?;
+        writer.finish_inline_table(first_id);
+        if let Some(marker) = owner.marker.combined().try_to_string() {
+            writer.inline_value(&mut first, "marker", marker)?;
+        }
+        writer.inline_value(&mut first, "root-set", root_indices[owner.roots.as_slice()])?;
+        if let Some(inputs) = &owner.inputs
+            && !inputs.is_empty()
+        {
+            writer.inline_value(&mut first, "inputs", serialize_value(inputs)?)?;
+        }
+        writer.finish_inline_table(first);
+        Ok(())
+    })
 }
 
 fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(), WriteError> {
