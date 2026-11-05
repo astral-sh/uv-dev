@@ -19,7 +19,9 @@ use super::{
     ResolverState, RootFork,
 };
 use crate::preferences::{Preference, Preferences, RuntimePreferenceMode};
-use crate::{AllowedYanks, BuildConstraintHashes, Manifest, ResolveError};
+use crate::{
+    AllowedYanks, BuildCluster, BuildClusters, BuildConstraintHashes, Manifest, ResolveError,
+};
 
 /// Which source packages can share an isolated build resolution.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -61,8 +63,8 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
 {
     /// Solve runtime and build dependencies on sibling branches of one PubGrub root.
     /// Discovery sees the original runtime graph at every depth for `match-runtime`.
-    /// Discovery splits owners at previous lock boundaries. Owners can share a build
-    /// fork when their markers and their locked selections agree.
+    /// Owners can share a build fork when one declaration covers the others in the same
+    /// marker, hash and previous-lock context.
     pub async fn resolve_with_build_forks<'pins, P: Ord + 'pins, E: From<ResolveError>>(
         self,
         strategy: BuildForkStrategy,
@@ -110,174 +112,103 @@ impl<Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
             hashes,
         };
         pending.enqueue(roots, strategy, &runtime.fork_markers);
-        let mut builds = Vec::new();
+        let mut builds = BuildClusters::new(strategy == BuildForkStrategy::Clustered);
 
-        let mut solve =
-            async |owners: &[SourceBuildRequirements], pins: Option<&P>, hasher: &HashStrategy| {
-                let scope = owners[0].marker;
-                let env = ResolverEnvironment::universal(vec![scope.combined()]);
-                // A URL can be trusted by one root but carry different hashes in another.
-                let index = InMemoryIndex::default();
-                let active = hashes.active_domain(scope);
-                let requirements = owners
-                    .iter()
-                    .flat_map(|owner| &owner.requirements)
-                    .filter(|requirement| !requirement.marker.is_disjoint(active))
-                    .cloned()
-                    .collect();
-                let (mut manifest, hasher, locked) =
-                    prepare(requirements, &env, &index, hasher, pins).await?;
-                provider.set_hasher(hasher.clone());
+        let mut solve = async |cluster: &BuildCluster, pins: Option<&P>, hasher: &HashStrategy| {
+            let owner = cluster.representative();
+            let scope = owner.marker;
+            let env = ResolverEnvironment::universal(vec![scope.combined()]);
+            // A URL can be trusted by one root but carry different hashes in another.
+            let index = InMemoryIndex::default();
+            let active = hashes.active_domain(scope);
+            let requirements = owner
+                .requirements
+                .iter()
+                .filter(|requirement| !requirement.marker.is_disjoint(active))
+                .cloned()
+                .collect();
+            let (mut manifest, hasher, locked) =
+                prepare(requirements, &env, &index, hasher, pins).await?;
+            provider.set_hasher(hasher.clone());
 
-                manifest.preferences = if locked.is_empty() {
-                    preferences.clone()
-                } else {
-                    Preferences::from_iter(
-                        locked
-                            .into_iter()
-                            .chain(runtime_preferences.iter().cloned()),
-                        &env,
-                    )
-                };
-                provider.set_allowed_yanks(AllowedYanks::from_manifest(
-                    &manifest,
+            manifest.preferences = if locked.is_empty() {
+                preferences.clone()
+            } else {
+                Preferences::from_iter(
+                    locked
+                        .into_iter()
+                        .chain(runtime_preferences.iter().cloned()),
                     &env,
-                    state.dependency_mode,
-                ));
-                let mut build = ResolverState::new(
-                    manifest,
-                    state.options.clone(),
-                    &hasher,
-                    env,
-                    &state.current_environment,
-                    state.tags.clone(),
-                    &state.python_requirement,
-                    state.conflicts.clone(),
-                    &index,
-                    &state.git,
-                    &state.capabilities,
-                    &state.locations,
-                    state.installed_packages.clone(),
-                );
-                build.reporter = state.reporter.clone();
-                debug!(
-                    owners = %owners.iter().map(|root| root.owner.name()).join(", "),
-                    ?scope,
-                    "Solving build requirements"
-                );
-                let graph = Arc::new(build).run(&provider, schedule).await;
-                Ok::<_, E>(graph.map(|graph| (graph, hasher)))
+                )
             };
+            provider.set_allowed_yanks(AllowedYanks::from_manifest(
+                &manifest,
+                &env,
+                state.dependency_mode,
+            ));
+            let mut build = ResolverState::new(
+                manifest,
+                state.options.clone(),
+                &hasher,
+                env,
+                &state.current_environment,
+                state.tags.clone(),
+                &state.python_requirement,
+                state.conflicts.clone(),
+                &index,
+                &state.git,
+                &state.capabilities,
+                &state.locations,
+                state.installed_packages.clone(),
+            );
+            build.reporter = state.reporter.clone();
+            debug!(
+                owners = %cluster.owners().map(|root| root.owner.name()).join(", "),
+                ?scope,
+                "Solving build requirements"
+            );
+            let graph = Arc::new(build).run(&provider, schedule).await;
+            Ok::<_, E>(graph.map(|graph| (graph, hasher)))
+        };
         while let Some(BuildGroup {
+            scope,
             pins,
             owners,
             hasher,
         }) = pending.groups.pop()
         {
-            for (owners, (graph, hasher)) in resolve_cluster(owners, &mut async |owners| {
-                solve(owners, pins, hasher).await
-            })
-            .await?
-            {
-                let scope = owners[0].marker;
+            for cluster in builds.plan(scope, pins, hasher, owners) {
+                let (graph, build_hasher) = solve(&cluster, pins, hasher)
+                    .await?
+                    .map_err(|error| build_error(cluster.owners(), error))?;
                 debug!(
-                    owners = %owners.iter().map(|root| root.owner.name()).join(", "),
+                    owners = %cluster.owners().map(|root| root.owner.name()).join(", "),
                     ?scope,
                     "Resolved build environment"
                 );
-                let nested = discover(&graph, &runtime, scope, &hasher).await?;
+                let nested = discover(&graph, &runtime, scope, &build_hasher).await?;
                 pending.enqueue(nested, strategy, &runtime.fork_markers);
-                builds.push(BuildResolution { owners, graph });
+                builds.record(scope, pins, hasher, cluster, graph);
             }
         }
-        runtime.builds = builds;
+        runtime.builds = builds
+            .into_builds()
+            .map(|(owners, graph)| BuildResolution { owners, graph })
+            .collect();
         Ok(runtime)
     }
 }
 
-/// Try a single shared graph first. After a conflict, put each owner in the first cluster
-/// whose combined requirements resolve. Retain the successful graph so it can be emitted
-/// without solving the same combination a second time.
-async fn resolve_cluster<T, E: From<ResolveError>>(
-    owners: Vec<SourceBuildRequirements>,
-    solve: &mut impl AsyncFnMut(&[SourceBuildRequirements]) -> Result<Result<T, ResolveError>, E>,
-) -> Result<Vec<(Vec<SourceBuildRequirements>, T)>, E> {
-    let count = owners.len();
-    match solve(&owners).await? {
-        Ok(graph) => return Ok(vec![(owners, graph)]),
-        Err(error) if count > 1 && is_cluster_conflict(&error) => {}
-        Err(error) => return Err(build_error(&owners, error).into()),
-    }
-
-    let mut clusters: Vec<(Vec<SourceBuildRequirements>, Option<T>)> = Vec::new();
-    'owner: for owner in owners {
-        for (roots, graph) in &mut clusters {
-            if roots.len() + 1 == count {
-                // The initial solve already rejected the full batch.
-                continue;
-            }
-            roots.push(owner.clone());
-            match solve(roots).await? {
-                Ok(resolution) => {
-                    *graph = Some(resolution);
-                    continue 'owner;
-                }
-                Err(error) if is_cluster_conflict(&error) => {
-                    roots.pop();
-                }
-                Err(error) => return Err(build_error(roots, error).into()),
-            }
-        }
-        clusters.push((vec![owner], None));
-    }
-
-    let mut builds = Vec::with_capacity(clusters.len());
-    for (owners, graph) in clusters {
-        let graph = match graph {
-            Some(graph) => graph,
-            None => solve(&owners)
-                .await?
-                .map_err(|error| build_error(&owners, error))?,
-        };
-        builds.push((owners, graph));
-    }
-    Ok(builds)
-}
-
-fn is_cluster_conflict(error: &ResolveError) -> bool {
-    match error {
-        ResolveError::Dependencies(source, ..) => is_cluster_conflict(source),
-        ResolveError::NoSolution(_)
-        | ResolveError::ConflictingUrls { .. }
-        | ResolveError::ConflictingIndexesForEnvironment { .. }
-        | ResolveError::ConflictingIndexes(..) => true,
-        ResolveError::Client(_)
-        | ResolveError::Distribution(_)
-        | ResolveError::BuildDependencies(..)
-        | ResolveError::SpawnThread(_)
-        | ResolveError::ChannelClosed
-        | ResolveError::UnregisteredTask(_)
-        | ResolveError::DisallowedUrl { .. }
-        | ResolveError::DistributionType(_)
-        | ResolveError::Dist(..)
-        | ResolveError::InvalidVersion(_)
-        | ResolveError::UnhashedPackage(_)
-        | ResolveError::ConflictingDistribution(_)
-        | ResolveError::PackageUnavailable(_)
-        | ResolveError::ConflictMarker(_)
-        | ResolveError::MismatchedPackageName { .. } => false,
-    }
-}
-
-fn build_error(owners: &[SourceBuildRequirements], error: ResolveError) -> ResolveError {
-    let packages = owners
-        .iter()
-        .map(|root| root.owner.name().clone())
-        .collect();
+fn build_error<'a>(
+    owners: impl Iterator<Item = &'a SourceBuildRequirements>,
+    error: ResolveError,
+) -> ResolveError {
+    let packages = owners.map(|root| root.owner.name().clone()).collect();
     ResolveError::BuildDependencies(packages, Box::new(error))
 }
 
 struct BuildGroup<'a, P> {
+    scope: UniversalMarker,
     pins: Option<&'a P>,
     hasher: &'a HashStrategy,
     owners: Vec<SourceBuildRequirements>,
@@ -341,6 +272,7 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
                             groups
                                 .entry((scope, pins))
                                 .or_insert_with(|| BuildGroup {
+                                    scope,
                                     pins,
                                     hasher,
                                     owners: Vec::new(),
@@ -349,6 +281,7 @@ impl<'pins, P: Ord> PendingBuilds<'pins, P> {
                                 .push(root);
                         }
                         BuildForkStrategy::PerPackage => self.groups.push(BuildGroup {
+                            scope,
                             pins,
                             hasher,
                             owners: vec![root],
