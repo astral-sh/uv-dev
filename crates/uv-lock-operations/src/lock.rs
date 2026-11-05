@@ -342,22 +342,42 @@ async fn do_lock(
 
     let existing_build_layout = existing_lock
         .as_ref()
-        .map(Lock::build_layout)
-        .unwrap_or_default();
+        .filter(|lock| lock.locks_builds())
+        .map(Lock::build_layout);
     let build_layout = if build_encoding.is_some() {
         match std::env::var(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT).as_deref() {
             Ok("cluster") => BuildLayout::Cluster,
             Ok("owner") => BuildLayout::Owner,
-            Err(std::env::VarError::NotPresent) => existing_build_layout,
+            Ok("compact") => BuildLayout::Compact,
+            Err(std::env::VarError::NotPresent) => {
+                let legacy_encoding =
+                    std::env::var_os(EnvVars::UV_INTERNAL__BUILD_LOCK_ENCODING).is_some();
+                match existing_build_layout {
+                    Some(BuildLayout::Compact) if legacy_encoding => BuildLayout::Cluster,
+                    Some(layout) => layout,
+                    None if legacy_encoding
+                        || std::env::var(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY).as_deref()
+                            == Ok("per-package") =>
+                    {
+                        BuildLayout::Owner
+                    }
+                    None => BuildLayout::Compact,
+                }
+            }
             Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(anyhow::anyhow!(
-                    "Expected `owner` or `cluster` for UV_INTERNAL__BUILD_LOCK_LAYOUT"
+                    "Expected `owner`, `cluster`, or `compact` for UV_INTERNAL__BUILD_LOCK_LAYOUT"
                 )
                 .into());
             }
         }
     } else {
         BuildLayout::Owner
+    };
+    let build_encoding = if build_layout == BuildLayout::Compact {
+        Some(BuildEncoding::Dependency)
+    } else {
+        build_encoding
     };
 
     // Extract the project settings.
@@ -839,7 +859,7 @@ async fn do_lock(
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
         // Per-owner lockfiles do not record which owners shared a solve.
-        let build_lock_matches = if existing_build_layout != build_layout {
+        let build_lock_matches = if existing_build_layout.unwrap_or_default() != build_layout {
             false
         } else if existing_lock.locks_builds() {
             match existing_lock
