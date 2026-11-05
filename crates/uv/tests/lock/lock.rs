@@ -1,4 +1,3 @@
-#[cfg(feature = "test-universal")]
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -145,7 +144,6 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     }
 
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
         .env(EnvVars::UV_INTERNAL__BUILD_RESOLUTION, "separate-grouped")
         .args(["--offline", "--preview-features=build-dependency-locking"]), @"
     exit_code: 0 (success)
@@ -157,23 +155,20 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     assert_eq!(parsed.to_toml()?, locked);
 
     let wire: toml::Value = toml::from_str(&locked)?;
-    assert_eq!(wire["version"].as_integer(), Some(6));
-    let universes = wire["build-universes"]
+    assert_eq!(wire["version"].as_integer(), Some(7));
+    let clusters = wire["build-cluster"]
         .as_array()
-        .ok_or_else(|| anyhow!("missing build universes"))?;
-    assert_eq!(universes.len(), 3);
-    let owners = universes[0]["owners"]
+        .ok_or_else(|| anyhow!("missing build clusters"))?;
+    assert_eq!(clusters.len(), 3);
+    assert_snapshot!(clusters[0]["roots"].to_string(), @r#"["inner"]"#);
+    assert_snapshot!(clusters[0]["owners"].to_string(), @r#"["alpha", "beta"]"#);
+    let declarations = clusters[0]["owner"]
         .as_array()
-        .ok_or_else(|| anyhow!("missing build owners"))?;
-    let root_sets = universes[0]["root-sets"]
-        .as_array()
-        .ok_or_else(|| anyhow!("missing root sets"))?;
-    assert_eq!(owners.len(), 2);
-    assert_eq!(root_sets.len(), 1);
-    assert_eq!(owners[0]["owner"]["name"].as_str(), Some("alpha"));
-    assert_eq!(owners[1]["owner"]["name"].as_str(), Some("beta"));
-    assert_eq!(owners[0]["root-set"], owners[1]["root-set"]);
-    assert_ne!(owners[0]["inputs"], owners[1]["inputs"]);
+        .ok_or_else(|| anyhow!("missing owner declarations"))?;
+    assert_eq!(declarations.len(), 2);
+    assert_eq!(declarations[0]["ref"].as_str(), Some("alpha"));
+    assert_eq!(declarations[1]["ref"].as_str(), Some("beta"));
+    assert_ne!(declarations[0]["inputs"], declarations[1]["inputs"]);
 
     uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"]), @"
     exit_code: 0 (success)
@@ -223,6 +218,154 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
             .as_array()
             .is_some_and(|owners| owners.len() == 1)
     }));
+    Ok(())
+}
+
+/// Match-runtime can select different backend versions for disjoint Python ranges.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_compact_conditional_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    for version in ["3.12.0", "4.1.0"] {
+        let (filename, bytes) = WheelBuilder::new(&"flit-core".parse()?, &version.parse()?).build();
+        wheels.child(filename).write_binary(&bytes)?;
+    }
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = [
+            "flit-core; python_version < '3.13'",
+            "flit-core; python_version >= '3.13'",
+        ]
+
+        [build-system]
+        requires = []
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        preview-features = ["build-dependency-locking"]
+
+        [tool.uv.sources]
+        flit-core = [
+            { path = "wheels/flit_core-3.12.0-py3-none-any.whl", marker = "python_version < '3.13'" },
+            { path = "wheels/flit_core-4.1.0-py3-none-any.whl", marker = "python_version >= '3.13'" },
+        ]
+
+        [tool.uv.extra-build-dependencies]
+        project = [{ requirement = "flit-core", match-runtime = true }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    assert_eq!(uv_lock::Lock::from_toml(&locked)?.to_toml()?, locked);
+    let wire = locked.parse::<toml_edit::DocumentMut>()?;
+    let clusters = wire["build-cluster"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing build clusters"))?;
+    assert_eq!(clusters.len(), 1);
+    assert_snapshot!(wire["build-cluster"][0]["owners"].to_string().trim(), @r#"["project"]"#);
+    assert_snapshot!(wire["build-cluster"][0]["roots"].to_string().trim(), @r#"[{ name = "flit-core", version = "3.12.0", marker = "python_full_version < '3.13'" }, { name = "flit-core", version = "4.1.0", marker = "python_full_version >= '3.13'" }]"#);
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
+}
+
+/// Runtime and build scopes may select different edges and wheels for the same package identity.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_compact_preserves_package_views() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    let shared = "shared".parse()?;
+    let version = "1".parse()?;
+    let requires = ["leaf".parse()?];
+    let shared = WheelBuilder::new(&shared, &version).requires(&requires);
+    let (filename, bytes) = shared.build();
+    let common_hash = hex::encode(Sha256::digest(&bytes));
+    wheels.child(filename).write_binary(&bytes)?;
+    let (filename, bytes) = shared.tag("py3-none-win_amd64").build();
+    let windows_hash = hex::encode(Sha256::digest(&bytes));
+    wheels.child(filename).write_binary(&bytes)?;
+    for version in ["1", "2"] {
+        let (filename, bytes) = WheelBuilder::new(&"leaf".parse()?, &version.parse()?).build();
+        wheels.child(filename).write_binary(&bytes)?;
+    }
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["shared==1; sys_platform != 'win32'", "leaf==1"]
+
+        [build-system]
+        requires = ["shared==1", "leaf==2"]
+        build-backend = "unused"
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        preview-features = ["build-dependency-locking"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    assert_eq!(uv_lock::Lock::from_toml(&locked)?.to_toml()?, locked);
+    let wire = locked.parse::<toml_edit::DocumentMut>()?;
+    let packages = wire["package"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing packages"))?;
+    let shared = packages
+        .iter()
+        .filter(|package| package["name"].as_str() == Some("shared"))
+        .collect::<Vec<_>>();
+    let [runtime] = shared.as_slice() else {
+        return Err(anyhow!("expected one common row for shared"));
+    };
+    let build = &wire["build-cluster"][0]["package"][0];
+    assert_snapshot!(build["ref"].to_string().trim(), @r#""shared""#);
+    assert_snapshot!(runtime["dependencies"].to_string().trim(), @r#"
+    [
+        { name = "leaf", version = "1", source = { registry = "wheels" } },
+    ]
+    "#);
+    assert_snapshot!(build["dependencies"].to_string().trim(), @r#"
+    [
+        { name = "leaf", version = "2", source = { registry = "wheels" } },
+    ]
+    "#);
+    let context = context
+        .with_filter((common_hash, "[COMMON_HASH]"))
+        .with_filter((windows_hash, "[WINDOWS_HASH]"));
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(runtime["wheels"].to_string().trim(), @r#"
+        [
+            { path = "shared-1-py3-none-any.whl", hash = "sha256:[COMMON_HASH]" },
+        ]
+        "#);
+        assert_snapshot!(build["wheels"].to_string().trim(), @r#"
+        [
+            "shared-1-py3-none-any.whl",
+            { path = "shared-1-py3-none-win_amd64.whl", hash = "sha256:[WINDOWS_HASH]" },
+        ]
+        "#);
+    });
     Ok(())
 }
 
@@ -423,7 +566,7 @@ async fn lock_build_index_hash_algorithm() -> Result<()> {
         assert_snapshot!(diff_snapshot(&original, &context.read("uv.lock"), 1), @r#"
         --- old
         +++ new
-        @@ -21,3 +21,3 @@
+        @@ -18,3 +18,3 @@
          wheels = [
         -    { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256]", upload-time = "2024-01-01T00:00:00Z" },
         +    { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha512:[SHA512]", upload-time = "2024-01-01T00:00:00Z" },
@@ -701,7 +844,7 @@ fn lock_build_bounded_upgrade() -> Result<()> {
     assert_snapshot!(diff_snapshot(&before, &context.read("uv.lock"), 2), @r#"
     --- old
     +++ new
-    @@ -17,8 +17,8 @@
+    @@ -14,8 +14,8 @@
      build-only = true
      name = "ok"
     -version = "1.0.0"
@@ -744,7 +887,7 @@ fn lock_build_hashes_conditional_versions() -> Result<()> {
             { requirement = "ok==2 ; python_version >= '3.13'", hashes = ["sha256:8163cd4f0477f8e93b856ac6a517fe5fa0f29339291fe2807d5376df685f6697"] },
         ]
     "#})?;
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "owner"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -858,17 +1001,17 @@ fn lock_build_inputs_direct_wheel_metadata() -> Result<()> {
         assert_snapshot!(diff_snapshot(&original, &context.read("uv.lock"), 1), @r#"
         --- old
         +++ new
-        @@ -11,3 +11,3 @@
+        @@ -10,3 +10,3 @@
          version = "1"
         -requires-dist = ["ok==1"]
         +requires-dist = ["ok==2"]
 
-        @@ -33,3 +33,3 @@
+        @@ -30,3 +30,3 @@
          [package.metadata]
         -requires-dist = [{ name = "ok", specifier = "==1" }]
         +requires-dist = [{ name = "ok", specifier = "==2" }]
 
-        @@ -38,6 +38,6 @@
+        @@ -35,6 +35,6 @@
          name = "ok"
         -version = "1.0.0"
         +version = "2.0.0"
@@ -906,7 +1049,9 @@ fn lock_build_encoding_reuses_versions() -> Result<()> {
     "#})?;
     let links = context.temp_dir.child("links");
     links.copy_from(context.workspace_root.join("test/links"), &["ok-1*.whl"])?;
-    uv_snapshot!(context.filters(), context.lock().args(["--preview-features", "build-dependency-locking"]), @"
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "owner")
+        .args(["--preview-features", "build-dependency-locking"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -979,12 +1124,7 @@ fn lock_build_relock_owner_version() -> Result<()> {
         assert_snapshot!(diff_snapshot(&locked, &context.read("uv.lock"), 1), @r#"
         --- old
         +++ new
-        @@ -9,3 +9,3 @@
-         [[build-universes]]
-        -owner = { name = "owner", version = "1", source = { editable = "." } }
-        +owner = { name = "owner", version = "2", source = { editable = "." } }
-         inputs = [{ kind = "backend", name = "backend", specifier = ">=1" }]
-        @@ -26,3 +26,3 @@
+        @@ -23,3 +23,3 @@
          name = "owner"
         -version = "1"
         +version = "2"
@@ -1043,29 +1183,25 @@ fn lock_build_relock_prefers_owner_pin() -> Result<()> {
         assert_snapshot!(diff_snapshot(&locked, &context.read("uv.lock"), 1), @r#"
         --- old
         +++ new
-        @@ -8,18 +8,2 @@
-
-        -[[build-universes]]
-        -owner = { name = "project", version = "1", source = { editable = "." } }
-        -inputs = [{ kind = "backend", name = "ok", specifier = ">=1" }]
-        -roots = [
-        -    { name = "ok", version = "1.0.0", source = { registry = "links" } },
-        -]
-        -
-        -[[package]]
+        @@ -8,3 +8,3 @@
+         [[build-cluster]]
+        -roots = [{ name = "ok", version = "1.0.0" }]
+        +roots = ["ok"]
+         owners = ["project"]
+        @@ -13,12 +13,3 @@
+         [[package]]
         -build-only = true
-        -name = "ok"
+         name = "ok"
         -version = "1.0.0"
         -source = { registry = "links" }
         -wheels = [
         -    { path = "ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" },
         -]
         -
-         [[package]]
-        @@ -36,4 +20,6 @@
-         source = { editable = "." }
-        +build-roots = [{ name = "ok" }]
-        +build-inputs = [{ kind = "backend", name = "ok", specifier = ">=1" }]
+        -[[package]]
+        -name = "ok"
+         version = "2.0.0"
+        @@ -34,3 +25,3 @@
          dependencies = [
         -    { name = "ok", version = "2.0.0", source = { registry = "links" } },
         +    { name = "ok" },
@@ -1382,8 +1518,8 @@ fn lock_build_inputs_ordinary_roots() -> Result<()> {
     ");
 
     let locked = context.read("uv.lock");
-    assert!(locked.contains("build-roots = [{ name = \"ok\" }]"));
-    assert!(!locked.contains("[[build-universes]]"));
+    let wire = locked.parse::<toml_edit::DocumentMut>()?;
+    assert_snapshot!(wire["build-cluster"][0]["roots"].to_string().trim(), @r#"["ok"]"#);
     pyproject.write_str(&project.replace(r#"requires = ["ok==1"]"#, r#"requires = ["ok>=1"]"#))?;
     uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline").arg("--no-cache"), @"
     exit_code: 1 (failure)
@@ -1477,8 +1613,12 @@ fn lock_build_inputs_compacted_domains() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     let lock = context.read("uv.lock");
-    assert!(lock.contains("build-roots = [{ name = \"d\" }]"));
-    assert!(!lock.contains("[[build-universes]]"));
+    let wire = lock.parse::<toml_edit::DocumentMut>()?;
+    let clusters = wire["build-cluster"]
+        .as_array_of_tables()
+        .ok_or_else(|| anyhow!("missing build clusters"))?;
+    assert_eq!(clusters.len(), 1);
+    assert_snapshot!(wire["build-cluster"][0]["roots"].to_string().trim(), @r#"["d"]"#);
 
     // Changes outside the supported project environments leave the descriptor current.
     let excluded = project.replace(

@@ -255,7 +255,7 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
             });
             if let Some(inputs) = common_inputs {
                 if inputs.as_ref().is_none_or(|inputs| !inputs.is_empty()) {
-                    write_compact_inputs(writer, inputs)?;
+                    write_compact_inputs(writer, inputs.as_ref())?;
                 }
             } else {
                 for owner in &owners {
@@ -266,7 +266,7 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
                     writer.key_start("ref")?;
                     write_compact_ref(writer, &owner.owner, None, &identities)?;
                     writer.raw("\n");
-                    write_compact_inputs(writer, &owner.inputs)?;
+                    write_compact_inputs(writer, owner.inputs.as_ref())?;
                 }
             }
             let mut packages = BTreeMap::new();
@@ -316,7 +316,7 @@ fn write_compact(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError>
 
 fn write_compact_inputs(
     writer: &mut LockWriter,
-    inputs: &Option<BTreeSet<super::build_inputs::BuildInput>>,
+    inputs: Option<&BTreeSet<super::build_inputs::BuildInput>>,
 ) -> Result<(), WriteError> {
     match inputs {
         Some(inputs) => write_serialized_array(writer, "inputs", inputs),
