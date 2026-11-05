@@ -112,13 +112,14 @@ const CLUSTER_BUILD_LOCK_VERSION: u32 = 6;
 const COMPACT_BUILD_LOCK_VERSION: u32 = 7;
 
 fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
+    // The compact layout identifies itself by version, without a build-encoding field.
+    if version == COMPACT_BUILD_LOCK_VERSION {
+        return None;
+    }
     if locks_builds {
         (!matches!(
             version,
-            EXPLICIT_BUILD_LOCK_VERSION
-                | BUILD_LOCK_VERSION
-                | CLUSTER_BUILD_LOCK_VERSION
-                | COMPACT_BUILD_LOCK_VERSION
+            EXPLICIT_BUILD_LOCK_VERSION | BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
         ))
         .then_some(COMPACT_BUILD_LOCK_VERSION)
     } else {

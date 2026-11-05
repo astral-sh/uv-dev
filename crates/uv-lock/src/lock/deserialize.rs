@@ -1130,6 +1130,73 @@ version = "1.0.0"
     }
 
     #[test]
+    fn duplicate_compact_build_owner_is_reported() {
+        let input = indoc! {r#"
+            version = 7
+            requires-python = ">=3.12"
+
+            [[build-cluster]]
+            roots = []
+            owners = ["project", "project"]
+
+            [[package]]
+            name = "project"
+            version = "1"
+            source = { editable = "." }
+        "#};
+        let error = Lock::from_toml(input).expect_err("duplicate build owners are invalid");
+        assert_matches!(
+            error,
+            LockParseError::Toml(source)
+                if source.message() == "Overlapping compact build coverage for `project==1 @ editable+.`"
+        );
+    }
+
+    #[test]
+    fn compact_build_owner_requires_a_reachable_package() {
+        let input = indoc! {r#"
+            version = 7
+            requires-python = ">=3.12"
+
+            [[build-cluster]]
+            roots = []
+            owners = ["ghost"]
+
+            [[package]]
+            build-only = true
+            name = "ghost"
+            version = "1"
+            source = { registry = "https://example.com/simple" }
+        "#};
+        let error = Lock::from_toml(input).expect_err("the owner entry does not use the package");
+        assert_matches!(
+            error,
+            LockParseError::Toml(source)
+                if source.message() == "Unreachable compact build-only package `ghost==1 @ registry+https://example.com/simple`"
+        );
+    }
+
+    #[test]
+    fn compact_build_only_package_requires_a_cluster() {
+        let input = indoc! {r#"
+            version = 7
+            requires-python = ">=3.12"
+
+            [[package]]
+            build-only = true
+            name = "ghost"
+            version = "1"
+            source = { registry = "https://example.com/simple" }
+        "#};
+        let error = Lock::from_toml(input).expect_err("build-only packages need a build graph");
+        assert_matches!(
+            error,
+            LockParseError::Toml(source)
+                if source.message() == "Unreachable compact build-only package `ghost==1 @ registry+https://example.com/simple`"
+        );
+    }
+
+    #[test]
     fn syntax_errors_preserve_real_byte_offsets() {
         let input =
             CANONICAL_LOCK.replace("requires-python = \">=3.12\"", "requires-python = '>=3.12'");

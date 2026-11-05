@@ -5,10 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
-use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree};
+use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree, satisfies_require_hashes};
 use uv_macros::DeserializeUntagged;
 use uv_normalize::{DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
+use uv_pypi_types::HashDigest;
 use uv_resolver_types::UniversalMarker;
 
 use super::super::{
@@ -16,7 +17,8 @@ use super::super::{
     LockWire, Package, PackageId, PackageMetadata, PackageWire, Source, SourceDist, VERSION, Wheel,
 };
 use super::{
-    BuildEncoding, BuildInput, BuildLocks, Universe, closure, error, missing, sort_universes,
+    BuildEncoding, BuildInput, BuildLocks, OrdinaryOwner, Universe, closure, error, missing,
+    sort_universes,
 };
 
 /// Resolve references against distinct identities, even when several builds use the same row.
@@ -430,6 +432,19 @@ pub(in crate::lock) fn decode(mut wire: LockWire) -> Result<Lock, LockError> {
             )));
         }
     }
+    let mut unreachable: BTreeSet<_> = rows
+        .values()
+        .filter(|row| row.build_only)
+        .map(|row| &row.id)
+        .collect();
+    for id in universes.iter().flat_map(|owner| owner.packages.keys()) {
+        unreachable.remove(id);
+    }
+    if let Some(id) = unreachable.first() {
+        return Err(error(format!(
+            "Unreachable compact build-only package `{id}`"
+        )));
+    }
     sort_universes(&mut universes);
     lock.version = COMPACT_BUILD_LOCK_VERSION;
     lock.builds = Some(BuildLocks {
@@ -437,6 +452,50 @@ pub(in crate::lock) fn decode(mut wire: LockWire) -> Result<Lock, LockError> {
         universes,
     });
     lock.with_ordinary_build_roots()
+}
+
+/// Every environment selecting a registry owner must agree on the digest of its source archive.
+/// Wheels and archive locations can differ across views of that package.
+pub(super) fn bind_owners(
+    runtime: &[Package],
+    universes: &mut [Universe],
+) -> Result<(), LockError> {
+    let mut archives: BTreeMap<_, Option<HashDigest>> = universes
+        .iter()
+        .filter(|universe| matches!(universe.owner.source, Source::Registry(_)))
+        .map(|universe| (universe.owner.clone(), None))
+        .collect();
+    for package in runtime.iter().chain(
+        universes
+            .iter()
+            .flat_map(|universe| universe.packages.values()),
+    ) {
+        if let Some(known) = archives.get_mut(&package.id)
+            && let Some(hash) = package
+                .sdist
+                .as_ref()
+                .and_then(SourceDist::hash)
+                .filter(|hash| satisfies_require_hashes(hash))
+        {
+            if known.as_ref().is_some_and(|known| known != hash) {
+                return Err(error(format!(
+                    "Ambiguous source archive digests for compact build owner `{}`",
+                    package.id
+                )));
+            }
+            known.get_or_insert_with(|| hash.clone());
+        }
+    }
+    for universe in universes {
+        universe.ordinary_owner = OrdinaryOwner::new(&universe.owner, None).or_else(|| {
+            archives
+                .get(&universe.owner)
+                .and_then(|hash| hash.as_ref())
+                .cloned()
+                .map(OrdinaryOwner::Archive)
+        });
+    }
+    Ok(())
 }
 
 /// Combine disjoint solves for the same owners when an ordinary marker projection can express
