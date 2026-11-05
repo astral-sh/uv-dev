@@ -40,6 +40,194 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// One accepted solve can serve several owners without sharing their isolated environments.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_cluster_replays_owner_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+
+        [tool.uv.workspace]
+        members = ["alpha", "beta", "gamma"]
+    "#})?;
+    let wheels = context.temp_dir.child("wheels");
+    for name in ["leaf", "other", "later"] {
+        let (filename, bytes) = WheelBuilder::new(&name.parse()?, &"1".parse()?).build();
+        wheels.child(filename).write_binary(&bytes)?;
+    }
+    let (filename, inner_wheel) = WheelBuilder::new(&"inner".parse()?, &"1".parse()?).build();
+    let inner_project = indoc! {r#"
+        [project]
+        name = "inner"
+        version = "1"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["leaf==1"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#};
+    let inner_metadata = indoc! {r"
+        Metadata-Version: 2.3
+        Name: inner
+        Version: 1
+        Requires-Python: >=3.12
+    "};
+    let inner_backend = formatdoc! {r#"
+        import shutil
+        from importlib.metadata import version
+        from importlib.util import find_spec
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert version("leaf") == "1"
+            assert find_spec("other") is None
+            wheel = Path(__file__).with_name("{filename}")
+            shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+            return wheel.name
+    "#};
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            ("inner-1/pyproject.toml", inner_project.as_bytes()),
+            ("inner-1/PKG-INFO", inner_metadata.as_bytes()),
+            ("inner-1/backend.py", inner_backend.as_bytes()),
+            (&format!("inner-1/{filename}"), inner_wheel.as_slice()),
+        ],
+    )?;
+    wheels.child("inner-1.tar.gz").write_binary(&archive)?;
+
+    for (name, requires, has_other) in [
+        ("alpha", r#"["inner==1"]"#, "False"),
+        ("beta", r#"["inner>=1"]"#, "False"),
+        (
+            "gamma",
+            r#"["inner==1", "other==1", "later==1; python_version >= '3.13'"]"#,
+            "True",
+        ),
+    ] {
+        let member = context.temp_dir.child(name);
+        member.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = {requires}
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        let (filename, bytes) = WheelBuilder::new(&name.parse()?, &"1".parse()?).build();
+        member.child(&filename).write_binary(&bytes)?;
+        member.child("backend.py").write_str(&formatdoc! {r#"
+            import shutil
+            from importlib.metadata import version
+            from importlib.util import find_spec
+            from pathlib import Path
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                assert version("inner") == "1"
+                assert (find_spec("other") is not None) == {has_other}
+                assert find_spec("later") is None
+                assert find_spec("leaf") is None
+                wheel = Path(__file__).with_name("{filename}")
+                shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+                return wheel.name
+        "#})?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
+        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "clustered")
+        .args(["--offline", "--preview-features=build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let parsed = uv_lock::Lock::from_toml(&locked)?;
+    assert_eq!(parsed.to_toml()?, locked);
+
+    let wire: toml::Value = toml::from_str(&locked)?;
+    assert_eq!(wire["version"].as_integer(), Some(6));
+    let universes = wire["build-universes"]
+        .as_array()
+        .ok_or_else(|| anyhow!("missing build universes"))?;
+    assert_eq!(universes.len(), 2);
+    let owners = universes[0]["owners"]
+        .as_array()
+        .ok_or_else(|| anyhow!("missing build owners"))?;
+    let root_sets = universes[0]["root-sets"]
+        .as_array()
+        .ok_or_else(|| anyhow!("missing root sets"))?;
+    assert_eq!(owners.len(), 3);
+    assert_eq!(root_sets.len(), 2);
+    assert_eq!(owners[0]["owner"]["name"].as_str(), Some("alpha"));
+    assert_eq!(owners[1]["owner"]["name"].as_str(), Some("beta"));
+    assert_eq!(owners[2]["owner"]["name"].as_str(), Some("gamma"));
+    assert_eq!(owners[0]["root-set"], owners[1]["root-set"]);
+    assert_ne!(owners[0]["inputs"], owners[1]["inputs"]);
+    assert_ne!(owners[0]["root-set"], owners[2]["root-set"]);
+
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline", "--no-cache", "--no-editable", "--all-packages"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + alpha==1 (from file://[TEMP_DIR]/alpha)
+     + beta==1 (from file://[TEMP_DIR]/beta)
+     + gamma==1 (from file://[TEMP_DIR]/gamma)
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    // Beta selects the same artifact as alpha, but its declaration is checked independently.
+    let beta = context.temp_dir.child("beta/pyproject.toml");
+    let beta_project = context.read("beta/pyproject.toml");
+    beta.write_str(&beta_project.replace("inner>=1", "inner==1"))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The locked build environments are out of date. Run `uv lock` to update them.
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+    beta.write_str(&beta_project)?;
+
+    // Independent solves remain separate even when they select byte-identical roots.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
+        .env(EnvVars::UV_INTERNAL__BUILD_FORK_STRATEGY, "per-package")
+        .args(["--offline", "--preview-features=build-dependency-locking"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let wire: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let universes = wire["build-universes"]
+        .as_array()
+        .ok_or_else(|| anyhow!("missing build universes"))?;
+    assert_eq!(universes.len(), 4);
+    assert!(universes.iter().all(|universe| {
+        universe["owners"]
+            .as_array()
+            .is_some_and(|owners| owners.len() == 1)
+    }));
+    Ok(())
+}
+
 /// Changing an index's hash algorithm also updates artifacts used only in a build.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
