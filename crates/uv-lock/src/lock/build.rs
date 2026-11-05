@@ -11,7 +11,7 @@ use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use uv_client::RegistryClient;
-use uv_configuration::BuildOptions;
+use uv_configuration::{BuildOptions, NormalizedRequirements};
 use uv_distribution_types::{
     Edge, ExtraBuildRequires, FirstParty, IndexLocations, Name, Node, Requirement, RequiresPython,
     Resolution, ResolvedDist, SimplifiedMarkerTree, SourceDist, satisfies_require_hashes,
@@ -29,11 +29,13 @@ use uv_resolver_types::{
 
 use super::build_inputs::BuildInput;
 use super::{
-    BUILD_LOCK_VERSION, Dependency, DependencyWire, HashedDist, Lock, LockError, LockErrorKind,
-    LockWire, Package, PackageId, PackageWire, RegistrySource, ResolverManifest, Source,
-    SourceDist as LockedSourceDist, TagPolicy, absolute_path, implicit_constraints_marker,
+    BUILD_LOCK_VERSION, CLUSTER_BUILD_LOCK_VERSION, COMPACT_BUILD_LOCK_VERSION, Dependency,
+    DependencyWire, HashedDist, Lock, LockError, LockErrorKind, LockWire, Package, PackageId,
+    PackageWire, RegistrySource, ResolverManifest, Source, SourceDist as LockedSourceDist,
+    TagPolicy, absolute_path, implicit_constraints_marker,
 };
 
+pub(super) mod compact;
 mod pins;
 pub use pins::{BuildLockPins, BuildPins};
 
@@ -56,6 +58,15 @@ impl BuildEncoding {
     }
 }
 
+/// Which accepted builds share a package-table scope.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BuildLayout {
+    #[default]
+    Owner,
+    Cluster,
+    Compact,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct BuildLocks {
     pub(super) encoding: BuildEncoding,
@@ -64,17 +75,28 @@ pub(super) struct BuildLocks {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Universe {
-    /// Provenance for an owner whose roots use the ordinary package graph.
-    pub(super) ordinary_owner: Option<OrdinaryOwner>,
+    /// A scope shared by owners from the same accepted build solve.
+    cluster: Option<usize>,
+    /// Static declarations before marker projection, used only for freshly solved domains.
+    declaration: Option<BuildDeclaration>,
+    /// Provenance established by the locked package rows.
+    ordinary_owner: Option<OrdinaryOwner>,
     pub(super) owner: PackageId,
     pub(super) marker: UniversalMarker,
     pub(super) roots: Vec<Dependency>,
     pub(super) inputs: Option<BTreeSet<BuildInput>>,
-    packages: BTreeMap<PackageId, Package>,
+    pub(super) packages: BTreeMap<PackageId, Package>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum OrdinaryOwner {
+struct BuildDeclaration {
+    names: BTreeSet<PackageName>,
+    requirements: Option<NormalizedRequirements>,
+    representative: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OrdinaryOwner {
     Archive(HashDigest),
     Directory,
 }
@@ -113,7 +135,32 @@ impl OrdinaryRoot {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub(super) struct UniverseWire {
+#[serde(untagged)]
+pub(super) enum UniverseWire {
+    Cluster(ClusterWire),
+    Owner(OwnerWire),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) struct ClusterWire {
+    root_sets: Vec<Vec<DependencyWire>>,
+    owners: Vec<ClusterOwnerWire>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct ClusterOwnerWire {
+    owner: PackageId,
+    #[serde(default)]
+    marker: MarkerTree,
+    root_set: usize,
+    #[serde(default)]
+    inputs: BTreeSet<BuildInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct OwnerWire {
     owner: PackageId,
     #[serde(default)]
     marker: MarkerTree,
@@ -141,19 +188,54 @@ impl Lock {
     pub fn with_build_graphs<'a>(
         mut self,
         encoding: BuildEncoding,
+        layout: BuildLayout,
         groups: impl IntoIterator<Item = (&'a [SourceBuildRequirements], &'a ResolverOutput)>,
         root: &Path,
         indexes: &IndexLocations,
         extras: &ExtraBuildRequires,
     ) -> Result<Self, LockError> {
         let mut universes = Vec::new();
-        for (owners, resolution) in groups {
+        for (cluster, (owners, resolution)) in groups.into_iter().enumerate() {
+            let start = universes.len();
             self.append_build_group(owners, resolution, root, indexes, extras, &mut universes)?;
+            if layout != BuildLayout::Owner {
+                let members = &mut universes[start..];
+                if let Some(first) = members.first()
+                    && members.iter().any(|member| member.marker != first.marker)
+                {
+                    return Err(error(
+                        "An accepted build cluster must have one marker domain",
+                    ));
+                }
+                for (index, (member, declaration)) in members.iter_mut().zip(owners).enumerate() {
+                    member.cluster = Some(cluster);
+                    if layout == BuildLayout::Compact {
+                        member.declaration = Some(BuildDeclaration {
+                            names: declaration
+                                .requirements
+                                .iter()
+                                .map(|req| req.name.clone())
+                                .collect(),
+                            requirements: Some(declaration.requirements.clone().into()),
+                            // The accepted solve's declarations come from the first owner.
+                            representative: index == 0,
+                        });
+                    }
+                }
+            }
         }
-        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
-        self.version = BUILD_LOCK_VERSION;
+        sort_universes(&mut universes);
+        self.version = match layout {
+            BuildLayout::Owner => BUILD_LOCK_VERSION,
+            BuildLayout::Cluster => CLUSTER_BUILD_LOCK_VERSION,
+            BuildLayout::Compact => COMPACT_BUILD_LOCK_VERSION,
+        };
         self.builds = Some(BuildLocks {
-            encoding,
+            encoding: if layout == BuildLayout::Compact {
+                BuildEncoding::Dependency
+            } else {
+                encoding
+            },
             universes,
         });
         Ok(self)
@@ -247,6 +329,8 @@ impl Lock {
                 UniversalMarker::TRUE,
             )?;
             universes.push(Universe {
+                cluster: None,
+                declaration: None,
                 ordinary_owner: None,
                 inputs: Some(inputs),
                 owner,
@@ -353,13 +437,17 @@ impl Lock {
             universe.marker =
                 UniversalMarker::from_combined(universe.marker.combined().restrict(project));
             let variants = owners.entry(universe.owner.clone()).or_default();
-            if let Some(other) = variants.iter_mut().find(|other| {
-                other.marker.combined().is_disjoint(domain)
-                    && other.inputs.is_some()
-                    && other.inputs == universe.inputs
-                    && other.roots == universe.roots
-                    && other.packages == universe.packages
-            }) {
+            // Cluster membership records an accepted solve. Equal projections from two
+            // different solves do not establish that the owners shared a resolution.
+            if universe.cluster.is_none()
+                && let Some(other) = variants.iter_mut().find(|other| {
+                    other.marker.combined().is_disjoint(domain)
+                        && other.inputs.is_some()
+                        && other.inputs == universe.inputs
+                        && other.roots == universe.roots
+                        && other.packages == universe.packages
+                })
+            {
                 other.marker.or(universe.marker);
             } else {
                 variants.push(universe);
@@ -372,6 +460,10 @@ impl Lock {
                 variants
             })
             .collect();
+        sort_universes(&mut builds.universes);
+        if self.version == COMPACT_BUILD_LOCK_VERSION {
+            compact::factor_domains(&mut builds.universes, project, &self.requires_python)?;
+        }
         Ok(self)
     }
 
@@ -398,10 +490,19 @@ impl Lock {
         implicit_constraints_marker(python, environments)
     }
 
-    /// Reuse ordinary packages only when reading the compact roots reconstructs the solved
-    /// environment exactly, including every artifact and each outgoing dependency.
+    /// Establish provenance from matching owner artifact rows. In the owner layout, reuse
+    /// ordinary packages only if compact roots reconstruct the entire solved environment.
     pub fn with_ordinary_build_roots(mut self) -> Result<Self, LockError> {
-        if self.version != BUILD_LOCK_VERSION {
+        if self.version == COMPACT_BUILD_LOCK_VERSION {
+            if let Some(builds) = &mut self.builds {
+                compact::bind_owners(&self.packages, &mut builds.universes)?;
+            }
+            return Ok(self);
+        }
+        if !matches!(
+            self.version,
+            BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+        ) {
             return Ok(self);
         }
         let Some(mut builds) = self.builds.take() else {
@@ -413,7 +514,7 @@ impl Lock {
             .iter()
             .chain(builds.universes.iter().flat_map(|u| u.packages.values()))
         {
-            let files = (&package.sdist, &package.wheels);
+            let files = (&package.sdist, package.wheels.as_slice());
             owner_artifacts
                 .entry(&package.id)
                 .and_modify(|known| {
@@ -430,6 +531,14 @@ impl Lock {
                 Some((id.clone(), OrdinaryOwner::new(id, sdist.as_ref())?))
             })
             .collect();
+        if self.version == CLUSTER_BUILD_LOCK_VERSION {
+            // An explicit scope still binds its owner to the archive recorded in the lock.
+            for universe in &mut builds.universes {
+                universe.ordinary_owner = proven.get(&universe.owner).cloned();
+            }
+            self.builds = Some(builds);
+            return Ok(self);
+        }
         let mut counts = BTreeMap::new();
         for universe in &builds.universes {
             *counts.entry(universe.owner.clone()).or_insert(0usize) += 1;
@@ -459,6 +568,15 @@ impl Lock {
         }
         self.builds = Some(builds);
         Ok(self)
+    }
+
+    /// The package-table layout recorded in the lock.
+    pub fn build_layout(&self) -> BuildLayout {
+        match self.version {
+            CLUSTER_BUILD_LOCK_VERSION => BuildLayout::Cluster,
+            COMPACT_BUILD_LOCK_VERSION => BuildLayout::Compact,
+            _ => BuildLayout::Owner,
+        }
     }
 
     /// Whether isolated builds must use the recorded build environments.
@@ -585,6 +703,8 @@ impl<'a> OrdinaryGraph<'a> {
                 .ok_or_else(|| missing(id))
         })?;
         let universe = Universe {
+            cluster: None,
+            declaration: None,
             ordinary_owner: Some(provenance.clone()),
             owner: owner.clone(),
             marker: UniversalMarker::TRUE,
@@ -683,6 +803,10 @@ impl Universe {
                     .values()
                     .filter(|package| package.id.source.is_immutable()),
             )
+    }
+
+    pub(super) fn uses_ordinary_roots(&self) -> bool {
+        self.cluster.is_none() && self.ordinary_owner.is_some()
     }
 
     fn accepts_source(&self, owner: &SourceDist) -> bool {
@@ -890,23 +1014,68 @@ pub(super) struct EncodedPackage {
     pub(super) edges: ScopedEdges,
 }
 
+/// Canonicalize scope IDs by the first owner and marker in each accepted solve.
+fn sort_universes(universes: &mut [Universe]) {
+    universes.sort_by(|left, right| (&left.owner, left.marker).cmp(&(&right.owner, right.marker)));
+    let mut clusters = FxHashMap::default();
+    for universe in universes {
+        if let Some(cluster) = &mut universe.cluster {
+            let next = clusters.len();
+            *cluster = *clusters.entry(*cluster).or_insert(next);
+        }
+    }
+}
+
 impl BuildLocks {
-    pub(super) fn packages(&self, runtime: &Lock) -> Vec<EncodedPackage> {
+    /// Collect explicit owners by package-table scope, in wire order.
+    pub(super) fn scopes(&self) -> Vec<Vec<&Universe>> {
+        let explicit = self
+            .universes
+            .iter()
+            .filter(|owner| !owner.uses_ordinary_roots());
+        let mut scopes = Vec::<Vec<&Universe>>::new();
+        let mut clusters = FxHashMap::default();
+        for owner in explicit {
+            if let Some(cluster) = owner.cluster {
+                let next = scopes.len();
+                let index = *clusters.entry(cluster).or_insert(next);
+                if index == next {
+                    scopes.push(Vec::new());
+                }
+                scopes[index].push(owner);
+            } else {
+                scopes.push(vec![owner]);
+            }
+        }
+        scopes
+    }
+
+    pub(super) fn packages(
+        &self,
+        runtime: &Lock,
+        scopes: &[Vec<&Universe>],
+    ) -> Result<Vec<EncodedPackage>, LockError> {
         let mut versions: BTreeMap<&PackageId, Vec<(usize, &Package)>> = BTreeMap::new();
         for package in &runtime.packages {
             versions.entry(&package.id).or_default().push((0, package));
         }
-        for (index, universe) in self
-            .universes
-            .iter()
-            .filter(|u| u.ordinary_owner.is_none())
-            .enumerate()
-        {
-            for package in universe.packages.values() {
-                versions
-                    .entry(&package.id)
-                    .or_default()
-                    .push((index + 1, package));
+        for (index, owners) in scopes.iter().enumerate() {
+            let scope = index + 1;
+            for package in owners.iter().flat_map(|owner| owner.packages.values()) {
+                let variants = versions.entry(&package.id).or_default();
+                if let Some((previous_scope, previous)) = variants.last()
+                    && *previous_scope == scope
+                {
+                    // A shared solve supplies a single package and its edges for this scope.
+                    if *previous != package {
+                        return Err(error(format!(
+                            "Inconsistent package `{}` in build universe {scope}",
+                            package.id
+                        )));
+                    }
+                } else {
+                    variants.push((scope, package));
+                }
             }
         }
         let mut encoded = Vec::new();
@@ -993,7 +1162,7 @@ impl BuildLocks {
                 encoded.push(row);
             }
         }
-        encoded
+        Ok(encoded)
     }
 }
 
@@ -1044,11 +1213,29 @@ impl PackageWire {
 }
 
 pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock, LockError> {
+    let clustered = wire.version == CLUSTER_BUILD_LOCK_VERSION;
     let descriptors = std::mem::take(&mut wire.build_universes);
+    let scope_count = descriptors.len();
     let mut names = FxHashMap::<PackageName, Option<PackageId>>::default();
     let mut rows: BTreeMap<PackageId, Vec<PackageWire>> = BTreeMap::new();
     let mut ordinary = BTreeMap::new();
     for mut package in std::mem::take(&mut wire.packages) {
+        if clustered
+            && package
+                .universe
+                .iter()
+                .chain(
+                    package
+                        .dependencies
+                        .iter()
+                        .chain(package.optional_dependencies.values().flatten())
+                        .chain(package.dependency_groups.values().flatten())
+                        .flat_map(|dependency| &dependency.universe),
+                )
+                .any(|&index| index > scope_count)
+        {
+            return Err(error(format!("Invalid build scope for `{}`", package.id)));
+        }
         if let Some(roots) = package.build_roots.take() {
             let provenance =
                 OrdinaryOwner::new(&package.id, package.sdist.as_ref()).ok_or_else(|| {
@@ -1097,49 +1284,101 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
     let default = UniversalMarker::from_combined(environment.into_marker(&runtime.requires_python));
     let mut universes = Vec::new();
     for (index, descriptor) in descriptors.into_iter().enumerate() {
-        if ordinary.contains_key(&descriptor.owner) {
-            return Err(error(format!(
-                "Ambiguous ordinary build owner `{}`",
-                descriptor.owner
-            )));
-        }
-        let roots = descriptor
-            .roots
-            .into_iter()
-            .map(|dep| dep.unwire(&runtime.requires_python, environment, default, &names))
-            .collect::<Result<Vec<_>, _>>()?;
-        let packages = closure(&roots, |id| {
-            let mut candidates = rows
-                .get(id)
-                .into_iter()
-                .flatten()
-                .filter(|p| p.in_universe(index + 1));
-            let row = candidates.next().ok_or_else(|| missing(id))?;
-            if candidates.next().is_some() {
+        let descriptors = match descriptor {
+            UniverseWire::Owner(owner) if !clustered => vec![owner],
+            UniverseWire::Cluster(cluster) if clustered => {
+                if cluster.owners.is_empty() {
+                    return Err(error("Empty locked build cluster"));
+                }
+                cluster
+                    .owners
+                    .into_iter()
+                    .map(|owner| {
+                        let roots = cluster.root_sets.get(owner.root_set).ok_or_else(|| {
+                            error(format!(
+                                "Invalid root set for locked build owner `{}`",
+                                owner.owner
+                            ))
+                        })?;
+                        if roots
+                            .iter()
+                            .any(|dependency| !dependency.universe.is_empty())
+                        {
+                            return Err(error(format!(
+                                "Scoped root in locked build owner `{}`",
+                                owner.owner
+                            )));
+                        }
+                        Ok(OwnerWire {
+                            owner: owner.owner,
+                            marker: owner.marker,
+                            roots: roots.clone(),
+                            inputs: Some(owner.inputs),
+                        })
+                    })
+                    .collect::<Result<_, LockError>>()?
+            }
+            UniverseWire::Owner(_) | UniverseWire::Cluster(_) => {
+                return Err(error("Build universe does not match the lockfile encoding"));
+            }
+        };
+        // Decode each selected package once for this scope, then give each owner only the
+        // closure of its own roots. Replay still activates only the extras on traversed edges.
+        let shared = descriptors.len() > 1;
+        let mut scoped_packages = BTreeMap::<PackageId, Package>::new();
+        for descriptor in descriptors {
+            if ordinary.contains_key(&descriptor.owner) {
                 return Err(error(format!(
-                    "Duplicate package `{id}` in build universe {}",
-                    index + 1
+                    "Ambiguous ordinary build owner `{}`",
+                    descriptor.owner
                 )));
             }
-            let mut package = row.project(index + 1, &runtime.requires_python).unwire(
-                &runtime.requires_python,
-                environment,
-                default,
-                &names,
-            )?;
-            package.normalize_dependencies()?;
-            Ok(package)
-        })?;
-        universes.push(Universe {
-            ordinary_owner: None,
-            inputs: descriptor
-                .inputs
-                .or_else(|| (runtime.version == BUILD_LOCK_VERSION).then(BTreeSet::new)),
-            owner: descriptor.owner,
-            marker: UniversalMarker::from_combined(descriptor.marker),
-            roots,
-            packages,
-        });
+            let roots = descriptor
+                .roots
+                .into_iter()
+                .map(|dep| dep.unwire(&runtime.requires_python, environment, default, &names))
+                .collect::<Result<Vec<_>, _>>()?;
+            let packages = closure(&roots, |id| {
+                if let Some(package) = scoped_packages.get(id) {
+                    return Ok(package.clone());
+                }
+                let mut candidates = rows
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| p.in_universe(index + 1));
+                let row = candidates.next().ok_or_else(|| missing(id))?;
+                if candidates.next().is_some() {
+                    return Err(error(format!(
+                        "Duplicate package `{id}` in build universe {}",
+                        index + 1
+                    )));
+                }
+                let mut package = row.project(index + 1, &runtime.requires_python).unwire(
+                    &runtime.requires_python,
+                    environment,
+                    default,
+                    &names,
+                )?;
+                package.normalize_dependencies()?;
+                if shared {
+                    scoped_packages.insert(id.clone(), package.clone());
+                }
+                Ok(package)
+            })?;
+            universes.push(Universe {
+                cluster: clustered.then_some(index),
+                declaration: None,
+                ordinary_owner: None,
+                inputs: descriptor
+                    .inputs
+                    .or_else(|| (runtime.version == BUILD_LOCK_VERSION).then(BTreeSet::new)),
+                owner: descriptor.owner,
+                marker: UniversalMarker::from_combined(descriptor.marker),
+                roots,
+                packages,
+            });
+        }
     }
     if !ordinary.is_empty() {
         let graph = OrdinaryGraph::new(&runtime);
@@ -1160,13 +1399,19 @@ pub(super) fn decode(mut wire: LockWire, encoding: BuildEncoding) -> Result<Lock
                     })?,
             );
         }
-        universes.sort_by(|a, b| (&a.owner, a.marker).cmp(&(&b.owner, b.marker)));
+    }
+    if clustered || !universes.iter().all(|owner| owner.ordinary_owner.is_none()) {
+        sort_universes(&mut universes);
     }
     runtime.builds = Some(BuildLocks {
         encoding,
         universes,
     });
-    Ok(runtime)
+    if clustered {
+        runtime.with_ordinary_build_roots()
+    } else {
+        Ok(runtime)
+    }
 }
 
 #[cfg(test)]
@@ -1242,11 +1487,12 @@ mod tests {
 
     fn build_lock(encoding: BuildEncoding) -> Result<Lock, Box<dyn Error>> {
         let build = graph("b", "2")?;
-        lock_with_roots(encoding, &build, &build.requirements)
+        lock_with_roots(encoding, BuildLayout::Owner, &build, &build.requirements)
     }
 
     fn lock_with_roots(
         encoding: BuildEncoding,
+        layout: BuildLayout,
         build: &ResolverOutput,
         roots: &[Requirement],
     ) -> Result<Lock, Box<dyn Error>> {
@@ -1271,12 +1517,66 @@ mod tests {
         )?
         .with_build_graphs(
             encoding,
+            layout,
             [(owners.as_slice(), build)],
             &root,
             &indexes,
             &ExtraBuildRequires::default(),
         )?;
         Ok(lock)
+    }
+
+    #[test]
+    fn cluster_scope_round_trip() -> Result<(), Box<dyn Error>> {
+        let root = std::env::current_dir()?;
+        let _preview = uv_preview::test::with_features(&[]);
+        let runtime = graph("a", "1")?;
+        let build = graph("b", "2")?;
+        let indexes = IndexLocations::default();
+        let mut owners = runtime.match_build_requirements(
+            &dist("a", "1")?.dist,
+            UniversalMarker::TRUE,
+            build.requirements.clone(),
+            &[],
+        )?;
+        owners.extend(runtime.match_build_requirements(
+            &dist("c", "1")?.dist,
+            UniversalMarker::TRUE,
+            build.requirements.clone(),
+            &[],
+        )?);
+
+        for encoding in [
+            BuildEncoding::Dependency,
+            BuildEncoding::Package,
+            BuildEncoding::ConflictMarker,
+        ] {
+            let lock = Lock::from_resolution(
+                &runtime,
+                ResolverManifest::default(),
+                &root,
+                vec![],
+                &indexes,
+                false,
+            )?
+            .with_build_graphs(
+                encoding,
+                BuildLayout::Cluster,
+                [(owners.as_slice(), &build)],
+                &root,
+                &indexes,
+                &ExtraBuildRequires::default(),
+            )?
+            .with_compacted_build_domains()?
+            .with_ordinary_build_roots()?;
+            let encoded = lock.to_toml()?;
+            assert_eq!(encoded.matches("[[build-universes]]").count(), 1);
+            let parsed = Lock::from_toml(&encoded)?;
+            assert_eq!(parsed.builds, lock.builds);
+            assert_eq!(parsed.packages, lock.packages);
+            assert_eq!(parsed.to_toml()?, encoded);
+        }
+        Ok(())
     }
 
     fn round_trip(encoding: BuildEncoding) -> Result<String, Box<dyn Error>> {
@@ -1316,8 +1616,13 @@ mod tests {
     fn ordinary_build_roots() -> Result<(), Box<dyn Error>> {
         let roots = [requirement("c==1")?];
         let build = graph("b", "1")?;
-        let explicit = lock_with_roots(BuildEncoding::Dependency, &build, &roots)?
-            .with_compacted_build_domains()?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Owner,
+            &build,
+            &roots,
+        )?
+        .with_compacted_build_domains()?;
         let compact = explicit.clone().with_ordinary_build_roots()?;
         let encoded = compact.to_toml()?;
         assert!(!encoded.contains("[[build-universes]]"));
@@ -1359,10 +1664,47 @@ mod tests {
         );
 
         let different_pin = graph("b", "2")?;
-        let explicit = lock_with_roots(BuildEncoding::Dependency, &different_pin, &roots)?
-            .with_compacted_build_domains()?
-            .with_ordinary_build_roots()?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Owner,
+            &different_pin,
+            &roots,
+        )?
+        .with_compacted_build_domains()?
+        .with_ordinary_build_roots()?;
         assert!(explicit.to_toml()?.contains("[[build-universes]]"));
+        Ok(())
+    }
+
+    /// Explicit cluster scopes still bind an owner to its locked source archive.
+    #[test]
+    fn cluster_scope_checks_owner_archive() -> Result<(), Box<dyn Error>> {
+        let roots = [requirement("c==1")?];
+        let build = graph("b", "1")?;
+        let explicit = lock_with_roots(
+            BuildEncoding::Dependency,
+            BuildLayout::Cluster,
+            &build,
+            &roots,
+        )?
+        .with_compacted_build_domains()?;
+        let encoded = explicit.to_toml()?;
+        let guarded = explicit.with_ordinary_build_roots()?;
+        assert_eq!(guarded.to_toml()?, encoded);
+        let parsed = Lock::from_toml(&encoded)?;
+        assert_eq!(parsed, guarded);
+
+        let universe = &parsed.builds.as_ref().expect("builds").universes[0];
+        let owner = parsed.find_by_name(&"a".parse()?)?.expect("source owner");
+        let mut archive = owner
+            .to_source_dist(&std::env::current_dir()?, FirstParty::No)?
+            .expect("sdist");
+        assert!(universe.accepts_source(&archive));
+        let SourceDist::Registry(claimed) = &mut archive else {
+            return Err("expected a registry source".into());
+        };
+        claimed.file.hashes = vec![format!("sha256:{}", "7".repeat(64)).parse()?].into();
+        assert!(!universe.accepts_source(&archive));
         Ok(())
     }
 

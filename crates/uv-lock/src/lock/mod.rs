@@ -85,7 +85,7 @@ pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
-pub use build::{BuildEncoding, BuildLockPins, BuildPins};
+pub use build::{BuildEncoding, BuildLayout, BuildLockPins, BuildPins};
 
 mod build;
 mod build_inputs;
@@ -107,17 +107,24 @@ const VERSION: u32 = 1;
 const EXPLICIT_BUILD_LOCK_VERSION: u32 = 2;
 // Version 3 is reserved for the incompatible shared package-table layout.
 const BUILD_LOCK_VERSION: u32 = 4;
+// Version 5 is reserved for the experimental archive-backed owner layout.
+const CLUSTER_BUILD_LOCK_VERSION: u32 = 6;
+const COMPACT_BUILD_LOCK_VERSION: u32 = 7;
 
 fn unsupported_version(version: u32, locks_builds: bool) -> Option<u32> {
-    if locks_builds && version == EXPLICIT_BUILD_LOCK_VERSION {
+    // The compact layout identifies itself by version, without a build-encoding field.
+    if version == COMPACT_BUILD_LOCK_VERSION {
         return None;
     }
-    let supported = if locks_builds {
-        BUILD_LOCK_VERSION
+    if locks_builds {
+        (!matches!(
+            version,
+            EXPLICIT_BUILD_LOCK_VERSION | BUILD_LOCK_VERSION | CLUSTER_BUILD_LOCK_VERSION
+        ))
+        .then_some(COMPACT_BUILD_LOCK_VERSION)
     } else {
-        VERSION
-    };
-    (version != supported).then_some(supported)
+        (version != VERSION).then_some(VERSION)
+    }
 }
 
 /// An error returned when parsing a lockfile.
@@ -6490,6 +6497,8 @@ struct LockWire {
     build_encoding: Option<BuildEncoding>,
     #[serde(default)]
     build_universes: Vec<build::UniverseWire>,
+    #[serde(default, rename = "build-cluster")]
+    build_clusters: Vec<build::compact::ClusterWire>,
     version: u32,
     revision: Option<u32>,
     requires_python: RequiresPython,
@@ -6516,6 +6525,15 @@ impl TryFrom<LockWire> for Lock {
     type Error = LockError;
 
     fn try_from(mut wire: LockWire) -> Result<Self, LockError> {
+        if wire.version == COMPACT_BUILD_LOCK_VERSION {
+            return build::compact::decode(wire);
+        }
+        if !wire.build_clusters.is_empty() {
+            return Err(LockErrorKind::BuildGraph(
+                "Build clusters require lockfile version 7".into(),
+            )
+            .into());
+        }
         if let Some(encoding) = wire.build_encoding.take() {
             return build::decode(wire, encoding);
         }

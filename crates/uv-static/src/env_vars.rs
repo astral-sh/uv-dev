@@ -719,6 +719,11 @@ impl EnvVars {
     #[attr_added_in("next release")]
     pub const UV_INTERNAL__BUILD_LOCK_ENCODING: &'static str = "UV_INTERNAL__BUILD_LOCK_ENCODING";
 
+    /// Select the experimental lockfile layout for isolated build environments.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_INTERNAL__BUILD_LOCK_LAYOUT: &'static str = "UV_INTERNAL__BUILD_LOCK_LAYOUT";
+
     /// Select how many runtime version preferences to try when resolving source builds.
     #[attr_hidden]
     #[attr_added_in("0.13.8")]

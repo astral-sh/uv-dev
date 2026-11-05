@@ -38,6 +38,7 @@ type FxHashbrownSet<T> = hashbrown::HashSet<T, rustc_hash::FxBuildHasher>;
 
 type FxHashbrownMap<K, V> = hashbrown::HashMap<K, V, rustc_hash::FxBuildHasher>;
 
+mod build_clusters;
 mod build_constraint_hashes;
 mod candidate_selector;
 mod dependency_provider;
