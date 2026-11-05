@@ -12,7 +12,7 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
-use super::build::{EncodedPackage, OrdinaryRoot, Section, Universe};
+use super::build::{BuildLocks, EncodedPackage, OrdinaryRoot, Section, Universe};
 use super::{
     Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
     PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
@@ -116,7 +116,7 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
 
-    let scopes = lock.builds.as_ref().map(|builds| builds.scopes());
+    let scopes = lock.builds.as_ref().map(BuildLocks::scopes);
     let encoded = lock
         .builds
         .as_ref()
