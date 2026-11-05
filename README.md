@@ -18,6 +18,18 @@ The `test` group is defined in `pyproject.toml`. The reporter questions whether 
 
 astral-sh/uv#10082 is the closest existing discussion. astral-sh/uv#11453 covers the equivalent sync request, and astral-sh/uv#7186 covers project-aware tool execution. Merged astral-sh/uv#19907 and astral-sh/uv#19884 provide supporting machinery and a ty-specific implementation, without a general package selector.
 
+## Maintainer-suggested workaround
+
+In astral-sh/uv#23112, maintainer charliermarsh suggests avoiding the group inclusion/exclusion combination by running:
+
+```console
+uv run --no-sync --with check-jsonschema check-jsonschema --version
+```
+
+This is a proposed workaround, not a confirmed resolution: the supplied discussion contains no reporter follow-up or execution result. The source supports its intended behavior: `--no-sync` skips synchronizing the project environment, while `--with` can still install the requested package and its dependencies into a separate cached environment. In the non-isolated project path, uv attempts to read the existing project lockfile for version preferences. The command therefore avoids installing unrelated project dependencies, but does not guarantee the exact locked dependency graph or remove unrelated packages already installed in the project environment.
+
+The remaining question is whether this command meets the reporter's CI requirements. The suggestion does not establish a decision to add a new selector or change the duplicate classification.
+
 ## Draft response
 
 This is already tracked in astral-sh/uv#10082: installing a single tool at its project-locked version in CI without installing the rest of the environment. Please add your use case there so we can keep the API discussion together. Your suggested `uv tool run --from-project` interface also overlaps with astral-sh/uv#7186.
@@ -44,6 +56,7 @@ The same CI motivation, single-tool selection, project lockfile version, and des
 - In astral-sh/uv#11453, the reporter explicitly clarifies that selecting a package must include its dependencies. The September 23, 2026 closure accepts an extra-per-product workaround; it does not announce a general CLI implementation.
 - `docs/concepts/projects/sync.md:141` documents that `--only-group` omits the project and default groups. At line 146, it states that group exclusions always take precedence over inclusions. This explains why excluding the same selected group can leave no project dependencies to install.
 - `crates/uv-project-commands/src/run.rs:908` constructs the separate `--with` environment specification with `PreferenceLocation::Lock` when a base lockfile exists, then calls `CachedEnvironment::from_spec`. This confirms version preferences and a separate resolution, rather than exact locked-subgraph installation. It does not establish that the reporter's actual environment used any particular version.
+- `crates/uv-project-commands/src/run.rs:681` skips project environment synchronization under `--no-sync` and attempts to read the existing lockfile for non-isolated `--with` requirements. The separate `--with` resolution remains active downstream. This supports the maintainer's suggested command without establishing its runtime result for this project.
 - `crates/uv-cli/src/lib.rs:3443` defines `uv run --package` as selecting a workspace member. The hidden `--only-install-package` option belongs to `SyncArgs` and `AddArgs`, not `RunArgs`. `crates/uv-configuration/src/install_options.rs:69` filters out every package not explicitly named, including unlisted transitive dependencies, so it is not an equivalent single-tool installation interface.
 - astral-sh/uv#19907 explicitly describes its implementation as a refactor without behavior changes. Its follow-up astral-sh/uv#19884 is scoped to `uv check` and `ty`. Current `crates/uv-project-commands/src/toolchain.rs:60` materializes an exact selected tool subgraph, with the `uv check` call site in `crates/uv-project-commands/src/check.rs:633`. These establish relevant implementation support, not availability of the requested arbitrary-package command.
 
@@ -55,4 +68,4 @@ astral-sh/uv#4028 was also inspected through astral-sh/uv#11453: it concerns omi
 
 ## Verification and limits
 
-Evidence comes from the issue report, authenticated read-only GitHub searches and issue/PR inspection, and the checked-out source and documentation. No package installation, reproduction, build, or test was needed for this classification. No source files or GitHub state were changed. The workaround's exact runtime result was not reproduced.
+Evidence comes from the issue report, authenticated read-only GitHub searches and issue/PR inspection, the supplied issue discussion and maintainer comment, and the checked-out source and documentation. No package installation, reproduction, build, or test was needed for this classification. No source files or GitHub state were changed. Neither the reporter's workaround nor the maintainer's suggested command was reproduced.
