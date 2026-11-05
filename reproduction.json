@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with installed uv 0.13.6, CPython 3.14.10, and Linux x86_64 using a dependency-free source archive declaring aprict 0.0.38. In a temporary virtual environment, `uv pip install './aprict-0.0.38-cupy-issue-#10458.tar.gz'` exits 1 with `Distribution not found`, although the file exists. Installing identical bytes as `./aprict-0.0.38-cupy-issue-10458.tar.gz` reproduces the metadata-name mismatch: aprict versus aprict-0-0-38-cupy-issue. Pip 26.2.2 installs both filenames successfully. uv succeeds with the standard filename aprict-0.0.38.tar.gz and with an explicitly named absolute file URL encoding literal # characters as %23. The reporter’s exact uv/Python versions and original archive were not tested. Updated $RUNNER_TEMP/issue-context/README.md with fixture, commands, observations, test-coverage findings, and limitations. No checkout files or GitHub state were modified."
+}
