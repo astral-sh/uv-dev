@@ -105,8 +105,8 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     wheels.child("inner-1.tar.gz").write_binary(&archive)?;
 
     for (name, requires, has_other) in [
-        ("alpha", r#"["inner==1"]"#, "False"),
-        ("beta", r#"["inner>=1"]"#, "False"),
+        ("alpha", r#"["inner>=1"]"#, "False"),
+        ("beta", r#"["inner>=0.5"]"#, "False"),
         (
             "gamma",
             r#"["inner==1", "other==1", "later==1; python_version >= '3.13'"]"#,
@@ -161,21 +161,19 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     let universes = wire["build-universes"]
         .as_array()
         .ok_or_else(|| anyhow!("missing build universes"))?;
-    assert_eq!(universes.len(), 2);
+    assert_eq!(universes.len(), 3);
     let owners = universes[0]["owners"]
         .as_array()
         .ok_or_else(|| anyhow!("missing build owners"))?;
     let root_sets = universes[0]["root-sets"]
         .as_array()
         .ok_or_else(|| anyhow!("missing root sets"))?;
-    assert_eq!(owners.len(), 3);
-    assert_eq!(root_sets.len(), 2);
+    assert_eq!(owners.len(), 2);
+    assert_eq!(root_sets.len(), 1);
     assert_eq!(owners[0]["owner"]["name"].as_str(), Some("alpha"));
     assert_eq!(owners[1]["owner"]["name"].as_str(), Some("beta"));
-    assert_eq!(owners[2]["owner"]["name"].as_str(), Some("gamma"));
     assert_eq!(owners[0]["root-set"], owners[1]["root-set"]);
     assert_ne!(owners[0]["inputs"], owners[1]["inputs"]);
-    assert_ne!(owners[0]["root-set"], owners[2]["root-set"]);
 
     uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"]), @"
     exit_code: 0 (success)
@@ -196,7 +194,7 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
     // Beta selects the same artifact as alpha, but its declaration is checked independently.
     let beta = context.temp_dir.child("beta/pyproject.toml");
     let beta_project = context.read("beta/pyproject.toml");
-    beta.write_str(&beta_project.replace("inner>=1", "inner==1"))?;
+    beta.write_str(&beta_project.replace("inner>=0.5", "inner>=1"))?;
     uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline", "--no-cache"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -225,6 +223,145 @@ fn lock_build_cluster_replays_owner_roots() -> Result<()> {
             .as_array()
             .is_some_and(|owners| owners.len() == 1)
     }));
+    Ok(())
+}
+
+/// Cluster declarations before resolution, including a compatible owner discovered only
+/// after solving the build that needs its sdist.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_clusters_by_direct_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+        preview-features = ["build-dependency-locking"]
+
+        [tool.uv.workspace]
+        members = ["alpha", "beta", "cap", "rust", "vcs"]
+    "#})?;
+    let wheels = context.temp_dir.child("wheels");
+    for (name, version) in [("hatchling", "1.0"), ("hatchling", "1.1"), ("maturin", "1")] {
+        let (filename, bytes) = WheelBuilder::new(&name.parse()?, &version.parse()?).build();
+        wheels.child(filename).write_binary(&bytes)?;
+    }
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            (
+                "hatch_vcs-1/pyproject.toml",
+                indoc! {r#"
+                    [project]
+                    name = "hatch-vcs"
+                    version = "1"
+                    requires-python = ">=3.12"
+
+                    [build-system]
+                    requires = ["hatchling>=1.0"]
+                    build-backend = "hatchling.build"
+                "#},
+            ),
+            (
+                "hatch_vcs-1/PKG-INFO",
+                indoc! {"
+                    Metadata-Version: 2.3
+                    Name: hatch-vcs
+                    Version: 1
+                    Requires-Python: >=3.12
+                "},
+            ),
+        ],
+    )?;
+    wheels.child("hatch_vcs-1.tar.gz").write_binary(&archive)?;
+    for (name, requires) in [
+        ("alpha", r#"["hatchling>=1.0"]"#),
+        ("beta", r#"["hatchling>=1.1"]"#),
+        ("cap", r#"["hatchling<1.1"]"#),
+        ("rust", r#"["maturin"]"#),
+        ("vcs", r#"["hatchling>=1.0", "hatch-vcs"]"#),
+    ] {
+        context
+            .temp_dir
+            .child(format!("{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = {requires}
+            build-backend = "unused"
+        "#})?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock()
+        .env(EnvVars::UV_INTERNAL__BUILD_LOCK_LAYOUT, "cluster")
+        .env(EnvVars::UV_INTERNAL__BUILD_RESOLUTION, "separate-grouped")
+        .env(EnvVars::RUST_LOG, "uv_lock_operations::build_resolution=debug")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Solving build requirements owners=beta, alpha scope=true
+    DEBUG Resolved build requirements for beta @ file://[TEMP_DIR]/beta, alpha @ file://[TEMP_DIR]/alpha: [hatchling==1.1]
+    DEBUG Solving build requirements owners=cap scope=true
+    DEBUG Resolved build requirements for cap @ file://[TEMP_DIR]/cap: [hatchling==1.0]
+    DEBUG Solving build requirements owners=rust scope=true
+    DEBUG Resolved build requirements for rust @ file://[TEMP_DIR]/rust: [maturin==1]
+    DEBUG Solving build requirements owners=vcs scope=true
+    DEBUG Resolved build requirements for vcs @ file://[TEMP_DIR]/vcs: [hatchling==1.1, hatch-vcs==1]
+    Resolved 5 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let wire: toml::Value = toml::from_str(&locked)?;
+    assert_eq!(wire["version"].as_integer(), Some(6));
+    let universes = wire["build-universes"]
+        .as_array()
+        .ok_or_else(|| anyhow!("missing build universes"))?;
+    let members = universes
+        .iter()
+        .map(|universe| {
+            universe["owners"]
+                .as_array()
+                .ok_or_else(|| anyhow!("missing build owners"))?
+                .iter()
+                .map(|owner| {
+                    owner["owner"]["name"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("missing owner name"))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        members,
+        [
+            vec!["alpha", "beta", "hatch-vcs"],
+            vec!["cap"],
+            vec!["rust"],
+            vec!["vcs"],
+        ]
+    );
+    assert_eq!(
+        universes[0]["root-sets"][0][0]["version"].as_str(),
+        Some("1.1")
+    );
+    assert_eq!(
+        universes[1]["root-sets"][0][0]["version"].as_str(),
+        Some("1.0")
+    );
+
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
     Ok(())
 }
 
@@ -1965,7 +2102,7 @@ fn lock_separate_builds_incompatible_roots() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["backend==1"]
+        requires = ["backend>=1,<2"]
         build-backend = "backend"
     "#})?;
     context
@@ -2007,8 +2144,9 @@ fn lock_separate_builds_incompatible_roots() -> Result<()> {
         .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    DEBUG Resolved 2 build environments in 5 solver runs
+    DEBUG Solving build requirements owners=first, third scope=true
     DEBUG Resolved build requirements for first @ file://[TEMP_DIR]/first, third @ file://[TEMP_DIR]/third: [backend==1]
+    DEBUG Solving build requirements owners=second scope=true
     DEBUG Resolved build requirements for second @ file://[TEMP_DIR]/second: [backend==2]
     Resolved 3 packages in [TIME]
     ");
@@ -2111,7 +2249,7 @@ fn lock_separate_builds_runtime_preferences_across_forks() -> Result<()> {
         .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    DEBUG Resolved 1 build environments in 1 solver runs
+    DEBUG Solving build requirements owners=project scope=true
     DEBUG Resolved build requirements for project @ file://[TEMP_DIR]/: [d==1]
     Resolved 3 packages in [TIME]
     ");
@@ -2124,7 +2262,7 @@ fn lock_separate_builds_runtime_preferences_across_forks() -> Result<()> {
         .arg("--no-index").arg("--find-links").arg(wheels.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    DEBUG Resolved 1 build environments in 1 solver runs
+    DEBUG Solving build requirements owners=project scope=true
     DEBUG Resolved build requirements for project @ file://[TEMP_DIR]/: [d==3]
     Resolved 3 packages in [TIME]
     ");
