@@ -33,7 +33,7 @@ use uv_python_types::{
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_tool::{InstalledTools, Tool, receipt_requirements_equal};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -46,7 +46,7 @@ use crate::common::{
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
-use crate::{Target, ToolRequest};
+use crate::{Target, ToolLockMode, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
@@ -61,6 +61,7 @@ use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 
 /// Install a tool.
 pub async fn install(
+    lock_mode: ToolLockMode,
     package: String,
     editable: bool,
     from: Option<String>,
@@ -90,7 +91,10 @@ pub async fn install(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
+    let locked = lock_mode.is_locked();
+    super::locked::check_preview(locked, preview)?;
+    super::locked::check_arguments(locked, with)?;
+    let tool_locks = !locked && preview.is_enabled(PreviewFeature::ToolInstallLocks);
     if settings.resolver.torch_backend.is_some() {
         warn_user_once!(
             "The `--torch-backend` option is experimental and may change without warning."
@@ -123,6 +127,11 @@ pub async fn install(
         }
         _ => None,
     };
+    if locked && let Some(requirements) = &unresolved_target_requirements {
+        for requirement in requirements {
+            super::locked::check_tool_requirement(&requirement.requirement)?;
+        }
+    }
 
     let tool_python = ToolPython::from_request(
         python.as_deref().map(PythonRequest::parse),
@@ -446,18 +455,25 @@ pub async fn install(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    // Name resolution returns named requirements first, followed by unnamed requirements.
-    let override_hashes = spec
-        .overrides
-        .iter()
-        .filter(|entry| matches!(entry.requirement, UnresolvedRequirement::Named(_)))
-        .chain(
-            spec.overrides
-                .iter()
-                .filter(|entry| matches!(entry.requirement, UnresolvedRequirement::Unnamed(_))),
-        )
-        .map(|entry| entry.hashes.clone())
-        .collect::<Vec<_>>();
+    let override_hashes = if locked {
+        super::locked::named_override_hashes(
+            &spec.overrides,
+            &spec.constraints,
+            &spec.override_dependencies,
+        )?
+    } else {
+        // Name resolution returns named requirements first, followed by unnamed requirements.
+        spec.overrides
+            .iter()
+            .filter(|entry| matches!(entry.requirement, UnresolvedRequirement::Named(_)))
+            .chain(
+                spec.overrides
+                    .iter()
+                    .filter(|entry| matches!(entry.requirement, UnresolvedRequirement::Unnamed(_))),
+            )
+            .map(|entry| entry.hashes.clone())
+            .collect()
+    };
     let resolved_overrides = resolve_names(
         spec.overrides,
         &interpreter,
@@ -481,15 +497,10 @@ pub async fn install(
             Override::Package(_) => None,
         })
         .collect::<Vec<NameRequirementSpecification>>();
-    receipt_override_specifications.extend(
-        resolved_overrides
-            .into_iter()
-            .zip(override_hashes)
-            .map(|(requirement, hashes)| NameRequirementSpecification {
-                requirement,
-                hashes,
-            }),
-    );
+    receipt_override_specifications.extend(super::locked::override_specifications(
+        &resolved_overrides,
+        &override_hashes,
+    ));
     let receipt_overrides = receipt_override_specifications
         .iter()
         .map(|entry| entry.requirement.clone())
@@ -502,26 +513,66 @@ pub async fn install(
             Override::Requirement(_) => None,
         })
         .collect::<Vec<_>>();
+    let same_requirements = |requested: &[Requirement], saved: &[Requirement], locked: bool| {
+        requested.len() == saved.len()
+            && requested.iter().zip(saved).all(|(left, right)| {
+                if locked {
+                    receipt_requirements_equal(left, right)
+                } else {
+                    left == right
+                }
+            })
+    };
+    let same_specifications = |requested: &[NameRequirementSpecification],
+                               saved: &[NameRequirementSpecification],
+                               locked: bool| {
+        requested.len() == saved.len()
+            && requested.iter().zip(saved).all(|(left, right)| {
+                left.hashes == right.hashes
+                    && if locked {
+                        receipt_requirements_equal(&left.requirement, &right.requirement)
+                    } else {
+                        left.requirement == right.requirement
+                    }
+            })
+    };
     let same_override_specifications = |tool_receipt: &Tool| {
         if tool_receipt.override_specifications().is_empty() {
             receipt_override_specifications
                 .iter()
                 .all(|entry| entry.hashes.is_empty())
         } else {
-            receipt_override_specifications == tool_receipt.override_specifications()
+            same_specifications(
+                &receipt_override_specifications,
+                tool_receipt.override_specifications(),
+                tool_receipt.locked(),
+            )
         }
     };
 
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
     let same_receipt = |tool_receipt: &Tool| {
-        requirements == tool_receipt.requirements()
-            && receipt_constraints == tool_receipt.constraints()
-            && receipt_overrides == tool_receipt.overrides()
-            && same_override_specifications(tool_receipt)
+        same_requirements(
+            &requirements,
+            tool_receipt.requirements(),
+            tool_receipt.locked(),
+        ) && same_specifications(
+            &receipt_constraints,
+            tool_receipt.constraints(),
+            tool_receipt.locked(),
+        ) && same_requirements(
+            &receipt_overrides,
+            tool_receipt.overrides(),
+            tool_receipt.locked(),
+        ) && same_override_specifications(tool_receipt)
             && receipt_scoped_overrides == tool_receipt.scoped_overrides()
             && receipt_excludes == tool_receipt.excludes()
-            && receipt_build_constraints == tool_receipt.build_constraints()
+            && same_specifications(
+                &receipt_build_constraints,
+                tool_receipt.build_constraints(),
+                tool_receipt.locked(),
+            )
     };
 
     // Convert to tool options.
@@ -646,7 +697,7 @@ pub async fn install(
         !request.is_latest() && settings.reinstall.is_none() && settings.resolver.upgrade.is_none()
     }) {
         if let Some(tool_receipt) = existing_tool_receipt.as_ref() {
-            if !tool_locks && same_receipt(tool_receipt) {
+            if !locked && !tool_locks && same_receipt(tool_receipt) {
                 let ResolverInstallerSettings {
                     resolver:
                         ResolverSettings {
@@ -708,10 +759,18 @@ pub async fn install(
                 );
                 if already_installed {
                     // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                    let locked = lock_mode.locked_for_upgrade(tool_receipt.locked())
+                        && !settings
+                            .resolver
+                            .build_options
+                            .no_binary_package(package_name);
+                    if *tool_receipt.options() != options || tool_receipt.locked() != locked {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            tool_receipt
+                                .clone()
+                                .with_options(options)
+                                .with_locked(locked),
                         )?;
                     }
 
@@ -768,7 +827,79 @@ pub async fn install(
     // This lets us confirm the environment is valid before removing an existing install. However,
     // entrypoints always contain an absolute path to the relevant Python interpreter, which would
     // be invalidated by moving the environment.
-    let (environment, tool_lock) = if let Some(environment) = existing_environment {
+    let (environment, tool_lock) = if locked {
+        let new_environment = existing_environment.is_none();
+        let interpreter = existing_environment
+            .as_ref()
+            .map_or(&interpreter, |environment| {
+                environment.environment().interpreter()
+            })
+            .clone();
+        let (resolution, interpreter) = Box::pin(super::locked::resolve_with_interpreter(
+            spec,
+            interpreter,
+            new_environment,
+            python_request.as_ref(),
+            python_platform.as_ref(),
+            &build_constraints,
+            &settings.resolver,
+            &client_builder,
+            &reporter,
+            &install_mirrors,
+            python_preference,
+            python_arch,
+            python_downloads,
+            &state,
+            &concurrency,
+            &cache,
+            workspace_cache,
+            printer,
+            preview,
+        ))
+        .await
+        .map_err(|err| match super::locked::root_selection_error(err) {
+            Ok(err) => UvError::from(err).into(),
+            Err(err) => err,
+        })?;
+        let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
+        let environment = if let Some(environment) = existing_environment {
+            environment.into_environment()
+        } else {
+            installed_tools.create_environment(package_name, interpreter)?
+        };
+        // Installed distributions do not retain the archive hashes needed to prove they match
+        // the packaged lock.
+        let locked_settings = ResolverInstallerSettings {
+            reinstall: Reinstall::All,
+            ..settings.clone()
+        };
+        let environment = sync_environment(
+            environment,
+            &resolution,
+            hash_strategy,
+            Modifications::Exact,
+            build_constraints.clone(),
+            (&locked_settings).into(),
+            &client_builder,
+            &state,
+            Box::new(DefaultInstallLogger),
+            installer_metadata,
+            &concurrency,
+            &cache,
+            printer,
+            preview,
+        )
+        .await
+        .inspect_err(|_| {
+            if new_environment {
+                let _ = installed_tools.remove_environment(package_name);
+            }
+        })?;
+        if let Some(receipt) = existing_tool_receipt.as_ref() {
+            remove_entrypoints(receipt);
+        }
+        (environment, None)
+    } else if let Some(environment) = existing_environment {
         let environment = environment.into_environment();
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
@@ -877,6 +1008,11 @@ pub async fn install(
                 } else {
                     existing_tool_receipt.python().clone()
                 };
+                let same_requirements = same_receipt(existing_tool_receipt)
+                    && !settings
+                        .resolver
+                        .build_options
+                        .no_binary_package(package_name);
                 ToolLock::write(&tool_dir, Some(&tool_lock))?;
                 installed_tools.add_tool_receipt(
                     package_name,
@@ -891,7 +1027,12 @@ pub async fn install(
                         options.clone(),
                     )
                     .with_override_specifications(receipt_override_specifications.clone())
-                    .with_scoped_overrides(receipt_scoped_overrides.clone()),
+                    .with_scoped_overrides(receipt_scoped_overrides.clone())
+                    .with_locked(
+                        lock_mode.locked_for_upgrade(
+                            existing_tool_receipt.locked() && same_requirements,
+                        ),
+                    ),
                 )?;
                 writeln!(
                     printer.stderr(),
@@ -1132,6 +1273,7 @@ pub async fn install(
     };
 
     finalize_tool_install(
+        locked,
         &environment,
         package_name,
         entrypoints,
