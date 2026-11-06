@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12782,
+        "title": "`fork-strategy` `fewest` does not limit versions when combined with `required-environments`",
+        "url": "https://github.com/astral-sh/uv/issues/12782",
+        "state": "open",
+        "reason": "Requests consistent versions across environments: fewest selects two open3d versions although one satisfies all required targets, and a maintainer acknowledged the report. This concerns improving minimization with required-environments, whereas the new request would reject every multi-version solution, including cases where splitting is necessary."
+      },
+      {
+        "kind": "issue",
+        "number": 18337,
+        "title": "constraint-dependencies ignored for transitive dep, leading to multiple versions of package in uv.lock",
+        "url": "https://github.com/astral-sh/uv/issues/18337",
+        "state": "closed",
+        "reason": "Also describes a one-version policy and duplicate package versions in uv.lock. Maintainer discussion established that its marker-conditioned constraint legitimately permits different versions elsewhere and suggested omitting the marker to constrain all environments. It provides a targeted workaround, rather than a general single-version-or-fail strategy."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21000,
+        "title": "Respect `fork-strategy` for `environments`",
+        "url": "https://github.com/astral-sh/uv/pull/21000",
+        "state": "merged",
+        "reason": "Merged on 2026-08-08 to fix astral-sh/uv#20999 by ordering initial Python environment forks according to the selected strategy. It fixes unnecessary versions caused by environment ordering, but adds no strict rejection mode. The new report supplies no evidence that this historical bug has regressed."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using fork-strategy/fewest, single version, one version, single-version, one-version, strict resolution, no forks, disabling forking, disallow fork, uniform versions, multiple versions with fail, duplicate versions, duplicate lock checks, and the exact uniq -d workaround. Used area:resolver, area:lock, and enhancement terminology, and inspected candidate bodies, maintainer comments, review comments, and reference chains. PR keyword searches returned no hits; referenced merged astral-sh/uv#21000 and astral-sh/uv#10007 were inspected directly. Historical ordering fixes were distinguished from the requested policy. Ruled out astral-sh/uv#5598, which prevents simultaneous conflicting versions within one marker environment, and astral-sh/uv#21484, which concerns lockfile integrity rather than cross-environment version uniformity. Also inspected astral-sh/uv#14588, astral-sh/uv#5161, astral-sh/uv#4926, astral-sh/uv#9735, and astral-sh/uv#17866; none tracks a general single-version-or-fail mode."
+  },
+  "type": "enhancement",
+  "type_reason": "The request adds a hard one-version-per-package constraint and failure behavior to universal resolution. Documentation and the ForkStrategy enum establish that fewest is an optimization strategy and only fewest/requires-python are available. Multiple versions across disjoint environments are supported behavior; no incorrect resolution or regression is established here. Related minimization bugs do not cover rejecting solutions that require multiple versions, and no existing issue tracking that same strict capability was found.",
+  "summary": "No exact duplicate found. astral-sh/uv#12782 covers related fewest minimization, astral-sh/uv#18337 explains legitimate multi-version locks and global constraints, and merged astral-sh/uv#21000 fixes environment ordering without adding a strict mode.",
+  "draft_response": "There isn't currently a single-version-or-fail fork strategy. `fewest` prefers fewer versions but still permits different versions for different environments; `uv lock --check` checks whether the lockfile is up to date, rather than enforcing that policy. This would be an enhancement.\n\nFor now, keep your separate CI check. For specific packages, an exact pin without environment markers in `tool.uv.constraint-dependencies` in the workspace-root `pyproject.toml` can require the same version wherever that package is used. astral-sh/uv#12782 tracks a related minimization bug, but does not cover rejecting all multi-version solutions."
+}
