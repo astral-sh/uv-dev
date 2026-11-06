@@ -60,6 +60,12 @@ Microsoft's [App Control debugging and troubleshooting documentation](https://le
 
 Taken together, the supplied fields strengthen the evidence for unsigned managed CPython as the blocked target, extend the reported affected versions to Python 3.14.2, and locate this failure at the venv launcher's attempt to start the base interpreter. They do not explain why enforcement began on October 23 or establish a uv regression. The existing duplicate classification and signed-system-Python workaround remain applicable.
 
+## Additional reported recovery
+
+RyanJMcCarty reports in the November 6, 2026 comment (comment ID 6673547322) on astral-sh/uv#22869 that affected Windows users on their team recovered by uninstalling Python, reinstalling it, and rebuilding the required virtual environments. They report successful recovery for Python 3.11, 3.13, 3.14, and 3.15. This broadens the reported version range, but the comment supplies no exact patch versions, uv version, Windows build, installation source, commands, signature checks, or Code Integrity events. It does not establish that reinstalling the same unsigned uv-managed distribution resolves the original reporter's failure.
+
+The original reporter's signed Python.org installation plus `UV_PYTHON_PREFERENCE=only-system` and environment rebuild remains the more specific workaround. The team's attribution to an October 2026 Windows 11 update invalidating existing executables or DLLs is an unverified hypothesis; no update identifier or before-and-after evidence is provided. To investigate that recovery, the useful missing details are the original and replacement Python distributions and versions, their signature status, and the Windows update/build involved.
+
 ## Supporting evidence
 
 - `docs/concepts/python-versions.md:450` identifies python-build-standalone as the source of managed CPython distributions. In astral-sh/uv#10336, maintainer zanieb linked astral-sh/python-build-standalone#89 on January 7, 2025. The upstream issue remains open and explicitly discusses pre-signed binaries and Windows signing.
