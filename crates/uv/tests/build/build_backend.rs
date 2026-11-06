@@ -613,6 +613,85 @@ fn build_sdist_with_hard_link() -> Result<()> {
     Ok(())
 }
 
+/// Pre-POSIX (v7) sdists have no ustar or GNU identity in their tar headers.
+#[test]
+fn build_sdist_with_v7_tar() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project.child("src/foo/__init__.py").touch()?;
+
+    let sdist = context.temp_dir.child("foo-1.0.0.tar.gz");
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import gzip
+            import sys
+            import tarfile
+            from pathlib import Path
+
+            with gzip.open(sys.argv[1], "wb") as archive:
+                for name in ["pyproject.toml", "src/foo/__init__.py"]:
+                    data = Path(name).read_bytes()
+                    info = tarfile.TarInfo(f"foo-1.0.0/{name}")
+                    info.size = len(data)
+                    info.type = tarfile.AREGTYPE
+                    header = bytearray(info.tobuf(format=tarfile.USTAR_FORMAT))
+                    # v7 headers end at byte 257; clear the ustar fields and recompute the checksum.
+                    header[257:] = bytes(255)
+                    header[148:156] = b"        "
+                    header[148:156] = f"{sum(header):06o}\0 ".encode()
+                    archive.write(header)
+                    archive.write(data)
+                    archive.write(bytes(-len(data) % 512))
+                archive.write(bytes(1024))
+        "#})
+        .arg(sdist.path())
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    // Valid v7 sdists should be accepted, but the default backend rejects their zeroed identity.
+    // See astral-sh/uv#22955.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
+        .arg("--no-cache")
+        .arg("--offline")
+        .arg(sdist.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `foo @ file://[TEMP_DIR]/foo-1.0.0.tar.gz`
+      cause: Failed to extract archive: foo @ file://[TEMP_DIR]/foo-1.0.0.tar.gz
+      cause: Invalid tar file
+      cause: at byte 0: invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]
+      cause: invalid tar identity: found [0, 0, 0, 0, 0, 0, 0, 0]
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env(EnvVars::UV_LEGACY_TAR_BACKEND, "1")
+        .arg("--no-cache")
+        .arg("--offline")
+        .arg(sdist.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
+    ");
+
+    Ok(())
+}
+
 /// Python's `tarfile` omits the NUL terminator when a group name fills the 32-byte header field.
 ///
 /// See <https://github.com/astral-sh/uv/issues/22510>.
