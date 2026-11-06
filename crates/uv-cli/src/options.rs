@@ -529,35 +529,45 @@ impl IntoPipOptions for FetchArgs {
 }
 
 impl IndexArgs {
+    /// Retain selected indexes until the effective configuration is available.
+    pub(crate) fn take_indexes(&mut self) -> Option<Vec<crate::IndexArg>> {
+        let default_index = self
+            .default_index
+            .take()
+            .and_then(Maybe::into_option)
+            .map(|index| vec![index]);
+        let index = self.index.take().map(|indexes| {
+            indexes
+                .into_iter()
+                .flatten()
+                .filter_map(Maybe::into_option)
+                .collect()
+        });
+        default_index.combine(index)
+    }
+
     /// Resolve the index arguments shared by pip, resolver, and installer settings.
-    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+    fn resolve(mut self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+        let index = self
+            .take_indexes()
+            .map(|indexes| {
+                indexes
+                    .into_iter()
+                    .map(|index| index.resolve(configured_indexes))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
         let Self {
-            default_index,
-            index,
+            default_index: _,
+            index: _,
             index_url,
             extra_index_url,
             no_index,
             find_links,
         } = self;
 
-        let default_index = default_index
-            .and_then(Maybe::into_option)
-            .map(|index| index.resolve(configured_indexes))
-            .transpose()?
-            .map(|index| vec![index]);
-        let index = index
-            .map(|indexes| {
-                indexes
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Maybe::into_option)
-                    .map(|index| index.resolve(configured_indexes))
-                    .collect::<anyhow::Result<Vec<_>>>()
-            })
-            .transpose()?;
-
         Ok(IndexOptions {
-            index: default_index.combine(index),
+            index,
             index_url: index_url.and_then(Maybe::into_option),
             extra_index_url: extra_index_url
                 .map(|indexes| indexes.into_iter().filter_map(Maybe::into_option).collect()),
