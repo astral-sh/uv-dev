@@ -7554,6 +7554,16 @@ pub struct PublishArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Allow publishing distributions with credentials in their metadata URLs.
+    ///
+    /// By default, uv rejects sensitive userinfo and known credential query parameters in
+    /// dependency and project URLs in wheel and source distribution metadata.
+    ///
+    /// WARNING: This can expose credentials to the package index and anyone who downloads the
+    /// distribution.
+    #[arg(long)]
+    pub unsafe_allow_credentials: bool,
+
     /// Do not upload attestations for the published files.
     ///
     /// By default, uv attempts to upload matching PEP 740 attestations with each distribution

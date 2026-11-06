@@ -515,6 +515,19 @@ impl<P: SerializationPolicy> SafeUrl<P> {
         Cow::Owned(url)
     }
 
+    /// Whether the URL contains sensitive userinfo or recognized credential query parameters.
+    ///
+    /// A passwordless `git` username on SSH and Git HTTPS URLs is not sensitive.
+    /// Query parameter names are percent-decoded and compared case-insensitively, as in display
+    /// redaction.
+    pub fn has_credentials(&self) -> bool {
+        (!is_ssh_git_username(&self.0)
+            && (!self.username().is_empty() || self.password().is_some()))
+            || self
+                .query_pairs()
+                .any(|(key, _)| is_sensitive_query_parameter(&key))
+    }
+
     /// Returns [`Display`] implementation that doesn't mask credentials.
     #[inline]
     pub fn displayable_with_credentials(&self) -> impl Display {
@@ -721,6 +734,36 @@ mod tests {
     use insta::assert_debug_snapshot;
 
     use super::*;
+
+    #[test]
+    fn detect_credentials() -> Result<(), SafeUrlError> {
+        for input in [
+            "https://user:password@example.com/file.whl",
+            "https://token@example.com/file.whl",
+            "https://:password@example.com/file.whl",
+            "https://git@example.com/repo",
+            "git+ssh://git:password@example.com/repo",
+            "https://example.com/file.whl?sig=signature",
+            "https://example.com/file.whl?%73%69%67=signature",
+            "https://example.com/file.whl?SiG=signature",
+            "https://example.com/file.whl?X-Amz-Credential=credential",
+            "https://example.com/file.whl?X-Amz-Security-Token=token",
+            "https://example.com/file.whl?X-Amz-Signature=signature",
+            "https://example.com/file.whl?sig=",
+        ] {
+            assert!(SafeUrl::parse(input)?.has_credentials(), "{input}");
+        }
+        for input in [
+            "https://example.com/file.whl?download=1#sha256=abc",
+            "ssh://git@example.com/repo",
+            "git+ssh://git@example.com/repo",
+            "git+https://git@example.com/repo",
+            "https://example.com/file.whl?assignment=1",
+        ] {
+            assert!(!SafeUrl::parse(input)?.has_credentials(), "{input}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn parse_relaxed() -> Result<(), url::ParseError> {

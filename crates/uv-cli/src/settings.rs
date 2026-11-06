@@ -5017,6 +5017,7 @@ pub struct PublishSettings {
     pub password: Option<String>,
     pub index: Option<String>,
     pub dry_run: bool,
+    pub unsafe_allow_credentials: bool,
     pub no_attestations: bool,
 
     // Both CLI and configuration.
@@ -5037,6 +5038,7 @@ impl fmt::Debug for PublishSettings {
             .field("password", &self.password.as_ref().map(|_| "****"))
             .field("index", &self.index)
             .field("dry_run", &self.dry_run)
+            .field("unsafe_allow_credentials", &self.unsafe_allow_credentials)
             .field("no_attestations", &self.no_attestations)
             .field("publish_url", &self.publish_url)
             .field("trusted_publishing", &self.trusted_publishing)
@@ -5081,6 +5083,7 @@ impl PublishSettings {
             username,
             password,
             dry_run: args.dry_run,
+            unsafe_allow_credentials: args.unsafe_allow_credentials,
             no_attestations: args.no_attestations,
             publish_url: args
                 .publish_url
