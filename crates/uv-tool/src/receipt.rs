@@ -50,3 +50,42 @@ impl From<Tool> for ToolReceipt {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_configuration::PackageOverride;
+    use uv_distribution_types::{Requirement, RequirementSource};
+    use uv_pypi_types::VerbatimParsedUrl;
+
+    use super::ToolReceipt;
+
+    /// A locked upgrade must use the same archive hashes as the original scoped override.
+    #[test]
+    fn scoped_override_url_hashes_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let fragment = format!("sha256={digest}");
+        let requirement = uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(&format!(
+            "idna @ https://example.com/idna-3.3-py3-none-any.whl#{fragment}"
+        ))?;
+        let receipt = ToolReceipt::from_string("[tool]\nentrypoints = []\n".to_string())?;
+        let tool = receipt.tool.with_scoped_overrides(vec![PackageOverride {
+            package: toml::from_str("name = 'locked-tool'\nversion = '1.0'\n")?,
+            dependencies: Box::new([Requirement::from(requirement)]),
+        }]);
+        let receipt = ToolReceipt::from_string(ToolReceipt::from(tool).to_toml()?)?;
+
+        let [package] = receipt.tool.scoped_overrides() else {
+            return Err("expected one scoped override".into());
+        };
+        let [requirement] = package.dependencies.as_ref() else {
+            return Err("expected one scoped override dependency".into());
+        };
+        let RequirementSource::Url { url, .. } = &requirement.source else {
+            return Err("expected a direct URL".into());
+        };
+        assert_eq!(url.fragment(), Some(fragment.as_str()));
+        Ok(())
+    }
+}
