@@ -121,7 +121,7 @@ where
     /// Note that because this type has a `Deref` impl, this method requires
     /// fully-qualified syntax. So, if `o` is an `OwnedArchive`, then use
     /// `OwnedArchive::deserialize(&o)`.
-    pub fn deserialize(this: &Self) -> A {
+    pub(crate) fn deserialize(this: &Self) -> A {
         rkyv::deserialize(&**this).expect("valid archive must deserialize correctly")
     }
 }

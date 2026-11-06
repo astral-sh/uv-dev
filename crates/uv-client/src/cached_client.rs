@@ -1082,7 +1082,7 @@ impl DataWithCachePolicy {
     }
 
     /// Serialize a new response with a unique entry ID for atomic publication.
-    pub(crate) fn serialize(policy: &CachePolicy, data: &[u8]) -> Result<Vec<u8>, Error> {
+    fn serialize(policy: &CachePolicy, data: &[u8]) -> Result<Vec<u8>, Error> {
         Self::serialize_with_id(policy, data, Self::new_entry_id())
     }
 
