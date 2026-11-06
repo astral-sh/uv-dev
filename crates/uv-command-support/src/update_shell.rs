@@ -13,8 +13,27 @@ use uv_shell::{ConfigurationUpdate, Shell, update_configuration_file};
 use crate::ExitStatus;
 use crate::Printer;
 
-/// Ensure that an executable directory is in PATH.
+/// The result of ensuring that an executable directory is configured for the shell.
+pub enum ShellUpdate {
+    /// The directory is on PATH or the shell configuration was updated.
+    Complete,
+    /// The shell configuration already contains the directory, but PATH does not yet include it.
+    AlreadyConfigured(Shell),
+}
+
+/// Ensure that an executable directory is in PATH for an explicit update-shell command.
 pub async fn update_shell(executable_directory: &Path, printer: Printer) -> Result<ExitStatus> {
+    match configure_shell(executable_directory, printer).await? {
+        ShellUpdate::Complete => Ok(ExitStatus::Success),
+        ShellUpdate::AlreadyConfigured(shell) => Err(anyhow::anyhow!(
+            "The executable directory `{}` is not in PATH, but the {shell} configuration files are already up-to-date",
+            executable_directory.simplified_display().cyan()
+        )),
+    }
+}
+
+/// Configure an executable directory, reporting unchanged startup files separately from errors.
+pub async fn configure_shell(executable_directory: &Path, printer: Printer) -> Result<ShellUpdate> {
     debug!(
         "Ensuring that the executable directory is in PATH: {}",
         executable_directory.simplified_display()
@@ -37,7 +56,7 @@ pub async fn update_shell(executable_directory: &Path, printer: Printer) -> Resu
             )?;
         }
 
-        return Ok(ExitStatus::Success);
+        return Ok(ShellUpdate::Complete);
     }
 
     if Shell::contains_path(executable_directory) {
@@ -46,7 +65,7 @@ pub async fn update_shell(executable_directory: &Path, printer: Printer) -> Resu
             "Executable directory {} is already in PATH",
             executable_directory.simplified_display().cyan()
         )?;
-        return Ok(ExitStatus::Success);
+        return Ok(ShellUpdate::Complete);
     }
 
     // Determine the current shell.
@@ -100,11 +119,8 @@ pub async fn update_shell(executable_directory: &Path, printer: Printer) -> Resu
 
     if updated {
         writeln!(printer.stderr(), "Restart your shell to apply changes")?;
-        Ok(ExitStatus::Success)
+        Ok(ShellUpdate::Complete)
     } else {
-        Err(anyhow::anyhow!(
-            "The executable directory `{}` is not in PATH, but the {shell} configuration files are already up-to-date",
-            executable_directory.simplified_display().cyan()
-        ))
+        Ok(ShellUpdate::AlreadyConfigured(shell))
     }
 }
