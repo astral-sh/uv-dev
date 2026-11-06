@@ -1446,6 +1446,13 @@ mod test {
             }
         );
 
+        // This short path isolates the tab from the space and length fallbacks.
+        let executable = Path::new("/tab\tdir/python");
+        assert_eq!(
+            format_shebang(executable, "posix", false),
+            "#!/tab\tdir/python"
+        );
+
         // And if we want a relocatable script, we should use the `exec` trick with `dirname`.
         let executable = Path::new("python3");
         let os_name = "posix";
