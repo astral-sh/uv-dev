@@ -28,9 +28,12 @@ uv-static = { workspace = true }
 uv-warnings = { workspace = true }
 
 ambient-id = { workspace = true }
+anyhow = { workspace = true }
 astral-tokio-tar = { workspace = true }
 async-compression = { workspace = true }
+async_zip = { workspace = true }
 base64 = { workspace = true }
+csv = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 glob = { workspace = true }
@@ -41,10 +44,12 @@ reqwest-retry = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tar-codec = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true, features = ["io"] }
+tokio-util = { workspace = true, features = ["compat", "io"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -54,7 +59,6 @@ uv-preview = { workspace = true, features = ["testing"] }
 anstream = { workspace = true }
 fastrand = { workspace = true }
 insta = { workspace = true }
-tempfile = { workspace = true }
 wiremock = { workspace = true }
 
 [features]
