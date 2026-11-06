@@ -4196,6 +4196,102 @@ impl Lock {
         }
     }
 
+    /// Check the runtime dependency modifiers recorded in the lockfile without resolving.
+    pub fn matches_runtime_resolution_inputs(
+        &self,
+        root: &Path,
+        constraints: &[Requirement],
+        overrides: &[Override<Requirement>],
+        excludes: &[ExcludeDependency],
+    ) -> Result<bool, LockError> {
+        let normalizer = RequirementNormalizer::new(root, &self.requires_python);
+        let filter = ManifestFilter::from_lock(self);
+        Ok(matches!(
+            self.validate_runtime_inputs(&normalizer, &filter, constraints, overrides, excludes)?,
+            ValidatedRuntimeInputs::Matched { .. }
+        ))
+    }
+
+    fn validate_runtime_inputs<'lock>(
+        &'lock self,
+        normalizer: &RequirementNormalizer<'_>,
+        filter: &ManifestFilter,
+        constraints: &[Requirement],
+        overrides: &[Override<Requirement>],
+        excludes: &[ExcludeDependency],
+    ) -> Result<ValidatedRuntimeInputs<'lock>, LockError> {
+        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
+        let normalized_constraints = {
+            let expected = normalizer.constraints(
+                constraints
+                    .iter()
+                    .filter(|entry| {
+                        filter.includes_constraint(entry)
+                            && (!omit_constraints || !self.can_omit_constraint(entry))
+                    })
+                    .cloned(),
+            )?;
+            let actual = normalizer.constraints(
+                self.manifest
+                    .constraints
+                    .iter()
+                    .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
+                    .cloned(),
+            )?;
+            if expected != actual {
+                return Ok(ValidatedRuntimeInputs::Mismatch(
+                    SatisfiesResult::MismatchedConstraints(
+                        expected.into_iter().collect(),
+                        actual.into_iter().collect(),
+                    ),
+                ));
+            }
+            expected.into_iter().collect()
+        };
+
+        let normalized_overrides = {
+            let expected = normalizer.overrides(
+                overrides
+                    .iter()
+                    .filter(|entry| filter.includes_override(entry))
+                    .cloned(),
+            )?;
+            let actual = normalizer.overrides(self.manifest.overrides.iter().cloned())?;
+            if expected != actual {
+                return Ok(ValidatedRuntimeInputs::Mismatch(
+                    SatisfiesResult::MismatchedOverrides(
+                        expected.into_iter().collect(),
+                        actual.into_iter().collect(),
+                    ),
+                ));
+            }
+            expected.into_inner()
+        };
+
+        let expected = NormalizedExcludes::from(
+            excludes
+                .iter()
+                .filter(|entry| filter.includes_exclusion(entry))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let actual =
+            NormalizedExcludes::from(self.manifest.excludes.iter().cloned().collect::<Vec<_>>());
+        if expected != actual {
+            return Ok(ValidatedRuntimeInputs::Mismatch(
+                SatisfiesResult::MismatchedExcludes(
+                    expected.into_iter().collect(),
+                    actual.into_iter().collect(),
+                ),
+            ));
+        }
+
+        Ok(ValidatedRuntimeInputs::Matched {
+            constraints: normalized_constraints,
+            overrides: normalized_overrides,
+        })
+    }
+
     /// Check whether the lock matches the project structure, requirements and configuration.
     #[instrument(skip_all)]
     pub async fn satisfies<Context: BuildContext>(
@@ -4349,69 +4445,19 @@ impl Lock {
         }
 
         let filter = ManifestFilter::from_lock(self);
-        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
-
-        let normalized_constraints = {
-            let expected = normalizer.constraints(
-                constraints
-                    .iter()
-                    .filter(|entry| {
-                        filter.includes_constraint(entry)
-                            && (!omit_constraints || !self.can_omit_constraint(entry))
-                    })
-                    .cloned(),
-            )?;
-            let actual = normalizer.constraints(
-                self.manifest
-                    .constraints
-                    .iter()
-                    .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
-                    .cloned(),
-            )?;
-            if expected != actual {
-                return Ok(SatisfiesResult::MismatchedConstraints(
-                    expected.into_iter().collect(),
-                    actual.into_iter().collect(),
-                ));
-            }
-            expected.into_iter().collect()
+        let (normalized_constraints, normalized_overrides) = match self.validate_runtime_inputs(
+            &normalizer,
+            &filter,
+            constraints,
+            overrides,
+            excludes,
+        )? {
+            ValidatedRuntimeInputs::Matched {
+                constraints,
+                overrides,
+            } => (constraints, overrides),
+            ValidatedRuntimeInputs::Mismatch(mismatch) => return Ok(mismatch),
         };
-
-        let normalized_overrides = {
-            let expected = normalizer.overrides(
-                overrides
-                    .iter()
-                    .filter(|entry| filter.includes_override(entry))
-                    .cloned(),
-            )?;
-            let actual = normalizer.overrides(self.manifest.overrides.iter().cloned())?;
-            if expected != actual {
-                return Ok(SatisfiesResult::MismatchedOverrides(
-                    expected.into_iter().collect(),
-                    actual.into_iter().collect(),
-                ));
-            }
-            expected.into_inner()
-        };
-
-        {
-            let expected = NormalizedExcludes::from(
-                excludes
-                    .iter()
-                    .filter(|entry| filter.includes_exclusion(entry))
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-            let actual = NormalizedExcludes::from(
-                self.manifest.excludes.iter().cloned().collect::<Vec<_>>(),
-            );
-            if expected != actual {
-                return Ok(SatisfiesResult::MismatchedExcludes(
-                    expected.into_iter().collect(),
-                    actual.into_iter().collect(),
-                ));
-            }
-        }
 
         let mut source_tree_metadata = FxHashMap::default();
 
@@ -6099,6 +6145,14 @@ impl<'tags> TagPolicy<'tags> {
             Self::Required(tags) | Self::Preferred(tags) => tags,
         }
     }
+}
+
+enum ValidatedRuntimeInputs<'lock> {
+    Matched {
+        constraints: BTreeSet<Requirement>,
+        overrides: Vec<Override<Requirement>>,
+    },
+    Mismatch(SatisfiesResult<'lock>),
 }
 
 /// The result of checking if a lockfile satisfies a set of requirements.
