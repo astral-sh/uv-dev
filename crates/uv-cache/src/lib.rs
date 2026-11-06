@@ -19,6 +19,7 @@ pub use crate::by_timestamp::CachedByTimestamp;
 pub use crate::cli::CacheArgs;
 use crate::removal::Remover;
 pub use crate::removal::{Removal, RemovalAccounting};
+pub use crate::simple::simple_detail_path;
 pub use crate::wheel::WheelCache;
 use crate::wheel::WheelCacheKind;
 pub use archive::{ArchiveFileId, ArchiveId};
@@ -28,6 +29,7 @@ mod by_timestamp;
 #[cfg(feature = "clap")]
 mod cli;
 mod removal;
+mod simple;
 mod wheel;
 
 /// The version of the archive bucket.
@@ -168,7 +170,7 @@ pub struct Cache {
     refresh: Refresh,
     /// Ensure that `uv cache` operations don't remove items from the cache that are used by another
     /// uv process. Drop the lock before a temporary directory so it can be removed on Windows.
-    lock_file: Option<Arc<LockedFile>>,
+    lock_file: Option<Arc<(LockedFileMode, LockedFile)>>,
     /// A temporary cache directory, if the user requested `--no-cache`.
     ///
     /// Included to ensure that the temporary directory exists for the length of the operation, but
@@ -259,7 +261,7 @@ impl Cache {
             root,
             refresh,
             temp_dir,
-            lock_file: Some(Arc::new(lock_file)),
+            lock_file: Some(Arc::new((LockedFileMode::Exclusive, lock_file))),
             removal_accounting,
         })
     }
@@ -285,7 +287,7 @@ impl Cache {
                 root,
                 refresh,
                 temp_dir,
-                lock_file: Some(Arc::new(lock_file)),
+                lock_file: Some(Arc::new((LockedFileMode::Exclusive, lock_file))),
                 removal_accounting,
             }),
             None => Err(Self {
@@ -454,6 +456,11 @@ impl Cache {
         Ok(id)
     }
 
+    /// Whether this handle holds a lock that prevents ordinary cache cleanup.
+    pub fn is_locked(&self) -> bool {
+        self.lock_file.is_some()
+    }
+
     /// Returns `true` if the [`Cache`] is temporary.
     pub fn is_temporary(&self) -> bool {
         self.temp_dir.is_some()
@@ -533,7 +540,7 @@ impl Cache {
         )
         .await
         {
-            Ok(lock_file) => Some(Arc::new(lock_file)),
+            Ok(lock_file) => Some(Arc::new((LockedFileMode::Shared, lock_file))),
             Err(err)
                 if err
                     .as_io_error()
@@ -573,7 +580,7 @@ impl Cache {
         Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
         Ok(Some(Self {
             root: std::path::absolute(root).map_err(Error::Absolute)?,
-            lock_file: Some(Arc::new(lock_file)),
+            lock_file: Some(Arc::new((LockedFileMode::Shared, lock_file))),
             ..self
         }))
     }
@@ -824,6 +831,11 @@ impl Cache {
         }
 
         summary += self.prune_archive_files()?;
+        // A concurrent writer can have published a detail file but not yet its manifest, and
+        // a reader can still need a superseded generation. Leave both for an exclusive prune.
+        if let Some((LockedFileMode::Exclusive, _)) = self.lock_file.as_deref() {
+            summary += self.prune_simple_details()?;
+        }
 
         Ok(summary)
     }
@@ -1264,11 +1276,9 @@ pub enum CacheBucket {
     Interpreter,
     /// Index responses through the simple metadata API.
     ///
-    /// Cache structure:
-    ///  * `simple-v0/pypi/<package_name>.rkyv`
-    ///  * `simple-v0/<digest(index_url)>/<package_name>.rkyv`
-    ///
-    /// The response is parsed into `uv_client::SimpleDetailMetadata` before storage.
+    /// Each index has a manifest per package, e.g. `pypi/anyio.rkyv`.
+    /// Larger packages store their release details alongside it in `anyio/<generation>.blocks`.
+    /// Alternate indexes use `index/<digest(index_url)>` in place of `pypi`.
     Simple,
     /// A cache of unzipped wheels, stored as directories. This is used internally within the cache.
     /// When other buckets need to store directories, they should persist them to
@@ -1306,7 +1316,7 @@ impl CacheBucket {
             Self::Interpreter => "interpreter-v5",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_clean.rs`.
-            Self::Simple => "simple-v27",
+            Self::Simple => "simple-v28",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
             Self::Wheels => "wheels-v7",
@@ -1421,15 +1431,9 @@ impl CacheBucket {
                 }
             }
             Self::Simple => {
-                // For `pypi` wheels, we expect a rkyv file per package, indexed by name.
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(format!("{name}.rkyv")))?;
-
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(format!("{name}.rkyv")))?;
+                for index in cache.simple_indexes()? {
+                    summary += cache.remove_path(index.join(format!("{name}.rkyv")))?;
+                    summary += cache.remove_path(index.join(name.as_str()))?;
                 }
             }
             Self::FlatIndex => {

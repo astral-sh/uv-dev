@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
+use tokio::task::JoinError;
 pub use uv_resolver_types::MetadataResponse;
 pub(crate) use uv_resolver_types::MetadataUnavailable;
 use uv_resolver_types::VariantsJsonMetadataError;
@@ -52,6 +53,14 @@ pub enum VersionsResponse {
 }
 
 pub trait ResolverProvider {
+    /// Run a speculative candidate lookup that may read cached release files.
+    fn run_cache_read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce() -> T + Send + 'static,
+    ) -> impl Future<Output = Result<T, JoinError>> {
+        tokio::task::spawn_blocking(read)
+    }
+
     /// Get the version map for a package.
     fn get_package_versions<'io>(
         &'io self,
@@ -204,6 +213,15 @@ pub(super) fn classify_wheel_metadata_error(error: uv_metadata::Error) -> Metada
 }
 
 impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Context> {
+    fn run_cache_read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce() -> T + Send + 'static,
+    ) -> impl Future<Output = Result<T, JoinError>> {
+        self.fetcher
+            .client()
+            .manual(|client, _| client.spawn_cache_read(read))
+    }
+
     /// Make a "Simple API" request for the package and convert the result to a [`VersionMap`].
     async fn get_package_versions<'io>(
         &'io self,
@@ -213,13 +231,22 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
         let result = self
             .fetcher
             .client()
-            .manual(|client, semaphore| {
-                client.simple_detail(
-                    package_name,
-                    index.map(IndexMetadataRef::from),
-                    self.capabilities,
-                    semaphore,
-                )
+            .manual(|client, semaphore| async move {
+                let pages = client
+                    .simple_detail(
+                        package_name,
+                        index.map(IndexMetadataRef::from),
+                        self.capabilities,
+                        semaphore,
+                    )
+                    .await?;
+                #[cfg(target_os = "linux")]
+                for (_, metadata) in &pages {
+                    if let MetadataFormat::Simple(page) = metadata {
+                        client.prefetch_recent_files(page);
+                    }
+                }
+                Ok::<_, uv_client::Error>(pages)
             })
             .await;
 

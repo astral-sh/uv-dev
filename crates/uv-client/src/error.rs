@@ -193,6 +193,7 @@ impl Error {
             | ErrorKind::Io(_)
             | ErrorKind::Decode(_)
             | ErrorKind::Encode(_)
+            | ErrorKind::InvalidReleaseBlock(..)
             | ErrorKind::ArchiveRead(_)
             | ErrorKind::ArchiveWrite(_) => false,
         }
@@ -554,6 +555,9 @@ pub enum ErrorKind {
 
     #[error("Reading from cache archive failed: {0}")]
     ArchiveRead(String),
+
+    #[error("Invalid release block {1} in {path}", path = .0.display())]
+    InvalidReleaseBlock(PathBuf, usize, #[source] Box<Error>),
 
     #[error("Writing to cache archive failed: {0}")]
     ArchiveWrite(String),
