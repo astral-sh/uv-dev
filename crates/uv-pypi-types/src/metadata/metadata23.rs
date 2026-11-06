@@ -5,6 +5,7 @@ use std::fmt::Write;
 use std::str;
 use std::str::FromStr;
 
+use astral_mail_headers::Message;
 use indexmap::IndexMap;
 
 use crate::MetadataError;
@@ -116,9 +117,9 @@ pub struct Metadata23 {
 }
 
 impl Metadata23 {
-    /// Parse distribution metadata from metadata `MetadataError`
-    pub fn parse(content: &[u8]) -> Result<Self, MetadataError> {
-        let headers = Headers::parse(content);
+    /// Read core metadata from an already parsed message.
+    pub fn from_message(message: Message<'_>) -> Result<Self, MetadataError> {
+        let headers = Headers { message };
 
         let metadata_version = headers
             .get_first_value("Metadata-Version")?
@@ -336,7 +337,7 @@ impl FromStr for Metadata23 {
     type Err = MetadataError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s.as_bytes())
+        Self::from_message(Message::parse(s.as_bytes()))
     }
 }
 
@@ -422,7 +423,7 @@ mod tests {
             Metadata-Version: 1.0
             Name: asdf
         "};
-        let meta = Metadata23::parse(s.as_bytes());
+        let meta = s.parse::<Metadata23>();
         assert_matches!(meta, Err(MetadataError::FieldNotFound("Version")));
 
         let s = indoc! {"
@@ -430,7 +431,7 @@ mod tests {
             Name: asdf
             Version: 1.0
         "};
-        let meta = Metadata23::parse(s.as_bytes()).unwrap();
+        let meta = s.parse::<Metadata23>().unwrap();
         assert_eq!(meta.metadata_version, "1.0");
         assert_eq!(meta.name, "asdf");
         assert_eq!(meta.version, "1.0");
@@ -507,7 +508,7 @@ mod tests {
             Import-Namespace: spam
         "};
         assert_snapshot!(
-            Metadata23::parse(metadata.as_bytes()).unwrap_err(),
+            metadata.parse::<Metadata23>().unwrap_err(),
             @"`Import-Name` and `Import-Namespace` must not both contain `spam`"
         );
     }

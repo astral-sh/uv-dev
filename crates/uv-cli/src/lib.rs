@@ -7554,6 +7554,13 @@ pub struct PublishArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Allow credentials in dependency and project URLs in distribution metadata.
+    ///
+    /// Only affects publishing with the `publish-check-creds` preview feature enabled.
+    /// Anyone who downloads the distribution can read these credentials.
+    #[arg(long)]
+    pub unsafe_allow_credentials: bool,
+
     /// Do not upload attestations for the published files.
     ///
     /// By default, uv attempts to upload matching PEP 740 attestations with each distribution

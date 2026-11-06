@@ -339,6 +339,12 @@ mod tests {
         to a `pyproject.toml` file. This feature takes effect before configuration is loaded, so it
         must be enabled on the command line or through an environment variable.
 
+        ### `publish-check-creds` {#publish-check-creds}
+
+        Before uploading a wheel or source distribution, `uv publish` checks dependency and project
+        URLs in its metadata for credentials. Use `--unsafe-allow-credentials` to publish a
+        distribution that intentionally includes them.
+
         ### `publish-require-normalized` {#publish-require-normalized}
 
         The `uv publish` command requires distribution filenames to be normalized. Files with

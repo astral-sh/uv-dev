@@ -500,19 +500,25 @@ impl<P: SerializationPolicy> SafeUrl<P> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn without_credentials(&self) -> Cow<'_, Self> {
-        if self.0.password().is_none() && self.0.username() == "" {
-            return Cow::Borrowed(self);
-        }
-
-        // For URLs that use the `git` convention (i.e., `ssh://git@github.com/...`), avoid dropping the
-        // username.
-        if is_ssh_git_username(&self.0) {
+        if !self.has_sensitive_userinfo() {
             return Cow::Borrowed(self);
         }
 
         let mut url = self.clone();
         url.remove_credentials();
         Cow::Owned(url)
+    }
+
+    fn has_sensitive_userinfo(&self) -> bool {
+        (!self.username().is_empty() || self.password().is_some()) && !is_ssh_git_username(&self.0)
+    }
+
+    /// Whether the URL contains sensitive userinfo or a recognized credential query parameter.
+    pub fn has_credentials(&self) -> bool {
+        self.has_sensitive_userinfo()
+            || self
+                .query_pairs()
+                .any(|(key, _)| is_sensitive_query_parameter(&key))
     }
 
     /// Returns [`Display`] implementation that doesn't mask credentials.
@@ -721,6 +727,36 @@ mod tests {
     use insta::assert_debug_snapshot;
 
     use super::*;
+
+    #[test]
+    fn detect_credentials() -> Result<(), SafeUrlError> {
+        for input in [
+            "https://user:password@example.com/file.whl",
+            "https://token@example.com/file.whl",
+            "https://:password@example.com/file.whl",
+            "https://git@example.com/repo",
+            "git+ssh://git:password@example.com/repo",
+            "https://example.com/file.whl?sig=signature",
+            "https://example.com/file.whl?%73%69%67=signature",
+            "https://example.com/file.whl?SiG=signature",
+            "https://example.com/file.whl?X-Amz-Credential=credential",
+            "https://example.com/file.whl?X-Amz-Security-Token=token",
+            "https://example.com/file.whl?X-Amz-Signature=signature",
+            "https://example.com/file.whl?sig=",
+        ] {
+            assert!(SafeUrl::parse(input)?.has_credentials(), "{input}");
+        }
+        for input in [
+            "https://example.com/file.whl?download=1#sha256=abc",
+            "ssh://git@example.com/repo",
+            "git+ssh://git@example.com/repo",
+            "git+https://git@example.com/repo",
+            "https://example.com/file.whl?assignment=1",
+        ] {
+            assert!(!SafeUrl::parse(input)?.has_credentials(), "{input}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn parse_relaxed() -> Result<(), url::ParseError> {
