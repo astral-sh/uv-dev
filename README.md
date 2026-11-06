@@ -19,13 +19,13 @@ Bug: reproduced local-path lookup failure for an existing source archive whose f
 
 There is no confirmed regression point. This is not an established duplicate of astral-sh/uv#4917: that report and its fix concern GitHub archive URLs rather than local archives. Likewise, astral-sh/uv#2501 concerns an intentional URL fragment rather than a literal filename character. No canonical issue or pull request covering this precise case was identified in the prior related-issue investigation.
 
-## Maintainer clarification and open question
+## Filename provenance and maintainer clarification
 
-In the discussion of astral-sh/uv#23118, maintainer woodruffw asks how the reported archive filenames were produced and notes that PEP 625 source-distribution filenames must follow `{name}-{version}.tar.gz`, with neither component containing `#`. The supplied discussion contains no reporter answer explaining the filenames' origin.
+The reporter confirms in the discussion of astral-sh/uv#23118 that they manually renamed the files using `mv`. The reported filenames therefore result from a manual rename; they are not evidence that a build tool emitted those names. The original filenames and archive build steps have not been provided.
 
-The missing information is whether these are build-generated sdists, manually renamed distributions, or general source archives, and which build or rename steps produced them. This distinction matters when deciding whether the issue calls for support for nonstandard source-archive names, improved diagnostics for invalid sdist names, or another change. The maintainer comment does not announce a final support policy, reject the report, or change its classification.
+Maintainer woodruffw notes that PEP 625 source-distribution filenames must follow `{name}-{version}.tar.gz`, with neither component containing `#`. The reporter's clarification narrows the case to installing manually renamed archives with nonstandard filenames. It does not establish whether the original archives were conforming sdists or general source archives.
 
-The existing reproduction and verified workaround remain valid observations. In particular, the synthetic fixture establishes the behavior for identical archive bytes under different names; it does not establish how the reporter's original archive was created or whether it is a conforming sdist. Filename provenance remains the next investigation question before settling the intended behavior.
+The existing reproduction, bug classification, and verified workaround remain unchanged. The synthetic fixture demonstrates the effect of different filenames on identical archive bytes, consistent with the reported manual rename. The remaining decision is the intended handling of such names, including whether to support them or improve diagnostics; the supplied discussion contains no final maintainer decision. The original archive and build details remain unavailable for validation against the reporter's package.
 
 ## Reproduction
 
