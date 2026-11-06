@@ -1,3 +1,4 @@
+use crate::ToolLockMode;
 use crate::common::finalize_tool_install;
 use anyhow::{Context, Result};
 use itertools::Itertools;
@@ -11,7 +12,8 @@ use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, Override, TargetTriple,
+    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, Override, Reinstall,
+    TargetTriple,
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -49,6 +51,7 @@ use uv_settings::ResolverInstallerSettings;
 
 /// Upgrade a tool.
 pub async fn upgrade(
+    lock_mode: ToolLockMode,
     names: Vec<String>,
     python: Option<String>,
     python_platform: Option<TargetTriple>,
@@ -67,6 +70,7 @@ pub async fn upgrade(
     preview: Preview,
     render_error: fn(&anyhow::Error, Printer) -> std::fmt::Result,
 ) -> Result<ExitStatus> {
+    super::locked::check_preview(lock_mode.is_locked(), preview)?;
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
 
@@ -139,6 +143,7 @@ pub async fn upgrade(
     for (name, constraints) in &names {
         debug!("Upgrading tool: `{name}`");
         let result = Box::pin(upgrade_tool(
+            lock_mode,
             name,
             constraints,
             interpreter.as_ref(),
@@ -272,6 +277,7 @@ struct UpgradeReport {
 
 /// Upgrade a specific tool.
 async fn upgrade_tool(
+    lock_mode: ToolLockMode,
     name: &PackageName,
     constraints: &[Requirement],
     interpreter: Option<&Interpreter>,
@@ -309,11 +315,8 @@ async fn upgrade_tool(
         }
     };
 
-    if existing_tool_receipt.locked() {
-        anyhow::bail!(
-            "`{name}` uses a packaged lock. Run `uv tool install --locked --upgrade {name}` to upgrade."
-        );
-    }
+    let locked = lock_mode.locked_for_upgrade(existing_tool_receipt.locked());
+    super::locked::check_preview(locked, preview)?;
 
     let environment = match installed_tools.get_environment(name, cache) {
         Ok(Some(environment)) => environment,
@@ -358,7 +361,12 @@ async fn upgrade_tool(
 
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
-    let settings = ResolverInstallerSettings::from(options.clone());
+    let mut settings = ResolverInstallerSettings::from(options.clone());
+    // An installed distribution's archive hash is unavailable, so a locked upgrade must
+    // reinstall it from the selected artifacts.
+    if locked {
+        settings.reinstall = Reinstall::All;
+    }
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let constraint_specifications = existing_tool_receipt
@@ -423,40 +431,61 @@ async fn upgrade_tool(
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
-    let (environment, outcome, tool_lock) = if tool_locks {
+    let (environment, outcome, tool_lock) = if locked || tool_locks {
         let target_interpreter =
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
-        let universal_resolution = resolve_environment(
-            tool_environment_spec(spec, None, Some(&site_packages)),
-            EnvironmentResolution::Universal,
-            target_interpreter,
-            python_platform,
-            SourceTreeEditablePolicy::Tool,
-            build_constraints.clone(),
-            &settings.resolver,
-            client_builder,
-            &state,
-            Box::new(SummaryResolveLogger),
-            concurrency,
-            cache,
-            workspace_cache,
-            printer,
-            preview,
-        )
-        .await?;
-        let tool_lock = ToolLock::from_resolution(
-            &tool_dir,
-            &universal_resolution,
-            &lock_manifest,
-            &settings.resolver.index_locations,
-        )?;
-        let resolution = tool_lock.to_resolution(
-            Some(name),
-            target_interpreter,
-            python_platform,
-            &settings.resolver.build_options,
-        )?;
+        let (resolution, tool_lock) = if locked {
+            let resolution = Box::pin(super::locked::resolve(
+                spec,
+                target_interpreter,
+                python_platform,
+                &build_constraints,
+                &settings.resolver,
+                client_builder,
+                &state,
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            ))
+            .await
+            .map_err(super::locked::unwrap_root_selection_error)?;
+            (resolution, None)
+        } else {
+            let universal_resolution = resolve_environment(
+                tool_environment_spec(spec, None, Some(&site_packages)),
+                EnvironmentResolution::Universal,
+                target_interpreter,
+                python_platform,
+                SourceTreeEditablePolicy::Tool,
+                build_constraints.clone(),
+                &settings.resolver,
+                client_builder,
+                &state,
+                Box::new(SummaryResolveLogger),
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .await?;
+            let tool_lock = ToolLock::from_resolution(
+                &tool_dir,
+                &universal_resolution,
+                &lock_manifest,
+                &settings.resolver.index_locations,
+            )?;
+            let resolution = tool_lock.to_resolution(
+                Some(name),
+                target_interpreter,
+                python_platform,
+                &settings.resolver.build_options,
+            )?;
+            (resolution, Some(tool_lock))
+        };
         let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
 
         if requested_interpreter.is_some() {
@@ -479,11 +508,7 @@ async fn upgrade_tool(
                 preview,
             )
             .await?;
-            (
-                environment,
-                UpgradeOutcome::UpgradeEnvironment,
-                Some(tool_lock),
-            )
+            (environment, UpgradeOutcome::UpgradeEnvironment, tool_lock)
         } else {
             // Otherwise, upgrade the existing environment.
             let ResolverInstallerSettings {
@@ -553,7 +578,7 @@ async fn upgrade_tool(
                 )
                 .await?
             };
-            (environment, outcome, Some(tool_lock))
+            (environment, outcome, tool_lock)
         }
     } else if let Some(interpreter) = requested_interpreter {
         let resolution = resolve_environment(
@@ -648,7 +673,7 @@ async fn upgrade_tool(
 
         // If we modified the target tool, reinstall the entrypoints.
         finalize_tool_install(
-            false,
+            locked,
             &environment,
             name,
             &entrypoints,
@@ -667,14 +692,15 @@ async fn upgrade_tool(
             printer,
         )?;
     } else {
-        if tool_locks {
+        if locked || tool_locks || locked != existing_tool_receipt.locked() {
             ToolLock::write(&tool_dir, tool_lock.as_ref())?;
         }
         installed_tools.add_tool_receipt(
             name,
             existing_tool_receipt
                 .clone()
-                .with_options(ToolOptions::from(options)),
+                .with_options(ToolOptions::from(options))
+                .with_locked(locked),
         )?;
     }
 
@@ -695,7 +721,9 @@ async fn upgrade_tool(
 fn pinned_requirement_version(tool: &Tool, name: &PackageName) -> Option<Version> {
     pinned_version_from(tool.requirements().iter(), name).or_else(|| {
         pinned_version_from(
-            tool.constraints().iter().map(|entry| &entry.requirement),
+            tool.constraints()
+                .iter()
+                .map(|constraint| &constraint.requirement),
             name,
         )
     })
