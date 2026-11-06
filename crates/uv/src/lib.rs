@@ -1710,6 +1710,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .collect::<Result<Vec<_>, _>>()?;
 
             Box::pin(commands::tool_install(
+                args.locked.into(),
                 args.package,
                 args.editable,
                 args.from,

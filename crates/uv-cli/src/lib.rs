@@ -5473,6 +5473,17 @@ pub struct UvxArgs {
 
 #[derive(Args)]
 pub struct ToolInstallArgs {
+    /// Install dependencies from the package's bundled `pylock.toml`.
+    ///
+    /// Requires the `locked-tools` preview feature. Fails if the selected package does not
+    /// contain a lock, or if that lock cannot be installed for the requested environment.
+    #[arg(long, hide = true, overrides_with = "unlocked")]
+    locked: bool,
+
+    /// Resolve dependencies instead of using the package's bundled lock.
+    #[arg(long, hide = true, overrides_with = "locked")]
+    unlocked: bool,
+
     /// The package to install commands from.
     #[arg(value_hint = ValueHint::Other)]
     package: String,
