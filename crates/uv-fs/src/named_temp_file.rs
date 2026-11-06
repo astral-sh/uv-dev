@@ -47,6 +47,28 @@ impl NamedTempFile {
         self.0.as_file()
     }
 
+    /// Publish a file whose previous contents can still be open by a reader.
+    pub fn persist_over_open(self, destination: &Path) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            // tempfile uses MoveFileExW, which cannot overwrite an open destination. The
+            // standard library also tries FileRenameInfoEx with POSIX replacement semantics.
+            let mut cleanup = tempfile::TempPath::try_from_path(self.as_ref())?;
+            // keep() clears FILE_ATTRIBUTE_TEMPORARY. The guard removes the source on failure.
+            let (_, source) = self.0.keep().map_err(|err| err.error)?;
+            let destination = verbatim_path(destination);
+            crate::with_retry_sync(&source, &destination, "rename", || {
+                fs_err::rename(&source, &destination)
+            })?;
+            cleanup.disable_cleanup(true);
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            crate::persist_with_retry_sync(self, destination)
+        }
+    }
+
     /// Persist the temporary file, atomically replacing any existing file at `path`.
     ///
     /// The destination must be on the same filesystem. This does not synchronize the file contents

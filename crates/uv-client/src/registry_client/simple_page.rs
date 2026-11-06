@@ -361,6 +361,7 @@ impl Cacheable for ParsedPage {
         let offset = (size_of::<PageHeader>() + len) as u64;
         let (files, envelope) = if len > INLINE_THRESHOLD
             && let Ok(permit) = FILE_BUDGET.try_acquire()
+            && uv_fs::supports_open_file_replacement(&file)
         {
             file.seek(SeekFrom::Start(offset)).map_err(ErrorKind::Io)?;
             let envelope = DataWithCachePolicy::from_reader_at(&mut file, offset)?;
@@ -372,18 +373,14 @@ impl Cacheable for ParsedPage {
                 envelope,
             )
         } else {
-            let mut reader = BufReader::new(file);
-            // The length comes from disk. Grow as bytes arrive instead of reserving an
-            // unverified length from a truncated cache entry.
-            let mut bytes = Vec::with_capacity(len.min(INLINE_THRESHOLD));
-            reader
-                .by_ref()
-                .take(len as u64)
-                .read_to_end(&mut bytes)
-                .map_err(ErrorKind::Io)?;
-            if bytes.len() != len {
+            // Oversized pages reach this path under descriptor pressure or on a volume that
+            // cannot replace an open file. Check the header before reserving its exact size.
+            if len > INLINE_THRESHOLD && file.metadata().map_err(ErrorKind::Io)?.len() < offset {
                 return Err(ErrorKind::ArchiveRead("truncated Simple release data".into()).into());
             }
+            let mut reader = BufReader::new(file);
+            let mut bytes = vec![0; len];
+            reader.read_exact(&mut bytes).map_err(ErrorKind::Io)?;
             let envelope = DataWithCachePolicy::from_reader_at(reader, offset)?;
             (ReleaseFiles::Memory(bytes), envelope)
         };
@@ -443,6 +440,7 @@ impl Cacheable for ParsedPage {
             // If unrelated work has consumed the available descriptors, keep the parsed bytes.
             let files = if self.details.len() > INLINE_THRESHOLD
                 && let Ok(permit) = FILE_BUDGET.try_acquire()
+                && uv_fs::supports_open_file_replacement(temp.as_file())
                 && let Ok(handle) = temp.as_file().try_clone()
             {
                 let file = fs_err::File::from_parts(handle, &path);
@@ -453,7 +451,7 @@ impl Cacheable for ParsedPage {
             } else {
                 ReleaseFiles::Memory(self.details)
             };
-            uv_fs::persist_with_retry_sync(temp, &path)?;
+            temp.persist_over_open(&path)?;
             Ok(SimplePage {
                 manifest: self.manifest,
                 files,
@@ -513,7 +511,10 @@ mod tests {
 
         let published = large_page(1)?.write_cache(&path, &policy).await?;
         let cached = ParsedPage::decode(ParsedPage::read_cache(&path)?)?;
-        assert!(matches!(cached.files, ReleaseFiles::Disk { .. }));
+        assert_eq!(
+            matches!(cached.files, ReleaseFiles::Disk { .. }),
+            uv_fs::supports_open_file_replacement(&fs_err::File::open(&path)?)
+        );
         let replacement = large_page(2)?.write_cache(&path, &policy).await?;
         assert_eq!(fs_err::read_dir(temp.path())?.count(), 1);
         fs_err::remove_file(&path)?;
