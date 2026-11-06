@@ -90,7 +90,7 @@ impl CandidateSelector {
         index: Option<&'a IndexUrl>,
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
-    ) -> Option<Candidate<'a>> {
+    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
         if let Some(recorder) = &self.recorder {
             recorder.candidate_policy(package_name);
         }
@@ -118,9 +118,9 @@ impl CandidateSelector {
             prerelease_selection,
             env,
             tags,
-        ) {
+        )? {
             trace!("Using preference {} {}", preferred.name, preferred.version);
-            return Some(preferred);
+            return Ok(Some(preferred));
         }
 
         // If we don't have a preference, find an already-installed distribution that satisfies the
@@ -137,7 +137,7 @@ impl CandidateSelector {
                 "Using installed {} {} that satisfies {range}",
                 installed.name, installed.version
             );
-            return Some(installed);
+            return Ok(Some(installed));
         }
 
         // Otherwise, find the best candidate from the version maps.
@@ -147,7 +147,7 @@ impl CandidateSelector {
             version_maps,
             prerelease_selection,
             env,
-        );
+        )?;
 
         // Cross-reference against the already-installed distribution.
         //
@@ -167,10 +167,10 @@ impl CandidateSelector {
                 "Using installed {} {} that satisfies {range}",
                 installed.name, installed.version
             );
-            return Some(installed);
+            return Ok(Some(installed));
         }
 
-        compatible
+        Ok(compatible)
     }
 
     /// If the package has a preference, an existing version from an existing lockfile or a version
@@ -194,16 +194,16 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
-    ) -> Option<Candidate<'a>> {
+    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
         let preferences = preferences.get(package_name);
 
         // If there are multiple preferences for the same package, we need to sort them by priority.
         let preferences = match preferences {
-            [] => return None,
+            [] => return Ok(None),
             [entry] => {
                 // Filter out preferences that map to a conflicting index.
                 if index.is_some_and(|index| !entry.index().matches(index)) {
-                    return None;
+                    return Ok(None);
                 }
                 Either::Left(std::iter::once((entry.pin().version(), entry.source())))
             }
@@ -263,7 +263,7 @@ impl CandidateSelector {
         reinstall: bool,
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
-    ) -> Option<Candidate<'a>> {
+    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
         for (version, source) in preferences {
             // Respect the version range for this requirement.
             if !range.contains(version) {
@@ -293,14 +293,14 @@ impl CandidateSelector {
                                 continue;
                             }
 
-                            return Some(Candidate {
+                            return Ok(Some(Candidate {
                                 name: package_name,
                                 version,
                                 dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
                                     dist,
                                 )),
                                 choice_kind: VersionChoiceKind::Preference,
-                            });
+                            }));
                         }
                     }
                     // We do not consider installed distributions with multiple versions because
@@ -333,10 +333,10 @@ impl CandidateSelector {
             }
 
             // Check for a remote distribution that matches the preferred version
-            if let Some((version_map, file)) = version_maps
-                .iter()
-                .find_map(|version_map| version_map.get(version).map(|dist| (version_map, dist)))
-            {
+            for version_map in version_maps {
+                let Some(file) = version_map.get(version)? else {
+                    continue;
+                };
                 // If the preferred version has a local variant, prefer that.
                 if version_map.local() {
                     for local in version_map
@@ -353,27 +353,27 @@ impl CandidateSelector {
                         if !range.contains(local) {
                             continue;
                         }
-                        if let Some(dist) = version_map.get(local) {
+                        if let Some(dist) = version_map.get(local)? {
                             debug!("Preferring local version `{package_name}` (v{local})");
-                            return Some(Candidate::new(
+                            return Ok(Some(Candidate::new(
                                 package_name,
                                 local,
                                 dist,
                                 VersionChoiceKind::Preference,
-                            ));
+                            )));
                         }
                     }
                 }
 
-                return Some(Candidate::new(
+                return Ok(Some(Candidate::new(
                     package_name,
                     version,
                     file,
                     VersionChoiceKind::Preference,
-                ));
+                )));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Check for an installed distribution that satisfies the current range and is allowed.
@@ -431,7 +431,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
         env: &ResolverEnvironment,
-    ) -> Option<Candidate<'a>> {
+    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
         self.select_no_preference_with(
             package_name,
             range,
@@ -448,7 +448,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
-    ) -> Option<Candidate<'a>> {
+    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
         match prerelease_selection {
             PrereleaseSelection::Allow => self.select_no_preference_from(
                 package_name,
@@ -505,6 +505,7 @@ impl CandidateSelector {
                     )
                 }),
         }
+        .transpose()
     }
 
     fn select_no_preference_from<'a>(
@@ -514,7 +515,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
-    ) -> Option<Candidate<'a>> {
+    ) -> Option<Result<Candidate<'a>, uv_client::Error>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
             version_maps.iter().map(VersionMap::len).sum::<usize>(),
@@ -630,7 +631,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
-    ) -> Option<Candidate<'a>> {
+    ) -> Option<Result<Candidate<'a>, uv_client::Error>> {
         let segments = range.iter();
         let segments = if highest {
             Either::Left(segments.rev())
@@ -654,7 +655,7 @@ impl CandidateSelector {
                 trace!(
                     "Returning incompatible candidate for package {package_name} with range {range} after {steps} steps",
                 );
-                return incompatible;
+                return incompatible.map(Ok);
             }
 
             let candidate = {
@@ -668,8 +669,10 @@ impl CandidateSelector {
                 if !cursor.contains(version) {
                     continue;
                 }
-                let Some(dist) = maybe_dist.prioritized_dist() else {
-                    continue;
+                let dist = match maybe_dist.prioritized_dist() {
+                    Ok(Some(dist)) => dist,
+                    Ok(None) => continue,
+                    Err(err) => return Some(Err(err)),
                 };
                 trace!(
                     "Found candidate for package {package_name} with range {range} after {steps} steps: {version} version"
@@ -725,14 +728,14 @@ impl CandidateSelector {
             trace!(
                 "Returning candidate for package {package_name} with range {range} after {steps} steps",
             );
-            return Some(candidate);
+            return Some(Ok(candidate));
         }
 
         if incompatible.is_some() {
             trace!(
                 "Returning incompatible candidate for package {package_name} with range {range} after {steps} steps",
             );
-            return incompatible;
+            return incompatible.map(Ok);
         }
 
         trace!(

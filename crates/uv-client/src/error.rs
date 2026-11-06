@@ -193,6 +193,7 @@ impl Error {
             | ErrorKind::Io(_)
             | ErrorKind::Decode(_)
             | ErrorKind::Encode(_)
+            | ErrorKind::SimplePageChanged(_)
             | ErrorKind::ArchiveRead(_)
             | ErrorKind::ArchiveWrite(_) => false,
         }
@@ -551,6 +552,9 @@ pub enum ErrorKind {
 
     #[error("Unsupported `Content-Type` \"{1}\" for `{0}`. Expected JSON or HTML.")]
     UnsupportedMediaType(SafeUrl, String),
+
+    #[error("The cached package index page at `{}` changed during this command. Rerun the command to use the updated page.", .0.display())]
+    SimplePageChanged(PathBuf),
 
     #[error("Reading from cache archive failed: {0}")]
     ArchiveRead(String),
