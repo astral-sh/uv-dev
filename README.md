@@ -10,6 +10,12 @@ The reporter wants to invoke a command provided by a local uv project from any d
 
 astral-sh/uv#13800 addresses global access through a separate editable tool installation, which does not meet the clarified requirement to reuse the existing project `.venv`. astral-sh/uv#14984 discusses using a project's environment from elsewhere; astral-sh/uv#11553 documents script shebangs, while astral-sh/uv#7242 separately tracks installing standalone scripts.
 
+## Maintainer guidance
+
+Maintainer woodruffw confirms that `--project` is the correct flag for running a command in a project's context from outside its working tree, and that wrapping this invocation in a script should work. They nevertheless do not generally encourage this pattern, preferring `uv tool install -e ...` or packaging the project as an installable distribution for clearer behavior. This answers the basic flag/wrapper question without establishing that the reporter's complete setup has been tested or endorsing symlinked executables, man pages, or completion scripts. It does not commit to a documentation change.
+
+The separate-tool-environment recommendation remains an alternative rather than satisfying the reporter's explicit preference to reuse the existing project `.venv`. No uv failure or regression is established, so the classification remains question.
+
 ## Prior draft response — superseded by clarified scope
 
 The retained draft below assumes that a separate tool installation is acceptable and proposes centralizing discussion in astral-sh/uv#13800. Those assumptions do not match the reporter's clarified requirement to reuse the existing project environment. It should not be used as the current response.
@@ -33,7 +39,7 @@ Question: the reporter asks for pitfalls or improvements when exposing commands 
 
 The explicit requirement to reuse the existing `.venv` distinguishes this request from astral-sh/uv#13800. In that issue, maintainer konstin recommends `uv tool install -e .` to expose a local repository's CLI globally, and its reporter confirms that solution. That recommendation creates a separate tool environment even though it references the same source checkout, so it does not settle the present question. The earlier duplicate interpretation is therefore superseded by the clarified scope; astral-sh/uv#13800 remains a related alternative rather than the canonical duplicate target.
 
-A project wrapper can use the existing environment, including its editable installation and commands supplied by dependencies. The issue body correctly quotes `"$@"`; shell argument forwarding is a request for confirmation rather than a reported failure. There is no maintainer decision on the clarified workflow, and no project-specific reproduction or independent verification of the reporter's setup.
+A project wrapper can use the existing environment, including its editable installation and commands supplied by dependencies. The issue body correctly quotes `"$@"`; shell argument forwarding is a request for confirmation rather than a reported failure. Maintainer woodruffw confirms that the `--project` wrapper should work while generally preferring tool installation or distribution packaging. There is still no project-specific reproduction or independent verification of the reporter's complete setup.
 
 ## Execution options and clarified use case
 
@@ -49,7 +55,7 @@ The tradeoff between these approaches has supporting repository evidence:
 - Direct execution is not otherwise identical to `uv run`: `crates/uv-project-commands/src/run.rs:1195` constructs a PATH including the environment's scripts directory, and line 1227 sets `VIRTUAL_ENV` when using a virtual environment. A symlink alone does not perform that environment setup. This distinction can matter for commands that invoke other project executables or inspect those variables; no such failure is reported here.
 - The reporter cites astral-sh/uv#11991 as precedent for the wrapper. Inspection confirms that maintainer charliermarsh recommends `uv run --project /root/my_project /root/my_project/task.py`, and that issue's reporter confirms it solves their cron invocation. Maintainer konstin separately explains that cron may not inherit the interactive shell's PATH. That supports explicit project selection but does not establish that the present report involves cron or has a PATH failure.
 
-The remaining support question is whether reusing this single project environment through wrappers and links has pitfalls beyond the documented differences above, including how manually linked ancillary files should be maintained. The reporter reports success so far; no additional failure mechanism or maintainer endorsement is established.
+The basic `--project` wrapper question has a maintainer answer: the flag is appropriate and the wrapper should work, although this is not the maintainer's generally preferred installation pattern. The potential pitfalls of the broader link-based integration, including maintenance of manually linked ancillary files, remain unverified. The reporter reports success so far; no additional failure mechanism is established.
 
 ## Related
 
