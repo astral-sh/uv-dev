@@ -911,14 +911,17 @@ impl<'a> PublishSession<'a> {
                 };
             }
         };
-        let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
+        let Ok([(_, MetadataFormat::Simple(simple_metadata))]) = <[_; 1]>::try_from(response)
+        else {
             unreachable!("We queried a single index, we must get a single response");
         };
         let Some(version_index) = simple_metadata.find_version(filename.version()) else {
             return Ok(false);
         };
-        let files = simple_metadata
-            .files(version_index)
+        let files = registry_client
+            .spawn_cache_read(move || simple_metadata.files(version_index))
+            .await
+            .expect("release file read panicked")
             .map_err(PublishError::CheckUrlIndex)?;
         let archived_files = match filename {
             DistFilename::SourceDistFilename(_) => &files.source_dists,
