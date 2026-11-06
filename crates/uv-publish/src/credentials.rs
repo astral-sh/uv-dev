@@ -22,9 +22,12 @@ pub(crate) fn validate(message: &Message<'_>) -> Result<(), PublishPrepareError>
             // Parser errors can contain the original credentials. Report only the field name.
             let invalid = || PublishPrepareError::InvalidMetadataUrl(field);
             let url = if field == "Requires-Dist" {
-                // Leave legacy version specifiers alone. Direct references contain `@` and
-                // bare absolute URLs contain `:`, even when the package name was omitted.
-                if !value.contains(['@', ':']) {
+                // A direct reference has an `@`, and a bare absolute URL has a scheme.
+                // Ignore marker text when deciding whether a legacy requirement needs parsing.
+                let dependency = value
+                    .split_once(';')
+                    .map_or(value, |(dependency, _)| dependency);
+                if !dependency.contains(['@', ':']) {
                     continue;
                 }
                 let requirement = value
@@ -103,7 +106,7 @@ mod tests {
     #[test]
     fn metadata_without_credentials() -> Result<(), PublishPrepareError> {
         validate(&Message::parse(
-            b"Requires-Dist: dependency >=1.*\n\
+            b"Requires-Dist: dependency >=1.* ; platform_version == '12:34'\n\
               Requires-Dist: dependency @ git+ssh://git@example.com/repo.git@main\n\
               Project-URL: Source, https://example.com/repo\n\
               Home-page: UNKNOWN\n\

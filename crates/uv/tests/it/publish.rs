@@ -1642,7 +1642,7 @@ async fn publish_check_creds() -> anyhow::Result<()> {
         Metadata-Version: 2.3
         Name: example
         Version: 1.0
-        Requires-Dist: dependency[extra] @ https://example.com/dependency.whl?%73iG=secret ; python_version < '2'
+        Requires-Dist: dependency[extra] @ https://example.com/dependency.whl;download?%73iG=secret ; python_version < '2'
     "};
     let mut archive = ZipFileWriter::new(Vec::new());
     archive
@@ -1673,23 +1673,26 @@ async fn publish_check_creds() -> anyhow::Result<()> {
       cause: The `Requires-Dist` metadata field contains URL credentials. Remove the credentials or use `--unsafe-allow-credentials` to publish them
     ");
 
-    context
-        .publish()
+    uv_snapshot!(context.filters(), context.publish()
         .args(["--token", "dummy", "--publish-url", &upload])
-        .arg(wheel.path())
-        .assert()
-        .success();
-    context
-        .publish()
-        .args([
-            "--preview-features",
-            "publish-check-creds",
-            "--unsafe-allow-credentials",
-        ])
+        .arg(wheel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    Uploading example-1.0-py3-none-any.whl ([SIZE]B)
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--preview-features", "publish-check-creds", "--unsafe-allow-credentials"])
         .args(["--token", "dummy", "--publish-url", &upload])
-        .arg(wheel.path())
-        .assert()
-        .success();
+        .arg(wheel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    Uploading example-1.0-py3-none-any.whl ([SIZE]B)
+    ");
 
     let requests = server
         .received_requests()
