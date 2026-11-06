@@ -53,12 +53,13 @@ pub enum VersionsResponse {
 }
 
 pub trait ResolverProvider {
-    /// Exclude the damaged cache entry while retrying an online resolution.
+    /// Exclude a newly discovered damaged response while retrying an online resolution.
     fn reject_simple_read(
         &self,
+        _retries: &mut uv_client::SimpleCacheRetries,
         _error: &uv_client::Error,
-    ) -> impl Future<Output = Option<uv_client::CacheRejection>> {
-        std::future::ready(None)
+    ) -> impl Future<Output = bool> {
+        std::future::ready(false)
     }
 
     /// Run a speculative candidate lookup that may read cached release files.
@@ -223,11 +224,12 @@ pub(super) fn classify_wheel_metadata_error(error: uv_metadata::Error) -> Metada
 impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Context> {
     fn reject_simple_read(
         &self,
+        retries: &mut uv_client::SimpleCacheRetries,
         error: &uv_client::Error,
-    ) -> impl Future<Output = Option<uv_client::CacheRejection>> {
+    ) -> impl Future<Output = bool> {
         self.fetcher
             .client()
-            .manual(|client, _| std::future::ready(client.reject_simple_read(error)))
+            .manual(|client, _| std::future::ready(retries.reject(client, error)))
     }
 
     fn run_cache_read<T: Send + 'static>(

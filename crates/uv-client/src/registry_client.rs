@@ -54,7 +54,7 @@ use crate::{
 
 mod simple_page;
 use simple_page::ParsedPage;
-pub use simple_page::SimplePage;
+pub use simple_page::{SimpleCacheRetries, SimplePage};
 
 /// Cache parsed core metadata and variant requirements from the same wheel.
 #[derive(Serialize, Deserialize)]

@@ -246,7 +246,7 @@ type RejectedEntries = Arc<OnceLock<Mutex<Vec<[u8; 16]>>>>;
 
 /// Bypass one damaged HTTP response for the duration of an online retry. A concurrent
 /// replacement at the same path has its own ID and remains usable.
-pub struct CacheRejection {
+pub(crate) struct CacheRejection {
     active: RejectedEntries,
     id: [u8; 16],
 }

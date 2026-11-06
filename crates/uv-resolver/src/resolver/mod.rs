@@ -313,18 +313,21 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
     pub async fn resolve(self) -> Result<ResolverOutput, ResolveError> {
         let mut state = Arc::new(self.state);
         let provider = Arc::new(self.provider);
-        let mut result = state.resolve_once(provider.clone()).await;
-        if let Err(ResolveError::Client(error)) = &result
-            && let Some(_rejection) = provider.reject_simple_read(error).await
-        {
+        let mut retries = uv_client::SimpleCacheRetries::default();
+        let result = loop {
+            let result = state.resolve_once(provider.clone()).await;
+            match &result {
+                Err(ResolveError::Client(error))
+                    if provider.reject_simple_read(&mut retries, error).await => {}
+                _ => break result,
+            }
             // A refresh can change release ordering or dependencies. Start a new solve against
             // the complete response rather than combining a fresh release with an old table.
             let retry = Arc::make_mut(&mut state);
             retry.index = retry.index.fresh_package_versions();
             retry.unavailable_packages.pin().clear();
             retry.incomplete_packages.pin().clear();
-            result = state.resolve_once(provider).await;
-        }
+        };
         state.on_complete();
         result
     }

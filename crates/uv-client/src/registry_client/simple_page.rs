@@ -17,9 +17,9 @@ use uv_pep440::Version;
 use uv_pypi_types::{ProjectStatus, ResolutionMetadata};
 
 use super::{RegistryClient, SimpleDetailMetadata, SimpleDetailMetadatum, VersionFiles};
-use crate::cached_client::{Cacheable, DataWithCachePolicy};
+use crate::cached_client::{CacheRejection, Cacheable, DataWithCachePolicy};
 use crate::httpcache::CachePolicy;
-use crate::{CacheRejection, Connectivity, Error, ErrorKind, OwnedArchive};
+use crate::{Connectivity, Error, ErrorKind, OwnedArchive};
 
 #[derive(Default, FromBytes, Immutable, IntoBytes)]
 #[repr(C)]
@@ -127,29 +127,41 @@ impl ReleaseFiles {
     }
 }
 
-impl RegistryClient {
-    /// Keep the damaged response out of online cache hits while the operation retries.
-    pub fn reject_simple_read(&self, error: &Error) -> Option<CacheRejection> {
-        if self.connectivity() == Connectivity::Online
-            && let ErrorKind::InvalidCachedRelease { entry_id, .. } = error.kind()
-        {
-            return Some(self.cached_client().reject(*entry_id));
-        }
-        None
-    }
+/// Responses excluded while one read-only operation repairs its Simple cache entries.
+#[derive(Default)]
+pub struct SimpleCacheRetries {
+    rejected: Vec<(PathBuf, CacheRejection)>,
+}
 
-    /// Retry a read-only operation once if a deferred release read needs a fresh response.
+impl SimpleCacheRetries {
+    /// Repair each package's cache entry at most once, even if refreshing it publishes
+    /// another damaged response. A healthy concurrent replacement remains eligible.
+    pub fn reject(&mut self, client: &RegistryClient, error: &Error) -> bool {
+        if client.connectivity() == Connectivity::Online
+            && let ErrorKind::InvalidCachedRelease { entry_id, path, .. } = error.kind()
+            && !self.rejected.iter().any(|(previous, _)| previous == path)
+        {
+            self.rejected
+                .push((path.clone(), client.cached_client().reject(*entry_id)));
+            return true;
+        }
+        false
+    }
+}
+
+impl RegistryClient {
+    /// Retry read-only work when a deferred release read needs a fresh HTTP response.
     pub async fn retry_simple_read<T>(
         &self,
         read: impl AsyncFn() -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let result = read().await;
-        if let Err(error) = &result
-            && let Some(_rejection) = self.reject_simple_read(error)
-        {
-            return read().await;
+        let mut retries = SimpleCacheRetries::default();
+        loop {
+            match read().await {
+                Err(error) if retries.reject(self, &error) => {}
+                result => return result,
+            }
         }
-        result
     }
 
     /// Run a blocking Simple cache read on the client's bounded cache-read pool.

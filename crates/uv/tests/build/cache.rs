@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -12,7 +11,7 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::CacheBucket;
@@ -40,66 +39,76 @@ fn cache_dir_uses_configured_test_context_path() {
     ");
 }
 
-/// A release can fail validation after its HTTP response was accepted. The online retry
-/// needs to resolve again because the index may have published different versions.
+/// Deferred failures in two distinct pages each get an unconditional fetch. Each new
+/// response can change the candidate versions, so both selections must be made again.
 #[tokio::test]
-async fn corrupt_simple_release_is_refetched_in_the_same_command() -> Result<()> {
+async fn corrupt_simple_releases_are_refetched_in_the_same_command() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let query = "x".repeat(40 * 1024);
-    let page = format!(
-        r#"<a href="demo-2.0-py3-none-any.whl?{query}" data-upload-time="2024-01-01T00:00:00Z">demo-2.0-py3-none-any.whl</a>"#
-    );
-    Mock::given(method("GET"))
-        .and(path("/demo/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("cache-control", "max-age=3600")
-                .insert_header("etag", "\"old\"")
-                .set_body_raw(page, "text/html"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    Mock::given(method("GET")).and(path_regex("^/(demo|helper)/$"))
+        .respond_with(move |request: &Request| {
+            let name = request.url.path().trim_matches('/');
+            let filename = format!("{name}-2.0-py3-none-any.whl");
+            let page = format!(r#"<a href="{filename}?{query}" data-upload-time="2024-01-01T00:00:00Z">{filename}</a>"#);
+            ResponseTemplate::new(200).insert_header("cache-control", "max-age=3600")
+                .insert_header("etag", "\"old\"").set_body_raw(page, "text/html")
+        }).expect(2).mount(&server).await;
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("demo")?;
-    context
-        .pip_compile()
-        .arg("--default-index")
-        .arg(server.uri())
-        .args(["--no-deps", "requirements.in"])
-        .assert()
-        .success();
+        .write_str("demo\nhelper\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    demo==2.0
+    helper==2.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     server.verify().await;
     server.reset().await;
 
-    let entry = context
-        .cache_files(CacheBucket::Simple)?
-        .into_iter()
-        .find(|file| file.ends_with("demo.rkyv"))
-        .context("expected cached Simple page")?;
-    let stamp = filetime::FileTime::from_last_modification_time(&fs_err::metadata(&entry)?);
-    let mut bytes = context.read_bytes(&entry);
-    let first_release = size_of::<u64>() + size_of::<u32>();
-    bytes[first_release] ^= 1;
-    fs_err::write(&entry, bytes)?;
-    filetime::set_file_mtime(&entry, stamp)?;
-
-    Mock::given(method("GET")).and(path("/demo/"))
+    let pages = context.cache_files(CacheBucket::Simple)?;
+    for name in ["demo.rkyv", "helper.rkyv"] {
+        let entry = pages
+            .iter()
+            .find(|file| file.ends_with(name))
+            .context("expected cached Simple page")?;
+        let stamp = filetime::FileTime::from_last_modification_time(&fs_err::metadata(entry)?);
+        let mut bytes = context.read_bytes(entry);
+        let first_release = size_of::<u64>() + size_of::<u32>();
+        bytes[first_release] ^= 1;
+        fs_err::write(entry, bytes)?;
+        filetime::set_file_mtime(entry, stamp)?;
+    }
+    Mock::given(method("GET"))
+        .and(path_regex("^/(demo|helper)/$"))
         .and(|request: &Request| !request.headers.contains_key("if-none-match"))
-        .respond_with(ResponseTemplate::new(200).insert_header("cache-control", "max-age=3600")
-            .set_body_raw(r#"<a href="demo-3.0-py3-none-any.whl" data-upload-time="2024-01-01T00:00:00Z">demo-3.0-py3-none-any.whl</a>"#, "text/html"))
-        .expect(1).mount(&server).await;
+        .respond_with(|request: &Request| {
+            let name = request.url.path().trim_matches('/');
+            let filename = format!("{name}-3.0-py3-none-any.whl");
+            let page = format!(
+                r#"<a href="{filename}" data-upload-time="2024-01-01T00:00:00Z">{filename}</a>"#
+            );
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_raw(page, "text/html")
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
     uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.uri())
         .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     demo==3.0
+    helper==3.0
 
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
     Ok(())
 }
@@ -128,13 +137,15 @@ async fn cutoff_conflict_survives_an_unreadable_historical_release() -> Result<(
         .await;
     let requirements = context.temp_dir.child("requirements.in");
     requirements.write_str("demo")?;
-    context
-        .pip_compile()
-        .arg("--default-index")
-        .arg(server.uri())
-        .args(["--no-deps", "requirements.in"])
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    demo==2.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     let entry = context
         .cache_files(CacheBucket::Simple)?
