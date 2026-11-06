@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19226,
+        "title": "uv venv creates the same python.exe and pythonw.exe",
+        "url": "https://github.com/astral-sh/uv/issues/19226",
+        "state": "closed",
+        "reason": "Tracks managed Windows virtual environments whose existing pythonw.exe launcher incorrectly opened a console. Fixed by astral-sh/uv#19235. It concerns launcher behavior inside a venv, whereas this request adds a missing launcher to PATH."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19235,
+        "title": "Fix pythonw launcher mode for managed Windows venv links",
+        "url": "https://github.com/astral-sh/uv/pull/19235",
+        "state": "merged",
+        "reason": "Merged August 11, 2026; fixes astral-sh/uv#19226 by selecting a windowed trampoline and targeting the managed pythonw.exe. Its diff leaves Python installation PATH launchers explicitly console-only, so it supplies relevant machinery without implementing this request."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using pythonw, pythonw.exe, pythonw3, Get-Command, not recognized, and uv python install --default. Separately searched installation/PATH aliases and GUI behavior using windowless, windowed, GUI interpreter, console, launcher, shim, and trampoline, including area:windows and searches without version or platform restrictions. Checked closed installation reports and followed comments to merged fixes: astral-sh/uv#19226 to astral-sh/uv#19235, astral-sh/uv#6805 to astral-sh/uv#9152, and astral-sh/uv#6801 to astral-sh/uv#11786. Keyword PR searches returned no direct matches; referenced PRs were inspected directly, including the diff of astral-sh/uv#19235. Ruled out astral-sh/uv#19226 as a duplicate or regression because it fixes an existing venv launcher, not a missing PATH launcher. Also inspected astral-sh/uv#12777, astral-sh/uv#15581, astral-sh/uv#13565, and astral-sh/uv#19156; these concern venv console aliases, console defaults, PyPy names, or GUI window focus. No existing discussion tracking the same PATH launcher request was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The request adds a Windows GUI launcher to the executables published by uv python install --default. Source confirms that installation currently enumerates console executable names and uses PythonExecutable::console, while virtual environment creation separately supports a windowed pythonw.exe target. No existing issue or PR was found tracking this additional PATH capability, and the historical venv fix did not implement it, so this is not a duplicate or an established regression.",
+  "summary": "The closest work is astral-sh/uv#19226 and its merged fix astral-sh/uv#19235, which corrected pythonw.exe launchers inside Windows virtual environments. Neither adds the requested managed Python launcher to PATH.",
+  "draft_response": "`uv python install --default` currently publishes console launchers only, so your report matches the implementation. The windowed trampoline support already exists: astral-sh/uv#19235 fixed virtual environments' launcher mode and `pythonw.exe` target, but did not add a launcher to PATH.\n\nThis is an enhancement to the install command. Before implementation, we should settle how `pythonw.exe` follows `--default`, interpreter upgrades, and uninstall. In the meantime, you can use a uv-created environment's `Scripts\\pythonw.exe` to run your GUI module."
+}
