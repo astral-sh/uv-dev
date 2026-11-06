@@ -1,3 +1,4 @@
+mod archive;
 mod trusted_publishing;
 
 use std::borrow::Cow;
@@ -45,6 +46,7 @@ use uv_redacted::{SafeUrl, SafeUrlError};
 use uv_static::TarBackend;
 use uv_warnings::warn_user;
 
+pub use crate::archive::add_lock_to_distribution;
 use crate::trusted_publishing::TrustedPublishingService;
 use crate::trusted_publishing::pypi::PyPIPublishingService;
 pub use crate::trusted_publishing::{TrustedPublishingError, TrustedPublishingToken};
