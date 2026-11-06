@@ -15,6 +15,8 @@ use uv_fastid::Id;
 use uv_pep440::Version;
 use uv_pypi_types::{ProjectStatus, ResolutionMetadata};
 
+#[cfg(target_os = "linux")]
+use super::RegistryClient;
 use super::{SimpleDetailMetadata, SimpleDetailMetadatum, VersionFiles};
 use crate::cached_client::Cacheable;
 use crate::{Error, ErrorKind, OwnedArchive};
@@ -133,6 +135,27 @@ struct CachedBlock {
     generation: Id,
     index: usize,
     files: Arc<OwnedArchive<Vec<VersionFiles>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl RegistryClient {
+    /// Start reading recent release details while the resolver considers other packages.
+    pub fn prefetch_recent_files(&self, page: &SimplePage) {
+        const READ_AHEAD_BYTES: u64 = 128 * 1024;
+
+        if let Details::Disk { path, .. } = &page.data.details
+            && let Some(last) = page.data.manifest.blocks.last()
+        {
+            let path = path.clone();
+            let end = last.end.to_native();
+            self.client
+                .uncached()
+                .cache_read_runtime()
+                .spawn_blocking(move || {
+                    uv_fs::prefetch_file_range(&path, end.saturating_sub(READ_AHEAD_BYTES)..end);
+                });
+        }
+    }
 }
 
 impl SimplePage {

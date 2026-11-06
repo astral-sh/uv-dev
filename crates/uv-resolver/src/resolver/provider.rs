@@ -213,13 +213,22 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
         let result = self
             .fetcher
             .client()
-            .manual(|client, semaphore| {
-                client.simple_detail(
-                    package_name,
-                    index.map(IndexMetadataRef::from),
-                    self.capabilities,
-                    semaphore,
-                )
+            .manual(|client, semaphore| async move {
+                let pages = client
+                    .simple_detail(
+                        package_name,
+                        index.map(IndexMetadataRef::from),
+                        self.capabilities,
+                        semaphore,
+                    )
+                    .await?;
+                #[cfg(target_os = "linux")]
+                for (_, metadata) in &pages {
+                    if let MetadataFormat::Simple(page) = metadata {
+                        client.prefetch_recent_files(page);
+                    }
+                }
+                Ok::<_, uv_client::Error>(pages)
             })
             .await;
 
