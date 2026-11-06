@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -17,7 +18,7 @@ use uv_client::{
 };
 use uv_configuration::{
     Concurrency, Constraints, DependencyModifiers, ExcludeDependency, Excludes, HashCheckingMode,
-    NoBinary, NoBuild, Override, Overrides, TargetTriple,
+    Override, Overrides, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::{DistributionDatabase, LocalWheel, LoweredExtraBuildDependencies};
@@ -59,7 +60,7 @@ use uv_settings::ResolverSettings;
 
 use crate::common::refine_interpreter;
 
-/// A failure to select the tool wheel, before inspecting its packaged lock.
+/// A failure to select the tool distribution, before inspecting its packaged lock.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 struct RootSelectionError(#[from] EnvironmentError);
@@ -197,7 +198,7 @@ pub(super) fn check_tool_requirement(requirement: &UnresolvedRequirement) -> any
         | RequirementSource::GitDirectory { .. }
         | RequirementSource::GitPath { .. }
         | RequirementSource::Directory { .. } => {
-            bail!("A wheel is required to install a tool with `--locked`")
+            bail!("`--locked` requires a tool wheel or a registry source distribution")
         }
     }
 }
@@ -429,14 +430,6 @@ pub(super) async fn resolve(
             }
         }
     }
-    if settings.build_options.no_binary_package(&requirement.name) {
-        bail!("`--locked` requires a wheel for the tool, but binary distributions are disabled");
-    }
-    let mut selection_settings = settings.clone();
-    selection_settings.build_options = selection_settings.build_options.combine(
-        NoBinary::None,
-        NoBuild::Packages(vec![requirement.name.clone()]),
-    );
     let client = RegistryClientBuilder::new(
         client_builder.clone().keyring(settings.keyring_provider),
         cache.clone(),
@@ -540,7 +533,7 @@ pub(super) async fn resolve(
     let mut spec = spec;
     let database =
         DistributionDatabase::new(&client, &dispatch, concurrency.downloads_semaphore.clone());
-    let (selected, wheel, root_hash) = loop {
+    let (selected, metadata, root_hash, contents) = loop {
         let selected = Resolution::from(
             resolve_environment(
                 spec.clone().into(),
@@ -549,7 +542,7 @@ pub(super) async fn resolve(
                 python_platform,
                 SourceTreeEditablePolicy::Tool,
                 build_constraints.clone(),
-                &selection_settings,
+                settings,
                 client_builder,
                 state,
                 Box::new(SummaryResolveLogger),
@@ -569,13 +562,18 @@ pub(super) async fn resolve(
         let ResolvedDist::Installable { dist, .. } = selected_dist else {
             bail!("Expected an installable tool distribution");
         };
-        if let Dist::Source(_) = dist.as_ref() {
-            bail!("A wheel is required to install a tool with `--locked`");
-        }
-
         let mut artifact_hashes = root_hashes.clone();
-        if let Dist::Built(BuiltDist::Registry(dist)) = dist.as_ref() {
-            let file = &dist.best_wheel().file;
+        let index_file = match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(dist)) => Some(&dist.best_wheel().file),
+            Dist::Source(SourceDist::Registry(dist)) => Some(&dist.file),
+            Dist::Built(BuiltDist::DirectUrl(_) | BuiltDist::Path(_) | BuiltDist::GitPath(_)) => {
+                None
+            }
+            Dist::Source(_) => {
+                bail!("`--locked` requires a tool wheel or a registry source distribution")
+            }
+        };
+        if let Some(file) = index_file {
             artifact_hashes.extend(
                 file.hashes
                     .iter()
@@ -588,6 +586,24 @@ pub(super) async fn resolve(
                     .into_iter()
                     .map(|hash| vec![hash]),
             );
+        }
+        if let Dist::Source(SourceDist::Registry(source)) = dist.as_ref() {
+            let groups = ArchiveHashGroups::new(artifact_hashes);
+            let policy = if groups.groups().is_empty() {
+                ArchiveHashPolicy::Generate
+            } else {
+                ArchiveHashPolicy::AllOfAny(&groups)
+            };
+            let (contents, hashes) = database.read_registry_source_lock(source, policy).await?;
+            let contents = contents.with_context(|| {
+                format!("`{selected_dist}` does not contain `pylock.toml` in its source distribution; `--locked` requires a packaged lock")
+            })?;
+            let hash = hashes
+                .iter()
+                .find(|hash| hash.algorithm() == HashAlgorithm::Sha256)
+                .context("Missing verified source archive hash")?
+                .clone();
+            break (selected, None, hash, contents);
         }
         let hasher = HashStrategy::from_resolution(&selected, HashCheckingMode::Verify)?;
         let (wheel, root_hash) = verify_hash_constraints(
@@ -621,27 +637,31 @@ pub(super) async fn resolve(
                 interpreter.python_version()
             );
         }
-        break (selected, wheel, root_hash);
+        let dist_info = find_flat_dist_info(wheel.filename(), wheel.path())?;
+        let contents = match fs_err::read_to_string(
+            wheel
+                .path()
+                .join(format!("{dist_info}.dist-info"))
+                .join("pylock.toml"),
+        ) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                bail!(
+                    "`{selected_dist}` does not contain `pylock.toml` in its `.dist-info` directory; `--locked` requires a packaged lock"
+                );
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to read the packaged lock for `{selected_dist}`")
+                });
+            }
+        };
+        break (selected, Some(metadata), root_hash, contents);
     };
     let selected_dist = selected
         .distributions()
         .next()
         .context("No compatible tool was selected")?;
-    let dist_info = find_flat_dist_info(wheel.filename(), wheel.path())?;
-    let dist_info = wheel.path().join(format!("{dist_info}.dist-info"));
-    let contents = match fs_err::read_to_string(dist_info.join("pylock.toml")) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            bail!(
-                "`{selected_dist}` does not contain `pylock.toml` in its `.dist-info` directory; `--locked` requires a packaged lock"
-            );
-        }
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!("Failed to read the packaged lock for `{selected_dist}`")
-            });
-        }
-    };
     let mut lock: PylockToml = toml::from_str(&contents)
         .with_context(|| format!("`{selected_dist}` contains an invalid `pylock.toml`"))?;
     for group in &requirement.groups {
@@ -790,7 +810,8 @@ pub(super) async fn resolve(
     }
     let (dependencies, _) = resolve_pylock_toml(
         lock,
-        &dist_info,
+        // Every lock entry was verified against a registry, so no paths can be relative.
+        Path::new(""),
         interpreter,
         None,
         python_platform,
@@ -808,6 +829,34 @@ pub(super) async fn resolve(
             requirement.name
         );
     }
+
+    let root_metadata = if let Some(metadata) = metadata {
+        metadata
+    } else {
+        // Wait until the packaged lock's artifact URLs are authorized before invoking the backend.
+        let ResolvedDist::Installable { dist, .. } = selected_dist else {
+            bail!("Expected an installable tool distribution");
+        };
+        let (wheel, _) = verify_hash_constraints(
+            &database,
+            dist,
+            &tags,
+            ArchiveHashPolicy::All(std::slice::from_ref(&root_hash)),
+            &[],
+        )
+        .await?;
+        let wheel = CachedDist::from(wheel);
+        let metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
+        if let Some(requires_python) = metadata.requires_python.as_ref()
+            && !requires_python.contains(interpreter.python_version())
+        {
+            bail!(
+                "`{selected_dist}` requires Python `{requires_python}`, but the selected interpreter is Python {}",
+                interpreter.python_version()
+            );
+        }
+        metadata
+    };
 
     let mut graph = dependencies.graph().clone();
     for node in graph.node_weights_mut() {
@@ -1049,7 +1098,6 @@ pub(super) async fn resolve(
                     .map(|version| (name.clone(), version.clone()))
             })
             .collect::<HashMap<_, _>>();
-        let root_metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
         let mut verified_metadata = HashMap::new();
         verified_metadata.insert(requirement.name.clone(), root_metadata);
         let mut override_extras = HashMap::<PackageName, HashSet<ExtraName>>::new();
@@ -1065,7 +1113,7 @@ pub(super) async fn resolve(
         selected_requirement.groups = Box::new([]);
         selected_requirement.source = RequirementSource::from(selected_dist);
         if let RequirementSource::Registry { index, .. } = &mut selected_requirement.source {
-            // The selected wheel can come from a find-links location, which is not a package index.
+            // The tool can come from a find-links location, which is not a package index.
             *index = None;
         }
         modified_spec.requirements = vec![selected_requirement.into()];
@@ -1497,8 +1545,8 @@ fn locked_metadata(
     }
 }
 
-/// Check each source archive hash policy before its build backend can run.
 /// Check each set of trusted digests against the same archive and return its SHA-256.
+/// A source archive must pass all checks before invoking its build backend.
 ///
 /// The caller uses that digest to bind installation to the bytes that passed these checks.
 async fn verify_hash_constraints(
