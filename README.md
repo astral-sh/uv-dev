@@ -30,6 +30,16 @@ The reporter would also accept the maintainer's proposed general stripped-log mo
 
 The reporter cites astral-sh/uv#9452 as encouraging log sharing. Inspection confirms that its “What information to include” section requests command output with `--verbose` and suggests repeated `-v` flags for additional logs. The inspected issue body contains no warning about personal or sensitive information in those logs. The reporter interprets that encouragement as implying some degree of safety; the maintainer's stated position remains that verbose logs are not designed for de-identified sharing.
 
+## Suggested workaround and limitations
+
+A community commenter suggests filtering combined stdout and stderr through `sed` before sharing logs, replacing occurrences of the home path with `~`. Their example is:
+
+```sh
+uv audit --verbose 2>&1 | sed -E "s@${HOME}@\~@g"
+```
+
+This is a suggested post-processing workaround, not a built-in uv feature or a verified reproduction. The commenter notes that case differences and paths that do not appear exactly as `$HOME` can defeat matching. In particular, it does not reliably handle the report's symlinked-home scenario: a replacement for `/home/jdoe` in `/var/home/jdoe/...` would leave `/var~...`, rather than the requested `~/...`. The expression also interpolates `$HOME` as a regular expression without escaping regex characters or the `@` delimiter. It therefore needs adaptation for some home paths and does not establish that the resulting logs are de-identified. The comment also suggests replacing a known personal name as another manual filter; no maintainer endorsement or reporter confirmation of either workaround is supplied.
+
 ## Classification
 
 The report requests a new default privacy-oriented display policy: abbreviate home-directory prefixes, recognize symlinked and resolved home paths, and possibly provide an opt-out. Source inspection confirms that the reported debug messages currently render paths without home abbreviation. Earlier managed-Python changes deliberately retained paths in debug logs, so they do not establish a regression or duplicate; no incorrect path value or broken existing scrubbing behavior is established.
