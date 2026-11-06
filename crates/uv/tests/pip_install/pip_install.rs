@@ -7028,6 +7028,47 @@ fn invalidate_path_on_env_var() -> Result<()> {
     Ok(())
 }
 
+/// A literal `#` in a local archive filename is interpreted as a URL fragment.
+#[test]
+fn install_sdist_filename_with_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.14");
+    let directory = context.temp_dir.child("cupy-issue-#10458");
+    let archive = directory.child("aprict-0.0.38-cupy-issue-#10458.tar.gz");
+    archive.write_binary(&generate_source_archive(
+        &"aprict".parse()?,
+        &"0.0.38".parse()?,
+        "",
+        None,
+    )?)?;
+
+    // The existing archive should be installable by path, but `#` truncates the path:
+    // astral-sh/uv#23118.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .current_dir(&directory)
+        .arg("./aprict-0.0.38-cupy-issue-#10458.tar.gz"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using Python 3.14.[X] environment at: [VENV]/
+    error: Distribution not found at: file://[TEMP_DIR]/cupy-issue-%2310458/aprict-0.0.38-cupy-issue-#10458.tar.gz
+    ");
+
+    // Encoding the literal `#` and supplying the metadata name makes the same archive installable.
+    let url = SafeUrl::from_file_path(archive.path()).map_err(|()| anyhow!("Invalid file path"))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .current_dir(&directory)
+        .arg(format!("aprict @ {url}")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using Python 3.14.[X] environment at: [VENV]/
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + aprict==0.0.38 (from file://[TEMP_DIR]/cupy-issue-%2310458/aprict-0.0.38-cupy-issue-%2310458.tar.gz)
+    ");
+
+    Ok(())
+}
+
 /// Install from a direct path (wheel) with changed versions in the file name.
 #[test]
 fn path_name_version_change() {
