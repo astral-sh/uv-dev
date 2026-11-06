@@ -19,6 +19,14 @@ Bug: reproduced local-path lookup failure for an existing source archive whose f
 
 There is no confirmed regression point. This is not an established duplicate of astral-sh/uv#4917: that report and its fix concern GitHub archive URLs rather than local archives. Likewise, astral-sh/uv#2501 concerns an intentional URL fragment rather than a literal filename character. No canonical issue or pull request covering this precise case was identified in the prior related-issue investigation.
 
+## Maintainer clarification and open question
+
+In the discussion of astral-sh/uv#23118, maintainer woodruffw asks how the reported archive filenames were produced and notes that PEP 625 source-distribution filenames must follow `{name}-{version}.tar.gz`, with neither component containing `#`. The supplied discussion contains no reporter answer explaining the filenames' origin.
+
+The missing information is whether these are build-generated sdists, manually renamed distributions, or general source archives, and which build or rename steps produced them. This distinction matters when deciding whether the issue calls for support for nonstandard source-archive names, improved diagnostics for invalid sdist names, or another change. The maintainer comment does not announce a final support policy, reject the report, or change its classification.
+
+The existing reproduction and verified workaround remain valid observations. In particular, the synthetic fixture establishes the behavior for identical archive bytes under different names; it does not establish how the reporter's original archive was created or whether it is a conforming sdist. Filename provenance remains the next investigation question before settling the intended behavior.
+
 ## Reproduction
 
 **Outcome: reproducible.** The two reported errors and the pip comparison were observed directly.
