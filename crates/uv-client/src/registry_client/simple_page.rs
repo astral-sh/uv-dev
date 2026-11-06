@@ -85,6 +85,13 @@ struct Release {
     checksum: u32,
 }
 
+impl ArchivedRelease {
+    /// Cache admission checks each end against the in-memory length of the release region.
+    fn end_offset(&self) -> usize {
+        usize::try_from(self.end.to_native()).expect("validated release offsets fit in usize")
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CachedPage {
     envelope: DataWithCachePolicy,
@@ -170,7 +177,7 @@ impl RegistryClient {
                     let mut bytes = AlignedVec::<16>::new();
                     let mut start = 0;
                     for release in page.manifest.releases.iter().rev() {
-                        let end = release.end.to_native() as usize;
+                        let end = release.end_offset();
                         bytes.resize(end - start, 0);
                         reader.read_exact(&mut bytes).map_err(ErrorKind::Io)?;
                         visit(&mut state, decode_release(release, &bytes)?);
@@ -323,8 +330,8 @@ impl SimplePage {
             .ok_or_else(|| ErrorKind::ArchiveRead("invalid release index".into()))?;
         let start = releases
             .get(index + 1)
-            .map_or(0, |next| next.end.to_native() as usize);
-        let len = release.end.to_native() as usize - start;
+            .map_or(0, ArchivedRelease::end_offset);
+        let len = release.end_offset() - start;
         let mut bytes = AlignedVec::<16>::with_capacity(len);
         bytes.resize(len, 0);
         self.files
