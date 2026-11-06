@@ -500,13 +500,7 @@ impl<P: SerializationPolicy> SafeUrl<P> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn without_credentials(&self) -> Cow<'_, Self> {
-        if self.0.password().is_none() && self.0.username() == "" {
-            return Cow::Borrowed(self);
-        }
-
-        // For URLs that use the `git` convention (i.e., `ssh://git@github.com/...`), avoid dropping the
-        // username.
-        if is_ssh_git_username(&self.0) {
+        if !self.has_sensitive_userinfo() {
             return Cow::Borrowed(self);
         }
 
@@ -515,14 +509,13 @@ impl<P: SerializationPolicy> SafeUrl<P> {
         Cow::Owned(url)
     }
 
-    /// Whether the URL contains sensitive userinfo or recognized credential query parameters.
-    ///
-    /// A passwordless `git` username on SSH and Git HTTPS URLs is not sensitive.
-    /// Query parameter names are percent-decoded and compared case-insensitively, as in display
-    /// redaction.
+    fn has_sensitive_userinfo(&self) -> bool {
+        (!self.username().is_empty() || self.password().is_some()) && !is_ssh_git_username(&self.0)
+    }
+
+    /// Whether the URL contains sensitive userinfo or a recognized credential query parameter.
     pub fn has_credentials(&self) -> bool {
-        (!is_ssh_git_username(&self.0)
-            && (!self.username().is_empty() || self.password().is_some()))
+        self.has_sensitive_userinfo()
             || self
                 .query_pairs()
                 .any(|(key, _)| is_sensitive_query_parameter(&key))

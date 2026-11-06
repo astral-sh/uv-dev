@@ -7554,12 +7554,10 @@ pub struct PublishArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Allow publishing distributions with credentials in their metadata URLs.
+    /// Allow credentials in dependency and project URLs in distribution metadata.
     ///
-    /// Overrides the credential check enabled by the `publish-check-creds` preview feature.
-    ///
-    /// WARNING: This can expose credentials to the package index and anyone who downloads the
-    /// distribution.
+    /// Only affects publishing with the `publish-check-creds` preview feature enabled.
+    /// Anyone who downloads the distribution can read these credentials.
     #[arg(long)]
     pub unsafe_allow_credentials: bool,
 

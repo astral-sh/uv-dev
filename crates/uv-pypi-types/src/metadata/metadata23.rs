@@ -5,6 +5,7 @@ use std::fmt::Write;
 use std::str;
 use std::str::FromStr;
 
+use astral_mail_headers::Message;
 use indexmap::IndexMap;
 
 use crate::MetadataError;
@@ -116,9 +117,14 @@ pub struct Metadata23 {
 }
 
 impl Metadata23 {
-    /// Parse distribution metadata from metadata `MetadataError`
+    /// Parse a core metadata file.
     pub fn parse(content: &[u8]) -> Result<Self, MetadataError> {
-        let headers = Headers::parse(content);
+        Self::from_message(Message::parse(content))
+    }
+
+    /// Read core metadata from an already parsed message.
+    pub fn from_message(message: Message<'_>) -> Result<Self, MetadataError> {
+        let headers = Headers { message };
 
         let metadata_version = headers
             .get_first_value("Metadata-Version")?

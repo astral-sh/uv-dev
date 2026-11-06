@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, io};
 
+use astral_mail_headers::Message;
 use fs_err::tokio::File;
 use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
@@ -1189,10 +1190,11 @@ fn parse_metadata(
     contents: &[u8],
     check_credentials: bool,
 ) -> Result<Metadata23, PublishPrepareError> {
+    let message = Message::parse(contents);
     if check_credentials {
-        credentials::validate(contents)?;
+        credentials::validate(&message)?;
     }
-    Ok(Metadata23::parse(contents)?)
+    Ok(Metadata23::from_message(message)?)
 }
 
 #[derive(Debug, Clone)]
