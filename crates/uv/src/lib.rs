@@ -2055,7 +2055,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PublishSettings::resolve(args, filesystem);
+            let args = PublishSettings::resolve(args, filesystem, globals.preview);
             show_settings!(args);
 
             let PublishSettings {
@@ -2063,7 +2063,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 username,
                 password,
                 dry_run,
-                unsafe_allow_credentials,
+                check_credentials,
                 no_attestations,
                 publish_url,
                 trusted_publishing,
@@ -2086,7 +2086,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 index,
                 index_locations,
                 dry_run,
-                unsafe_allow_credentials,
+                check_credentials,
                 no_attestations,
                 &cache,
                 printer,

@@ -7556,8 +7556,7 @@ pub struct PublishArgs {
 
     /// Allow publishing distributions with credentials in their metadata URLs.
     ///
-    /// By default, uv rejects sensitive userinfo and known credential query parameters in
-    /// dependency and project URLs in wheel and source distribution metadata.
+    /// Overrides the credential check enabled by the `publish-check-creds` preview feature.
     ///
     /// WARNING: This can expose credentials to the package index and anyone who downloads the
     /// distribution.

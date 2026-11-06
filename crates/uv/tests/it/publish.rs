@@ -1632,9 +1632,9 @@ async fn dry_run_does_not_upload() {
     );
 }
 
-/// Credentials in dependency metadata must be rejected before sending the archive or form fields.
+/// Preview rejects credentials before uploading. Both ordinary and explicitly allowed uploads succeed.
 #[tokio::test]
-async fn publish_rejects_credentials_unless_explicitly_allowed() {
+async fn publish_check_creds() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     let metadata = indoc! {"
@@ -1664,6 +1664,7 @@ async fn publish_rejects_credentials_unless_explicitly_allowed() {
         .await;
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--token").arg("dummy")
         .arg("--publish-url").arg(format!("{}/upload", server.uri()))
         .arg(wheel.path()), @"
@@ -1680,11 +1681,23 @@ async fn publish_rejects_credentials_unless_explicitly_allowed() {
     Mock::given(method("POST"))
         .and(basic_auth("__token__", "dummy"))
         .respond_with(ResponseTemplate::new(200))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--token").arg("dummy")
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .arg(wheel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    Uploading example-1.0-py3-none-any.whl ([SIZE]B)
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--token").arg("dummy")
         .arg("--publish-url").arg(format!("{}/upload", server.uri()))
         .arg("--unsafe-allow-credentials")
@@ -1700,8 +1713,8 @@ async fn publish_rejects_credentials_unless_explicitly_allowed() {
         .received_requests()
         .await
         .expect("Requests are recorded");
-    assert_eq!(requests.len(), 1);
-    let request = &requests[0];
+    assert_eq!(requests.len(), 2);
+    let request = &requests[1];
     // The override uploads the original archive; it must not silently redact signed artifacts.
     assert!(
         request
@@ -1742,6 +1755,7 @@ async fn publish_dry_run_rejects_signed_urls() {
         .expect("Failed to write wheel");
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--dry-run")
         .arg("--token").arg("dummy")
         .arg(wheel.path()), @"
@@ -1755,6 +1769,7 @@ async fn publish_dry_run_rejects_signed_urls() {
     ");
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--dry-run")
         .arg("--unsafe-allow-credentials")
         .arg("--token").arg("dummy")
@@ -1792,6 +1807,7 @@ async fn publish_rejects_credentials_in_duplicate_project_urls() {
         .await;
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--token").arg("dummy")
         .arg("--publish-url").arg(format!("{}/upload", server.uri()))
         .arg(sdist.path()), @"
@@ -1829,6 +1845,7 @@ async fn publish_invalid_metadata_url_does_not_expose_credentials() {
         .expect("Failed to write wheel");
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--preview-features").arg("publish-check-creds")
         .arg("--dry-run")
         .arg("--token").arg("dummy")
         .arg(wheel.path()), @"

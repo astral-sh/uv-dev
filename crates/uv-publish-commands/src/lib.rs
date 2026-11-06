@@ -44,7 +44,7 @@ pub async fn publish(
     index: Option<String>,
     index_locations: IndexLocations,
     dry_run: bool,
-    unsafe_allow_credentials: bool,
+    check_credentials: bool,
     no_attestations: bool,
     cache: &Cache,
     printer: Printer,
@@ -165,7 +165,7 @@ pub async fn publish(
         client_builder.retry_policy(),
         TarBackend::from_env(),
     )
-    .with_unsafe_allow_credentials(unsafe_allow_credentials)
+    .with_credential_check(check_credentials)
     .with_credentials_prompt(credentials_prompt.clone());
     if let Some(index_url) = check_url {
         let registry_client_builder =

@@ -269,7 +269,7 @@ impl PreparedDistribution {
         &self,
         reporter: Arc<impl Reporter>,
         tar_backend: TarBackend,
-        unsafe_allow_credentials: bool,
+        check_credentials: bool,
     ) -> Result<(FormMetadata, Option<String>, u64), PublishError> {
         let size = fs_err::tokio::metadata(&self.file)
             .await
@@ -288,7 +288,7 @@ impl PreparedDistribution {
                 &self.filename,
                 reporter,
                 tar_backend,
-                unsafe_allow_credentials,
+                check_credentials,
             )
             .await?;
             let mut attestations = Vec::with_capacity(self.attestations.len());
@@ -338,7 +338,7 @@ pub struct PublishSession<'a> {
     oidc_client: &'a BaseClient,
     retry_policy: ExponentialBackoff,
     tar_backend: TarBackend,
-    unsafe_allow_credentials: bool,
+    check_credentials: bool,
     check_url_client: Option<CheckUrlClient<'a>>,
     download_concurrency: Semaphore,
 }
@@ -639,16 +639,16 @@ impl<'a> PublishSession<'a> {
             oidc_client,
             retry_policy,
             tar_backend,
-            unsafe_allow_credentials: false,
+            check_credentials: false,
             check_url_client: None,
             // Check URL requests are made one at a time against a single index.
             download_concurrency: Semaphore::new(1),
         }
     }
 
-    /// Allow credentials in distribution metadata URLs to be uploaded without modification.
-    pub fn with_unsafe_allow_credentials(mut self, unsafe_allow_credentials: bool) -> Self {
-        self.unsafe_allow_credentials = unsafe_allow_credentials;
+    /// Check distribution metadata URLs for credentials before uploading.
+    pub fn with_credential_check(mut self, check_credentials: bool) -> Self {
+        self.check_credentials = check_credentials;
         self
     }
 
@@ -704,7 +704,7 @@ impl<'a> PublishSession<'a> {
         reporter: Arc<impl Reporter>,
     ) -> Result<(), PublishError> {
         prepared
-            .read_metadata(reporter, self.tar_backend, self.unsafe_allow_credentials)
+            .read_metadata(reporter, self.tar_backend, self.check_credentials)
             .await?;
         Ok(())
     }
@@ -720,11 +720,7 @@ impl<'a> PublishSession<'a> {
         reporter: Arc<impl Reporter>,
     ) -> Result<UploadOutcome, PublishError> {
         let (form_metadata, attestations, size) = prepared
-            .read_metadata(
-                reporter.clone(),
-                self.tar_backend,
-                self.unsafe_allow_credentials,
-            )
+            .read_metadata(reporter.clone(), self.tar_backend, self.check_credentials)
             .await?;
         reporter.on_upload_ready(&prepared.filename, size)?;
 
@@ -1163,7 +1159,7 @@ async fn metadata(
     file: &Path,
     filename: &DistFilename,
     tar_backend: TarBackend,
-    unsafe_allow_credentials: bool,
+    check_credentials: bool,
 ) -> Result<Metadata23, PublishPrepareError> {
     let contents = match filename {
         DistFilename::SourceDistFilename(source_dist) => {
@@ -1180,20 +1176,20 @@ async fn metadata(
             return tokio::task::spawn_blocking(move || {
                 let reader = io::BufReader::new(fs_err::File::open(file)?);
                 let contents = read_archive_metadata(&wheel, reader)?;
-                parse_metadata(&contents, unsafe_allow_credentials)
+                parse_metadata(&contents, check_credentials)
             })
             .await
             .map_err(io::Error::from)?;
         }
     };
-    parse_metadata(&contents, unsafe_allow_credentials)
+    parse_metadata(&contents, check_credentials)
 }
 
 fn parse_metadata(
     contents: &[u8],
-    unsafe_allow_credentials: bool,
+    check_credentials: bool,
 ) -> Result<Metadata23, PublishPrepareError> {
-    if !unsafe_allow_credentials {
+    if check_credentials {
         credentials::validate(contents)?;
     }
     Ok(Metadata23::parse(contents)?)
@@ -1211,7 +1207,7 @@ impl FormMetadata {
         filename: &DistFilename,
         reporter: Arc<impl Reporter>,
         tar_backend: TarBackend,
-        unsafe_allow_credentials: bool,
+        check_credentials: bool,
     ) -> Result<Self, PublishPrepareError> {
         let [sha256_hash, blake2b_hash] = hash_file(
             file,
@@ -1224,7 +1220,7 @@ impl FormMetadata {
         )
         .await?;
 
-        let metadata = metadata(file, filename, tar_backend, unsafe_allow_credentials).await?;
+        let metadata = metadata(file, filename, tar_backend, check_credentials).await?;
 
         Ok(Self::from_metadata(
             metadata,

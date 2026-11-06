@@ -130,16 +130,15 @@ Publish your package with `uv publish`:
 $ uv publish
 ```
 
-Before uploading each distribution, uv checks dependency and project URLs in its metadata for
-credentials. This includes usernames, passwords, and known sensitive query parameters such as `sig`
-and `X-Amz-Signature`. The check applies to `Requires-Dist`, `Project-URL`, `Home-page`, and
-`Download-URL` fields in wheel `METADATA` and source distribution `PKG-INFO`, including during
-`uv publish --dry-run`. Passwordless `git` usernames in `ssh://`, `git+ssh://`, and `git+https://`
-URLs are allowed.
+To check dependency and project URLs for credentials before uploading each distribution, use
+`uv publish --preview-features publish-check-creds`. This check is disabled by default. It detects
+usernames, passwords, and known sensitive query parameters such as `sig` and `X-Amz-Signature`. The
+check applies to `Requires-Dist`, `Project-URL`, `Home-page`, and `Download-URL` fields in wheel
+`METADATA` and source distribution `PKG-INFO`, including during `uv publish --dry-run`. Passwordless
+`git` usernames in `ssh://`, `git+ssh://`, and `git+https://` URLs are allowed.
 
-Remove credentials and correct invalid URLs before publishing. If credentials are intentionally
-included, use `--unsafe-allow-credentials` to upload the distribution unchanged. This exposes the
-credentials to the package index and anyone who downloads the distribution.
+If the check finds credentials, remove them before publishing or use `--unsafe-allow-credentials` to
+publish them intentionally. Anyone who can download the distribution can read these credentials.
 
 Set a PyPI token with `--token` or `UV_PUBLISH_TOKEN`, or set a username with `--username` or
 `UV_PUBLISH_USERNAME` and password with `--password` or `UV_PUBLISH_PASSWORD`. For publishing to
