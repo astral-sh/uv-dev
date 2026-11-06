@@ -52,6 +52,10 @@ use crate::{
     RetryState,
 };
 
+mod simple_page;
+use simple_page::ParsedPage;
+pub use simple_page::{SimpleCacheRetries, SimplePage};
+
 /// Cache parsed core metadata and variant requirements from the same wheel.
 #[derive(Serialize, Deserialize)]
 struct CachedVariantWheelMetadata {
@@ -288,7 +292,7 @@ impl From<bool> for MetadataRangeRequest {
 #[derive(Debug)]
 pub enum MetadataFormat {
     /// The metadata adheres to the Simple Repository API format.
-    Simple(OwnedArchive<SimpleDetailMetadata>),
+    Simple(SimplePage),
     /// The metadata consists of a list of distributions from a "flat" index.
     Flat(Vec<FlatIndexEntry>),
 }
@@ -609,7 +613,7 @@ impl RegistryClient {
         };
 
         match result {
-            Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),
+            Ok(page) => Ok(SimpleMetadataSearchOutcome::Found(page)),
             Err(err) => match err.kind() {
                 // The package could not be found in the remote index.
                 ErrorKind::WrappedReqwestError(.., reqwest_err) => {
@@ -647,7 +651,7 @@ impl RegistryClient {
         url: &SafeUrl,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+    ) -> Result<SimplePage, Error> {
         let simple_request = self
             .uncached_client(url)
             .get(url.clone())
@@ -698,7 +702,7 @@ impl RegistryClient {
                                 data.project_status,
                                 &url,
                             );
-                            OwnedArchive::from_unarchived(&unarchived)
+                            ParsedPage::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -713,7 +717,7 @@ impl RegistryClient {
                         self.parse_simple_body(text.len(), move || {
                             let unarchived =
                                 SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
-                            OwnedArchive::from_unarchived(&unarchived)
+                            ParsedPage::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -740,11 +744,11 @@ impl RegistryClient {
     /// bodies or bodies that cannot fit the shared worker and byte budgets are parsed inline
     /// without waiting. Offloaded work retains both permits until its result is collected or
     /// dropped, even if the caller is cancelled.
-    async fn parse_simple_body(
+    async fn parse_simple_body<T: Send + 'static>(
         &self,
         body_size: usize,
-        parse: impl FnOnce() -> Result<OwnedArchive<SimpleDetailMetadata>, Error> + Send + 'static,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+        parse: impl FnOnce() -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
         // Small responses are cheaper to parse inline than to dispatch to another thread.
         if body_size < 512 * 1024 {
             return parse();
@@ -778,7 +782,7 @@ impl RegistryClient {
         &self,
         package_name: &PackageName,
         url: &SafeUrl,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+    ) -> Result<SimplePage, Error> {
         let path = url
             .to_file_path()
             .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?
@@ -795,7 +799,7 @@ impl RegistryClient {
             }
         };
         let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
-        OwnedArchive::from_unarchived(&metadata)
+        ParsedPage::from_metadata(metadata).map(ParsedPage::into_page)
     }
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
@@ -1513,7 +1517,7 @@ impl RegistryClient {
 #[derive(Debug)]
 enum SimpleMetadataSearchOutcome {
     /// Simple metadata was found
-    Found(OwnedArchive<SimpleDetailMetadata>),
+    Found(SimplePage),
     /// Simple metadata was not found
     NotFound,
     /// A status code failure was encountered when searching for
@@ -1822,27 +1826,20 @@ impl SimpleIndexMetadata {
 /// Detail response for a Python package from a Simple API index.
 ///
 /// Abstracts over both HTML and JSON index formats.
-#[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
-#[rkyv(derive(Debug))]
-pub struct SimpleDetailMetadata {
+#[derive(Default, Debug)]
+struct SimpleDetailMetadata {
     project_status: ProjectStatus,
     versions: Vec<SimpleDetailMetadatum>,
 }
 
-#[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
-#[rkyv(derive(Debug))]
-pub struct SimpleDetailMetadatum {
-    pub version: Version,
-    pub files: VersionFiles,
-    #[rkyv(with = rkyv::with::Niche)]
-    pub metadata: Option<Box<ResolutionMetadata>>,
+#[derive(Debug)]
+struct SimpleDetailMetadatum {
+    version: Version,
+    files: VersionFiles,
+    metadata: Option<Box<ResolutionMetadata>>,
 }
 
 impl SimpleDetailMetadata {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &SimpleDetailMetadatum> {
-        self.versions.iter()
-    }
-
     fn from_pypi_files(
         files: Vec<uv_pypi_types::PypiFile>,
         package_name: &PackageName,
@@ -1933,32 +1930,6 @@ impl SimpleDetailMetadata {
     }
 }
 
-impl IntoIterator for SimpleDetailMetadata {
-    type Item = SimpleDetailMetadatum;
-    type IntoIter = std::vec::IntoIter<SimpleDetailMetadatum>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.versions.into_iter()
-    }
-}
-
-impl ArchivedSimpleDetailMetadata {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &rkyv::Archived<SimpleDetailMetadatum>> {
-        self.versions.iter()
-    }
-
-    pub fn datum(&self, i: usize) -> Option<&rkyv::Archived<SimpleDetailMetadatum>> {
-        self.versions.get(i)
-    }
-
-    /// Return the project-level [PEP 792] status marker for this package.
-    ///
-    /// [PEP 792]: https://peps.python.org/pep-0792/
-    pub fn project_status(&self) -> &rkyv::Archived<ProjectStatus> {
-        &self.project_status
-    }
-}
-
 #[derive(Debug)]
 enum MediaType {
     PypiV1Json,
@@ -2023,9 +1994,10 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
+    use super::{ParsedPage, SimpleDetailMetadata};
     use crate::{
-        BaseClientBuilder, Connectivity, OwnedArchive, RegistryClient, RegistryClientBuilder,
-        SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
+        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
+        html::SimpleDetailHTML,
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
@@ -2356,8 +2328,9 @@ mod tests {
             &base,
         );
         let versions: Vec<String> = simple_metadata
+            .versions
             .iter()
-            .map(|SimpleDetailMetadatum { version, .. }| version.to_string())
+            .map(|datum| datum.version.to_string())
             .collect();
         assert_eq!(versions, ["1.7.8".to_string()]);
     }
@@ -2392,14 +2365,8 @@ mod tests {
             data.project_status,
             &base,
         );
-        let archived = OwnedArchive::from_unarchived(&simple_metadata)?;
-        let simple_metadata = OwnedArchive::deserialize(&archived);
-
-        let files: Vec<_> = simple_metadata
-            .versions
-            .into_iter()
-            .flat_map(|datum| datum.files.all(&package_name))
-            .collect();
+        let page = ParsedPage::from_metadata(simple_metadata)?.into_page();
+        let files: Vec<_> = page.files(0)?.all(&package_name).collect();
         let filenames: Vec<_> = files
             .iter()
             .map(|(filename, _)| filename.to_string())
@@ -2465,13 +2432,8 @@ mod tests {
             data.project_status,
             &base,
         );
-        let archived = OwnedArchive::from_unarchived(&metadata)?;
-        let metadata = OwnedArchive::deserialize(&archived);
-        let entries: Vec<_> = metadata
-            .versions
-            .into_iter()
-            .flat_map(|datum| datum.files.all_entries(&package_name))
-            .collect();
+        let page = ParsedPage::from_metadata(metadata)?.into_page();
+        let entries: Vec<_> = page.files(0)?.all_entries(&package_name).collect();
 
         assert_debug_snapshot!(
             entries

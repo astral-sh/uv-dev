@@ -193,6 +193,7 @@ impl Error {
             | ErrorKind::Io(_)
             | ErrorKind::Decode(_)
             | ErrorKind::Encode(_)
+            | ErrorKind::InvalidCachedRelease { .. }
             | ErrorKind::ArchiveRead(_)
             | ErrorKind::ArchiveWrite(_) => false,
         }
@@ -554,6 +555,14 @@ pub enum ErrorKind {
 
     #[error("Reading from cache archive failed: {0}")]
     ArchiveRead(String),
+
+    #[error("Failed to read a cached release from `{path}`")]
+    InvalidCachedRelease {
+        path: PathBuf,
+        entry_id: [u8; 16],
+        #[source]
+        source: Box<Error>,
+    },
 
     #[error("Writing to cache archive failed: {0}")]
     ArchiveWrite(String),
