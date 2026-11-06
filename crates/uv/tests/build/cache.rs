@@ -11,6 +11,8 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::CacheBucket;
 use uv_fs::PortablePath;
@@ -35,6 +37,68 @@ fn cache_dir_uses_configured_test_context_path() {
     ----- stdout -----
     [CACHE_DIR]/
     ");
+}
+
+/// Corruption inside a release block must trigger a fresh fetch even when the manifest is fresh.
+#[tokio::test]
+async fn corrupt_simple_release_block_is_refetched() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    // A large yanked reason keeps these two releases outside the inline portion of the cache.
+    let reason = "x".repeat(256 * 1024);
+    let page = format!(
+        r#"<html><body>
+        <a href="demo-1.0-py3-none-any.whl" data-upload-time="2024-01-01T00:00:00Z" data-yanked="{reason}">demo-1.0-py3-none-any.whl</a>
+        <a href="demo-2.0-py3-none-any.whl" data-upload-time="2024-01-01T00:00:00Z">demo-2.0-py3-none-any.whl</a>
+        </body></html>"#
+    );
+    Mock::given(method("GET"))
+        .and(path("/demo/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=31536000")
+                .set_body_raw(page, "text/html"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("demo")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    demo==2.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let block_file = context
+        .cache_files(CacheBucket::Simple)?
+        .into_iter()
+        .find(|file| file.extension().is_some_and(|ext| ext == "blocks"))
+        .context("expected a file containing release details")?;
+    let mut bytes = context.read_bytes(&block_file);
+    bytes[0] ^= 1;
+    fs_err::write(block_file, bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    demo==2.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
 }
 
 /// Invalid cache keys in a local dependency must fail instead of falling back to the default keys.

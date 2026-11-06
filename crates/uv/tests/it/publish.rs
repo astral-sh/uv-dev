@@ -1,3 +1,4 @@
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use fs_err::OpenOptions;
@@ -7,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use uv_cache::Cache;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
@@ -879,6 +881,32 @@ async fn index_username_used_for_keyring() {
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Keyring request for VssSessionToken@http://[LOCALHOST]/upload
     ");
+}
+
+/// A publish index check reads cached release details and must wait for cache cleanup.
+#[tokio::test]
+async fn check_url_waits_for_cache_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let _cache = Cache::from_path(context.cache_dir.path())
+        .with_exclusive_lock()
+        .await?;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--dry-run")
+        .arg("--check-url")
+        .arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel())
+        .env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Could not acquire lock
+      cause: Timeout ([TIME]) when waiting for lock on `[CACHE_DIR]/` at `[CACHE_DIR]/.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    ");
+
+    Ok(())
 }
 
 #[tokio::test]

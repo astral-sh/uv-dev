@@ -46,9 +46,13 @@ pub(crate) trait Cacheable: Sized {
     type Target: Send + 'static;
 
     /// Deserialize a value from bytes aligned to a 16-byte boundary.
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<Self::Target, Error>;
+    fn from_aligned_bytes(bytes: AlignedVec, path: &Path) -> Result<Self::Target, Error>;
     /// Serialize bytes to a possibly owned byte buffer.
     fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error>;
+    /// Publish any immutable files referenced by the payload before publishing the cache entry.
+    async fn prepare_to_cache(&mut self, _path: &Path) -> Result<(), Error> {
+        Ok(())
+    }
     /// Convert this type into its final form.
     fn into_target(self) -> Self::Target;
 }
@@ -64,7 +68,7 @@ struct SerdeCacheable<T> {
 impl<T: Serialize + DeserializeOwned + Send + 'static> Cacheable for SerdeCacheable<T> {
     type Target = T;
 
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<T, Error> {
+    fn from_aligned_bytes(bytes: AlignedVec, _path: &Path) -> Result<T, Error> {
         Ok(rmp_serde::from_slice::<T>(&bytes).map_err(ErrorKind::Decode)?)
     }
 
@@ -89,7 +93,7 @@ where
 {
     type Target = Self;
 
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<Self, Error> {
+    fn from_aligned_bytes(bytes: AlignedVec, _path: &Path) -> Result<Self, Error> {
         Self::new(bytes)
     }
 
@@ -273,10 +277,9 @@ impl CachedClient {
                 }
                 Err(err) => {
                     warn!(
-                        "Broken cache entry at `{}`, removing: {err}",
+                        "Ignoring broken cache entry at `{}`: {err}",
                         cache_entry.path().display()
                     );
-                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
                 }
             }
 
@@ -302,7 +305,7 @@ impl CachedClient {
                     Ok(payload) => Ok(payload),
                     Err(err) => {
                         warn!(
-                            "Broken fresh cache entry (for payload) at `{}`, removing: {err}",
+                            "Ignoring broken fresh cache payload at `{}`: {err}",
                             cache_entry.path().display()
                         );
                         self.resend_and_heal_cache(
@@ -352,7 +355,7 @@ impl CachedClient {
                         span.in_scope(|| {
                             cached.refresh_policy(&path, &new_policy)?;
                             // Keep decoding errors separate so a corrupt payload can be refetched.
-                            Ok::<_, Error>(Payload::from_aligned_bytes(cached.into_data()))
+                            Ok::<_, Error>(Payload::from_aligned_bytes(cached.into_data(), &path))
                         })
                     })
                     .await
@@ -361,8 +364,7 @@ impl CachedClient {
                         Ok(payload) => Ok(payload),
                         Err(err) => {
                             warn!(
-                                "Broken fresh cache entry after revalidation \
-                                 (for payload) at `{}`, removing: {err}",
+                                "Ignoring broken cache payload after revalidation at `{}`: {err}",
                                 cache_entry.path().display()
                             );
                             self.resend_and_heal_cache(
@@ -446,7 +448,8 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
-        let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
+        // The failed read may have used an older generation. A successful fetch atomically
+        // replaces the entry; unlinking by path could discard another writer's valid response.
         let start = Instant::now();
         let (response, cache_policy) = self.fresh_request(req, cache_control).await?;
         self.run_response_callback(
@@ -472,7 +475,7 @@ impl CachedClient {
         response_callback: Callback,
     ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
         let new_cache = info_span!("new_cache", file = %cache_entry.path().display());
-        let data = response_callback(response)
+        let mut data = response_callback(response)
             .boxed_local()
             .await
             .map_err(|err| CachedClientError::Callback {
@@ -489,6 +492,7 @@ impl CachedClient {
             fs_err::tokio::create_dir_all(cache_entry.dir())
                 .await
                 .map_err(ErrorKind::CacheWrite)?;
+            data.prepare_to_cache(cache_entry.path()).await?;
             let data_with_cache_policy_bytes =
                 DataWithCachePolicy::serialize(&cache_policy, &data.to_bytes()?)?;
             write_atomic(cache_entry.path(), data_with_cache_policy_bytes)
@@ -531,6 +535,7 @@ impl CachedClient {
                                 debug!("Found fresh response for: {url}");
                                 Some(CachedEntry::Fresh(Payload::from_aligned_bytes(
                                     cached.into_data(),
+                                    &path,
                                 )))
                             }
                             BeforeRequest::Stale(new_cache_policy_builder) => {
@@ -563,10 +568,9 @@ impl CachedClient {
                     );
                 } else {
                     warn!(
-                        "Broken cache policy entry at `{}`, removing: {err}",
+                        "Ignoring broken cache policy at `{}`: {err}",
                         cache_entry.path().display()
                     );
-                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
                 }
                 None
             }
@@ -577,7 +581,7 @@ impl CachedClient {
     /// Reads and decodes an allowed-stale cache entry in one blocking task.
     ///
     /// The task returns the request it owns while checking the policy. `Ok(None)` means the entry
-    /// belongs to a different request; errors indicate a broken entry for the caller to remove.
+    /// belongs to a different request. An error requires fetching a fresh response.
     #[instrument(name = "read_and_decode_stale_cache", skip_all, fields(file = %cache_entry.path().display()))]
     async fn read_and_decode_stale_cache<Payload: Cacheable + 'static>(
         &self,
@@ -590,7 +594,7 @@ impl CachedClient {
             .spawn_blocking(move || {
                 let cached = DataWithCachePolicy::from_path_sync(&path).and_then(|cached| {
                     if cached.cache_policy().matches_stale_request(&req) {
-                        Payload::from_aligned_bytes(cached.into_data()).map(Some)
+                        Payload::from_aligned_bytes(cached.into_data(), &path).map(Some)
                     } else {
                         Ok(None)
                     }

@@ -11,7 +11,7 @@ use indoc::indoc;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use uv_cache::Cache;
+use uv_cache::{Cache, CacheBucket};
 #[cfg(unix)]
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
@@ -370,16 +370,19 @@ fn clean_package_pypi() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
+    let index = context
         .cache_dir
-        .child("simple-v27")
-        .child("pypi")
-        .child("iniconfig.rkyv");
+        .child(CacheBucket::Simple.to_string())
+        .child("pypi");
+    let rkyv = index.child("iniconfig.rkyv");
     assert!(
         rkyv.exists(),
         "Expected the `.rkyv` file to exist for `iniconfig`"
     );
+
+    // Release details from an older response also belong to this package.
+    let details = index.child("iniconfig");
+    details.child("0000000000000001.blocks").touch()?;
 
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
     exit_code: 0 (success)
@@ -395,6 +398,7 @@ fn clean_package_pypi() -> Result<()> {
         !rkyv.exists(),
         "Expected the `.rkyv` file to be removed for `iniconfig`"
     );
+    assert!(!details.exists());
 
     // Running `uv cache prune` should have no effect.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -439,7 +443,7 @@ fn clean_package_index() -> Result<()> {
     // Assert that the `.rkyv` file is created for `iniconfig`.
     let rkyv = context
         .cache_dir
-        .child("simple-v27")
+        .child(CacheBucket::Simple.to_string())
         .child("index")
         .child("e8208120cae3ba69")
         .child("iniconfig.rkyv");

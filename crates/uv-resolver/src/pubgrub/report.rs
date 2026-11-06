@@ -13,6 +13,7 @@ use owo_colors::OwoColorize;
 use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
 use reqwest::StatusCode;
 use rustc_hash::FxHashMap;
+use tracing::debug;
 
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
@@ -1082,12 +1083,19 @@ impl PubGrubReportFormatter<'_> {
         let publish_date = version_maps
             .iter()
             .filter_map(|version_map| {
-                version_map.get(&version).and_then(|prioritized| {
-                    prioritized
-                        .files()
-                        .filter_map(|file| file.upload_time_utc_ms)
-                        .min()
-                })
+                version_map
+                    .get(&version)
+                    .inspect_err(|err| {
+                        debug!("Failed to look up the publish date for `{name}`: {err}");
+                    })
+                    .ok()
+                    .flatten()
+                    .and_then(|prioritized| {
+                        prioritized
+                            .files()
+                            .filter_map(|file| file.upload_time_utc_ms)
+                            .min()
+                    })
             })
             .min()
             .and_then(|upload_time| {
@@ -1128,7 +1136,10 @@ impl PubGrubReportFormatter<'_> {
             return None;
         };
 
-        let candidate = selector.select_no_preference(name, set, version_maps, env)?;
+        let candidate = selector
+            .select_no_preference(name, set, version_maps, env)
+            .inspect_err(|err| debug!("Failed to look up wheel tags for `{name}`: {err}"))
+            .ok()??;
 
         let prioritized = candidate.prioritized()?;
 

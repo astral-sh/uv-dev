@@ -31,8 +31,8 @@ use tracing::{Level, debug, enabled, trace, warn};
 use uv_auth::{Credentials, CredentialsPrompt, CredentialsPromptError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
-    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
-    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, ProblemDetails,
+    RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -914,28 +914,25 @@ impl<'a> PublishSession<'a> {
         let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
             unreachable!("We queried a single index, we must get a single response");
         };
-        let simple_metadata = OwnedArchive::deserialize(simple_metadata);
-        let Some(metadatum) = simple_metadata
-            .iter()
-            .find(|metadatum| &metadatum.version == filename.version())
-        else {
+        let Some(version_index) = simple_metadata.find_version(filename.version()) else {
             return Ok(false);
         };
-
-        let archived_files = match filename {
-            DistFilename::SourceDistFilename(_) => &metadatum.files.source_dists,
-            DistFilename::WheelFilename(_) => &metadatum.files.wheels,
+        let files = simple_metadata
+            .files(version_index)
+            .map_err(PublishError::CheckUrlIndex)?;
+        let distributions = match filename {
+            DistFilename::SourceDistFilename(_) => &files.source_dists,
+            DistFilename::WheelFilename(_) => &files.wheels,
         };
-        let archived_file = archived_files.iter().find(|file| {
+        let Some(existing) = distributions.iter().find(|file| {
             DistFilename::try_from_filename(file.filename(), filename.name())
                 .is_some_and(|candidate| &candidate == filename)
-        });
-        let Some(archived_file) = archived_file else {
+        }) else {
             return Ok(false);
         };
 
         // TODO(konsti): Do we have a preference for a hash here?
-        if let Some(remote_hash) = archived_file.hashes().first() {
+        if let Some(remote_hash) = existing.hashes().first() {
             // We accept the risk for TOCTOU errors here, since we already read the file once before the
             // streaming upload to compute the hash for the form metadata.
             let [local_hash] = hash_file(

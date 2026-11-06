@@ -50,6 +50,10 @@ use crate::{
     RetryState,
 };
 
+mod simple_page;
+pub use simple_page::SimplePage;
+use simple_page::{RegistryCache, SimplePageData};
+
 /// A builder for an [`RegistryClient`].
 #[derive(Debug, Clone)]
 pub struct RegistryClientBuilder<'a> {
@@ -204,7 +208,7 @@ impl<'a> RegistryClientBuilder<'a> {
             indexes: self.index_locations,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
-            cache: self.cache,
+            cache: Arc::new(RegistryCache::new(self.cache)),
             connectivity,
             client,
             read_timeout,
@@ -229,8 +233,8 @@ pub struct RegistryClient {
     torch_backend: Option<TorchStrategy>,
     /// The underlying HTTP client.
     client: CachedClient,
-    /// Used for the remote wheel METADATA cache.
-    cache: Cache,
+    /// The on-disk cache and shared Simple API release block.
+    cache: Arc<RegistryCache>,
     /// The connectivity mode to use.
     connectivity: Connectivity,
     /// Client HTTP read timeout.
@@ -269,7 +273,7 @@ impl From<bool> for MetadataRangeRequest {
 #[derive(Debug)]
 pub enum MetadataFormat {
     /// The metadata adheres to the Simple Repository API format.
-    Simple(OwnedArchive<SimpleDetailMetadata>),
+    Simple(SimplePage),
     /// The metadata consists of a list of distributions from a "flat" index.
     Flat(Vec<FlatIndexEntry>),
 }
@@ -504,7 +508,8 @@ impl RegistryClient {
             return Ok(entries.get(package_name).cloned().unwrap_or_default());
         }
 
-        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
+        let client =
+            FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache.disk);
 
         // Fetch the entries for the index.
         let (entries, _) = client
@@ -556,7 +561,7 @@ impl RegistryClient {
 
         trace!("Fetching metadata for `{package_name}` from `{url}`");
 
-        let cache_entry = self.cache.entry(
+        let cache_entry = self.cache.disk.entry(
             CacheBucket::Simple,
             WheelCache::Index(index).root(),
             format!("{package_name}.rkyv"),
@@ -569,6 +574,7 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
+                    .disk
                     .freshness(&cache_entry, Some(package_name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -590,7 +596,10 @@ impl RegistryClient {
         };
 
         match result {
-            Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),
+            Ok(data) => Ok(SimpleMetadataSearchOutcome::Found(SimplePage::new(
+                data,
+                self.cache.clone(),
+            ))),
             Err(err) => match err.kind() {
                 // The package could not be found in the remote index.
                 ErrorKind::WrappedReqwestError(.., reqwest_err) => {
@@ -628,7 +637,7 @@ impl RegistryClient {
         url: &SafeUrl,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+    ) -> Result<SimplePageData, Error> {
         let simple_request = self
             .uncached_client(url)
             .get(url.clone())
@@ -679,7 +688,7 @@ impl RegistryClient {
                                 data.project_status,
                                 &url,
                             );
-                            OwnedArchive::from_unarchived(&unarchived)
+                            SimplePageData::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -694,7 +703,7 @@ impl RegistryClient {
                         self.parse_simple_body(text.len(), move || {
                             let unarchived =
                                 SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
-                            OwnedArchive::from_unarchived(&unarchived)
+                            SimplePageData::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -724,8 +733,8 @@ impl RegistryClient {
     async fn parse_simple_body(
         &self,
         body_size: usize,
-        parse: impl FnOnce() -> Result<OwnedArchive<SimpleDetailMetadata>, Error> + Send + 'static,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+        parse: impl FnOnce() -> Result<SimplePageData, Error> + Send + 'static,
+    ) -> Result<SimplePageData, Error> {
         // Small responses are cheaper to parse inline than to dispatch to another thread.
         if body_size < 512 * 1024 {
             return parse();
@@ -759,7 +768,7 @@ impl RegistryClient {
         &self,
         package_name: &PackageName,
         url: &SafeUrl,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+    ) -> Result<SimplePageData, Error> {
         let path = url
             .to_file_path()
             .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?
@@ -776,7 +785,7 @@ impl RegistryClient {
             }
         };
         let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
-        OwnedArchive::from_unarchived(&metadata)
+        SimplePageData::from_metadata(metadata)
     }
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
@@ -811,7 +820,7 @@ impl RegistryClient {
         url: &SafeUrl,
         index: &IndexUrl,
     ) -> Result<OwnedArchive<SimpleIndexMetadata>, Error> {
-        let cache_entry = self.cache.entry(
+        let cache_entry = self.cache.disk.entry(
             CacheBucket::Simple,
             WheelCache::Index(index).root(),
             "index.html.rkyv",
@@ -824,6 +833,7 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
+                    .disk
                     .freshness(&cache_entry, None, None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -953,7 +963,7 @@ impl RegistryClient {
                     .collect::<Vec<_>>()
             ))
         );
-        let cache_entry = self.cache.entry(
+        let cache_entry = self.cache.disk.entry(
             CacheBucket::Wheels,
             WheelCache::Index(index).wheel_dir(package_name.as_ref()),
             format!("{cache_key}.msgpack"),
@@ -967,6 +977,7 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
+                    .disk
                     .freshness(&cache_entry, Some(package_name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -1072,7 +1083,7 @@ impl RegistryClient {
                     .fetch(
                         &wheel.git,
                         self.git_http_settings(wheel.git.url()),
-                        self.cache.bucket(CacheBucket::Git),
+                        self.cache.disk.bucket(CacheBucket::Git),
                         reporter,
                     )
                     .await
@@ -1159,7 +1170,7 @@ impl RegistryClient {
             let path = format!("{}.metadata", url.path());
             url.set_path(&path);
 
-            let cache_entry = self.cache.entry(
+            let cache_entry = self.cache.disk.entry(
                 CacheBucket::Wheels,
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
                 format!("{}.msgpack", filename.cache_key()),
@@ -1172,6 +1183,7 @@ impl RegistryClient {
                 }
                 Connectivity::Online => CacheControl::from(
                     self.cache
+                        .disk
                         .freshness(&cache_entry, Some(&filename.name), None)
                         .map_err(ErrorKind::Io)?,
                 ),
@@ -1237,7 +1249,7 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
-        let cache_entry = self.cache.entry(
+        let cache_entry = self.cache.disk.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),
             format!("{}.msgpack", filename.cache_key()),
@@ -1251,6 +1263,7 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
+                    .disk
                     .freshness(&cache_entry, Some(&filename.name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -1416,7 +1429,7 @@ impl RegistryClient {
 #[derive(Debug)]
 enum SimpleMetadataSearchOutcome {
     /// Simple metadata was found
-    Found(OwnedArchive<SimpleDetailMetadata>),
+    Found(SimplePage),
     /// Simple metadata was not found
     NotFound,
     /// A status code failure was encountered when searching for
@@ -1725,19 +1738,16 @@ impl SimpleIndexMetadata {
 /// Detail response for a Python package from a Simple API index.
 ///
 /// Abstracts over both HTML and JSON index formats.
-#[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
-#[rkyv(derive(Debug))]
+#[derive(Default, Debug)]
 pub struct SimpleDetailMetadata {
     project_status: ProjectStatus,
     versions: Vec<SimpleDetailMetadatum>,
 }
 
-#[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
-#[rkyv(derive(Debug))]
+#[derive(Debug)]
 pub struct SimpleDetailMetadatum {
     pub version: Version,
     pub files: VersionFiles,
-    #[rkyv(with = rkyv::with::Niche)]
     pub metadata: Option<Box<ResolutionMetadata>>,
 }
 
@@ -1845,23 +1855,6 @@ impl IntoIterator for SimpleDetailMetadata {
     }
 }
 
-impl ArchivedSimpleDetailMetadata {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &rkyv::Archived<SimpleDetailMetadatum>> {
-        self.versions.iter()
-    }
-
-    pub fn datum(&self, i: usize) -> Option<&rkyv::Archived<SimpleDetailMetadatum>> {
-        self.versions.get(i)
-    }
-
-    /// Return the project-level [PEP 792] status marker for this package.
-    ///
-    /// [PEP 792]: https://peps.python.org/pep-0792/
-    pub fn project_status(&self) -> &rkyv::Archived<ProjectStatus> {
-        &self.project_status
-    }
-}
-
 #[derive(Debug)]
 enum MediaType {
     PypiV1Json,
@@ -1918,6 +1911,7 @@ impl Connectivity {
 mod tests {
     use std::assert_matches;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     use insta::{assert_debug_snapshot, assert_snapshot};
     use tokio::sync::Semaphore;
@@ -1926,8 +1920,9 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
+    use super::{MetadataFormat, RegistryCache, SimplePage, SimplePageData};
     use crate::{
-        BaseClientBuilder, Connectivity, OwnedArchive, RegistryClient, RegistryClientBuilder,
+        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
         SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
     };
     use uv_cache::Cache;
@@ -2066,6 +2061,56 @@ mod tests {
 
         assert_no_index(&registry_client, "validation", None).await?;
         assert_no_requests(&server).await;
+        Ok(())
+    }
+
+    /// A page can outlive the client that fetched it and still read a release from disk.
+    #[tokio::test]
+    async fn simple_page_keeps_temporary_cache_alive() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let index = IndexUrl::from_str(&server.uri())?;
+        let package = PackageName::from_str("example")?;
+        // Put the release details in a separate file by including a large yanked reason.
+        let reason = "x".repeat(64 * 1024);
+        Mock::given(method("GET"))
+            .and(path_regex("^/example/$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "max-age=3600")
+                    .set_body_raw(
+                        format!(r#"<a href="example-1.0.tar.gz" data-yanked="{reason}">example-1.0.tar.gz</a>"#),
+                        "text/html",
+                    ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cache = Cache::temp()?.init().await?;
+        let root = cache.root().to_path_buf();
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+        let Some((_, MetadataFormat::Simple(page))) = client
+            .simple_detail(
+                &package,
+                Some(IndexMetadataRef::from(&index)),
+                &IndexCapabilities::default(),
+                &Semaphore::new(1),
+            )
+            .await?
+            .pop()
+        else {
+            return Err("expected a Simple API response".into());
+        };
+        drop(client);
+        assert!(
+            Cache::from_path(&root)
+                .with_exclusive_lock_no_wait()
+                .is_err()
+        );
+        let files = page.files(0)?;
+        assert_eq!(files.source_dists[0].filename(), "example-1.0.tar.gz");
+        drop(page);
+        assert!(!root.exists());
         Ok(())
     }
 
@@ -2295,14 +2340,11 @@ mod tests {
             data.project_status,
             &base,
         );
-        let archived = OwnedArchive::from_unarchived(&simple_metadata)?;
-        let simple_metadata = OwnedArchive::deserialize(&archived);
-
-        let files: Vec<_> = simple_metadata
-            .versions
-            .into_iter()
-            .flat_map(|datum| datum.files.all(&package_name))
-            .collect();
+        let page = SimplePage::new(
+            SimplePageData::from_metadata(simple_metadata)?,
+            Arc::new(RegistryCache::new(Cache::temp()?)),
+        );
+        let files: Vec<_> = page.files(0)?.all(&package_name).collect();
         let filenames: Vec<_> = files
             .iter()
             .map(|(filename, _)| filename.to_string())
@@ -2368,13 +2410,11 @@ mod tests {
             data.project_status,
             &base,
         );
-        let archived = OwnedArchive::from_unarchived(&metadata)?;
-        let metadata = OwnedArchive::deserialize(&archived);
-        let entries: Vec<_> = metadata
-            .versions
-            .into_iter()
-            .flat_map(|datum| datum.files.all_entries(&package_name))
-            .collect();
+        let page = SimplePage::new(
+            SimplePageData::from_metadata(metadata)?,
+            Arc::new(RegistryCache::new(Cache::temp()?)),
+        );
+        let entries: Vec<_> = page.files(0)?.all_entries(&package_name).collect();
 
         assert_debug_snapshot!(
             entries

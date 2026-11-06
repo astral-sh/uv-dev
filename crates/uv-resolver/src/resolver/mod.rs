@@ -1386,7 +1386,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        ) else {
+        )?
+        else {
             // Short circuit: we couldn't find _any_ versions for a package.
             return Ok(None);
         };
@@ -1541,13 +1542,18 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // we passed over can become compatible once we know its variant properties. Revisit the
         // indexes in order, stopping as soon as one has a distribution we can use.
         let candidates = if self.selector.index_strategy() == &IndexStrategy::UnsafeBestMatch {
-            Either::Left(version_maps.iter().filter_map(|map| map.get(version)))
+            Either::Left(
+                version_maps
+                    .iter()
+                    .filter_map(|map| map.get(version).transpose()),
+            )
         } else {
-            Either::Right(std::iter::once(prioritized))
+            Either::Right(std::iter::once(Ok(prioritized)))
         };
 
         let mut selection = WheelVariantSelection::default();
         for dist in candidates {
+            let dist = dist?;
             // Queue all metadata requests for this candidate before waiting for any of them.
             // A flat index can combine wheels from several sources, so keep each response
             // paired with its source: the same variant label can mean different things on each.
@@ -1702,7 +1708,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        ) else {
+        )?
+        else {
             return Ok(None);
         };
         let CandidateDist::Compatible(base_dist) = base_candidate.dist() else {
@@ -2422,7 +2429,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 // Try to find a compatible version. If there aren't any compatible versions,
                 // short-circuit.
-                let Some(candidate) = self.selector.select(
+                let candidate = self.selector.select(
                     &package_name,
                     &range,
                     version_map,
@@ -2432,8 +2439,15 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     None,
                     &env,
                     self.tags.as_ref(),
-                ) else {
-                    return Ok(None);
+                );
+                let candidate = match candidate {
+                    Ok(Some(candidate)) => candidate,
+                    Ok(None) => return Ok(None),
+                    Err(err) => {
+                        // Selection on the solver thread reports the error if it needs this release.
+                        debug!("Skipping prefetch for `{package_name}`: {err}");
+                        return Ok(None);
+                    }
                 };
 
                 // If there is not a compatible distribution, short-circuit.
@@ -2626,50 +2640,37 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .or_insert_with(BTreeSet::new);
 
                         for (version, dists) in version_map.iter(&Ranges::full()) {
-                            // Included versions are those that survive the effective
-                            // `exclude-newer` filter used during resolution. Files with
-                            // missing upload times are treated as excluded (matching
-                            // the resolution behavior in `version_map.rs`).
-                            let excluded_from_included = || {
-                                let Some(included_version_cutoff) =
-                                    version_map.included_version_cutoff()
-                                else {
-                                    return false;
-                                };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
-                                    return true;
-                                };
-                                prioritized_dist.files().all(|file| {
-                                    file.upload_time_utc_ms.is_none_or(|upload_time| {
-                                        upload_time >= included_version_cutoff.as_millisecond()
-                                    })
-                                })
+                            let included_cutoff = version_map.included_version_cutoff();
+                            if included_cutoff.is_none() && available_version_cutoff.is_none() {
+                                package_included_versions.insert(version.clone());
+                                package_available_versions.insert(version.clone());
+                                continue;
+                            }
+                            let dist = match dists.prioritized_dist() {
+                                Ok(dist) => dist,
+                                Err(err) => return err.into(),
                             };
 
-                            if !excluded_from_included() {
+                            // Missing upload dates exclude a file from the configured cutoff, but
+                            // keep it in the available versions reported by the diagnostic.
+                            if included_cutoff.is_none_or(|cutoff| {
+                                dist.is_some_and(|dist| {
+                                    dist.files().any(|file| {
+                                        file.upload_time_utc_ms
+                                            .is_some_and(|time| time < cutoff.as_millisecond())
+                                    })
+                                })
+                            }) {
                                 package_included_versions.insert(version.clone());
                             }
-
-                            // Available versions are used in resolver error reporting,
-                            // and can be bounded by a test-only cutoff for deterministic
-                            // snapshots. Files with missing upload times are *not*
-                            // excluded, since we only filter versions we can confirm
-                            // were published after the cutoff.
-                            let excluded_from_available = || {
-                                let Some(ref exclude_newer) = available_version_cutoff else {
-                                    return false;
-                                };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
-                                    return false;
-                                };
-                                prioritized_dist.files().all(|file| {
-                                    file.upload_time_utc_ms.is_some_and(|upload_time| {
-                                        upload_time >= exclude_newer.as_millisecond()
+                            if available_version_cutoff.is_none_or(|cutoff| {
+                                dist.is_none_or(|dist| {
+                                    dist.files().any(|file| {
+                                        file.upload_time_utc_ms
+                                            .is_none_or(|time| time < cutoff.as_millisecond())
                                     })
                                 })
-                            };
-
-                            if !excluded_from_available() {
+                            }) {
                                 package_available_versions.insert(version.clone());
                             }
                         }

@@ -3,6 +3,7 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_cache::CacheBucket;
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
@@ -30,6 +31,62 @@ fn prune_no_op() -> Result<()> {
     Pruning cache at: [CACHE_DIR]/
     No unused entries found
     ");
+
+    Ok(())
+}
+
+/// A package refresh publishes its new release details before replacing its manifest. Prune
+/// must keep the generation named by the manifest and remove superseded generations.
+#[test]
+fn prune_superseded_simple_details() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let index = context
+        .cache_dir
+        .child(CacheBucket::Simple.to_string())
+        .child("pypi");
+    let details = index.child("example");
+    details.create_dir_all()?;
+    index
+        .child("example.rkyv")
+        .write_binary(b"0000000000000002")?;
+    let superseded = details.child("0000000000000001.blocks");
+    let current = details.child("0000000000000002.blocks");
+    superseded.touch()?;
+    current.touch()?;
+
+    uv_snapshot!(context.filters(), context.prune(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    Removed 1 file (0B)
+    ");
+
+    assert!(current.is_file());
+    assert!(!superseded.exists());
+
+    Ok(())
+}
+
+/// The first write for a package can be interrupted between publishing its details and its
+/// manifest, leaving an unreferenced generation in the cache.
+#[test]
+fn prune_unpublished_simple_details() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let details = context
+        .cache_dir
+        .child(CacheBucket::Simple.to_string())
+        .child("index/1234567890abcdef/example");
+    details.create_dir_all()?;
+    details.child("0000000000000001.blocks").touch()?;
+
+    uv_snapshot!(context.filters(), context.prune(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    Removed 1 file (0B)
+    ");
+
+    assert!(!details.exists());
 
     Ok(())
 }
@@ -273,10 +330,17 @@ async fn prune_force() -> Result<()> {
     let simple = context.cache_dir.child("simple-v4");
     simple.create_dir_all()?;
 
-    // When locked, `--force` should proceed without blocking
+    // A writer holding the shared lock may still be publishing its Simple API manifest.
     let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
-        .with_exclusive_lock()
-        .await;
+        .init()
+        .await?;
+    let details = context
+        .cache_dir
+        .child(CacheBucket::Simple.to_string())
+        .child("pypi/example/0000000000000001.blocks");
+    details.touch()?;
+
+    // When locked, `--force` can still remove the stale bucket.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -288,6 +352,7 @@ async fn prune_force() -> Result<()> {
     DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
     Removed 1 directory (0B)
     ");
+    assert!(details.is_file());
 
     Ok(())
 }
