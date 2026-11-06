@@ -506,37 +506,31 @@ impl<const CACHE_LOCKED: bool> Cacheable for CachedSimplePage<CACHE_LOCKED> {
         Ok(page)
     }
 
-    async fn prepare_to_cache(&mut self, manifest: &Path) -> Result<(), Error> {
+    async fn serialize_for_cache(&mut self, manifest: &Path) -> Result<Cow<'_, [u8]>, Error> {
         let page = &mut self.0;
-        if let Details::Memory(bytes) = &page.details {
-            let path = simple_detail_path(manifest, &page.generation);
-            let directory = path
-                .parent()
-                .expect("release files have a package directory");
-            fs_err::tokio::create_dir_all(directory)
-                .await
-                .map_err(ErrorKind::CacheWrite)?;
-            uv_fs::write_atomic(&path, bytes)
-                .await
-                .map_err(ErrorKind::CacheWrite)?;
-            let metadata = fs_err::tokio::metadata(&path)
-                .await
-                .map_err(ErrorKind::Io)?;
-            page.details = Details::Disk {
-                path,
-                timestamp: SimplePageData::modified_nanos(&metadata),
-            };
-        }
-        Ok(())
-    }
-
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
-        let page = &self.0;
-        let manifest = OwnedArchive::as_bytes(&page.manifest);
         let timestamp = match &page.details {
+            Details::Memory(bytes) => {
+                let path = simple_detail_path(manifest, &page.generation);
+                let directory = path
+                    .parent()
+                    .expect("release files have a package directory");
+                fs_err::tokio::create_dir_all(directory)
+                    .await
+                    .map_err(ErrorKind::CacheWrite)?;
+                uv_fs::write_atomic(&path, bytes)
+                    .await
+                    .map_err(ErrorKind::CacheWrite)?;
+                let metadata = fs_err::tokio::metadata(&path)
+                    .await
+                    .map_err(ErrorKind::Io)?;
+                let timestamp = SimplePageData::modified_nanos(&metadata);
+                page.details = Details::Disk { path, timestamp };
+                timestamp
+            }
             Details::Disk { timestamp, .. } => *timestamp,
-            Details::Inline | Details::Memory(_) => 0,
+            Details::Inline => 0,
         };
+        let manifest = OwnedArchive::as_bytes(&page.manifest);
         let header = PageHeader {
             generation: *page
                 .generation
@@ -589,9 +583,8 @@ mod tests {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
         let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
-        page.prepare_to_cache(&manifest).await?;
         let mut bytes = AlignedVec::new();
-        bytes.extend_from_slice(&page.to_bytes()?);
+        bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
 
         let pack = simple_detail_path(&manifest, &page.0.generation);
         let recorded = fs_err::metadata(&pack)?.modified()?;
@@ -611,9 +604,8 @@ mod tests {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
         let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
-        page.prepare_to_cache(&manifest).await?;
         let mut bytes = AlignedVec::new();
-        bytes.extend_from_slice(&page.to_bytes()?);
+        bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
 
         let snapshot = CachedSimplePage::<false>::from_aligned_bytes(bytes, &manifest)?;
         fs_err::remove_file(simple_detail_path(&manifest, &page.0.generation))?;
@@ -630,11 +622,9 @@ mod tests {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
         let mut page = CachedSimplePage::<false>::from_metadata(large_package()?)?;
-        page.prepare_to_cache(&manifest).await?;
-        assert!(!simple_detail_path(&manifest, &page.0.generation).exists());
-
         let mut bytes = AlignedVec::new();
-        bytes.extend_from_slice(&page.to_bytes()?);
+        bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
+        assert!(!simple_detail_path(&manifest, &page.0.generation).exists());
         let snapshot = CachedSimplePage::<true>::from_aligned_bytes(bytes, &manifest)?;
         let mut reader = snapshot.reader()?;
         let files = snapshot.read_block(0, &mut reader)?;

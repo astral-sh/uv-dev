@@ -47,12 +47,8 @@ pub(crate) trait Cacheable: Sized {
 
     /// Deserialize a value from bytes aligned to a 16-byte boundary.
     fn from_aligned_bytes(bytes: AlignedVec, path: &Path) -> Result<Self::Target, Error>;
-    /// Serialize bytes to a possibly owned byte buffer.
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error>;
-    /// Publish any immutable files referenced by the payload before publishing the cache entry.
-    async fn prepare_to_cache(&mut self, _path: &Path) -> Result<(), Error> {
-        Ok(())
-    }
+    /// Serialize the payload for this cache entry, first publishing any files it references.
+    async fn serialize_for_cache(&mut self, path: &Path) -> Result<Cow<'_, [u8]>, Error>;
     /// Convert this type into its final form.
     fn into_target(self) -> Self::Target;
 }
@@ -72,7 +68,7 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Cacheable for SerdeCachea
         Ok(rmp_serde::from_slice::<T>(&bytes).map_err(ErrorKind::Decode)?)
     }
 
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
+    async fn serialize_for_cache(&mut self, _path: &Path) -> Result<Cow<'_, [u8]>, Error> {
         Ok(Cow::from(
             rmp_serde::to_vec(&self.inner).map_err(ErrorKind::Encode)?,
         ))
@@ -97,7 +93,7 @@ where
         Self::new(bytes)
     }
 
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
+    async fn serialize_for_cache(&mut self, _path: &Path) -> Result<Cow<'_, [u8]>, Error> {
         Ok(Cow::from(Self::as_bytes(self)))
     }
 
@@ -492,9 +488,10 @@ impl CachedClient {
             fs_err::tokio::create_dir_all(cache_entry.dir())
                 .await
                 .map_err(ErrorKind::CacheWrite)?;
-            data.prepare_to_cache(cache_entry.path()).await?;
-            let data_with_cache_policy_bytes =
-                DataWithCachePolicy::serialize(&cache_policy, &data.to_bytes()?)?;
+            let data_with_cache_policy_bytes = DataWithCachePolicy::serialize(
+                &cache_policy,
+                &data.serialize_for_cache(cache_entry.path()).await?,
+            )?;
             write_atomic(cache_entry.path(), data_with_cache_policy_bytes)
                 .await
                 .map_err(ErrorKind::CacheWrite)?;
