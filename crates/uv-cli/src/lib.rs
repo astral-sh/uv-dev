@@ -7560,6 +7560,17 @@ pub struct PublishArgs {
     /// that is published.
     #[arg(long, env = EnvVars::UV_PUBLISH_NO_ATTESTATIONS)]
     pub no_attestations: bool,
+
+    /// Embed a lockfile for each published package using the workspace's `uv.lock`.
+    ///
+    /// Requires the `locked-tools` preview feature. When an artifact depends on a local
+    /// workspace member, include that member's distributions in the same publish command.
+    #[arg(long)]
+    pub locked: bool,
+
+    /// Allow embedding artifact URLs from indexes other than PyPI.
+    #[arg(long, requires = "locked")]
+    pub allow_non_pypi: bool,
 }
 
 #[derive(Args)]

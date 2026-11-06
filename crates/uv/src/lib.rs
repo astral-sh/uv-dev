@@ -47,6 +47,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
 use uv_preview::PreviewFeature;
+use uv_publish_commands::LockedPublish;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_types::PythonRequest;
@@ -2064,6 +2065,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 password,
                 dry_run,
                 no_attestations,
+                locked,
+                allow_non_pypi,
                 publish_url,
                 trusted_publishing,
                 keyring_provider,
@@ -2086,6 +2089,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 index_locations,
                 dry_run,
                 no_attestations,
+                locked.then_some(LockedPublish {
+                    project_dir: &project_dir,
+                    allow_non_pypi,
+                }),
                 &cache,
                 printer,
             )
