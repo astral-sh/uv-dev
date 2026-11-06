@@ -7,6 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use itertools::Itertools;
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
+use tokio::task::JoinHandle;
 use zerocopy::byteorder::little_endian::U64;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
@@ -133,6 +134,17 @@ struct CachedBlock {
 }
 
 impl RegistryClient {
+    /// Run a blocking Simple cache read on the client's bounded cache-read pool.
+    pub fn spawn_cache_read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce() -> T + Send + 'static,
+    ) -> JoinHandle<T> {
+        self.client
+            .uncached()
+            .cache_read_runtime()
+            .spawn_blocking(read)
+    }
+
     /// Start reading recent release details while the resolver considers other packages.
     #[cfg(target_os = "linux")]
     pub fn prefetch_recent_files(&self, page: &SimplePage) {
@@ -143,12 +155,9 @@ impl RegistryClient {
         {
             let path = path.clone();
             let end = last.end.to_native();
-            self.client
-                .uncached()
-                .cache_read_runtime()
-                .spawn_blocking(move || {
-                    uv_fs::prefetch_file_range(&path, end.saturating_sub(READ_AHEAD_BYTES)..end);
-                });
+            self.spawn_cache_read(move || {
+                uv_fs::prefetch_file_range(&path, end.saturating_sub(READ_AHEAD_BYTES)..end);
+            });
         }
     }
 
@@ -159,24 +168,20 @@ impl RegistryClient {
         mut state: T,
         mut visit: impl FnMut(&mut T, VersionFiles) + Send + 'static,
     ) -> Result<T, Error> {
-        self.client
-            .uncached()
-            .cache_read_runtime()
-            .spawn_blocking(move || {
-                let mut reader = page.data.reader()?;
-                for index in (0..page.data.manifest.blocks.len()).rev() {
-                    let block = page.data.read_block(index, &mut reader)?;
-                    for files in block.iter().rev() {
-                        let files = rkyv::deserialize(files).map_err(|err: rancor::Error| {
-                            ErrorKind::ArchiveRead(err.to_string())
-                        })?;
-                        visit(&mut state, files);
-                    }
+        self.spawn_cache_read(move || {
+            let mut reader = page.data.reader()?;
+            for index in (0..page.data.manifest.blocks.len()).rev() {
+                let block = page.data.read_block(index, &mut reader)?;
+                for files in block.iter().rev() {
+                    let files = rkyv::deserialize(files)
+                        .map_err(|err: rancor::Error| ErrorKind::ArchiveRead(err.to_string()))?;
+                    visit(&mut state, files);
                 }
-                Ok(state)
-            })
-            .await
-            .expect("release file scan panicked")
+            }
+            Ok(state)
+        })
+        .await
+        .expect("release file scan panicked")
     }
 }
 

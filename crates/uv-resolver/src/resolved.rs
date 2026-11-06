@@ -2,9 +2,8 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use uv_distribution_types::{
-    BuiltDist, Dist, DistributionId, DistributionMetadata, Identifier, IndexUrl, InstalledDist,
-    Name, RegistryBuiltWheel, RegistrySourceDist, ResolvedDist, ResourceId, SourceDist,
-    VersionOrUrlRef,
+    BuiltDist, Dist, DistributionId, DistributionMetadata, Identifier, InstalledDist, Name,
+    RegistryBuiltWheel, RegistrySourceDist, ResolvedDist, ResourceId, SourceDist, VersionOrUrlRef,
 };
 use uv_normalize::PackageName;
 
@@ -66,15 +65,6 @@ impl ResolvedDistRef<'_> {
             Self::Installed { dist } => ResolvedDist::Installed {
                 dist: Arc::new((*dist).clone()),
             },
-        }
-    }
-
-    /// Returns the [`IndexUrl`], if the distribution is from a registry.
-    pub(crate) fn index(&self) -> Option<&IndexUrl> {
-        match self {
-            Self::InstallableRegistrySourceDist { sdist, .. } => Some(&sdist.index),
-            Self::InstallableRegistryBuiltDist { wheel, .. } => Some(&wheel.index),
-            Self::Installed { .. } => None,
         }
     }
 }
