@@ -98,6 +98,12 @@ impl PackseServer {
         Self::from_scenario(&Scenario::empty())
     }
 
+    /// Start a mock server from a Packse scenario given as a TOML string.
+    pub fn from_toml(toml: &str) -> Result<Self, toml::de::Error> {
+        let scenario = toml::from_str(toml)?;
+        Ok(Self::from_scenario(&scenario))
+    }
+
     /// Start a mock server for the given scenario.
     pub fn from_scenario(scenario: &Scenario) -> Self {
         Self::start(scenario, true)
@@ -122,6 +128,11 @@ impl PackseServer {
     /// The Simple API index URL (e.g., `http://127.0.0.1:PORT/simple/`).
     pub fn index_url(&self) -> String {
         format!("{}/simple/", self.server.url())
+    }
+
+    /// The Simple API index URL for testing relative distribution links.
+    pub fn relative_index_url(&self) -> String {
+        format!("{}/relative/simple/", self.server.url())
     }
 
     /// Return the URL for a generated distribution file.
@@ -314,6 +325,12 @@ fn handle_request(
     hashes: bool,
 ) -> ResponseTemplate {
     let path = req.url.path();
+    // Resolve artifact links under `/relative/files/` from either spelling of the package URL.
+    let (path, artifact_root) = match path.strip_prefix("/relative") {
+        Some(path) if path.ends_with('/') => (path, "../.."),
+        Some(path) => (path, ".."),
+        None => (path, server_uri),
+    };
 
     if let Some(pkg) = extract_package_name(path) {
         let Ok(package_name) = PackageName::from_str(pkg) else {
@@ -321,7 +338,7 @@ fn handle_request(
         };
 
         if let Some(entry) = index.packages.get(&package_name) {
-            return build_simple_api_response(pkg, entry, server_uri, hashes);
+            return build_simple_api_response(pkg, entry, artifact_root, hashes);
         }
         return ResponseTemplate::new(404);
     }
@@ -439,13 +456,13 @@ fn parse_byte_range(range: &str, length: usize) -> Option<(usize, usize)> {
 fn build_simple_api_response(
     package_name: &str,
     entry: &[IndexFile],
-    server_uri: &str,
+    artifact_root: &str,
     hashes: bool,
 ) -> ResponseTemplate {
     let files: Vec<serde_json::Value> = entry
         .iter()
         .map(|file| {
-            let url = format!("{server_uri}/files/{}", file.filename);
+            let url = format!("{artifact_root}/files/{}", file.filename);
             let mut file_obj = json!({
                 "filename": file.filename,
                 "url": url,
@@ -521,6 +538,23 @@ mod tests {
         assert_eq!(extract_package_name("/simple/foo/bar"), None);
     }
 
+    #[tokio::test]
+    async fn relative_index_emits_relative_file_urls() -> Result<()> {
+        let server = PackseServer::new("simple/single-package.toml");
+        for (package_path, root) in [("a/", "../.."), ("a", "..")] {
+            let page: serde_json::Value =
+                reqwest::get(format!("{}{package_path}", server.relative_index_url()))
+                    .await?
+                    .json()
+                    .await?;
+            assert_eq!(
+                page["files"][0]["url"],
+                format!("{root}/files/a-1.0.0-py3-none-any.whl")
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn server_index_construction_does_not_load_vendor_artifacts() {
         let _index = ServerIndex::new(&Scenario::empty());
@@ -534,7 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn serves_artifact_upload_times() -> Result<()> {
-        let scenario = toml::from_str::<Scenario>(
+        let server = PackseServer::from_toml(
             r#"
 name = "artifact-upload-times"
 
@@ -557,7 +591,6 @@ wheel = {}
 wheel = false
 "#,
         )?;
-        let server = PackseServer::from_scenario(&scenario);
 
         let a: serde_json::Value = reqwest::get(format!("{}a/", server.index_url()))
             .await?
@@ -595,7 +628,7 @@ wheel = false
 
     #[tokio::test]
     async fn file_requests_support_byte_ranges() -> Result<()> {
-        let scenario = toml::from_str::<Scenario>(
+        let server = PackseServer::from_toml(
             r#"
 name = "range-requests"
 
@@ -609,7 +642,6 @@ satisfiable = true
 sdist = false
 "#,
         )?;
-        let server = PackseServer::from_scenario(&scenario);
         let url = server.file_url("a-1.0.0-py3-none-any.whl");
         let client = reqwest::Client::new();
 

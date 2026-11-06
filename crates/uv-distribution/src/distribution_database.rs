@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::future::Future;
 use std::io;
@@ -24,14 +25,15 @@ use uv_client::{
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, HashCollection,
-    HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name, ResolutionRecorder,
-    SourceDist, SourceUrl, parse_url_hashes,
+    ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, GitPathBuiltDist,
+    HashCollection, HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name,
+    ResolutionRecorder, SourceDist, SourceUrl, VariantsJsonContent, parse_url_hashes,
 };
 use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
 use uv_fs::{LockedFile, write_atomic};
-use uv_git::{GIT_LFS, GitError};
+use uv_git::{Fetch, GIT_LFS, GitError};
+use uv_metadata::read_archive_wheel_variant;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
@@ -43,7 +45,7 @@ use uv_threads::initialize_rayon_once;
 use uv_types::{BuildContext, BuildStack};
 
 use crate::archive::Archive;
-use crate::download::check_wheel_variant_compatibility;
+use crate::download::{check_wheel_variant_compatibility, read_extracted_wheel_variant};
 use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
@@ -227,7 +229,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Dist::Built(built) => {
                 check_supported_wheel_variant(built)?;
                 let wheel = self.get_wheel(built, hashes).await?;
-                check_wheel_variant_compatibility(&wheel.filename, &wheel.archive)?;
+                check_wheel_variant_compatibility(
+                    &wheel.filename,
+                    &wheel.archive,
+                    tags.python_platform(),
+                )?;
                 Ok(wheel)
             }
             // TODO(konsti): Support source distributions that build variant wheels.
@@ -275,6 +281,58 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .await
             }
         }
+    }
+
+    /// Read embedded variant metadata for a wheel being considered by the solver.
+    #[instrument(skip_all, fields(%wheel))]
+    pub async fn get_wheel_variant_metadata(
+        &self,
+        wheel: &BuiltDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<Option<VariantsJsonContent>, Error> {
+        let filename = wheel.wheel_filename();
+        let Some(label) = filename.variant() else {
+            return Ok(None);
+        };
+        let path = match wheel {
+            BuiltDist::Path(wheel) => Cow::Borrowed(wheel.install_path.as_ref()),
+            BuiltDist::GitPath(wheel) => {
+                let fetch = self.fetch_git_wheel(wheel).await?;
+                Cow::Owned(fetch.path().join(&wheel.install_path))
+            }
+            BuiltDist::DirectUrl(url) => {
+                // Hash generation downloads the full wheel, so skip the metadata request.
+                if hashes != ArchiveHashPolicy::Generate || parse_url_hashes(&url.url).is_some() {
+                    let result = self
+                        .client
+                        .managed(|client| {
+                            client
+                                .direct_url_wheel_variant(url, self.build_context.capabilities())
+                                .boxed_local()
+                        })
+                        .await;
+                    match result {
+                        Ok(variant) => return Ok(Some(variant)),
+                        Err(err)
+                            if err.is_http_streaming_unsupported()
+                                || matches!(err.kind(), uv_client::ErrorKind::Offline(_)) => {}
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                // TODO(konsti): Read `variant.json` from the same archive that supplied the hash.
+                // With `Cache-Control: no-store`, `pip compile --generate-hashes` can hash one
+                // wheel and check compatibility against a different wheel returned by a second GET.
+                let wheel = Box::pin(self.get_wheel(wheel, hashes)).await?;
+                return read_extracted_wheel_variant(filename, &wheel.archive, label).map(Some);
+            }
+            // Registry candidates use index variant metadata.
+            BuiltDist::Registry(_) => return Ok(None),
+        };
+
+        read_archive_wheel_variant(filename, &path, label)
+            .await
+            .map(Some)
+            .map_err(|err| Error::WheelMetadata(path.into_owned(), Box::new(err)))
     }
 
     /// Fetch a wheel from the cache or download it from the index.
@@ -456,30 +514,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             }
 
             BuiltDist::GitPath(wheel) => {
-                // Fetch the Git repository.
-                let fetch = self
-                    .build_context
-                    .git()
-                    .fetch(
-                        &wheel.git,
-                        self.client.unmanaged.git_http_settings(wheel.git.url()),
-                        self.build_context.cache().bucket(CacheBucket::Git),
-                        self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
-                    )
-                    .await?;
-
-                if wheel.git.lfs().enabled() && !fetch.lfs_ready() {
-                    if GIT_LFS.is_err() {
-                        return Err(Error::MissingWheelGitLfsArtifacts(
-                            wheel.url.to_url(),
-                            GitError::GitLfsNotFound,
-                        ));
-                    }
-                    return Err(Error::MissingWheelGitLfsArtifacts(
-                        wheel.url.to_url(),
-                        GitError::GitLfsNotConfigured,
-                    ));
-                }
+                let fetch = self.fetch_git_wheel(wheel).await?;
 
                 let git_sha = fetch.git().precise().expect("Exact commit after checkout");
                 let cache_entry = self.build_context.cache().entry(
@@ -513,6 +548,34 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
     }
 
+    /// Fetch the Git checkout containing a wheel, including any required Git LFS artifacts.
+    async fn fetch_git_wheel(&self, wheel: &GitPathBuiltDist) -> Result<Fetch, Error> {
+        let fetch = self
+            .build_context
+            .git()
+            .fetch(
+                &wheel.git,
+                self.client.unmanaged.git_http_settings(wheel.git.url()),
+                self.build_context.cache().bucket(CacheBucket::Git),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
+            )
+            .await?;
+
+        if wheel.git.lfs().enabled() && !fetch.lfs_ready() {
+            let error = if GIT_LFS.is_err() {
+                GitError::GitLfsNotFound
+            } else {
+                GitError::GitLfsNotConfigured
+            };
+            return Err(Error::MissingWheelGitLfsArtifacts(
+                wheel.url.to_url(),
+                error,
+            ));
+        }
+
+        Ok(fetch)
+    }
+
     /// Convert a source distribution into a wheel, fetching it from the cache or building it if
     /// necessary.
     ///
@@ -539,7 +602,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return if tags.is_cross() {
                 Err(Error::BuiltWheelIncompatibleTargetPlatform {
                     filename: built_wheel.filename,
-                    python_platform: tags.python_platform().clone(),
+                    python_platform: Box::new(tags.python_platform().clone()),
                     python_version: PythonVersion {
                         version: tags.python_version(),
                         variant: if tags.is_freethreaded() {
@@ -552,7 +615,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             } else {
                 Err(Error::BuiltWheelIncompatibleHostPlatform {
                     filename: built_wheel.filename,
-                    python_platform: tags.python_platform().clone(),
+                    python_platform: Box::new(tags.python_platform().clone()),
                     python_version: PythonVersion {
                         version: tags.python_version(),
                         variant: if tags.is_freethreaded() {
@@ -675,27 +738,24 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .await;
 
         match result {
-            Ok(metadata) => {
-                // Validate that the metadata is consistent with the distribution.
-                Ok(ArchiveMetadata::from_metadata23(metadata))
-            }
+            Ok(metadata) => return Ok(ArchiveMetadata::from_metadata23(metadata)),
             Err(err) if err.is_http_streaming_unsupported() => {
                 warn!(
                     "Streaming unsupported when fetching metadata for `{dist}`; downloading wheel directly ({err})"
                 );
-
-                // If the request failed due to an error that could be resolved by
-                // downloading the wheel directly, try that.
-                let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
-                let metadata = wheel.metadata()?;
-                let hashes = wheel.hashes;
-                Ok(ArchiveMetadata {
-                    metadata: Metadata::from_metadata23(metadata),
-                    hashes,
-                })
             }
-            Err(err) => Err(err.into()),
+            // Try reusing the cached wheel when the metadata entry is missing offline.
+            Err(err)
+                if matches!(dist, BuiltDist::DirectUrl(url) if url.filename.variant().is_some())
+                    && matches!(err.kind(), uv_client::ErrorKind::Offline(_)) => {}
+            Err(err) => return Err(err.into()),
         }
+
+        let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
+        Ok(ArchiveMetadata {
+            metadata: Metadata::from_metadata23(wheel.metadata()?),
+            hashes: wheel.hashes,
+        })
     }
 
     /// Build the wheel metadata for a source distribution, or fetch it from the cache if possible.

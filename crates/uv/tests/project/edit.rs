@@ -3983,6 +3983,43 @@ fn remove_non_normalized_source() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn remove_with_empty_inline_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio"]
+
+        [tool.uv]
+        sources = {}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [tool.uv]
+    sources = {}
+    "#);
+
+    Ok(())
+}
+
 /// Adding a dependency does not remove untracked dependencies from the environment.
 #[test]
 fn add_inexact() -> Result<()> {
@@ -11546,6 +11583,41 @@ fn add_index_with_ambiguous_relative_path() -> Result<()> {
     error: Directory not found for index: file://[TEMP_DIR]/test-index
     ");
 
+    Ok(())
+}
+
+#[test]
+fn add_dev_preserves_inline_group_comments() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        dependency-groups = {
+            dev = [], # Local development
+            # Release tests run separately.
+            release = [],
+        }
+
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["--dev", "ok==1.0.0", "--frozen"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    dependency-groups = {
+        dev = [
+        "ok==1.0.0",
+    ], # Local development
+        # Release tests run separately.
+        release = [],
+    }
+
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    "#);
     Ok(())
 }
 

@@ -9,6 +9,8 @@ env:
 jobs:
   review:
     name: "code quality review"
+    # N.B. despite setting this, Depot jobs allow cache writes directly through the API
+    cache-mode: read
     if: >-
       ${{
         github.event_name == 'pull_request' &&
@@ -39,11 +41,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: $/.github/actions/setup-uv-toolchain
         with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.5"
-          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+          enable-cache: auto
+          save-cache: false
 
       - name: "Prepare review configuration"
         env:
@@ -95,7 +96,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/codex-code-quality-review
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: "0.157.1"
+          codex-version: "0.160.0"
           codex-home: "${{ env.REVIEW_CONFIG }}/codex"
           model: gpt-6-astra
           effort: xhigh
@@ -142,11 +143,9 @@ jobs:
           sparse-checkout: pull-request-review
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: $/.github/actions/setup-uv-toolchain
         with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.5"
-          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+          enable-cache: auto
 
       - name: "Prepare review findings"
         id: comments

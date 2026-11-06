@@ -37,8 +37,8 @@ impl fmt::Display for PythonVersion {
 
 #[derive(DebugNoInline, thiserror::Error)]
 pub enum Error {
-    #[error("Wheel variants are not supported yet: `{0}`")]
-    UnsupportedWheelVariant(Box<WheelFilename>),
+    #[error("Wheel variant `{0}` requires `--preview-features wheel-variants`")]
+    WheelVariantsDisabled(Box<WheelFilename>),
     #[error("Wheel variant `{label}` requires unsupported properties: {properties}")]
     IncompatibleWheelVariant {
         label: VariantLabel,
@@ -114,7 +114,7 @@ pub enum Error {
     )]
     BuiltWheelIncompatibleHostPlatform {
         filename: WheelFilename,
-        python_platform: Platform,
+        python_platform: Box<Platform>,
         python_version: PythonVersion,
     },
     /// This may happen when trying to cross-install native dependencies without their build backend
@@ -127,7 +127,7 @@ pub enum Error {
     )]
     BuiltWheelIncompatibleTargetPlatform {
         filename: WheelFilename,
-        python_platform: Platform,
+        python_platform: Box<Platform>,
         python_version: PythonVersion,
     },
     #[error("Failed to parse metadata from built wheel")]
@@ -302,7 +302,7 @@ impl Error {
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
-            Self::UnsupportedWheelVariant(_)
+            Self::WheelVariantsDisabled(_)
             | Self::IncompatibleWheelVariant { .. }
             | Self::NoBuild
             | Self::NoBuildPackage(_)
@@ -429,13 +429,13 @@ mod tests {
                 "cryptography-47.0.0.dev1-cp315-abi3t-macosx_11_0_arm64.whl",
             )
             .unwrap(),
-            python_platform: Platform::new(
+            python_platform: Box::new(Platform::new(
                 Os::Macos {
                     major: 11,
                     minor: 0,
                 },
                 Arch::Aarch64,
-            ),
+            )),
             python_version: PythonVersion {
                 version: (3, 15),
                 variant: PythonVariant::Freethreaded,
@@ -452,13 +452,13 @@ mod tests {
     fn built_wheel_error_formats_target_python() {
         let err = Error::BuiltWheelIncompatibleTargetPlatform {
             filename: WheelFilename::from_str("py313-0.1.0-py313-none-any.whl").unwrap(),
-            python_platform: Platform::new(
+            python_platform: Box::new(Platform::new(
                 Os::Manylinux {
                     major: 2,
                     minor: 28,
                 },
                 Arch::X86_64,
-            ),
+            )),
             python_version: PythonVersion {
                 version: (3, 12),
                 variant: PythonVariant::Default,
