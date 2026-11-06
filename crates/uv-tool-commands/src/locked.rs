@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -17,7 +18,7 @@ use uv_client::{
 };
 use uv_configuration::{
     Concurrency, Constraints, DependencyModifiers, ExcludeDependency, Excludes, HashCheckingMode,
-    NoBinary, NoBuild, Override, Overrides, TargetTriple,
+    Override, Overrides, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::{DistributionDatabase, LocalWheel, LoweredExtraBuildDependencies};
@@ -54,13 +55,14 @@ use uv_environment_operations::{
 };
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::{
-    loggers::SummaryResolveLogger, resolution_markers, resolution_tags, resolve_pylock_toml,
+    PylockResolutionError, loggers::SummaryResolveLogger, resolution_markers, resolution_tags,
+    resolve_pylock_toml,
 };
 use uv_settings::ResolverSettings;
 
 use crate::common::refine_interpreter;
 
-/// A failure to select the tool wheel, before inspecting its packaged lock.
+/// A failure to select the tool distribution, before inspecting its packaged lock.
 #[derive(Debug, thiserror::Error)]
 #[error("{error}")]
 struct RootSelectionError {
@@ -205,7 +207,7 @@ pub(super) fn check_tool_requirement(requirement: &UnresolvedRequirement) -> any
         | RequirementSource::GitDirectory { .. }
         | RequirementSource::GitPath { .. }
         | RequirementSource::Directory { .. } => {
-            bail!("A wheel is required to install a tool with `--locked`")
+            bail!("`--locked` requires a tool wheel or a registry source distribution")
         }
     }
 }
@@ -391,14 +393,6 @@ pub(super) async fn resolve(
             }
         }
     }
-    if settings.build_options.no_binary_package(&requirement.name) {
-        bail!("`--locked` requires a wheel for the tool, but binary distributions are disabled");
-    }
-    let mut selection_settings = settings.clone();
-    selection_settings.build_options = selection_settings.build_options.combine(
-        NoBinary::None,
-        NoBuild::Packages(vec![requirement.name.clone()]),
-    );
     let client = RegistryClientBuilder::new(
         client_builder.clone().keyring(settings.keyring_provider),
         cache.clone(),
@@ -504,7 +498,7 @@ pub(super) async fn resolve(
     let database =
         DistributionDatabase::new(&client, &dispatch, concurrency.downloads_semaphore.clone());
     let mut incompatible_python = Vec::new();
-    let (selected, wheel, root_hash) = loop {
+    let (selected, root_metadata, root_hash, packaged_lock) = loop {
         let selected = Resolution::from(
             resolve_environment(
                 spec.clone().into(),
@@ -513,7 +507,7 @@ pub(super) async fn resolve(
                 python_platform,
                 SourceTreeEditablePolicy::Tool,
                 build_constraints.clone(),
-                &selection_settings,
+                settings,
                 client_builder,
                 state,
                 Box::new(SummaryResolveLogger),
@@ -536,13 +530,18 @@ pub(super) async fn resolve(
         let ResolvedDist::Installable { dist, .. } = selected_dist else {
             bail!("Expected an installable tool distribution");
         };
-        if let Dist::Source(_) = dist.as_ref() {
-            bail!("A wheel is required to install a tool with `--locked`");
-        }
-
         let mut artifact_hashes = root_hashes.clone();
-        if let Dist::Built(BuiltDist::Registry(dist)) = dist.as_ref() {
-            let file = &dist.best_wheel().file;
+        let index_file = match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(dist)) => Some(&dist.best_wheel().file),
+            Dist::Source(SourceDist::Registry(dist)) => Some(&dist.file),
+            Dist::Built(BuiltDist::DirectUrl(_) | BuiltDist::Path(_) | BuiltDist::GitPath(_)) => {
+                None
+            }
+            Dist::Source(_) => {
+                bail!("`--locked` requires a tool wheel or a registry source distribution")
+            }
+        };
+        if let Some(file) = index_file {
             artifact_hashes.extend(
                 file.hashes
                     .iter()
@@ -556,224 +555,138 @@ pub(super) async fn resolve(
                     .map(|hash| vec![hash]),
             );
         }
-        let hasher = HashStrategy::from_resolution(&selected, HashCheckingMode::Verify)?;
-        let (wheel, root_hash) = verify_hash_constraints(
-            &database,
-            dist,
-            &tags,
-            hasher.archive_policy(dist.as_ref()),
-            &artifact_hashes,
-        )
-        .await?;
-        let wheel = CachedDist::from(wheel);
-
-        let metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
-        if let Some(requires_python) = metadata.requires_python.as_ref()
-            && !requires_python.contains(interpreter.python_version())
+        let (metadata, root_hash, contents) = if let Dist::Source(SourceDist::Registry(source)) =
+            dist.as_ref()
         {
-            // Index metadata may omit Requires-Python, particularly for --find-links.
-            // Eliminate incompatible releases before considering their packaged locks.
-            let mut excluded = requirement.clone();
-            if let RequirementSource::Registry { specifier, .. } = &mut excluded.source
-                && dist.index().is_some()
+            let groups = ArchiveHashGroups::new(artifact_hashes);
+            let policy = if groups.groups().is_empty() {
+                ArchiveHashPolicy::None
+            } else {
+                ArchiveHashPolicy::all_of_any(&groups)
+            };
+            let (contents, hashes) = database.read_registry_source_lock(source, policy).await?;
+            let contents = contents.with_context(|| {
+                format!("`{selected_dist}` does not contain `pylock.toml` in its source distribution; `--locked` requires a packaged lock")
+            })?;
+            let hash = hashes
+                .iter()
+                .find(|hash| hash.algorithm() == HashAlgorithm::Sha256)
+                .context("Missing verified source archive hash")?
+                .clone();
+            (None, hash, contents)
+        } else {
+            let hasher = HashStrategy::from_resolution(&selected, HashCheckingMode::Verify)?;
+            let (wheel, root_hash) = verify_hash_constraints(
+                &database,
+                dist,
+                &tags,
+                hasher.archive_policy(dist.as_ref()),
+                &artifact_hashes,
+            )
+            .await?;
+            let wheel = CachedDist::from(wheel);
+
+            let metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
+            if let Some((excluded, requires_python)) =
+                exclude_incompatible_release(&requirement, selected_dist, &metadata, interpreter)?
             {
-                *specifier =
-                    VersionSpecifier::not_equals_version(wheel.filename().version.clone()).into();
                 incompatible_python.push(requires_python.clone());
-                spec.constraints
-                    .push(NameRequirementSpecification::from(excluded));
+                spec.constraints.push(excluded);
                 continue;
             }
-            bail!(
-                "`{selected_dist}` requires Python `{requires_python}`, but the selected interpreter is Python {}",
-                interpreter.python_version()
-            );
-        }
-        break (selected, wheel, root_hash);
+            let dist_info = find_flat_dist_info(wheel.filename(), wheel.path())?;
+            let contents = match fs_err::read_to_string(
+                wheel
+                    .path()
+                    .join(format!("{dist_info}.dist-info"))
+                    .join("pylock.toml"),
+            ) {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    bail!(
+                        "`{selected_dist}` does not contain `pylock.toml` in its `.dist-info` directory; `--locked` requires a packaged lock"
+                    );
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("Failed to read the packaged lock for `{selected_dist}`")
+                    });
+                }
+            };
+            (Some(metadata), root_hash, contents)
+        };
+
+        let packaged_lock = match prepare_packaged_lock(
+            &contents,
+            selected_dist,
+            &requirement,
+            &spec,
+            interpreter,
+            python_platform,
+            markers.markers(),
+            &client,
+            &cached_client,
+            settings,
+            cache,
+            concurrency,
+        )
+        .await
+        {
+            Ok(packaged_lock) => packaged_lock,
+            Err(err) => {
+                // A source distribution's lock may report Requires-Python before its backend
+                // has produced wheel metadata. Consider another release without building it.
+                if metadata.is_none()
+                    && let Some(PylockResolutionError::IncompatiblePython {
+                        requires_python, ..
+                    }) = err.downcast_ref::<PylockResolutionError>()
+                    && let Some(excluded) = exclude_registry_release(&requirement, selected_dist)
+                {
+                    incompatible_python.push(requires_python.specifiers().clone());
+                    spec.constraints.push(excluded);
+                    continue;
+                }
+                return Err(err);
+            }
+        };
+        let root_metadata = if let Some(metadata) = metadata {
+            metadata
+        } else {
+            // Wait until the packaged lock's artifact URLs are authorized before invoking the backend.
+            let (wheel, _) = verify_hash_constraints(
+                &database,
+                dist,
+                &tags,
+                ArchiveHashPolicy::All(std::slice::from_ref(&root_hash)),
+                &[],
+            )
+            .await?;
+            let wheel = CachedDist::from(wheel);
+            let metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
+            if let Some((excluded, requires_python)) =
+                exclude_incompatible_release(&requirement, selected_dist, &metadata, interpreter)?
+            {
+                incompatible_python.push(requires_python.clone());
+                spec.constraints.push(excluded);
+                continue;
+            }
+            metadata
+        };
+        break (selected, root_metadata, root_hash, packaged_lock);
     };
+
     let selected_dist = selected
         .distributions()
         .next()
         .context("No compatible tool was selected")?;
-    let dist_info = find_flat_dist_info(wheel.filename(), wheel.path())?;
-    let dist_info = wheel.path().join(format!("{dist_info}.dist-info"));
-    let contents = match fs_err::read_to_string(dist_info.join("pylock.toml")) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            bail!(
-                "`{selected_dist}` does not contain `pylock.toml` in its `.dist-info` directory; `--locked` requires a packaged lock"
-            );
-        }
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!("Failed to read the packaged lock for `{selected_dist}`")
-            });
-        }
-    };
-    let mut lock: PylockToml = toml::from_str(&contents)
-        .with_context(|| format!("`{selected_dist}` contains an invalid `pylock.toml`"))?;
-    for group in &requirement.groups {
-        if !lock.dependency_groups.contains(group) {
-            bail!(
-                "The packaged lock for `{}` does not support the dependency group `{group}`",
-                requirement.name
-            );
-        }
-    }
-    let mut groups = lock.default_groups.clone();
-    groups.extend(requirement.groups.iter().cloned());
-    lock.validate_environment(markers.markers())?;
-    groups.sort_unstable();
-    groups.dedup();
-    // Only packages selected for this environment can contribute artifacts to the installation.
-    lock.packages
-        .retain(|package| package.is_active(markers.markers(), &requirement.extras, &groups));
-    let mut override_names = HashSet::new();
-    let mut hash_overrides = spec.overrides.clone();
-    for entry in &spec.overrides {
-        let UnresolvedRequirement::Named(override_requirement) = &entry.requirement else {
-            bail!("Expected a named dependency override");
-        };
-        if override_requirement.evaluate_markers(Some(markers.markers()), &[]) {
-            override_names.insert(override_requirement.name.clone());
-        }
-    }
-    for entry in &spec.override_dependencies {
-        match entry {
-            Override::Requirement(override_requirement) => {
-                if override_requirement.hashes()?.is_some() {
-                    check_hashed_source(override_requirement)?;
-                }
-                if override_requirement.evaluate_markers(Some(markers.markers()), &[]) {
-                    override_names.insert(override_requirement.name.clone());
-                }
-                hash_overrides.push(override_requirement.clone().into());
-            }
-            Override::Package(_) => {}
-        }
-    }
-    let mut excluded_names = HashSet::new();
-    for entry in &spec.excludes {
-        match entry {
-            ExcludeDependency::Dependency(name) => {
-                excluded_names.insert(name.clone());
-            }
-            ExcludeDependency::Package(_) => {
-                bail!("Scoped dependency exclusions are not supported with `--locked`");
-            }
-        }
-    }
-    let modifiers = DependencyModifiers::new(
-        Overrides::from_entries(spec.override_dependencies.clone())?,
-        Excludes::from_entries(spec.excludes.clone()),
-    );
-    let selected_version = selected_dist
-        .version()
-        .context("The selected tool has no version")?;
-    let scopes = std::iter::once((&requirement.name, selected_version)).chain(
-        lock.packages
-            .iter()
-            .filter(|package| {
-                !excluded_names.contains(&package.name)
-                    && package.is_active(markers.markers(), &requirement.extras, &groups)
-            })
-            .filter_map(|package| {
-                package
-                    .version
-                    .as_ref()
-                    .map(|version| (&package.name, version))
-            }),
-    );
-    let mut scoped_names = HashSet::new();
-    for (name, version) in scopes {
-        for override_requirement in modifiers.scoped_overrides_for(name, version) {
-            if override_requirement.hashes()?.is_some() {
-                check_hashed_source(override_requirement)?;
-            }
-            if override_requirement.evaluate_markers(Some(markers.markers()), &[]) {
-                scoped_names.insert(override_requirement.name.clone());
-                hash_overrides.push(override_requirement.clone().into());
-            }
-        }
-    }
-    override_names.extend(scoped_names);
-    if spec.override_dependencies.iter().any(|entry| match entry {
-        Override::Package(package) => {
-            package.package.name() != &requirement.name
-                && override_names.contains(package.package.name())
-        }
-        Override::Requirement(_) => false,
-    }) {
-        bail!("Scoped overrides for a replaced package are not supported with `--locked`");
-    }
-    let mut replaced_names = HashSet::new();
-    for package in &lock.packages {
-        if package.name != requirement.name
-            && !excluded_names.contains(&package.name)
-            && override_names.contains(&package.name)
-            && package.is_active(markers.markers(), &requirement.extras, &groups)
-            && !replaced_names.insert(package.name.clone())
-        {
-            bail!(
-                "The packaged lock selects `{}` more than once",
-                package.name
-            );
-        }
-    }
-    lock.packages.retain(|package| {
-        !excluded_names.contains(&package.name)
-            && (package.name == requirement.name || !override_names.contains(&package.name))
-    });
-    if lock.has_missing_hashes() {
-        bail!(
-            "The packaged lock for `{selected_dist}` is missing artifact hashes; regenerate the lock before publishing the package"
-        );
-    }
-    let indexed_artifacts = validate_artifact_urls(
-        &lock,
-        &client,
-        &cached_client,
-        &settings.index_locations,
-        cache,
-        concurrency,
-    )
-    .await
-    .with_context(|| {
-        format!("The packaged lock for `{selected_dist}` contains unverified artifacts")
-    })?;
-    // Use the user's configured index, not the publisher-supplied URL, for cache identity.
-    for package in &mut lock.packages {
-        package.index = Some(
-            configured_index(
-                package.index.as_ref().map(SafeUrl::as_url),
-                &settings.index_locations,
-            )?
-            .without_credentials()
-            .into_owned()
-            .with_policy(Stripped),
-        );
-    }
-    let (dependencies, _) = resolve_pylock_toml(
-        lock,
-        &dist_info,
-        interpreter,
-        None,
-        python_platform,
-        &requirement.extras,
-        &groups,
-        &settings.build_options,
-        Some(HashCheckingMode::Verify),
-    )?;
-    if dependencies
-        .distributions()
-        .any(|dist| dist.name() == &requirement.name)
-    {
-        bail!(
-            "The packaged lock for `{}` must not include the tool itself",
-            requirement.name
-        );
-    }
-
+    let PreparedPackagedLock {
+        dependencies,
+        override_names,
+        replaced_names,
+        hash_overrides,
+        modifiers,
+        indexed_artifacts,
+    } = packaged_lock;
     let mut graph = dependencies.graph().clone();
     for node in graph.node_weights_mut() {
         let Node::Dist {
@@ -1008,7 +921,6 @@ pub(super) async fn resolve(
                     .map(|version| (name.clone(), version.clone()))
             })
             .collect::<HashMap<_, _>>();
-        let root_metadata = read_flat_wheel_metadata(wheel.filename(), wheel.path())?;
         let mut verified_metadata = HashMap::new();
         verified_metadata.insert(requirement.name.clone(), root_metadata);
         let mut override_extras = HashMap::<PackageName, HashSet<ExtraName>>::new();
@@ -1024,7 +936,7 @@ pub(super) async fn resolve(
         selected_requirement.groups = Box::new([]);
         selected_requirement.source = RequirementSource::from(selected_dist);
         if let RequirementSource::Registry { index, .. } = &mut selected_requirement.source {
-            // The selected wheel can come from a find-links location, which is not a package index.
+            // The tool can come from a find-links location, which is not a package index.
             *index = None;
         }
         modified_spec.requirements = vec![selected_requirement.into()];
@@ -1393,6 +1305,243 @@ pub(super) async fn resolve(
     Ok(Resolution::new(graph))
 }
 
+/// Index metadata can omit Requires-Python. When the archive reports an incompatible Python
+/// requirement, exclude the registry release so root selection can consider an older version.
+fn exclude_incompatible_release<'metadata>(
+    requirement: &Requirement,
+    dist: &ResolvedDist,
+    metadata: &'metadata ResolutionMetadata,
+    interpreter: &Interpreter,
+) -> anyhow::Result<Option<(NameRequirementSpecification, &'metadata VersionSpecifiers)>> {
+    let Some(requires_python) = metadata
+        .requires_python
+        .as_ref()
+        .filter(|requires_python| !requires_python.contains(interpreter.python_version()))
+    else {
+        return Ok(None);
+    };
+    if let Some(excluded) = exclude_registry_release(requirement, dist) {
+        return Ok(Some((excluded, requires_python)));
+    }
+    bail!(
+        "`{dist}` requires Python `{requires_python}`, but the selected interpreter is Python {}",
+        interpreter.python_version()
+    )
+}
+
+fn exclude_registry_release(
+    requirement: &Requirement,
+    dist: &ResolvedDist,
+) -> Option<NameRequirementSpecification> {
+    let mut excluded = requirement.clone();
+    if let RequirementSource::Registry { specifier, .. } = &mut excluded.source
+        && dist.index().is_some()
+        && let Some(version) = dist.version()
+    {
+        *specifier = VersionSpecifier::not_equals_version(version.clone()).into();
+        return Some(NameRequirementSpecification::from(excluded));
+    }
+    None
+}
+
+struct PreparedPackagedLock {
+    dependencies: Resolution,
+    override_names: HashSet<PackageName>,
+    replaced_names: HashSet<PackageName>,
+    hash_overrides: Vec<UnresolvedRequirementSpecification>,
+    modifiers: DependencyModifiers,
+    indexed_artifacts: Vec<IndexedArtifact>,
+}
+
+/// Filter the lock for this environment and authorize every remaining artifact URL.
+async fn prepare_packaged_lock(
+    contents: &str,
+    selected_dist: &ResolvedDist,
+    requirement: &Requirement,
+    spec: &RequirementsSpecification,
+    interpreter: &Interpreter,
+    python_platform: Option<&TargetTriple>,
+    markers: &MarkerEnvironment,
+    client: &RegistryClient,
+    cached_client: &RegistryClient,
+    settings: &ResolverSettings,
+    cache: &Cache,
+    concurrency: &Concurrency,
+) -> anyhow::Result<PreparedPackagedLock> {
+    let indexes = &settings.index_locations;
+    let mut lock: PylockToml = toml::from_str(contents)
+        .with_context(|| format!("`{selected_dist}` contains an invalid `pylock.toml`"))?;
+    for group in &requirement.groups {
+        if !lock.dependency_groups.contains(group) {
+            bail!(
+                "The packaged lock for `{}` does not support the dependency group `{group}`",
+                requirement.name
+            );
+        }
+    }
+    let mut groups = lock.default_groups.clone();
+    groups.extend(requirement.groups.iter().cloned());
+    // Report an incompatible Python range after authorizing the lock's artifacts.
+    if lock
+        .requires_python
+        .as_ref()
+        .is_none_or(|requires_python| requires_python.contains(interpreter.python_version()))
+    {
+        lock.validate_environment(markers)?;
+    }
+    groups.sort_unstable();
+    groups.dedup();
+    // Only packages selected for this environment can contribute artifacts to the installation.
+    lock.packages
+        .retain(|package| package.is_active(markers, &requirement.extras, &groups));
+    let mut override_names = HashSet::new();
+    let mut hash_overrides = spec.overrides.clone();
+    for entry in &spec.overrides {
+        let UnresolvedRequirement::Named(override_requirement) = &entry.requirement else {
+            bail!("Expected a named dependency override");
+        };
+        if override_requirement.evaluate_markers(Some(markers), &[]) {
+            override_names.insert(override_requirement.name.clone());
+        }
+    }
+    for entry in &spec.override_dependencies {
+        match entry {
+            Override::Requirement(override_requirement) => {
+                if override_requirement.hashes()?.is_some() {
+                    check_hashed_source(override_requirement)?;
+                }
+                if override_requirement.evaluate_markers(Some(markers), &[]) {
+                    override_names.insert(override_requirement.name.clone());
+                }
+                hash_overrides.push(override_requirement.clone().into());
+            }
+            Override::Package(_) => {}
+        }
+    }
+    let mut excluded_names = HashSet::new();
+    for entry in &spec.excludes {
+        match entry {
+            ExcludeDependency::Dependency(name) => {
+                excluded_names.insert(name.clone());
+            }
+            ExcludeDependency::Package(_) => {
+                bail!("Scoped dependency exclusions are not supported with `--locked`");
+            }
+        }
+    }
+    let modifiers = DependencyModifiers::new(
+        Overrides::from_entries(spec.override_dependencies.clone())?,
+        Excludes::from_entries(spec.excludes.clone()),
+    );
+    let selected_version = selected_dist
+        .version()
+        .context("The selected tool has no version")?;
+    let scopes = std::iter::once((&requirement.name, selected_version)).chain(
+        lock.packages
+            .iter()
+            .filter(|package| {
+                !excluded_names.contains(&package.name)
+                    && package.is_active(markers, &requirement.extras, &groups)
+            })
+            .filter_map(|package| {
+                package
+                    .version
+                    .as_ref()
+                    .map(|version| (&package.name, version))
+            }),
+    );
+    let mut scoped_names = HashSet::new();
+    for (name, version) in scopes {
+        for override_requirement in modifiers.scoped_overrides_for(name, version) {
+            if override_requirement.hashes()?.is_some() {
+                check_hashed_source(override_requirement)?;
+            }
+            if override_requirement.evaluate_markers(Some(markers), &[]) {
+                scoped_names.insert(override_requirement.name.clone());
+                hash_overrides.push(override_requirement.clone().into());
+            }
+        }
+    }
+    override_names.extend(scoped_names);
+    if spec.override_dependencies.iter().any(|entry| match entry {
+        Override::Package(package) => {
+            package.package.name() != &requirement.name
+                && override_names.contains(package.package.name())
+        }
+        Override::Requirement(_) => false,
+    }) {
+        bail!("Scoped overrides for a replaced package are not supported with `--locked`");
+    }
+    let mut replaced_names = HashSet::new();
+    for package in &lock.packages {
+        if package.name != requirement.name
+            && !excluded_names.contains(&package.name)
+            && override_names.contains(&package.name)
+            && package.is_active(markers, &requirement.extras, &groups)
+            && !replaced_names.insert(package.name.clone())
+        {
+            bail!(
+                "The packaged lock selects `{}` more than once",
+                package.name
+            );
+        }
+    }
+    lock.packages.retain(|package| {
+        !excluded_names.contains(&package.name)
+            && (package.name == requirement.name || !override_names.contains(&package.name))
+    });
+    if lock.has_missing_hashes() {
+        bail!(
+            "The packaged lock for `{selected_dist}` is missing artifact hashes; regenerate the lock before publishing the package"
+        );
+    }
+    let indexed_artifacts =
+        validate_artifact_urls(&lock, client, cached_client, indexes, cache, concurrency)
+            .await
+            .with_context(|| {
+                format!("The packaged lock for `{selected_dist}` contains unverified artifacts")
+            })?;
+    // Use the user's configured index, not the publisher-supplied URL, for cache identity.
+    for package in &mut lock.packages {
+        package.index = Some(
+            configured_index(package.index.as_ref().map(SafeUrl::as_url), indexes)?
+                .without_credentials()
+                .into_owned()
+                .with_policy(Stripped),
+        );
+    }
+    let (dependencies, _) = resolve_pylock_toml(
+        lock,
+        // Every lock entry was verified against a registry, so no paths can be relative.
+        Path::new(""),
+        interpreter,
+        None,
+        python_platform,
+        &requirement.extras,
+        &groups,
+        &settings.build_options,
+        Some(HashCheckingMode::Verify),
+    )?;
+    if dependencies
+        .distributions()
+        .any(|dist| dist.name() == &requirement.name)
+    {
+        bail!(
+            "The packaged lock for `{}` must not include the tool itself",
+            requirement.name
+        );
+    }
+
+    Ok(PreparedPackagedLock {
+        dependencies,
+        override_names,
+        replaced_names,
+        hash_overrides,
+        modifiers,
+        indexed_artifacts,
+    })
+}
+
 /// Use only dependencies represented in the lock or explicitly overridden by the user.
 fn locked_metadata(
     metadata: ResolutionMetadata,
@@ -1435,8 +1584,8 @@ fn locked_metadata(
     }
 }
 
-/// Check each source archive hash policy before its build backend can run.
 /// Check each set of trusted digests against the same archive and return its SHA-256.
+/// A source archive must pass all checks before invoking its build backend.
 ///
 /// The caller uses that digest to bind installation to the bytes that passed these checks.
 async fn verify_hash_constraints(
