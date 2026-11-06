@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -12,8 +11,6 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::CacheBucket;
 use uv_fs::PortablePath;
@@ -38,67 +35,6 @@ fn cache_dir_uses_configured_test_context_path() {
     ----- stdout -----
     [CACHE_DIR]/
     ");
-}
-
-/// Corruption inside a release block must trigger a fresh fetch even when the manifest is fresh.
-#[tokio::test]
-async fn corrupt_simple_release_block_is_refetched() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
-
-    // A long file URL puts the release details in an external block.
-    let query = "x".repeat(32 * 1024);
-    let page = format!(
-        r#"<a href="demo-2.0-py3-none-any.whl?{query}" data-upload-time="2024-01-01T00:00:00Z">demo-2.0-py3-none-any.whl</a>"#,
-    );
-    Mock::given(method("GET"))
-        .and(path("/demo/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("cache-control", "max-age=3600")
-                .set_body_raw(page, "text/html"),
-        )
-        .expect(2)
-        .mount(&server)
-        .await;
-    context
-        .temp_dir
-        .child("requirements.in")
-        .write_str("demo")?;
-
-    context
-        .pip_compile()
-        .arg("--default-index")
-        .arg(server.uri())
-        .args(["--no-deps", "requirements.in"])
-        .assert()
-        .success();
-
-    let block_file = context
-        .cache_files(CacheBucket::Simple)?
-        .into_iter()
-        .find(|file| file.extension().is_some_and(|ext| ext == "blocks"))
-        .context("expected a file containing release details")?;
-    let mut bytes = context.read_bytes(&block_file);
-    bytes[0] ^= 1;
-    fs_err::write(&block_file, bytes)?;
-    // Ensure the write is visible even on filesystems with coarse timestamps.
-    filetime::set_file_mtime(
-        &block_file,
-        filetime::FileTime::from_unix_time(1_700_000_000, 0),
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_compile()
-        .arg("--default-index").arg(server.uri())
-        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    demo==2.0
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-    Ok(())
 }
 
 /// Invalid cache keys in a local dependency must fail instead of falling back to the default keys.

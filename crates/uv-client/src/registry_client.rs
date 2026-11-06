@@ -53,8 +53,8 @@ use crate::{
 };
 
 mod simple_page;
+use simple_page::ParsedPage;
 pub use simple_page::SimplePage;
-use simple_page::{BlockCache, CachedSimplePage, SimplePageData};
 
 /// Cache parsed core metadata and variant requirements from the same wheel.
 #[derive(Serialize, Deserialize)]
@@ -227,7 +227,6 @@ impl<'a> RegistryClientBuilder<'a> {
             indexes: self.index_locations,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
-            block_cache: Arc::new(BlockCache::new(self.cache.clone())),
             cache: self.cache,
             connectivity,
             client,
@@ -255,8 +254,6 @@ pub struct RegistryClient {
     client: CachedClient,
     /// Used for the remote wheel METADATA cache.
     cache: Cache,
-    /// Release details shared across Simple API pages.
-    block_cache: Arc<BlockCache>,
     /// The connectivity mode to use.
     connectivity: Connectivity,
     /// Client HTTP read timeout.
@@ -610,24 +607,13 @@ impl RegistryClient {
 
         let result = if matches!(index, IndexUrl::Path(_)) {
             self.fetch_local_simple_detail(package_name, &url).await
-        } else if self.cache.is_locked() {
-            self.fetch_remote_simple_detail::<true>(package_name, &url, &cache_entry, cache_control)
-                .await
         } else {
-            self.fetch_remote_simple_detail::<false>(
-                package_name,
-                &url,
-                &cache_entry,
-                cache_control,
-            )
-            .await
+            self.fetch_remote_simple_detail(package_name, &url, &cache_entry, cache_control)
+                .await
         };
 
         match result {
-            Ok(data) => Ok(SimpleMetadataSearchOutcome::Found(SimplePage::new(
-                data,
-                self.block_cache.clone(),
-            ))),
+            Ok(page) => Ok(SimpleMetadataSearchOutcome::Found(page)),
             Err(err) => match err.kind() {
                 // The package could not be found in the remote index.
                 ErrorKind::WrappedReqwestError(.., reqwest_err) => {
@@ -659,13 +645,13 @@ impl RegistryClient {
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a remote URL, using the PEP 503 Simple Repository API.
-    async fn fetch_remote_simple_detail<const CACHE_LOCKED: bool>(
+    async fn fetch_remote_simple_detail(
         &self,
         package_name: &PackageName,
         url: &SafeUrl,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
-    ) -> Result<SimplePageData, Error> {
+    ) -> Result<SimplePage, Error> {
         let simple_request = self
             .uncached_client(url)
             .get(url.clone())
@@ -716,7 +702,7 @@ impl RegistryClient {
                                 data.project_status,
                                 &url,
                             );
-                            CachedSimplePage::<CACHE_LOCKED>::from_metadata(unarchived)
+                            ParsedPage::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -731,7 +717,7 @@ impl RegistryClient {
                         self.parse_simple_body(text.len(), move || {
                             let unarchived =
                                 SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
-                            CachedSimplePage::<CACHE_LOCKED>::from_metadata(unarchived)
+                            ParsedPage::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -740,7 +726,7 @@ impl RegistryClient {
             .boxed_local()
             .instrument(info_span!("parse_simple_api", package = %package_name))
         };
-        let simple = self
+        let mut simple = self
             .cached_client()
             .get_cacheable_with_retry(
                 simple_request,
@@ -749,6 +735,7 @@ impl RegistryClient {
                 parse_simple_response,
             )
             .await?;
+        simple.keep_temporary_cache(&self.cache);
         Ok(simple)
     }
 
@@ -796,7 +783,7 @@ impl RegistryClient {
         &self,
         package_name: &PackageName,
         url: &SafeUrl,
-    ) -> Result<SimplePageData, Error> {
+    ) -> Result<SimplePage, Error> {
         let path = url
             .to_file_path()
             .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?
@@ -813,7 +800,7 @@ impl RegistryClient {
             }
         };
         let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
-        SimplePageData::from_metadata::<true>(metadata)
+        ParsedPage::from_metadata(metadata).map(ParsedPage::into_page)
     }
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
@@ -2000,7 +1987,6 @@ impl Connectivity {
 mod tests {
     use std::assert_matches;
     use std::str::FromStr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use insta::{assert_debug_snapshot, assert_snapshot};
@@ -2010,12 +1996,12 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
-    use super::{BlockCache, MetadataFormat, SimpleDetailMetadata, SimplePage, SimplePageData};
+    use super::{MetadataFormat, ParsedPage, SimpleDetailMetadata, SimplePage};
     use crate::{
-        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
+        BaseClientBuilder, Connectivity, ErrorKind, RegistryClient, RegistryClientBuilder,
         html::SimpleDetailHTML,
     };
-    use uv_cache::{Cache, CacheBucket, WheelCache};
+    use uv_cache::Cache;
     use uv_distribution_types::{
         FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
         IndexUrl, ToUrlError, VariantsJsonFilename,
@@ -2154,95 +2140,44 @@ mod tests {
         Ok(())
     }
 
-    /// A page can outlive the client that fetched it and still read a release from disk.
+    /// A reader may keep its offsets after revalidation or a metadata-only refresh. If
+    /// the release bytes change, the reader must ask for a retry before using an old offset.
     #[tokio::test]
-    async fn simple_page_keeps_temporary_cache_alive() -> Result<(), Error> {
+    async fn reopen_simple_release_across_refresh() -> Result<(), Error> {
         let server = MockServer::start().await;
         let index = IndexUrl::from_str(&server.uri())?;
         let package = PackageName::from_str("example")?;
-        // Put the release details in a separate file by including a large yanked reason.
-        let reason = "x".repeat(64 * 1024);
-        Mock::given(method("GET"))
-            .and(path_regex("^/example/$"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("cache-control", "max-age=3600")
-                    .set_body_raw(
-                        format!(r#"<a href="example-1.0.tar.gz" data-yanked="{reason}">example-1.0.tar.gz</a>"#),
-                        "text/html",
-                    ),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let cache = Cache::temp()?.init().await?;
-        let root = cache.root().to_path_buf();
-        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
-        let Some((_, MetadataFormat::Simple(page))) = client
-            .simple_detail(
-                &package,
-                Some(IndexMetadataRef::from(&index)),
-                &IndexCapabilities::default(),
-                &Semaphore::new(1),
-            )
-            .await?
-            .pop()
-        else {
-            return Err("expected a Simple API response".into());
-        };
-        drop(client);
-        assert!(
-            Cache::from_path(&root)
-                .with_exclusive_lock_no_wait()
-                .is_err()
-        );
-        let files = page.files(0)?;
-        assert_eq!(files.source_dists[0].filename(), "example-1.0.tar.gz");
-        drop(page);
-        assert!(!root.exists());
-        Ok(())
-    }
-
-    /// A metadata-only 200 reuses the immutable pack. A later file change publishes a
-    /// new generation, while a reader that kept the first page can still select its release.
-    #[tokio::test]
-    async fn refresh_reuses_only_identical_release_packs() -> Result<(), Error> {
-        let server = MockServer::start().await;
-        let index = IndexUrl::from_str(&server.uri())?;
-        let package = PackageName::from_str("example")?;
-        let request_number = AtomicUsize::new(0);
+        let requests = AtomicUsize::new(0);
         let reason = "x".repeat(40 * 1024);
         Mock::given(method("GET"))
             .and(path_regex("^/example/$"))
-            .respond_with(move |_: &Request| {
-                let request = request_number.fetch_add(1, Ordering::Relaxed);
-                let version = if request < 2 { "1.0" } else { "2.0" };
+            .respond_with(move |request: &Request| {
+                let number = requests.fetch_add(1, Ordering::Relaxed);
+                if number == 1 {
+                    assert_eq!(request.headers["if-none-match"], r#""first""#);
+                    return ResponseTemplate::new(304)
+                        .insert_header("etag", r#""first""#)
+                        .insert_header("cache-control", "no-cache");
+                }
+                let version = if number == 3 { "2.0" } else { "1.0" };
                 let filename = format!("example-{version}.tar.gz");
-                let status = if request == 0 {
-                    ""
-                } else {
-                    concat!(
-                        r#"<meta name="pypi:project-status" content="archived">"#,
-                        r#"<meta name="pypi:project-status-reason" content="retired">"#
-                    )
+                let status = if number < 2 { "" } else {
+                    r#"<meta name="pypi:project-status" content="archived"><meta name="pypi:project-status-reason" content="retired">"#
                 };
                 let body = format!(
                     r#"<html><head>{status}</head><body><a href="{filename}" data-yanked="{reason}">{filename}</a></body></html>"#
                 );
                 ResponseTemplate::new(200)
                     .insert_header("cache-control", "no-cache")
+                    .insert_header("etag", if number == 0 { r#""first""# } else { r#""later""# })
                     .set_body_raw(body, "text/html")
             })
-            .expect(3)
+            .expect(4)
             .mount(&server)
             .await;
 
         let cache = Cache::temp()?.init().await?;
-        let directory = cache
-            .bucket(CacheBucket::Simple)
-            .join(WheelCache::Index(&index).root())
-            .join(package.as_str());
+        let root = cache.root().to_owned();
         let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
         let fetch = async || -> Result<SimplePage, Error> {
             let Some((_, MetadataFormat::Simple(page))) = client
@@ -2261,26 +2196,43 @@ mod tests {
         };
 
         let original = fetch().await?;
-        let same_files = fetch().await?;
-        let status =
-            rkyv::deserialize::<ProjectStatus, rkyv::rancor::Error>(same_files.project_status())?;
-        assert_eq!(status.reason.as_deref(), Some("retired"));
-        assert_eq!(fs_err::read_dir(&directory)?.count(), 1);
-
-        let changed = fetch().await?;
-        assert_eq!(fs_err::read_dir(&directory)?.count(), 2);
+        let revalidated = fetch().await?;
         assert_eq!(
-            changed.files(0)?.source_dists[0].filename(),
-            "example-2.0.tar.gz"
+            revalidated.files(0)?.source_dists[0].filename(),
+            "example-1.0.tar.gz"
         );
+        let metadata_only = fetch().await?;
+        let status = rkyv::deserialize::<ProjectStatus, rkyv::rancor::Error>(
+            metadata_only.project_status(),
+        )?;
+        assert_eq!(status.reason.as_deref(), Some("retired"));
         assert_eq!(
             original.files(0)?.source_dists[0].filename(),
             "example-1.0.tar.gz"
         );
-        assert_eq!(
-            same_files.files(0)?.source_dists[0].filename(),
-            "example-1.0.tar.gz"
+
+        let changed = fetch().await?;
+        assert_matches!(
+            original
+                .files(0)
+                .expect_err("changed cached release")
+                .kind(),
+            ErrorKind::SimplePageChanged(_)
         );
+        assert_matches!(
+            revalidated
+                .files(0)
+                .expect_err("changed revalidated release")
+                .kind(),
+            ErrorKind::SimplePageChanged(_)
+        );
+        drop((client, original, revalidated, metadata_only));
+        assert_eq!(
+            changed.files(0)?.source_dists[0].filename(),
+            "example-2.0.tar.gz"
+        );
+        drop(changed);
+        assert!(!root.exists());
         Ok(())
     }
 
@@ -2511,10 +2463,7 @@ mod tests {
             data.project_status,
             &base,
         );
-        let page = SimplePage::new(
-            SimplePageData::from_metadata::<true>(simple_metadata)?,
-            Arc::new(BlockCache::new(Cache::temp()?)),
-        );
+        let page = ParsedPage::from_metadata(simple_metadata)?.into_page();
         let files: Vec<_> = page.files(0)?.all(&package_name).collect();
         let filenames: Vec<_> = files
             .iter()
@@ -2581,10 +2530,7 @@ mod tests {
             data.project_status,
             &base,
         );
-        let page = SimplePage::new(
-            SimplePageData::from_metadata::<true>(metadata)?,
-            Arc::new(BlockCache::new(Cache::temp()?)),
-        );
+        let page = ParsedPage::from_metadata(metadata)?.into_page();
         let entries: Vec<_> = page.files(0)?.all_entries(&package_name).collect();
 
         assert_debug_snapshot!(

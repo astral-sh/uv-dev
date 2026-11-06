@@ -6199,6 +6199,7 @@ dependencies = [
  "astral_async_zip",
  "async-trait",
  "bitflags 2.13.2",
+ "blake3",
  "bytecheck",
  "crc32fast",
  "fs-err",

@@ -2,9 +2,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-#[cfg(target_os = "linux")]
-use std::{num::NonZeroU64, ops::Range};
-
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
@@ -18,20 +15,15 @@ use std::io::Read;
 
 #[cfg(feature = "tokio")]
 use encoding_rs_io::DecodeReaderBytes;
-#[cfg(windows)]
-use fs_err::os::windows::fs::OpenOptionsExt;
 #[cfg(target_os = "linux")]
-use rustix::fs::{Advice, AtFlags, CWD as RUSTIX_CWD, StatxFlags, fadvise, statx};
+use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, StatxFlags, statx};
 #[cfg(feature = "tokio")]
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
 #[cfg(windows)]
-use windows::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES,
-    GetFileInformationByHandle,
-};
+use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
 pub use crate::locked_file::*;
 #[cfg(feature = "tokio")]
@@ -51,29 +43,6 @@ mod path;
 mod read;
 mod space;
 pub mod which;
-
-/// Ask the kernel to read a file range into its page cache ahead of a subsequent read.
-#[cfg(target_os = "linux")]
-pub fn prefetch_file_range(path: &Path, range: Range<u64>) {
-    if let Some(len) = NonZeroU64::new(range.end.saturating_sub(range.start))
-        && let Ok(file) = fs_err::File::open(path)
-    {
-        let _ = fadvise(file, range.start, Some(len), Advice::WillNeed);
-    }
-}
-
-/// Open a file for reading, requesting permission to update its timestamps when available.
-pub fn open_with_write_attributes(path: &Path) -> io::Result<fs_err::File> {
-    // Windows requires FILE_WRITE_ATTRIBUTES on the handle passed to `set_modified`.
-    #[cfg(windows)]
-    if let Ok(file) = fs_err::OpenOptions::new()
-        .access_mode((FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES).0)
-        .open(path)
-    {
-        return Ok(file);
-    }
-    fs_err::File::open(path)
-}
 
 /// Return the number of hardlinks to a file.
 #[cfg(unix)]

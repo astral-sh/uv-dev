@@ -2,12 +2,9 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
-use serde_json::json;
 
-use uv_cache::CacheBucket;
 use uv_static::EnvVars;
 
-use uv_test::package_server::PackageServer;
 use uv_test::uv_snapshot;
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
@@ -32,70 +29,6 @@ fn prune_no_op() -> Result<()> {
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
     No unused entries found
-    ");
-
-    Ok(())
-}
-
-/// A package refresh publishes its new release details before replacing its manifest. Prune
-/// must keep the generation named by the manifest and remove superseded generations.
-#[tokio::test]
-async fn prune_superseded_simple_details() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
-    let server = PackageServer::new(&"example".parse()?).await;
-    let filename = "example-1.0-py3-none-any.whl";
-    // Put the file details in an external block.
-    let url = format!("{}?{}", server.file_url(filename), "x".repeat(32 * 1024));
-    server
-        .serve_with(filename, b"", None, json!({ "url": url }))
-        .await;
-    context
-        .temp_dir
-        .child("requirements.in")
-        .write_str("example")?;
-
-    uv_snapshot!(context.filters(), context.pip_compile()
-        .arg("--default-index").arg(server.index_url())
-        .args(["--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    example==1.0
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    let replacement = "example-2.0-py3-none-any.whl";
-    let url = format!("{}?{}", server.file_url(replacement), "x".repeat(32 * 1024));
-    server
-        .serve_with(replacement, b"", None, json!({ "url": url }))
-        .await;
-    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.index_url())
-        .args(["--refresh", "--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    example==2.0
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.prune(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Pruning cache at: [CACHE_DIR]/
-    Removed 1 file ([SIZE])
-    ");
-
-    uv_snapshot!(context.filters(), context.pip_compile()
-        .arg("--default-index").arg(server.index_url())
-        .args(["--offline", "--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    example==2.0
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
     ");
 
     Ok(())
@@ -326,14 +259,6 @@ async fn prune_force() -> Result<()> {
         .assert()
         .success();
 
-    // An unpublished block can be removed while prune holds the exclusive lock.
-    let package = context
-        .cache_dir
-        .child(CacheBucket::Simple.to_string())
-        .child("index/1234567890abcdef/example");
-    let details = package.child("0000000000000001.blocks");
-    details.touch()?;
-
     // When unlocked, `--force` should still take a lock
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
@@ -341,9 +266,8 @@ async fn prune_force() -> Result<()> {
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
-    Removed [N] files (0B)
+    No unused entries found
     ");
-    assert!(!package.exists());
 
     // Add a stale directory to the cache.
     let simple = context.cache_dir.child("simple-v4");
@@ -351,10 +275,8 @@ async fn prune_force() -> Result<()> {
 
     // When locked, `--force` should proceed without blocking
     let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
-        .init()
-        .await?;
-    // A writer may have stored a block and still be publishing its manifest.
-    details.touch()?;
+        .with_exclusive_lock()
+        .await;
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -366,7 +288,6 @@ async fn prune_force() -> Result<()> {
     DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
     Removed 1 directory (0B)
     ");
-    assert!(details.is_file());
 
     Ok(())
 }
