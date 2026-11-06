@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::future;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -68,10 +69,15 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Cacheable for SerdeCachea
         Ok(rmp_serde::from_slice::<T>(&bytes).map_err(ErrorKind::Decode)?)
     }
 
-    async fn serialize_for_cache(&mut self, _path: &Path) -> Result<Cow<'_, [u8]>, Error> {
-        Ok(Cow::from(
-            rmp_serde::to_vec(&self.inner).map_err(ErrorKind::Encode)?,
-        ))
+    fn serialize_for_cache(
+        &mut self,
+        _path: &Path,
+    ) -> impl Future<Output = Result<Cow<'_, [u8]>, Error>> {
+        future::ready(
+            rmp_serde::to_vec(&self.inner)
+                .map(Cow::Owned)
+                .map_err(|err| ErrorKind::Encode(err).into()),
+        )
     }
 
     fn into_target(self) -> Self::Target {
@@ -93,8 +99,11 @@ where
         Self::new(bytes)
     }
 
-    async fn serialize_for_cache(&mut self, _path: &Path) -> Result<Cow<'_, [u8]>, Error> {
-        Ok(Cow::from(Self::as_bytes(self)))
+    fn serialize_for_cache(
+        &mut self,
+        _path: &Path,
+    ) -> impl Future<Output = Result<Cow<'_, [u8]>, Error>> {
+        future::ready(Ok(Cow::Borrowed(Self::as_bytes(self))))
     }
 
     fn into_target(self) -> Self::Target {
