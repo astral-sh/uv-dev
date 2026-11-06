@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
+use tokio::task::JoinError;
 pub use uv_resolver_types::MetadataResponse;
 pub(crate) use uv_resolver_types::MetadataUnavailable;
 use uv_resolver_types::VariantsJsonMetadataError;
@@ -52,6 +53,22 @@ pub enum VersionsResponse {
 }
 
 pub trait ResolverProvider {
+    /// Exclude the damaged cache entry while retrying an online resolution.
+    fn reject_simple_read(
+        &self,
+        _error: &uv_client::Error,
+    ) -> impl Future<Output = Option<uv_client::CacheRejection>> {
+        std::future::ready(None)
+    }
+
+    /// Run a speculative candidate lookup that may read cached release files.
+    fn run_cache_read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce() -> T + Send + 'static,
+    ) -> impl Future<Output = Result<T, JoinError>> {
+        tokio::task::spawn_blocking(read)
+    }
+
     /// Get the version map for a package.
     fn get_package_versions<'io>(
         &'io self,
@@ -204,6 +221,24 @@ pub(super) fn classify_wheel_metadata_error(error: uv_metadata::Error) -> Metada
 }
 
 impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Context> {
+    fn reject_simple_read(
+        &self,
+        error: &uv_client::Error,
+    ) -> impl Future<Output = Option<uv_client::CacheRejection>> {
+        self.fetcher
+            .client()
+            .manual(|client, _| std::future::ready(client.reject_simple_read(error)))
+    }
+
+    fn run_cache_read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce() -> T + Send + 'static,
+    ) -> impl Future<Output = Result<T, JoinError>> {
+        self.fetcher
+            .client()
+            .manual(|client, _| client.spawn_cache_read(read))
+    }
+
     /// Make a "Simple API" request for the package and convert the result to a [`VersionMap`].
     async fn get_package_versions<'io>(
         &'io self,

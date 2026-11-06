@@ -4,13 +4,15 @@ pub use base_client::{
     ExtraMiddleware, RedirectClientWithMiddleware, RedirectPolicy, RequestBuilder,
     RetryParsingError, fetch_with_url_fallback,
 };
-pub use cached_client::{CacheControl, CachedClient, CachedClientError, DataWithCachePolicy};
+pub use cached_client::{
+    CacheControl, CacheRejection, CachedClient, CachedClientError, DataWithCachePolicy,
+};
 pub use error::{Error, ErrorKind, ProblemDetails, WrappedReqwestError};
 pub use file_hash::FileHashError;
 pub use flat_index::{FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError};
 pub use registry_client::{
     Connectivity, MetadataFormat, MetadataRangeRequest, RegistryClient, RegistryClientBuilder,
-    SimpleDetailMetadata, SimpleDetailMetadatum, SimpleIndexMetadata, VersionFiles,
+    SimpleIndexMetadata, SimplePage, VersionFiles,
 };
 pub(crate) use retry::UvRetryMiddleware;
 pub use retry::{RetriableError, RetryState, retryable_on_request_failure};

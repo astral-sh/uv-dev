@@ -1,6 +1,7 @@
-use std::borrow::Cow;
+use std::borrow::Borrow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crc32fast::Hasher;
@@ -45,10 +46,13 @@ pub(crate) trait Cacheable: Sized {
     /// impls without hitting overlapping impl problems.
     type Target: Send + 'static;
 
-    /// Deserialize a value from bytes aligned to a 16-byte boundary.
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<Self::Target, Error>;
-    /// Serialize bytes to a possibly owned byte buffer.
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error>;
+    /// Encoded response retained while HTTP validators are checked.
+    type Cached: Borrow<DataWithCachePolicy> + Send + 'static;
+
+    fn read_cache(path: &Path) -> Result<Self::Cached, Error>;
+    fn decode(cached: Self::Cached) -> Result<Self::Target, Error>;
+    /// Atomically publish this response and return the same snapshot to the caller.
+    async fn write_cache(self, path: &Path, policy: &CachePolicy) -> Result<Self::Target, Error>;
     /// Convert this type into its final form.
     fn into_target(self) -> Self::Target;
 }
@@ -64,14 +68,22 @@ struct SerdeCacheable<T> {
 impl<T: Serialize + DeserializeOwned + Send + 'static> Cacheable for SerdeCacheable<T> {
     type Target = T;
 
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<T, Error> {
-        Ok(rmp_serde::from_slice::<T>(&bytes).map_err(ErrorKind::Decode)?)
+    type Cached = DataWithCachePolicy;
+
+    fn read_cache(path: &Path) -> Result<Self::Cached, Error> {
+        DataWithCachePolicy::from_path_sync(path)
     }
 
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
-        Ok(Cow::from(
-            rmp_serde::to_vec(&self.inner).map_err(ErrorKind::Encode)?,
-        ))
+    fn decode(cached: Self::Cached) -> Result<T, Error> {
+        Ok(rmp_serde::from_slice(&cached.into_data()).map_err(ErrorKind::Decode)?)
+    }
+
+    async fn write_cache(self, path: &Path, policy: &CachePolicy) -> Result<T, Error> {
+        let bytes = rmp_serde::to_vec(&self.inner).map_err(ErrorKind::Encode)?;
+        write_atomic(path, DataWithCachePolicy::serialize(policy, &bytes)?)
+            .await
+            .map_err(ErrorKind::CacheWrite)?;
+        Ok(self.inner)
     }
 
     fn into_target(self) -> Self::Target {
@@ -89,12 +101,24 @@ where
 {
     type Target = Self;
 
-    fn from_aligned_bytes(bytes: AlignedVec) -> Result<Self, Error> {
-        Self::new(bytes)
+    type Cached = DataWithCachePolicy;
+
+    fn read_cache(path: &Path) -> Result<Self::Cached, Error> {
+        DataWithCachePolicy::from_path_sync(path)
     }
 
-    fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
-        Ok(Cow::from(Self::as_bytes(self)))
+    fn decode(cached: Self::Cached) -> Result<Self, Error> {
+        Self::new(cached.into_data())
+    }
+
+    async fn write_cache(self, path: &Path, policy: &CachePolicy) -> Result<Self, Error> {
+        write_atomic(
+            path,
+            DataWithCachePolicy::serialize(policy, Self::as_bytes(&self))?,
+        )
+        .await
+        .map_err(ErrorKind::CacheWrite)?;
+        Ok(self)
     }
 
     fn into_target(self) -> Self::Target {
@@ -213,20 +237,60 @@ impl From<Freshness> for CacheControl {
 /// Again unlike `http-cache`, the caller gets full control over the cache key with the assumption
 /// that it's a file.
 #[derive(Debug, Clone)]
-pub struct CachedClient(BaseClient);
+pub struct CachedClient {
+    client: BaseClient,
+    rejected: RejectedEntries,
+}
+
+type RejectedEntries = Arc<OnceLock<Mutex<Vec<[u8; 16]>>>>;
+
+/// Bypass one damaged HTTP response for the duration of an online retry. A concurrent
+/// replacement at the same path has its own ID and remains usable.
+pub struct CacheRejection {
+    active: RejectedEntries,
+    id: [u8; 16],
+}
+
+impl Drop for CacheRejection {
+    fn drop(&mut self) {
+        let mut ids = self
+            .active
+            .get_or_init(Mutex::default)
+            .lock()
+            .expect("cache rejection mutex poisoned");
+        if let Some(position) = ids.iter().position(|id| id == &self.id) {
+            ids.swap_remove(position);
+        }
+    }
+}
 
 impl CachedClient {
     pub fn new(client: BaseClient) -> Self {
-        Self(client)
+        Self {
+            client,
+            rejected: Arc::default(),
+        }
+    }
+
+    pub(crate) fn reject(&self, id: [u8; 16]) -> CacheRejection {
+        self.rejected
+            .get_or_init(Mutex::default)
+            .lock()
+            .expect("cache rejection mutex poisoned")
+            .push(id);
+        CacheRejection {
+            active: self.rejected.clone(),
+            id,
+        }
     }
 
     /// The underlying [`BaseClient`] without caching.
     pub fn uncached(&self) -> &BaseClient {
-        &self.0
+        &self.client
     }
 
     pub(crate) fn certificate_source(&self) -> CertificateSource {
-        self.0.certificate_source()
+        self.client.certificate_source()
     }
 
     /// Make a cached request with a custom response transformation while using
@@ -273,10 +337,9 @@ impl CachedClient {
                 }
                 Err(err) => {
                     warn!(
-                        "Broken cache entry at `{}`, removing: {err}",
+                        "Ignoring broken cache entry at `{}`: {err}",
                         cache_entry.path().display()
                     );
-                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
                 }
             }
 
@@ -302,7 +365,7 @@ impl CachedClient {
                     Ok(payload) => Ok(payload),
                     Err(err) => {
                         warn!(
-                            "Broken fresh cache entry (for payload) at `{}`, removing: {err}",
+                            "Ignoring broken fresh cache payload at `{}`: {err}",
                             cache_entry.path().display()
                         );
                         self.resend_and_heal_cache(
@@ -350,9 +413,9 @@ impl CachedClient {
                     let span = Span::current();
                     let payload = tokio::task::spawn_blocking(move || {
                         span.in_scope(|| {
-                            cached.refresh_policy(&path, &new_policy)?;
+                            cached.borrow().refresh_policy(&path, &new_policy)?;
                             // Keep decoding errors separate so a corrupt payload can be refetched.
-                            Ok::<_, Error>(Payload::from_aligned_bytes(cached.into_data()))
+                            Ok::<_, Error>(Payload::decode(cached))
                         })
                     })
                     .await
@@ -361,8 +424,7 @@ impl CachedClient {
                         Ok(payload) => Ok(payload),
                         Err(err) => {
                             warn!(
-                                "Broken fresh cache entry after revalidation \
-                                 (for payload) at `{}`, removing: {err}",
+                                "Ignoring broken cache payload after revalidation at `{}`: {err}",
                                 cache_entry.path().display()
                             );
                             self.resend_and_heal_cache(
@@ -446,7 +508,8 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
-        let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
+        // The failed read may have used an older generation. A successful fetch atomically
+        // replaces the entry; unlinking by path could discard another writer's valid response.
         let start = Instant::now();
         let (response, cache_policy) = self.fresh_request(req, cache_control).await?;
         self.run_response_callback(
@@ -489,12 +552,7 @@ impl CachedClient {
             fs_err::tokio::create_dir_all(cache_entry.dir())
                 .await
                 .map_err(ErrorKind::CacheWrite)?;
-            let data_with_cache_policy_bytes =
-                DataWithCachePolicy::serialize(&cache_policy, &data.to_bytes()?)?;
-            write_atomic(cache_entry.path(), data_with_cache_policy_bytes)
-                .await
-                .map_err(ErrorKind::CacheWrite)?;
-            Ok(data.into_target())
+            Ok(data.write_cache(cache_entry.path(), &cache_policy).await?)
         }
         .instrument(new_cache)
         .await
@@ -509,15 +567,23 @@ impl CachedClient {
         mut req: Request,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
-    ) -> (Request, Option<CachedEntry<Payload::Target>>) {
+    ) -> (Request, Option<CachedEntry<Payload>>) {
         let path = cache_entry.path().to_path_buf();
+        let rejected = self.rejected.clone();
         let span = Span::current();
         let (req, cached) = self
-            .0
+            .client
             .cache_read_runtime()
             .spawn_blocking(move || {
                 span.in_scope(|| {
-                    let cached = DataWithCachePolicy::from_path_sync(&path).map(|cached| {
+                    let cached = Payload::read_cache(&path).map(|cached| {
+                        if rejected.get().is_some_and(|ids| {
+                            ids.lock()
+                                .expect("cache rejection mutex poisoned")
+                                .contains(&cached.borrow().entry_id)
+                        }) {
+                            return None;
+                        }
                         // Apply the cache control header only when checking an existing entry.
                         if let CacheControl::MustRevalidate = cache_control {
                             req.headers_mut().insert(
@@ -526,12 +592,10 @@ impl CachedClient {
                             );
                         }
                         let url = SafeUrl::from_url(req.url().clone());
-                        match cached.cache_policy().before_request(&mut req) {
+                        match cached.borrow().cache_policy().before_request(&mut req) {
                             BeforeRequest::Fresh => {
                                 debug!("Found fresh response for: {url}");
-                                Some(CachedEntry::Fresh(Payload::from_aligned_bytes(
-                                    cached.into_data(),
-                                )))
+                                Some(CachedEntry::Fresh(Payload::decode(cached)))
                             }
                             BeforeRequest::Stale(new_cache_policy_builder) => {
                                 debug!("Found stale response for: {url}");
@@ -563,10 +627,9 @@ impl CachedClient {
                     );
                 } else {
                     warn!(
-                        "Broken cache policy entry at `{}`, removing: {err}",
+                        "Ignoring broken cache policy at `{}`: {err}",
                         cache_entry.path().display()
                     );
-                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
                 }
                 None
             }
@@ -577,7 +640,7 @@ impl CachedClient {
     /// Reads and decodes an allowed-stale cache entry in one blocking task.
     ///
     /// The task returns the request it owns while checking the policy. `Ok(None)` means the entry
-    /// belongs to a different request; errors indicate a broken entry for the caller to remove.
+    /// belongs to a different request. An error requires fetching a fresh response.
     #[instrument(name = "read_and_decode_stale_cache", skip_all, fields(file = %cache_entry.path().display()))]
     async fn read_and_decode_stale_cache<Payload: Cacheable + 'static>(
         &self,
@@ -585,12 +648,12 @@ impl CachedClient {
         cache_entry: &CacheEntry,
     ) -> (Request, Result<Option<Payload::Target>, Error>) {
         let path = cache_entry.path().to_path_buf();
-        self.0
+        self.client
             .cache_read_runtime()
             .spawn_blocking(move || {
-                let cached = DataWithCachePolicy::from_path_sync(&path).and_then(|cached| {
-                    if cached.cache_policy().matches_stale_request(&req) {
-                        Payload::from_aligned_bytes(cached.into_data()).map(Some)
+                let cached = Payload::read_cache(&path).and_then(|cached| {
+                    if cached.borrow().cache_policy().matches_stale_request(&req) {
+                        Payload::decode(cached).map(Some)
                     } else {
                         Ok(None)
                     }
@@ -601,18 +664,18 @@ impl CachedClient {
             .expect("cache read and payload decoding task panicked")
     }
 
-    async fn send_cached_handle_stale(
+    async fn send_cached_handle_stale<C: Borrow<DataWithCachePolicy>>(
         &self,
         req: Request,
         cache_control: CacheControl,
-        cached: DataWithCachePolicy,
+        cached: C,
         new_cache_policy_builder: CachePolicyBuilder,
-    ) -> Result<CachedResponse, Error> {
+    ) -> Result<CachedResponse<C>, Error> {
         let url = SafeUrl::from_url(req.url().clone());
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
         let mut response = self
-            .0
+            .client
             .execute(req)
             .instrument(info_span!("revalidation_request", url = %url))
             .await
@@ -648,6 +711,7 @@ impl CachedClient {
         }
 
         match cached
+            .borrow()
             .cache_policy()
             .after_response(new_cache_policy_builder, &response)
         {
@@ -681,7 +745,7 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
-        let mut response = self.0.execute(req).await.map_err(|err| {
+        let mut response = self.client.execute(req).await.map_err(|err| {
             Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
         })?;
         trace!(
@@ -840,22 +904,22 @@ impl CachedClient {
 
 /// A cache entry checked against the current request.
 #[derive(Debug)]
-enum CachedEntry<Payload> {
+enum CachedEntry<Payload: Cacheable> {
     /// The payload was decoded without an HTTP request (e.g. age < max-age).
-    Fresh(Result<Payload, Error>),
+    Fresh(Result<Payload::Target, Error>),
     /// The payload may be reused if the server confirms it is unmodified.
     Stale {
-        cached: DataWithCachePolicy,
+        cached: Payload::Cached,
         new_cache_policy_builder: Box<CachePolicyBuilder>,
     },
 }
 
 #[derive(Debug)]
-enum CachedResponse {
+enum CachedResponse<C> {
     /// The cached response is fresh after an HTTP request (e.g. 304 not modified)
     NotModified {
         /// The cached response (with its old cache policy).
-        cached: DataWithCachePolicy,
+        cached: C,
         /// The new [`CachePolicy`] is used to determine if the response
         /// is fresh or stale when making subsequent requests for the same
         /// resource. This policy should overwrite the old policy associated
@@ -905,6 +969,8 @@ pub struct DataWithCachePolicy {
     bytes: AlignedVec,
     data_len: usize,
     policy_start: usize,
+    /// Starting offset of the HTTP envelope within the file.
+    file_offset: u64,
     entry_id: [u8; 16],
 }
 
@@ -965,6 +1031,13 @@ impl DataWithCachePolicy {
         Self::from_aligned_bytes(aligned_bytes)
     }
 
+    /// Read the HTTP envelope after an independently readable prefix.
+    pub(crate) fn from_reader_at(reader: impl Read, offset: u64) -> Result<Self, Error> {
+        let mut cached = Self::from_reader(reader)?;
+        cached.file_offset = offset;
+        Ok(cached)
+    }
+
     /// Validate the policy within its aligned portion of the shared buffer.
     fn from_aligned_bytes(mut bytes: AlignedVec) -> Result<Self, Error> {
         let (contents, footer) = CachePolicyFooter::ref_from_suffix(&bytes).map_err(|_| {
@@ -1003,16 +1076,32 @@ impl DataWithCachePolicy {
             bytes,
             data_len,
             policy_start,
+            file_offset: 0,
             entry_id,
         })
     }
 
     /// Serialize a new response with a unique entry ID for atomic publication.
-    fn serialize(policy: &CachePolicy, data: &[u8]) -> Result<Vec<u8>, Error> {
-        let entry_id = *Id::secure()
+    pub(crate) fn serialize(policy: &CachePolicy, data: &[u8]) -> Result<Vec<u8>, Error> {
+        Self::serialize_with_id(policy, data, Self::new_entry_id())
+    }
+
+    pub(crate) fn new_entry_id() -> [u8; 16] {
+        *Id::secure()
             .as_bytes()
             .as_array::<16>()
-            .expect("IDs have 16 bytes");
+            .expect("IDs have 16 bytes")
+    }
+
+    pub(crate) fn entry_id(&self) -> [u8; 16] {
+        self.entry_id
+    }
+
+    pub(crate) fn serialize_with_id(
+        policy: &CachePolicy,
+        data: &[u8],
+        entry_id: [u8; 16],
+    ) -> Result<Vec<u8>, Error> {
         let tail = Self::serialize_policy(policy, &entry_id, data.len())?;
         let entry_id_start = data.len() + Self::padding_len(data.len());
         let mut bytes = Vec::with_capacity(entry_id_start + entry_id.len() + tail.len());
@@ -1091,7 +1180,7 @@ impl DataWithCachePolicy {
             Err(err) => return Err(ErrorKind::CacheWrite(err).into()),
         };
         file.seek(SeekFrom::Start(
-            (self.policy_start - self.entry_id.len()) as u64,
+            self.file_offset + (self.policy_start - self.entry_id.len()) as u64,
         ))
         .map_err(ErrorKind::CacheWrite)?;
         let mut entry_id = [0; 16];
@@ -1106,7 +1195,7 @@ impl DataWithCachePolicy {
         }
         let tail = Self::serialize_policy(policy, &entry_id, self.data_len)?;
         file.write_all(&tail).map_err(ErrorKind::CacheWrite)?;
-        file.set_len((self.policy_start + tail.len()) as u64)
+        file.set_len(self.file_offset + (self.policy_start + tail.len()) as u64)
             .map_err(ErrorKind::CacheWrite)?;
         Ok(())
     }
@@ -1184,6 +1273,33 @@ mod tests {
                 .is_ok()
         );
         assert!(DataWithCachePolicy::from_aligned_bytes(bytes).is_err());
+        Ok(())
+    }
+
+    /// A 304 for a range-readable page updates the HTTP tail without touching the
+    /// preceding release bytes, even when the new policy has a different length.
+    #[test]
+    fn revalidation_respects_the_file_offset() -> Result<()> {
+        use std::io::{Seek, SeekFrom};
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("response");
+        let prefix = b"unaligned release bytes";
+        let small = policy("x-small")?;
+        let large = policy(&format!("x-{}", "large".repeat(100)))?;
+        let encoded = DataWithCachePolicy::serialize(&small, b"version table")?;
+        fs_err::write(&path, [prefix.as_slice(), &encoded].concat())?;
+        let offset = prefix.len() as u64;
+        let read = || -> Result<DataWithCachePolicy> {
+            let mut file = fs_err::File::open(&path)?;
+            file.seek(SeekFrom::Start(offset))?;
+            Ok(DataWithCachePolicy::from_reader_at(file, offset)?)
+        };
+        let cached = read()?;
+        cached.refresh_policy(&path, &large)?;
+        assert_eq!(&fs_err::read(&path)?[..prefix.len()], prefix);
+        let refreshed = read()?;
+        assert_eq!(refreshed.entry_id, cached.entry_id);
+        assert_eq!(&*refreshed.into_data(), b"version table");
         Ok(())
     }
 

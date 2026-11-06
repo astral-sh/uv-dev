@@ -1,7 +1,7 @@
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use uv_client::{MetadataFormat, RegistryClient, VersionFiles};
+use uv_client::{MetadataFormat, RegistryClient};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     File, IndexCapabilities, IndexEntryFilename, IndexLocations, IndexMetadataRef, IndexUrl,
@@ -27,30 +27,25 @@ pub struct LatestClient<'env> {
     pub requires_python: Option<&'env RequiresPython>,
 }
 
-impl LatestClient<'_> {
-    fn effective_exclude_newer(
-        &self,
-        package: &PackageName,
-        index: &IndexUrl,
-    ) -> Option<jiff::Timestamp> {
-        self.exclude_newer.exclude_newer_package_for_index(
-            package,
-            self.index_locations.exclude_newer_for(index, package),
-        )
-    }
+struct LatestCandidate {
+    filename: Option<DistFilename>,
+    prerelease: PrereleaseMode,
+    tags: Option<Tags>,
+    requires_python: Option<RequiresPython>,
+}
 
-    fn consider_candidate(
-        &self,
-        package: &PackageName,
-        filename: &DistFilename,
+impl LatestCandidate {
+    fn consider(
+        &mut self,
+        candidate: DistFilename,
         file: &File,
         exclude_newer: Option<&jiff::Timestamp>,
-    ) -> bool {
+    ) {
         // Respect any exclude-newer cutoffs that were provided.
         if let Some(exclude_newer) = exclude_newer {
             match file.upload_time_utc_ms.as_ref() {
                 Some(&upload_time) if upload_time >= exclude_newer.as_millisecond() => {
-                    return false;
+                    return;
                 }
                 None => {
                     warn_user_once!(
@@ -64,9 +59,8 @@ impl LatestClient<'_> {
         }
 
         // Unless explicitly allowed, skip pre-release artifacts.
-        let prerelease = self.prerelease.mode(package);
-        if !filename.version().is_stable() && !matches!(prerelease, PrereleaseMode::Allow) {
-            return false;
+        if !candidate.version().is_stable() && !matches!(self.prerelease, PrereleaseMode::Allow) {
+            return;
         }
 
         // Avoid yanked or otherwise withdrawn files.
@@ -75,11 +69,11 @@ impl LatestClient<'_> {
             .as_ref()
             .is_some_and(|yanked| yanked.is_yanked())
         {
-            return false;
+            return;
         }
 
         // Enforce the interpreter's `Requires-Python` constraints.
-        if let Some(requires_python) = self.requires_python
+        if let Some(requires_python) = &self.requires_python
             && file
                 .requires_python
                 .as_ref()
@@ -87,21 +81,43 @@ impl LatestClient<'_> {
                     !requires_python.is_contained_by(file_requires_python)
                 })
         {
-            return false;
+            return;
         }
 
         // Skip wheels that aren't compatible with the current platform.
         // TODO(konsti): Check variant compatibility when looking for updates.
-        if let DistFilename::WheelFilename(filename) = filename
+        if let DistFilename::WheelFilename(filename) = &candidate
             && (filename.variant().is_some()
                 || self
                     .tags
+                    .as_ref()
                     .is_some_and(|tags| !filename.compatibility(tags).is_compatible()))
         {
-            return false;
+            return;
         }
 
-        true
+        // Prefer higher versions, and prefer wheels over sdists at parity.
+        if self.filename.as_ref().is_none_or(|current| {
+            candidate.version() > current.version()
+                || (candidate.version() == current.version()
+                    && matches!(candidate, DistFilename::WheelFilename(_))
+                    && matches!(current, DistFilename::SourceDistFilename(_)))
+        }) {
+            self.filename = Some(candidate);
+        }
+    }
+}
+
+impl LatestClient<'_> {
+    fn effective_exclude_newer(
+        &self,
+        package: &PackageName,
+        index: &IndexUrl,
+    ) -> Option<jiff::Timestamp> {
+        self.exclude_newer.exclude_newer_package_for_index(
+            package,
+            self.index_locations.exclude_newer_for(index, package),
+        )
     }
 
     /// Find the latest version of a package from an index.
@@ -111,20 +127,27 @@ impl LatestClient<'_> {
         index: Option<&IndexUrl>,
         download_concurrency: &Semaphore,
     ) -> Result<Option<DistFilename>, uv_client::Error> {
+        self.client
+            .retry_simple_read(async || {
+                self.find_latest_once(package, index, download_concurrency)
+                    .await
+            })
+            .await
+    }
+
+    async fn find_latest_once(
+        &self,
+        package: &PackageName,
+        index: Option<&IndexUrl>,
+        download_concurrency: &Semaphore,
+    ) -> Result<Option<DistFilename>, uv_client::Error> {
         debug!("Fetching latest version of: `{package}`");
 
-        let mut latest: Option<DistFilename> = None;
-
-        let mut update_latest = |candidate: DistFilename| {
-            // Prefer higher versions, and prefer wheels over sdists at parity.
-            if latest.as_ref().is_none_or(|current| {
-                candidate.version() > current.version()
-                    || (candidate.version() == current.version()
-                        && matches!(candidate, DistFilename::WheelFilename(_))
-                        && matches!(current, DistFilename::SourceDistFilename(_)))
-            }) {
-                latest = Some(candidate);
-            }
+        let mut latest = LatestCandidate {
+            filename: None,
+            prerelease: self.prerelease.mode(package),
+            tags: self.tags.cloned(),
+            requires_python: self.requires_python.cloned(),
         };
 
         let archives = match self
@@ -156,22 +179,15 @@ impl LatestClient<'_> {
 
             match archive {
                 MetadataFormat::Simple(archive) => {
-                    for datum in archive.iter().rev() {
-                        let files =
-                            rkyv::deserialize::<VersionFiles, rkyv::rancor::Error>(&datum.files)
-                                .expect("archived version files always deserializes");
-
-                        for (filename, file) in files.all(package) {
-                            if self.consider_candidate(
-                                package,
-                                &filename,
-                                &file,
-                                exclude_newer.as_ref(),
-                            ) {
-                                update_latest(filename);
+                    let package = package.clone();
+                    latest = self
+                        .client
+                        .fold_version_files(archive, latest, move |latest, files| {
+                            for (filename, file) in files.all(&package) {
+                                latest.consider(filename, &file, exclude_newer.as_ref());
                             }
-                        }
-                    }
+                        })
+                        .await?;
                 }
                 MetadataFormat::Flat(entries) => {
                     for entry in entries {
@@ -180,14 +196,7 @@ impl LatestClient<'_> {
                             IndexEntryFilename::DistFilename(filename) => filename,
                             IndexEntryFilename::VariantJson(_) => continue,
                         };
-                        if self.consider_candidate(
-                            package,
-                            &filename,
-                            &file,
-                            exclude_newer.as_ref(),
-                        ) {
-                            update_latest(filename);
-                        }
+                        latest.consider(filename, &file, exclude_newer.as_ref());
                     }
                 }
             }
@@ -205,12 +214,10 @@ impl LatestClient<'_> {
                     IndexEntryFilename::VariantJson(_) => continue,
                 };
                 let exclude_newer = self.effective_exclude_newer(package, &index);
-                if self.consider_candidate(package, &filename, &file, exclude_newer.as_ref()) {
-                    update_latest(filename);
-                }
+                latest.consider(filename, &file, exclude_newer.as_ref());
             }
         }
 
-        Ok(latest)
+        Ok(latest.filename)
     }
 }

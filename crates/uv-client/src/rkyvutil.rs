@@ -116,12 +116,11 @@ where
         &this.raw
     }
 
-    /// Deserialize this owned archived value into the original
-    /// `SimpleDetailMetadata`.
+    /// Deserialize this owned archived value into the original type.
     ///
     /// Note that because this type has a `Deref` impl, this method requires
-    /// fully-qualified syntax. So, if `o` is an `OwnedValue`, then use
-    /// `OwnedValue::deserialize(&o)`.
+    /// fully-qualified syntax. So, if `o` is an `OwnedArchive`, then use
+    /// `OwnedArchive::deserialize(&o)`.
     pub fn deserialize(this: &Self) -> A {
         rkyv::deserialize(&**this).expect("valid archive must deserialize correctly")
     }
@@ -136,7 +135,7 @@ where
 
     fn deref(&self) -> &A::Archived {
         // SAFETY: We've validated that our underlying buffer is a valid
-        // archive for SimpleDetailMetadata in the constructor, so we can skip
+        // archive for A in the constructor, so we can skip
         // validation here. Since we don't mutate the buffer, this conversion
         // is guaranteed to be correct.
         #[allow(unsafe_code)]

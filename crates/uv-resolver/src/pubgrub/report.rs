@@ -1082,7 +1082,7 @@ impl PubGrubReportFormatter<'_> {
         let publish_date = version_maps
             .iter()
             .filter_map(|version_map| {
-                version_map.get(&version).and_then(|prioritized| {
+                version_map.get(&version).ok()?.and_then(|prioritized| {
                     prioritized
                         .files()
                         .filter_map(|file| file.upload_time_utc_ms)
@@ -1128,7 +1128,9 @@ impl PubGrubReportFormatter<'_> {
             return None;
         };
 
-        let candidate = selector.select_no_preference(name, set, version_maps, env)?;
+        let candidate = selector
+            .select_no_preference(name, set, version_maps, env)
+            .ok()??;
 
         let prioritized = candidate.prioritized()?;
 

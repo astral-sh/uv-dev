@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -11,6 +12,8 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::CacheBucket;
 use uv_fs::PortablePath;
@@ -35,6 +38,124 @@ fn cache_dir_uses_configured_test_context_path() {
     ----- stdout -----
     [CACHE_DIR]/
     ");
+}
+
+/// A release can fail validation after its HTTP response was accepted. The online retry
+/// needs to resolve again because the index may have published different versions.
+#[tokio::test]
+async fn corrupt_simple_release_is_refetched_in_the_same_command() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let query = "x".repeat(40 * 1024);
+    let page = format!(
+        r#"<a href="demo-2.0-py3-none-any.whl?{query}" data-upload-time="2024-01-01T00:00:00Z">demo-2.0-py3-none-any.whl</a>"#
+    );
+    Mock::given(method("GET"))
+        .and(path("/demo/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .insert_header("etag", "\"old\"")
+                .set_body_raw(page, "text/html"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("demo")?;
+    context
+        .pip_compile()
+        .arg("--default-index")
+        .arg(server.uri())
+        .args(["--no-deps", "requirements.in"])
+        .assert()
+        .success();
+    server.verify().await;
+    server.reset().await;
+
+    let entry = context
+        .cache_files(CacheBucket::Simple)?
+        .into_iter()
+        .find(|file| file.ends_with("demo.rkyv"))
+        .context("expected cached Simple page")?;
+    let stamp = filetime::FileTime::from_last_modification_time(&fs_err::metadata(&entry)?);
+    let mut bytes = context.read_bytes(&entry);
+    let first_release = size_of::<u64>() + size_of::<u32>();
+    bytes[first_release] ^= 1;
+    fs_err::write(&entry, bytes)?;
+    filetime::set_file_mtime(&entry, stamp)?;
+
+    Mock::given(method("GET")).and(path("/demo/"))
+        .and(|request: &Request| !request.headers.contains_key("if-none-match"))
+        .respond_with(ResponseTemplate::new(200).insert_header("cache-control", "max-age=3600")
+            .set_body_raw(r#"<a href="demo-3.0-py3-none-any.whl" data-upload-time="2024-01-01T00:00:00Z">demo-3.0-py3-none-any.whl</a>"#, "text/html"))
+        .expect(1).mount(&server).await;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--no-annotate", "--no-header", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    demo==3.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Generating the cutoff explanation must not read details for an unrelated, older release.
+#[tokio::test]
+async fn cutoff_conflict_survives_an_unreadable_historical_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let query = "x".repeat(40 * 1024);
+    let page = format!(
+        r#"
+        <a href="demo-1.0-py3-none-any.whl?{query}" data-upload-time="2024-01-01T00:00:00Z">demo-1.0-py3-none-any.whl</a>
+        <a href="demo-2.0-py3-none-any.whl" data-upload-time="2024-01-01T00:00:00Z">demo-2.0-py3-none-any.whl</a>
+    "#
+    );
+    Mock::given(method("GET"))
+        .and(path("/demo/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_raw(page, "text/html"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let requirements = context.temp_dir.child("requirements.in");
+    requirements.write_str("demo")?;
+    context
+        .pip_compile()
+        .arg("--default-index")
+        .arg(server.uri())
+        .args(["--no-deps", "requirements.in"])
+        .assert()
+        .success();
+
+    let entry = context
+        .cache_files(CacheBucket::Simple)?
+        .into_iter()
+        .find(|file| file.ends_with("demo.rkyv"))
+        .context("expected cached Simple page")?;
+    let mut bytes = context.read_bytes(&entry);
+    let data_len = usize::try_from(u64::from_le_bytes(bytes[..8].try_into()?))?;
+    // The oldest release ends immediately before the version table.
+    bytes[size_of::<u64>() + size_of::<u32>() + data_len - 1] ^= 1;
+    fs_err::write(&entry, bytes)?;
+    requirements.write_str("demo==99")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.uri())
+        .args(["--no-deps", "--offline", "--exclude-newer", "2025-01-01", "requirements.in"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because there is no version of demo==99 and you require demo==99, we can conclude that your requirements are unsatisfiable.
+    ");
+    Ok(())
 }
 
 /// Invalid cache keys in a local dependency must fail instead of falling back to the default keys.
