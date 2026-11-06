@@ -321,8 +321,8 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             // the complete response rather than combining a fresh release with an old table.
             let retry = Arc::make_mut(&mut state);
             retry.index = retry.index.fresh_package_versions();
-            retry.unavailable_packages = Box::default();
-            retry.incomplete_packages = Box::default();
+            retry.unavailable_packages.pin().clear();
+            retry.incomplete_packages.pin().clear();
             result = state.resolve_once(provider).await;
         }
         state.on_complete();

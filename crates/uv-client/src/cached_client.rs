@@ -1295,7 +1295,9 @@ mod tests {
             Ok(DataWithCachePolicy::from_reader_at(file, offset)?)
         };
         let cached = read()?;
+        let original_len = fs_err::metadata(&path)?.len();
         cached.refresh_policy(&path, &large)?;
+        assert!(fs_err::metadata(&path)?.len() > original_len);
         assert_eq!(&fs_err::read(&path)?[..prefix.len()], prefix);
         let refreshed = read()?;
         assert_eq!(refreshed.entry_id, cached.entry_id);

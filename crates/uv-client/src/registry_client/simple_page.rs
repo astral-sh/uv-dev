@@ -86,7 +86,7 @@ struct Release {
 }
 
 impl ArchivedRelease {
-    /// Cache admission checks each end against the in-memory length of the release region.
+    /// The validated release-region length fits in `usize` and bounds every offset.
     fn end_offset(&self) -> usize {
         usize::try_from(self.end.to_native()).expect("validated release offsets fit in usize")
     }
@@ -381,6 +381,9 @@ impl Cacheable for ParsedPage {
                 .take(len as u64)
                 .read_to_end(&mut bytes)
                 .map_err(ErrorKind::Io)?;
+            if bytes.len() != len {
+                return Err(ErrorKind::ArchiveRead("truncated Simple release data".into()).into());
+            }
             let envelope = DataWithCachePolicy::from_reader_at(reader, offset)?;
             (ReleaseFiles::Memory(bytes), envelope)
         };
