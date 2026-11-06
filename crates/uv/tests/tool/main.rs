@@ -18,6 +18,9 @@ mod tool_list;
 #[cfg(feature = "test-python")]
 mod tool_locked;
 
+#[cfg(feature = "test-python")]
+mod tool_locked_sdist;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_run;
 

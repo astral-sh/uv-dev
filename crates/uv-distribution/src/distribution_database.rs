@@ -24,6 +24,7 @@ use uv_client::{
     RequestBuilder, RetryState,
 };
 use uv_distribution_filename::WheelFilename;
+use uv_distribution_types::RegistrySourceDist;
 use uv_distribution_types::{
     ArchiveHashGroups, ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef,
     GitPathBuiltDist, HashCollection, HashValidation, Hashed, IndexUrl, InstalledDist,
@@ -265,6 +266,23 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .map_err(|err| Error::ReadInstalled(Box::new(dist.clone()), err))?;
 
         Ok(ArchiveMetadata::from_metadata23(metadata.clone()))
+    }
+
+    /// Read a registry source distribution's packaged lock without executing its build backend.
+    ///
+    /// The policy must compute a SHA-256 digest to bind the lock to its archive. Use
+    /// [`ArchiveHashPolicy::AllOfAny`] for any required index and user hashes, or
+    /// [`ArchiveHashPolicy::Generate`] if no digests are available.
+    #[instrument(skip_all, fields(%dist))]
+    pub async fn read_registry_source_lock(
+        &self,
+        dist: &RegistrySourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<(Option<String>, HashDigests), Error> {
+        self.builder
+            .read_registry_source_lock(dist, hashes, &self.client)
+            .boxed_local()
+            .await
     }
 
     /// Retrieve distribution metadata and any hashes requested for resolution.
