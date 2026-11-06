@@ -5918,11 +5918,15 @@ impl Lock {
         )?;
         let locked_hashes = match (&package.id.source, &dist) {
             (Source::Direct(..) | Source::Path(_), Dist::Source(_)) if !hashes.is_empty() => {
-                Some(HashValidation::All(hashes.as_slice()))
+                Some((
+                    HashValidation::All(hashes.as_slice()),
+                    ArchiveHashPolicy::All(hashes.as_slice()),
+                ))
             }
-            (Source::Registry(_), Dist::Source(_)) if !hashes.is_empty() => {
-                Some(HashValidation::Any(hashes.as_slice()))
-            }
+            (Source::Registry(_), Dist::Source(_)) if !hashes.is_empty() => Some((
+                HashValidation::Any(hashes.as_slice()),
+                ArchiveHashPolicy::Any(hashes.as_slice()),
+            )),
             _ => None,
         };
         let id = dist.distribution_id();
@@ -5932,13 +5936,12 @@ impl Lock {
             } else {
                 None
             }
-        }) && locked_hashes.is_none_or(|validation| {
-            ArchiveHashPolicy::from(validation).matches(archive.hashes.as_slice())
-        }) {
+        }) && locked_hashes.is_none_or(|(_, policy)| policy.matches(archive.hashes.as_slice()))
+        {
             return Ok(archive.metadata.clone());
         }
 
-        let metadata_hashes = if let Some(validation) = locked_hashes {
+        let metadata_hashes = if let Some((validation, _)) = locked_hashes {
             MetadataHashPolicy {
                 collection: hasher.collection(),
                 validation,

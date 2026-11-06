@@ -15,7 +15,7 @@ use uv_distribution_types::{
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier};
-use uv_pypi_types::{Conflicts, HashDigests, ParsedUrl, VerbatimParsedUrl, Yanked};
+use uv_pypi_types::{Conflicts, HashAlgorithm, HashDigests, ParsedUrl, VerbatimParsedUrl, Yanked};
 use uv_resolver_types::PackageRole;
 use uv_types::HashStrategy;
 
@@ -353,8 +353,7 @@ fn add_version(
     }))
 }
 
-/// Identify the hashes for a concrete distribution, preserving any hashes that were provided
-/// by the lockfile.
+/// Identify the hashes for a concrete distribution according to its verification policy.
 fn get_hashes(
     name: &PackageName,
     index: Option<&IndexUrl>,
@@ -365,6 +364,21 @@ fn get_hashes(
     hasher: &HashStrategy,
     in_memory: &InMemoryIndex,
 ) -> HashDigests {
+    if hasher.has_independent_hashes() {
+        // Bind the result to the exact archive that satisfied all assertions.
+        if let Some(response) = in_memory.distributions().get(metadata_id)
+            && let MetadataResponse::Found(archive) = response.as_ref()
+        {
+            return archive
+                .hashes
+                .iter()
+                .find(|digest| digest.algorithm() == HashAlgorithm::Sha256)
+                .cloned()
+                .map_or_else(HashDigests::empty, HashDigests::from);
+        }
+        return HashDigests::empty();
+    }
+
     // 1. Look for hashes from the lockfile.
     if let Some(digests) = preferences.match_hashes(name, version) {
         if !digests.is_empty() {
@@ -372,25 +386,23 @@ fn get_hashes(
         }
     }
 
-    // 2. Preserve trusted hashes for this URL or path. Wheel metadata lookup does not always
-    // hash the archive, so installation still needs the original hashes to verify its contents.
     if let Some(url) = url {
+        // 2. Preserve trusted hashes for this URL or path. Wheel metadata lookup does not always
+        // hash the archive, so installation still needs the original hashes to verify its contents.
         let policy = hasher.archive_policy_for_url(&url.verbatim);
-        if !policy.digests().is_empty() {
-            return HashDigests::from(policy.digests());
+        let digests: HashDigests = policy.digests().cloned().collect();
+        if !digests.is_empty() {
+            return digests;
         }
-    }
 
-    // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
-    if let Some(url) = url
-        && let ParsedUrl::Archive(_) = &url.parsed_url
-        && hasher.collection() != HashCollection::None
-        && !hasher
-            .archive_policy_for_url(&url.verbatim)
-            .requires_validation()
-        && let Some(hashes) = parse_url_hashes(&url.verbatim)
-    {
-        return hashes;
+        // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
+        if let ParsedUrl::Archive(_) = &url.parsed_url
+            && hasher.collection() != HashCollection::None
+            && !policy.requires_validation()
+            && let Some(hashes) = parse_url_hashes(&url.verbatim)
+        {
+            return hashes;
+        }
     }
 
     // 4. Look for hashes computed for the specific wheel or source distribution.
@@ -535,4 +547,82 @@ fn has_lower_bound(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::Arc;
+
+    use uv_distribution::ArchiveMetadata;
+    use uv_distribution_types::{DistributionId, HashCollection};
+    use uv_pep508::Pep508Url;
+    use uv_pypi_types::{HashAlgorithm, HashDigest, ResolutionMetadata, VerbatimParsedUrl};
+    use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
+    use uv_types::{HashStrategy, HashVerification};
+
+    use super::get_hashes;
+    use crate::preferences::{Preference, Preferences};
+    use crate::{InMemoryIndex, MetadataResponse, ResolverEnvironment};
+
+    #[test]
+    fn independent_hashes_only_use_computed_archive_sha256() -> Result<(), Box<dyn Error>> {
+        let preferred = Preference::from_entry(RequirementEntry {
+            requirement: RequirementsTxtRequirement::Named("demo==1.0".parse()?),
+            hashes: vec![format!("sha256:{}", "0".repeat(64))],
+        })?
+        .ok_or("missing preference")?;
+        let preferences =
+            Preferences::from_iter([preferred], &ResolverEnvironment::universal(vec![]));
+        let url = VerbatimParsedUrl::parse_url(
+            &format!(
+                "https://example.com/demo-1.0-py3-none-any.whl#sha256={}",
+                "1".repeat(64)
+            ),
+            None,
+        )?;
+        let id = DistributionId::AbsoluteUrl(url.verbatim.to_string());
+        let hasher = HashStrategy::collect(HashCollection::All).with_verification(
+            HashVerification::Independent {
+                by_package: Arc::default(),
+                by_url: Arc::default(),
+            },
+        );
+
+        let metadata = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n",
+        )?;
+        let hashes = |preferences: &Preferences, archive: Option<ArchiveMetadata>| {
+            let index = InMemoryIndex::default();
+            if let Some(archive) = archive {
+                index
+                    .distributions()
+                    .done(id.clone(), Arc::new(MetadataResponse::Found(archive)));
+            }
+            get_hashes(
+                &metadata.name,
+                None,
+                Some(&url),
+                &id,
+                &metadata.version,
+                preferences,
+                &hasher,
+                &index,
+            )
+        };
+
+        assert!(hashes(&preferences, None).is_empty());
+        assert!(hashes(&Preferences::default(), None).is_empty());
+
+        let mut archive = ArchiveMetadata::from_metadata23(metadata.clone());
+        let md5 = HashDigest::new(HashAlgorithm::Md5, "0".repeat(32))?;
+        archive.hashes = vec![md5.clone()].into();
+        assert!(hashes(&preferences, Some(archive.clone())).is_empty());
+
+        let sha256 = HashDigest::new(HashAlgorithm::Sha256, "2".repeat(64))?;
+        archive.hashes = vec![md5, sha256.clone()].into();
+        assert_eq!(hashes(&preferences, Some(archive)).as_slice(), &[sha256]);
+
+        Ok(())
+    }
 }
