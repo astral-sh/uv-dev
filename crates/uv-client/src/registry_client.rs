@@ -2001,11 +2001,12 @@ mod tests {
     use std::assert_matches;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use insta::{assert_debug_snapshot, assert_snapshot};
     use tokio::sync::Semaphore;
     use uv_normalize::PackageName;
-    use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
+    use uv_pypi_types::{HashDigest, HashDigests, ProjectStatus, PypiSimpleDetail};
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
@@ -2014,14 +2015,14 @@ mod tests {
         BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
         html::SimpleDetailHTML,
     };
-    use uv_cache::Cache;
+    use uv_cache::{Cache, CacheBucket, WheelCache};
     use uv_distribution_types::{
         FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
         IndexUrl, ToUrlError, VariantsJsonFilename,
     };
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
 
@@ -2200,6 +2201,86 @@ mod tests {
         assert_eq!(files.source_dists[0].filename(), "example-1.0.tar.gz");
         drop(page);
         assert!(!root.exists());
+        Ok(())
+    }
+
+    /// A metadata-only 200 reuses the immutable pack. A later file change publishes a
+    /// new generation, while a reader that kept the first page can still select its release.
+    #[tokio::test]
+    async fn refresh_reuses_only_identical_release_packs() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let index = IndexUrl::from_str(&server.uri())?;
+        let package = PackageName::from_str("example")?;
+        let request_number = AtomicUsize::new(0);
+        let reason = "x".repeat(40 * 1024);
+        Mock::given(method("GET"))
+            .and(path_regex("^/example/$"))
+            .respond_with(move |_: &Request| {
+                let request = request_number.fetch_add(1, Ordering::Relaxed);
+                let version = if request < 2 { "1.0" } else { "2.0" };
+                let filename = format!("example-{version}.tar.gz");
+                let status = if request == 0 {
+                    ""
+                } else {
+                    concat!(
+                        r#"<meta name="pypi:project-status" content="archived">"#,
+                        r#"<meta name="pypi:project-status-reason" content="retired">"#
+                    )
+                };
+                let body = format!(
+                    r#"<html><head>{status}</head><body><a href="{filename}" data-yanked="{reason}">{filename}</a></body></html>"#
+                );
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "no-cache")
+                    .set_body_raw(body, "text/html")
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let cache = Cache::temp()?.init().await?;
+        let directory = cache
+            .bucket(CacheBucket::Simple)
+            .join(WheelCache::Index(&index).root())
+            .join(package.as_str());
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+        let fetch = async || -> Result<SimplePage, Error> {
+            let Some((_, MetadataFormat::Simple(page))) = client
+                .simple_detail(
+                    &package,
+                    Some(IndexMetadataRef::from(&index)),
+                    &IndexCapabilities::default(),
+                    &Semaphore::new(1),
+                )
+                .await?
+                .pop()
+            else {
+                return Err("expected a Simple API response".into());
+            };
+            Ok(page)
+        };
+
+        let original = fetch().await?;
+        let same_files = fetch().await?;
+        let status =
+            rkyv::deserialize::<ProjectStatus, rkyv::rancor::Error>(same_files.project_status())?;
+        assert_eq!(status.reason.as_deref(), Some("retired"));
+        assert_eq!(fs_err::read_dir(&directory)?.count(), 1);
+
+        let changed = fetch().await?;
+        assert_eq!(fs_err::read_dir(&directory)?.count(), 2);
+        assert_eq!(
+            changed.files(0)?.source_dists[0].filename(),
+            "example-2.0.tar.gz"
+        );
+        assert_eq!(
+            original.files(0)?.source_dists[0].filename(),
+            "example-1.0.tar.gz"
+        );
+        assert_eq!(
+            same_files.files(0)?.source_dists[0].filename(),
+            "example-1.0.tar.gz"
+        );
         Ok(())
     }
 

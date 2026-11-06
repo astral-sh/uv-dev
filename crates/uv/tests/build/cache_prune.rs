@@ -54,20 +54,31 @@ async fn prune_superseded_simple_details() -> Result<()> {
         .child("requirements.in")
         .write_str("example")?;
 
-    context
-        .pip_compile()
-        .arg("--default-index")
-        .arg(server.index_url())
-        .args(["--no-deps", "requirements.in"])
-        .assert()
-        .success();
-    context
-        .pip_compile()
-        .arg("--default-index")
-        .arg(server.index_url())
-        .args(["--refresh", "--no-deps", "requirements.in"])
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("--default-index").arg(server.index_url())
+        .args(["--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let replacement = "example-2.0-py3-none-any.whl";
+    let url = format!("{}?{}", server.file_url(replacement), "x".repeat(32 * 1024));
+    server
+        .serve_with(replacement, b"", None, json!({ "url": url }))
+        .await;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("--default-index").arg(server.index_url())
+        .args(["--refresh", "--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==2.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     uv_snapshot!(context.filters(), context.prune(), @"
     exit_code: 0 (success)
@@ -81,7 +92,7 @@ async fn prune_superseded_simple_details() -> Result<()> {
         .args(["--offline", "--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    example==1.0
+    example==2.0
 
     ----- stderr -----
     Resolved 1 package in [TIME]

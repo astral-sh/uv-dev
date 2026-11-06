@@ -7,6 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use itertools::Itertools;
 use rkyv::rancor;
 use rkyv::util::AlignedVec;
+use tokio::io::AsyncReadExt;
 use tokio::task::JoinHandle;
 use zerocopy::byteorder::little_endian::U64;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
@@ -17,7 +18,7 @@ use uv_pep440::Version;
 use uv_pypi_types::{ProjectStatus, ResolutionMetadata};
 
 use super::{RegistryClient, SimpleDetailMetadata, SimpleDetailMetadatum, VersionFiles};
-use crate::cached_client::Cacheable;
+use crate::cached_client::{Cacheable, DataWithCachePolicy};
 use crate::{Error, ErrorKind, OwnedArchive};
 
 /// Group adjacent candidates so that backtracking can reuse their file details.
@@ -68,6 +69,7 @@ struct Manifest {
 }
 
 #[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(PartialEq))]
 struct Block {
     /// Exclusive end offset in the concatenated block archives.
     end: u64,
@@ -399,6 +401,43 @@ impl SimplePageData {
         Ok(files)
     }
 
+    /// Reuse the published pack when a fresh response contains exactly the same release files.
+    async fn matching_pack(&self, path: &Path, bytes: &[u8]) -> Option<(Id, PathBuf)> {
+        const BUFFER_SIZE: usize = 64 * 1024;
+
+        let path = path.to_owned();
+        let previous = tokio::task::spawn_blocking(move || {
+            let entry = DataWithCachePolicy::from_reader(fs_err::File::open(&path).ok()?).ok()?;
+            CachedSimplePage::<true>::from_aligned_bytes(entry.into_data(), &path).ok()
+        })
+        .await
+        .expect("Simple manifest read panicked")?;
+        let Details::Disk(pack) = previous.details else {
+            return None;
+        };
+        if previous.manifest.releases_per_block != self.manifest.releases_per_block
+            || previous.manifest.releases.len() != self.manifest.releases.len()
+            || previous.manifest.blocks.as_slice() != self.manifest.blocks.as_slice()
+        {
+            return None;
+        }
+
+        // Matching block sizes and CRC32s are a fast filter. Only identical bytes can share
+        // an immutable generation, including when project metadata changed independently.
+        let generation = previous.generation;
+        drop(previous.manifest);
+        let mut file = fs_err::tokio::File::open(&pack).await.ok()?;
+        let mut buffer = vec![0; BUFFER_SIZE.min(bytes.len())];
+        for chunk in bytes.chunks(BUFFER_SIZE) {
+            let scratch = &mut buffer[..chunk.len()];
+            file.read_exact(scratch).await.ok()?;
+            if scratch != chunk {
+                return None;
+            }
+        }
+        Some((generation, pack))
+    }
+
     /// Zero means the filesystem did not supply a usable timestamp. In that case the reader
     /// verifies the checksums before accepting the cache entry.
     fn modified_nanos(metadata: &std::fs::Metadata) -> u64 {
@@ -505,16 +544,22 @@ impl<const CACHE_LOCKED: bool> Cacheable for CachedSimplePage<CACHE_LOCKED> {
     async fn serialize_for_cache(&mut self, manifest: &Path) -> Result<Cow<'_, [u8]>, Error> {
         let page = &mut self.0;
         if let Details::Memory(bytes) = &page.details {
-            let path = simple_detail_path(manifest, &page.generation);
-            fs_err::tokio::create_dir_all(
-                path.parent()
-                    .expect("release files have a package directory"),
-            )
-            .await
-            .map_err(ErrorKind::CacheWrite)?;
-            uv_fs::write_atomic(&path, bytes)
+            let path = if let Some((generation, path)) = page.matching_pack(manifest, bytes).await {
+                page.generation = generation;
+                path
+            } else {
+                let path = simple_detail_path(manifest, &page.generation);
+                fs_err::tokio::create_dir_all(
+                    path.parent()
+                        .expect("release files have a package directory"),
+                )
                 .await
                 .map_err(ErrorKind::CacheWrite)?;
+                uv_fs::write_atomic(&path, bytes)
+                    .await
+                    .map_err(ErrorKind::CacheWrite)?;
+                path
+            };
             page.details = Details::Disk(path);
         }
         let timestamp = if let Details::Disk(path) = &page.details {
