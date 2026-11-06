@@ -309,6 +309,12 @@ async fn upgrade_tool(
         }
     };
 
+    if existing_tool_receipt.locked() {
+        anyhow::bail!(
+            "`{name}` uses a packaged lock. Run `uv tool install --locked --upgrade {name}` to upgrade."
+        );
+    }
+
     let environment = match installed_tools.get_environment(name, cache) {
         Ok(Some(environment)) => environment,
         Ok(None) => {
@@ -640,6 +646,7 @@ async fn upgrade_tool(
 
         // If we modified the target tool, reinstall the entrypoints.
         finalize_tool_install(
+            false,
             &environment,
             name,
             &entrypoints,

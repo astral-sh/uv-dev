@@ -1091,6 +1091,7 @@ fn tool_install_baseline() {
         ),
     }
     ToolInstallSettings {
+        locked: None,
         package: "anyio",
         from: None,
         with: [],
@@ -4031,6 +4032,7 @@ fn preview_features() {
     +            PackagedInit,
     +            CentralizedProjectEnvs,
     +            ToolInstallLocks,
+    +            LockedTools,
     +            WorkspaceListScripts,
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,

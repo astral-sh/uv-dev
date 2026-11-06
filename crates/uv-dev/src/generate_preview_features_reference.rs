@@ -275,6 +275,11 @@ mod tests {
         dependencies. Their metadata is retained so uv can check whether those sources are requested
         or stale without network access.
 
+        ### `locked-tools` {#locked-tools}
+
+        Publish distributions with a bundled lock and install tools using their packaged locks
+        with `--locked`.
+
         ### `lockfile-format-check` {#lockfile-format-check}
 
         Commands using `--locked` or `--check` reject non-canonical lockfile formatting, even if the

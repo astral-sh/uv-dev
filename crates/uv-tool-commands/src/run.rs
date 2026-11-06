@@ -1228,6 +1228,7 @@ async fn get_or_create_environment(
                     &interpreter,
                     python_request.as_ref(),
                     &err,
+                    &[],
                     client_builder,
                     &reporter,
                     &install_mirrors,

@@ -18,6 +18,8 @@ use uv_settings::{ToolOptions, ToolOptionsWire};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "ToolWire")]
 pub struct Tool {
+    /// Whether dependencies must come from the package's bundled lock.
+    locked: bool,
     /// The requirements requested by the user during installation.
     ///
     /// The first requirement is the tool target itself; any remaining requirements come from
@@ -44,6 +46,8 @@ pub struct Tool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct ToolWire {
+    #[serde(default)]
+    locked: bool,
     #[serde(default)]
     requirements: Vec<RequirementWire>,
     #[serde(default)]
@@ -108,6 +112,45 @@ fn archive_url_hashes(requirement: &Requirement) -> Vec<String> {
         })
         .map(str::to_string)
         .collect()
+}
+
+/// Compare requirements as stored in a tool receipt, ignoring unrelated archive URL fragments.
+pub fn receipt_requirements_equal(left: &Requirement, right: &Requirement) -> bool {
+    fn normalized(requirement: &Requirement) -> Requirement {
+        let mut hashes = archive_url_hashes(requirement);
+        hashes.sort();
+        let mut requirement = requirement.clone();
+        match &mut requirement.source {
+            RequirementSource::Url {
+                subdirectory, url, ..
+            } => {
+                let mut normalized = url.clone().into_url();
+                let mut fragments = subdirectory
+                    .as_ref()
+                    .map(|path| format!("subdirectory={}", path.display()))
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                fragments.extend(hashes);
+                normalized.set_fragment(
+                    (!fragments.is_empty())
+                        .then(|| fragments.join("&"))
+                        .as_deref(),
+                );
+                *url = VerbatimUrl::from_url(normalized);
+            }
+            RequirementSource::Path { url, .. } => {
+                let mut normalized = url.clone().into_url();
+                normalized.set_fragment((!hashes.is_empty()).then(|| hashes.join("&")).as_deref());
+                *url = VerbatimUrl::from_url(normalized);
+            }
+            RequirementSource::Registry { .. }
+            | RequirementSource::GitDirectory { .. }
+            | RequirementSource::GitPath { .. }
+            | RequirementSource::Directory { .. } => {}
+        }
+        requirement
+    }
+    left == right || normalized(left) == normalized(right)
 }
 
 fn restore_archive_url_hashes(
@@ -226,6 +269,7 @@ impl TryFrom<ToolWire> for Tool {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Self::Error::custom)?;
         Ok(Self {
+            locked: tool.locked,
             requirements,
             constraints,
             overrides,
@@ -301,6 +345,18 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
 }
 
 impl Tool {
+    /// Whether dependencies must come from the package's bundled lock.
+    pub fn locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Require the package's bundled lock for subsequent upgrades.
+    #[must_use]
+    pub fn with_locked(mut self, locked: bool) -> Self {
+        self.locked = locked;
+        self
+    }
+
     /// Create a new `Tool`.
     pub fn new(
         requirements: Vec<Requirement>,
@@ -315,6 +371,7 @@ impl Tool {
         let mut entrypoints: Vec<_> = entrypoints.into_iter().collect();
         entrypoints.sort();
         Self {
+            locked: false,
             requirements,
             constraints,
             overrides,
@@ -336,6 +393,9 @@ impl Tool {
     /// Returns the TOML table for this tool.
     pub(crate) fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
+        if self.locked {
+            table.insert("locked", value(true));
+        }
 
         if !self.requirements.is_empty() {
             table.insert("requirements", {

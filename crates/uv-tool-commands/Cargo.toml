@@ -39,6 +39,7 @@ uv-install-operations = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
 uv-lock-operations = { workspace = true }
+uv-metadata = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
@@ -66,10 +67,13 @@ fs-err = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
+petgraph = { workspace = true }
+rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

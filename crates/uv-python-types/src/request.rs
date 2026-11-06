@@ -619,6 +619,43 @@ impl PythonRequest {
         }
     }
 
+    /// Restrict interpreter discovery to versions allowed by the given Requires-Python specifiers.
+    ///
+    /// Requests for a specific executable or directory cannot be refined.
+    pub fn narrow_for_requires_python(&self, requires_python: &VersionSpecifiers) -> Option<Self> {
+        if !self.intersects_specifiers(requires_python) {
+            return None;
+        }
+
+        let specifiers = requires_python
+            .iter()
+            .cloned()
+            .chain(self.as_version_specifiers().into_iter().flatten())
+            .collect();
+        let version_request = |version: Option<&VersionRequest>| {
+            let variant = version
+                .and_then(VersionRequest::variant)
+                .unwrap_or_default();
+            VersionRequest::Range(specifiers, variant)
+        };
+
+        match self {
+            Self::Default | Self::Any => Some(Self::Version(version_request(None))),
+            Self::Version(version) => Some(Self::Version(version_request(Some(version)))),
+            Self::Implementation(implementation) => Some(Self::ImplementationVersion(
+                *implementation,
+                version_request(None),
+            )),
+            Self::ImplementationVersion(implementation, version) => Some(
+                Self::ImplementationVersion(*implementation, version_request(Some(version))),
+            ),
+            Self::Key(key) => Some(Self::Key(
+                key.clone().with_version(version_request(key.version())),
+            )),
+            Self::Directory(_) | Self::File(_) | Self::ExecutableName(_) => None,
+        }
+    }
+
     /// Returns `true` when this request is compatible with the given `requires-python` specifier.
     ///
     /// Requests without version constraints (e.g., paths, executable names) are always considered

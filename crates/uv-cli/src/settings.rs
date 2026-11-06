@@ -1051,6 +1051,7 @@ impl ToolRunSettings {
 /// The resolved settings to use for a `tool install` invocation.
 #[derive(Debug, Clone)]
 pub struct ToolInstallSettings {
+    pub locked: Option<bool>,
     pub package: String,
     pub from: Option<String>,
     pub with: Vec<String>,
@@ -1080,6 +1081,8 @@ impl ToolInstallSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let ToolInstallArgs {
+            locked,
+            unlocked,
             package,
             editable,
             from,
@@ -1135,6 +1138,13 @@ impl ToolInstallSettings {
         let lfs = GitLfsSetting::new(lfs.then_some(true), environment.lfs);
 
         Ok(Self {
+            locked: if locked {
+                Some(true)
+            } else if unlocked {
+                Some(false)
+            } else {
+                environment.tool_locked.value
+            },
             package,
             from,
             with: with
