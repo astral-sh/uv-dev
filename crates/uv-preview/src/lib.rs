@@ -391,6 +391,9 @@ pub enum PreviewFeature {
     /// installations and upgrades. The lockfile records the tool's resolved dependencies and also
     /// provides the dependency information used by `uv tool audit`.
     ToolInstallLocks,
+    /// Publish distributions with a bundled lock and install tools using their packaged locks
+    /// with `--locked`.
+    LockedTools,
     /// The `uv workspace list --scripts` command lists standalone Python scripts with inline
     /// metadata under the workspace root. It prints script paths relative to the workspace root,
     /// allowing tools to discover scripts separately from workspace members.

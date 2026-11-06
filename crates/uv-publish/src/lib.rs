@@ -245,6 +245,43 @@ pub struct PreparedDistribution {
 }
 
 impl PreparedDistribution {
+    /// The path to the local archive.
+    pub fn path(&self) -> &Path {
+        &self.file
+    }
+
+    /// Whether the original archive has attestations selected for upload.
+    pub fn has_attestations(&self) -> bool {
+        !self.attestations.is_empty()
+    }
+
+    /// Use a rewritten copy of this distribution with the same filename.
+    #[must_use]
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.file = path;
+        self
+    }
+
+    /// Read the core metadata from the archive.
+    pub async fn metadata(
+        &self,
+        tar_backend: TarBackend,
+    ) -> Result<Metadata23, PublishPrepareError> {
+        metadata(&self.file, &self.filename, tar_backend).await
+    }
+
+    /// Compute the hash of the local archive.
+    pub async fn sha256(&self, reporter: Arc<impl Reporter>) -> Result<HashDigest, io::Error> {
+        let [hash] = hash_file(
+            &self.file,
+            &self.filename,
+            [Hasher::from(HashAlgorithm::Sha256)],
+            reporter,
+        )
+        .await?;
+        Ok(hash)
+    }
+
     /// The parsed distribution filename.
     pub fn filename(&self) -> &DistFilename {
         &self.filename

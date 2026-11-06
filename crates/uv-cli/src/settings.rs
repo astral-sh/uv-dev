@@ -29,13 +29,13 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
-    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
+    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification, PYPI_URL,
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, RequirementOrigin};
+use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrl};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
@@ -5018,6 +5018,8 @@ pub struct PublishSettings {
     pub index: Option<String>,
     pub dry_run: bool,
     pub no_attestations: bool,
+    pub locked: bool,
+    pub allow_non_pypi: bool,
 
     // Both CLI and configuration.
     pub publish_url: SafeUrl,
@@ -5038,6 +5040,8 @@ impl fmt::Debug for PublishSettings {
             .field("index", &self.index)
             .field("dry_run", &self.dry_run)
             .field("no_attestations", &self.no_attestations)
+            .field("locked", &self.locked)
+            .field("allow_non_pypi", &self.allow_non_pypi)
             .field("publish_url", &self.publish_url)
             .field("trusted_publishing", &self.trusted_publishing)
             .field("keyring_provider", &self.keyring_provider)
@@ -5076,16 +5080,24 @@ impl PublishSettings {
             (args.username, args.password)
         };
 
+        let publish_url = args
+            .publish_url
+            .combine(publish_url)
+            .unwrap_or_else(|| SafeUrl::parse(PYPI_PUBLISH_URL).unwrap());
+        let check_url = args.check_url.combine(check_url).or_else(|| {
+            (args.locked && publish_url.as_str() == PYPI_PUBLISH_URL)
+                .then(|| IndexUrl::from(VerbatimUrl::from_url(PYPI_URL.clone())))
+        });
+
         Self {
             files: args.files,
             username,
             password,
             dry_run: args.dry_run,
             no_attestations: args.no_attestations,
-            publish_url: args
-                .publish_url
-                .combine(publish_url)
-                .unwrap_or_else(|| SafeUrl::parse(PYPI_PUBLISH_URL).unwrap()),
+            locked: args.locked,
+            allow_non_pypi: args.allow_non_pypi,
+            publish_url,
             trusted_publishing: args
                 .trusted_publishing
                 .combine(trusted_publishing)
@@ -5094,7 +5106,7 @@ impl PublishSettings {
                 .keyring_provider
                 .combine(keyring_provider)
                 .unwrap_or_default(),
-            check_url: args.check_url.combine(check_url),
+            check_url,
             index: args.index,
             index_locations: IndexLocations::new(
                 index

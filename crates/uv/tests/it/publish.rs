@@ -1,14 +1,22 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
+#[cfg(feature = "test-python")]
+use async_zip::base::read::mem::ZipFileReader;
 use fs_err::OpenOptions;
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "test-python")]
+use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "test-python")]
+use std::sync::{Arc, Mutex};
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
+#[cfg(feature = "test-python")]
+use wiremock::matchers::path_regex;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -38,6 +46,26 @@ fn basic_package_wheel() -> PathBuf {
     test_link("basic_package-0.1.0-py3-none-any.whl")
 }
 
+/// Read the uploaded archive from its multipart form field.
+#[cfg(feature = "test-python")]
+fn uploaded_archive<'a>(request: &'a Request, filename: &str) -> Option<&'a [u8]> {
+    let content_type = request.headers.get("content-type")?.to_str().ok()?;
+    let (_, boundary) = content_type.split_once("boundary=")?;
+    let field = format!("name=\"content\"; filename=\"{filename}\"");
+    let field_start = request
+        .body
+        .windows(field.len())
+        .position(|window| window == field.as_bytes())?;
+    let field = &request.body[field_start..];
+    let body_start = field.windows(4).position(|window| window == b"\r\n\r\n")? + 4;
+    let body = &field[body_start..];
+    let delimiter = format!("\r\n--{boundary}");
+    let body_end = body
+        .windows(delimiter.len())
+        .position(|window| window == delimiter.as_bytes())?;
+    Some(&body[..body_end])
+}
+
 /// Read the JSON attestations field from a recorded multipart upload.
 fn upload_attestations(request: &Request) -> Option<Value> {
     let body = String::from_utf8_lossy(&request.body);
@@ -46,6 +74,215 @@ fn upload_attestations(request: &Request) -> Option<Value> {
         .split_once("\r\n")
         .expect("Multipart field is terminated");
     Some(serde_json::from_str(attestations).expect("Attestations are JSON"))
+}
+
+#[cfg(feature = "test-python")]
+#[test]
+fn publish_locked_stale_lock() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "ok"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "ok"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["iniconfig"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--locked", "--preview-features", "locked-tools", "--dry-run"])
+        .arg(dummy_wheel()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Checking 1 file against https://upload.pypi.org/legacy/
+    error: `uv.lock` does not match the dependencies of `ok`; run `uv lock` before publishing
+    ");
+    Ok(())
+}
+
+#[cfg(feature = "test-python")]
+#[tokio::test]
+async fn publish_locked_workspace() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "locked-app"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["locked-helper>=1"]
+
+        [tool.uv.workspace]
+        members = ["packages/locked-helper"]
+
+        [tool.uv.sources]
+        locked-helper = { workspace = true }
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#})?;
+    context
+        .temp_dir
+        .child("src/locked_app/__init__.py")
+        .touch()?;
+    let helper = context.temp_dir.child("packages/locked-helper");
+    helper.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "locked-helper"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#})?;
+    helper.child("src/locked_helper/__init__.py").touch()?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .build()
+        .args(["--all", "--wheel", "--offline"])
+        .assert()
+        .success();
+
+    let app_filename = "locked_app-1.0.0-py3-none-any.whl";
+    let helper_filename = "locked_helper-1.0.0-py3-none-any.whl";
+    let app_path = context.temp_dir.child("dist").child(app_filename);
+    let helper_path = context.temp_dir.child("dist").child(helper_filename);
+    let original_app = context.read_bytes(&app_path);
+    let original_helper = context.read_bytes(&helper_path);
+
+    let server = MockServer::start().await;
+    let helper_url = format!("{}/files/{helper_filename}", server.uri());
+    let published = Arc::new(Mutex::new(BTreeMap::new()));
+    let record_hashes = Arc::clone(&published);
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(move |request: &Request| {
+            let (filename, wheel) = [app_filename, helper_filename]
+                .into_iter()
+                .find_map(|filename| {
+                    uploaded_archive(request, filename).map(|wheel| (filename, wheel))
+                })
+                .expect("An expected wheel was uploaded");
+            record_hashes
+                .lock()
+                .expect("Hash mutex is available")
+                .insert(filename, hex::encode(Sha256::digest(wheel)));
+            ResponseTemplate::new(200)
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let server_url = server.uri();
+    let advertised_hashes = Arc::clone(&published);
+    Mock::given(method("GET"))
+        .and(path_regex("^/simple/locked-(app|helper)/$"))
+        .respond_with(move |request: &Request| {
+            let filename = if request.url.path() == "/simple/locked-app/" {
+                app_filename
+            } else {
+                helper_filename
+            };
+            let hashes = advertised_hashes.lock().expect("Hash mutex is available");
+            let Some(hash) = hashes.get(filename) else {
+                return ResponseTemplate::new(404);
+            };
+            ResponseTemplate::new(200).set_body_raw(
+                json!({"files": [{
+                    "filename": filename,
+                    "hashes": {"sha256": hash},
+                    "url": format!("{server_url}/files/{filename}"),
+                }]})
+                .to_string(),
+                "application/vnd.pypi.simple.v1+json",
+            )
+        })
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--locked", "--allow-non-pypi", "--preview-features", "locked-tools"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg("--check-url")
+        .arg(format!("{}/simple/", server.uri()))
+        .arg("--token")
+        .arg("secret"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    Hashing locked_helper-1.0.0-py3-none-any.whl ([SIZE]KiB)
+    Uploading locked_helper-1.0.0-py3-none-any.whl ([SIZE]KiB)
+    Hashing locked_app-1.0.0-py3-none-any.whl ([SIZE]KiB)
+    Uploading locked_app-1.0.0-py3-none-any.whl ([SIZE]KiB)
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--locked", "--allow-non-pypi", "--preview-features", "locked-tools"])
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg("--check-url")
+        .arg(format!("{}/simple/", server.uri()))
+        .arg("--token")
+        .arg("secret"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    File locked_helper-1.0.0-py3-none-any.whl already exists, skipping
+    File locked_app-1.0.0-py3-none-any.whl already exists, skipping
+    ");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("Requests were recorded");
+    let wheel = requests
+        .iter()
+        .find_map(|request| uploaded_archive(request, app_filename))
+        .expect("The app wheel was uploaded");
+    let wheel = ZipFileReader::new(wheel.to_vec()).await?;
+    let index = wheel
+        .file()
+        .entries()
+        .iter()
+        .position(|entry| {
+            entry.filename().as_str().ok() == Some("locked_app-1.0.0.dist-info/pylock.toml")
+        })
+        .expect("The app wheel includes a lockfile");
+    let mut lock_bytes = Vec::new();
+    wheel
+        .reader_with_entry(index)
+        .await?
+        .read_to_end_checked(&mut lock_bytes)
+        .await?;
+    let lock: toml::Value = toml::from_str(std::str::from_utf8(&lock_bytes)?)?;
+    let package = &lock["packages"][0];
+    assert_eq!(package["name"].as_str(), Some("locked-helper"));
+    assert_eq!(
+        package["wheels"][0]["url"].as_str(),
+        Some(helper_url.as_str())
+    );
+    assert_eq!(
+        package["wheels"][0]["hashes"]["sha256"].as_str(),
+        published
+            .lock()
+            .expect("Hash mutex is available")
+            .get(helper_filename)
+            .map(String::as_str),
+    );
+    assert_eq!(context.read_bytes(&app_path), original_app);
+    assert_eq!(context.read_bytes(&helper_path), original_helper);
+    Ok(())
 }
 
 /// Mock token acquisition and invalidation for the expected number of publishing runs.
@@ -1805,4 +2042,43 @@ fn non_normalized_filename_skip() {
     warning: `ok-1.01.0.tar.gz` has a non-normalized filename (expected `ok-1.1.0.tar.gz`), skipping
     "
     );
+}
+
+/// A workspace constraint can invalidate the lock without changing distribution metadata.
+#[cfg(feature = "test-python")]
+#[test]
+fn publish_locked_stale_constraints() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "ok"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    OpenOptions::new()
+        .append(true)
+        .open(pyproject.path())?
+        .write_all(
+            indoc! {r#"
+
+                [tool.uv]
+                constraint-dependencies = ["ok>=2"]
+
+                [tool.uv.sources]
+                ok = { workspace = true }
+                "#}
+            .as_bytes(),
+        )?;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--locked", "--preview-features", "locked-tools", "--dry-run"])
+        .arg(dummy_wheel()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Checking 1 file against https://upload.pypi.org/legacy/
+    error: The workspace constraints, overrides, or excludes have changed; run `uv lock` before publishing
+    ");
+    Ok(())
 }

@@ -27,6 +27,27 @@ pub struct RequiresDist {
 }
 
 impl RequiresDist {
+    /// Lower static project dependencies as they would be recorded in the workspace lockfile.
+    pub async fn from_workspace_member(
+        metadata: uv_pypi_types::RequiresDist,
+        install_path: &Path,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+    ) -> Result<Self, MetadataError> {
+        Self::from_project_maybe_workspace(
+            metadata,
+            install_path,
+            None,
+            &IndexLocations::default(),
+            NoSources::None,
+            true,
+            cache,
+            workspace_cache,
+            &CredentialsCache::default(),
+        )
+        .await
+    }
+
     /// Lower by considering `tool.uv` in `pyproject.toml` if present, used for Git and directory
     /// dependencies.
     pub(crate) async fn from_project_maybe_workspace(
