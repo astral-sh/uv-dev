@@ -66,6 +66,14 @@ RyanJMcCarty reports in the November 6, 2026 comment (comment ID 6673547322) on 
 
 The original reporter's signed Python.org installation plus `UV_PYTHON_PREFERENCE=only-system` and environment rebuild remains the more specific workaround. The team's attribution to an October 2026 Windows 11 update invalidating existing executables or DLLs is an unverified hypothesis; no update identifier or before-and-after evidence is provided. To investigate that recovery, the useful missing details are the original and replacement Python distributions and versions, their signature status, and the Windows update/build involved.
 
+## Separate PowerShell activation failure
+
+zsvr-pkruse reports in the November 6, 2026 comment (comment ID 6682598100) on astral-sh/uv#22869 using `uv 0.13.7 (316c827e0 2026-11-03 x86_64-pc-windows-msvc)`, distributed through the Visual Studio Code Python/Pylance extension according to the commenter. After manually removing their virtual environments, they ran `uv python uninstall XXXX`, `uv python install XXXX`, and `uv venv env`, interspersed with `uv python list`. The actual Python version represented by `XXXX` is unspecified.
+
+Their subsequent `.\env\Scripts\activate` invocation fails because `U:\[...]\env\Scripts\activate.ps1` is not digitally signed; PowerShell's error refers to execution policies. This provides a concrete failure after reinstalling managed Python and rebuilding a venv, but the blocked artifact is the PowerShell activation script. The comment contains no direct `env\Scripts\python.exe --version` result, executable signature check, or Code Integrity event linking it to the original managed-interpreter block. It therefore does not establish that the original signed-Python.org workaround failed: this attempt reinstalls through `uv python install` and does not report selecting signed system Python.
+
+For investigation, distinguish activation-script policy enforcement from interpreter execution. The useful missing evidence is whether directly invoking `.\env\Scripts\python.exe --version` succeeds without activation, the effective PowerShell execution policies, and the selected Python version and source. A direct invocation is a diagnostic distinction, not a verified workaround for this commenter's machine. Keep the original interpreter-signing classification and evidence separate from this activation symptom.
+
 ## Supporting evidence
 
 - `docs/concepts/python-versions.md:450` identifies python-build-standalone as the source of managed CPython distributions. In astral-sh/uv#10336, maintainer zanieb linked astral-sh/python-build-standalone#89 on January 7, 2025. The upstream issue remains open and explicitly discusses pre-signed binaries and Windows signing.
