@@ -11,11 +11,14 @@ use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
+    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, Override, TargetTriple,
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{
+    ExtraBuildRequires, Index, Name, NameRequirementSpecification, Requirement, RequirementSource,
+    UnresolvedRequirementSpecification,
+};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -352,18 +355,27 @@ async fn upgrade_tool(
     let settings = ResolverInstallerSettings::from(options.clone());
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
-    let manifest_constraints = existing_tool_receipt
+    let constraint_specifications = existing_tool_receipt
         .constraints()
         .iter()
-        .chain(constraints)
         .cloned()
+        .chain(
+            constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from),
+        )
         .collect::<Vec<_>>();
-    let manifest_overrides = existing_tool_receipt.overrides().to_vec();
+    let manifest_constraints = constraint_specifications
+        .iter()
+        .map(|constraint| constraint.requirement.clone())
+        .collect::<Vec<_>>();
     let manifest_excludes = existing_tool_receipt.excludes().to_vec();
     let lock_manifest = ToolLock::manifest(
         existing_tool_receipt.requirements(),
         &manifest_constraints,
-        &manifest_overrides,
+        existing_tool_receipt.overrides(),
+        existing_tool_receipt.scoped_overrides(),
         &manifest_excludes,
         &build_constraints,
         &settings.resolver.dependency_metadata,
@@ -371,12 +383,29 @@ async fn upgrade_tool(
     let build_constraints = Constraints::from_specifications(build_constraints);
 
     // Resolve the requirements.
-    let spec = RequirementsSpecification::from_excludes(
-        existing_tool_receipt.requirements().to_vec(),
-        manifest_constraints,
-        manifest_overrides,
-        manifest_excludes,
-    );
+    let spec = RequirementsSpecification {
+        requirements: existing_tool_receipt
+            .requirements()
+            .iter()
+            .cloned()
+            .map(UnresolvedRequirementSpecification::from)
+            .collect(),
+        constraints: constraint_specifications,
+        overrides: existing_tool_receipt
+            .overrides()
+            .iter()
+            .cloned()
+            .map(UnresolvedRequirementSpecification::from)
+            .collect(),
+        override_dependencies: existing_tool_receipt
+            .scoped_overrides()
+            .iter()
+            .cloned()
+            .map(Override::Package)
+            .collect(),
+        excludes: manifest_excludes,
+        ..RequirementsSpecification::default()
+    };
     // Initialize any shared state.
     let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
@@ -621,6 +650,7 @@ async fn upgrade_tool(
             existing_tool_receipt.requirements().to_vec(),
             existing_tool_receipt.constraints().to_vec(),
             existing_tool_receipt.overrides().to_vec(),
+            existing_tool_receipt.scoped_overrides().to_vec(),
             existing_tool_receipt.excludes().to_vec(),
             existing_tool_receipt.build_constraints().to_vec(),
             tool_lock.as_ref(),
@@ -653,13 +683,19 @@ async fn upgrade_tool(
 }
 
 fn pinned_requirement_version(tool: &Tool, name: &PackageName) -> Option<Version> {
-    pinned_version_from(tool.requirements(), name)
-        .or_else(|| pinned_version_from(tool.constraints(), name))
+    pinned_version_from(tool.requirements().iter(), name).or_else(|| {
+        pinned_version_from(
+            tool.constraints().iter().map(|entry| &entry.requirement),
+            name,
+        )
+    })
 }
 
-fn pinned_version_from(requirements: &[Requirement], name: &PackageName) -> Option<Version> {
+fn pinned_version_from<'a>(
+    requirements: impl Iterator<Item = &'a Requirement>,
+    name: &PackageName,
+) -> Option<Version> {
     requirements
-        .iter()
         .filter(|requirement| requirement.name == *name)
         .find_map(|requirement| match &requirement.source {
             RequirementSource::Registry { specifier, .. } => {

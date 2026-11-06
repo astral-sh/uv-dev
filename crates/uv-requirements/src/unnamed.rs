@@ -12,8 +12,8 @@ use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_filename::{DistExtension, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     BuildableSource, DirectSourceUrl, DirectorySourceUrl, GitDirectorySourceUrl, GitPathSourceUrl,
-    Identifier, PathSourceUrl, RemoteSource, Requirement, SourceUrl, UnresolvedRequirement,
-    UnresolvedRequirementSpecification,
+    Identifier, NameRequirementSpecification, PathSourceUrl, RemoteSource, Requirement, SourceUrl,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -63,16 +63,42 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
         self,
         requirements: impl Iterator<Item = UnnamedRequirement<VerbatimParsedUrl>>,
     ) -> Result<Vec<Requirement>, Error> {
+        self.resolve_with(
+            requirements.map(|requirement| (requirement, ())),
+            |requirement, ()| requirement,
+        )
+        .await
+    }
+
+    /// Resolve unnamed requirements, keeping each requirement's supplied hashes.
+    pub async fn resolve_with_hashes(
+        self,
+        requirements: impl Iterator<Item = (UnnamedRequirement<VerbatimParsedUrl>, Vec<String>)>,
+    ) -> Result<Vec<NameRequirementSpecification>, Error> {
+        self.resolve_with(requirements, |requirement, hashes| {
+            NameRequirementSpecification {
+                requirement,
+                hashes,
+            }
+        })
+        .await
+    }
+
+    async fn resolve_with<T, R>(
+        self,
+        requirements: impl Iterator<Item = (UnnamedRequirement<VerbatimParsedUrl>, T)>,
+        output: impl Fn(Requirement, T) -> R,
+    ) -> Result<Vec<R>, Error> {
         let Self {
             hasher,
             index,
             database,
         } = self;
         requirements
-            .map(async |requirement| {
+            .map(async |(requirement, data)| {
                 Self::resolve_requirement(requirement, hasher, index, &database)
                     .await
-                    .map(Requirement::from)
+                    .map(|requirement| output(Requirement::from(requirement), data))
             })
             .collect::<FuturesOrdered<_>>()
             .try_collect()

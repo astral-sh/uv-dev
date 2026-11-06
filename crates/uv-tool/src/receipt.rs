@@ -50,3 +50,46 @@ impl From<Tool> for ToolReceipt {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_distribution_types::{Requirement, RequirementSource};
+    use uv_pypi_types::VerbatimParsedUrl;
+    use uv_settings::ToolOptions;
+
+    use super::ToolReceipt;
+    use crate::Tool;
+
+    /// A locked upgrade must use the same archive hashes as the original URL override.
+    #[test]
+    fn override_url_hashes_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let fragment = format!("sha256={digest}");
+        let requirement = uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(&format!(
+            "idna @ https://example.com/idna-3.3-py3-none-any.whl#{fragment}"
+        ))?;
+        let tool = Tool::new(
+            Vec::new(),
+            Vec::new(),
+            vec![Requirement::from(requirement).into()],
+            Vec::new(),
+            Vec::new(),
+            None,
+            [],
+            ToolOptions::default(),
+        );
+        let receipt = ToolReceipt::from_string(ToolReceipt::from(tool).to_toml()?)?;
+
+        let [override_spec] = receipt.tool.overrides() else {
+            return Err("expected one override".into());
+        };
+        let requirement = &override_spec.requirement;
+        let RequirementSource::Url { url, .. } = &requirement.source else {
+            return Err("expected a direct URL".into());
+        };
+        assert_eq!(url.fragment(), Some(fragment.as_str()));
+        Ok(())
+    }
+}

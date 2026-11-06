@@ -702,7 +702,7 @@ impl RequirementsSpecification {
 
     /// Initialize a [`RequirementsSpecification`] from a list of [`Requirement`], including
     /// constraints, overrides, and excludes.
-    pub fn from_excludes(
+    pub(crate) fn from_excludes(
         requirements: Vec<Requirement>,
         constraints: Vec<Requirement>,
         overrides: Vec<Requirement>,

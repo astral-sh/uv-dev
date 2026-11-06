@@ -243,6 +243,15 @@ impl From<Requirement> for UnresolvedRequirementSpecification {
     }
 }
 
+impl From<NameRequirementSpecification> for UnresolvedRequirementSpecification {
+    fn from(specification: NameRequirementSpecification) -> Self {
+        Self {
+            requirement: UnresolvedRequirement::Named(specification.requirement),
+            hashes: specification.hashes,
+        }
+    }
+}
+
 impl From<Requirement> for NameRequirementSpecification {
     fn from(requirement: Requirement) -> Self {
         Self {

@@ -15,7 +15,7 @@ use wiremock::{
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -1674,6 +1674,66 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
     error: Failed to upgrade executable-application
       cause: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/executable-application/
       cause: Missing credentials for: http://[LOCALHOST]/basic-auth/simple/executable-application/
+    ");
+
+    Ok(())
+}
+
+/// Reapply a scoped override from the receipt after the requirements file is removed.
+#[test]
+fn tool_upgrade_scoped_override_from_receipt() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+
+    let (filename, wheel) = WheelBuilder::new(&"scoped-tool".parse()?, &"1.0.0".parse()?)
+        .requires(&["ok>=1".parse()?])
+        .entry_points(&["scoped-tool".to_string()])
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+
+    let requirements = context.temp_dir.child("scoped.py");
+    requirements.write_str(indoc! {r#"
+        # /// script
+        # dependencies = []
+        #
+        # [tool.uv]
+        # override-dependencies = [
+        #   { package = { name = "scoped-tool", version = "1.0.0" }, dependencies = ["ok==1.0.0"] },
+        # ]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["scoped-tool", "--with-requirements", "scoped.py", "--no-preview"])
+        .args(["--no-index", "--find-links", "wheels"])
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0
+     + scoped-tool==1.0.0
+    Installed 1 executable: scoped-tool
+    ");
+
+    fs_err::remove_file(requirements.path())?;
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["scoped-tool", "--no-preview"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
     ");
 
     Ok(())
