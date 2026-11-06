@@ -116,7 +116,11 @@ where
         &this.raw
     }
 
-    /// Deserialize the original value from its validated archive.
+    /// Deserialize this owned archived value into the original type.
+    ///
+    /// Note that because this type has a `Deref` impl, this method requires
+    /// fully-qualified syntax. So, if `o` is an `OwnedArchive`, then use
+    /// `OwnedArchive::deserialize(&o)`.
     pub(crate) fn deserialize(this: &Self) -> A {
         rkyv::deserialize(&**this).expect("valid archive must deserialize correctly")
     }
@@ -130,7 +134,10 @@ where
     type Target = A::Archived;
 
     fn deref(&self) -> &A::Archived {
-        // SAFETY: The constructor validates the archive, and its backing buffer is immutable.
+        // SAFETY: We've validated that our underlying buffer is a valid
+        // archive for A in the constructor, so we can skip
+        // validation here. Since we don't mutate the buffer, this conversion
+        // is guaranteed to be correct.
         #[allow(unsafe_code)]
         unsafe {
             rkyv::access_unchecked::<A::Archived>(&self.raw)

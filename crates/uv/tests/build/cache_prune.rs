@@ -300,7 +300,22 @@ fn prune_stale_symlink() -> Result<()> {
 
 #[tokio::test]
 async fn prune_force() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(indoc! {"
+        typing-extensions
+        iniconfig
+    "})?;
+
+    // Install a requirement, to populate the cache.
+    context
+        .pip_sync()
+        .arg("requirements.txt")
+        .assert()
+        .success();
+
+    // An unpublished block can be removed while prune holds the exclusive lock.
     let package = context
         .cache_dir
         .child(CacheBucket::Simple.to_string())
@@ -308,14 +323,14 @@ async fn prune_force() -> Result<()> {
     let details = package.child("0000000000000001.blocks");
     details.touch()?;
 
-    // With an exclusive lock, a detail file without a manifest is an abandoned write.
+    // When unlocked, `--force` should still take a lock
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
-    Removed 1 file (0B)
+    Removed [N] files (0B)
     ");
     assert!(!package.exists());
 
@@ -323,13 +338,12 @@ async fn prune_force() -> Result<()> {
     let simple = context.cache_dir.child("simple-v4");
     simple.create_dir_all()?;
 
-    // A writer holding the shared lock may still be publishing its Simple API manifest.
+    // When locked, `--force` should proceed without blocking
     let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
         .init()
         .await?;
+    // A writer may have stored a block and still be publishing its manifest.
     details.touch()?;
-
-    // When locked, `--force` can still remove the stale bucket.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----

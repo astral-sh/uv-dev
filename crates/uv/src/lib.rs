@@ -2072,13 +2072,6 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 index_locations,
             } = args;
 
-            // Checking whether a file is already published reads the Simple API cache.
-            let cache = if check_url.is_some() || index.is_some() {
-                cache.init().await?
-            } else {
-                cache
-            };
-
             commands::publish(
                 files,
                 publish_url,

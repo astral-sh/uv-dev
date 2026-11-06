@@ -15,9 +15,7 @@ use uv_fastid::Id;
 use uv_pep440::Version;
 use uv_pypi_types::{ProjectStatus, ResolutionMetadata};
 
-#[cfg(target_os = "linux")]
-use super::RegistryClient;
-use super::{SimpleDetailMetadata, SimpleDetailMetadatum, VersionFiles};
+use super::{RegistryClient, SimpleDetailMetadata, SimpleDetailMetadatum, VersionFiles};
 use crate::cached_client::Cacheable;
 use crate::{Error, ErrorKind, OwnedArchive};
 
@@ -31,7 +29,7 @@ const INLINE_THRESHOLD: usize = 32 * 1024;
 #[derive(Debug)]
 pub struct SimplePage {
     data: SimplePageData,
-    cache: Arc<RegistryCache>,
+    cache: Arc<BlockCache>,
 }
 
 #[derive(Debug)]
@@ -47,10 +45,7 @@ enum Details {
     Inline,
     /// Details owned by this page before publication, or when disk reads cannot be deferred.
     Memory(Vec<u8>),
-    Disk {
-        path: PathBuf,
-        timestamp: u64,
-    },
+    Disk(PathBuf),
 }
 
 /// A fixed-size header lets cache pruning identify the live generation without decoding rkyv.
@@ -114,17 +109,17 @@ impl Release {
 
 /// Cache state shared by the registry client and the pages it returns.
 #[derive(Debug)]
-pub(super) struct RegistryCache {
+pub(super) struct BlockCache {
     /// Keep the temporary directory and shared cache lock alive while pages can read from disk.
-    pub(super) disk: Cache,
+    _disk: Cache,
     /// Keep at most one block across all packages, for reuse by adjacent candidate lookups.
     block: Mutex<Option<CachedBlock>>,
 }
 
-impl RegistryCache {
+impl BlockCache {
     pub(super) fn new(disk: Cache) -> Self {
         Self {
-            disk,
+            _disk: disk,
             block: Mutex::default(),
         }
     }
@@ -137,13 +132,13 @@ struct CachedBlock {
     files: Arc<OwnedArchive<Vec<VersionFiles>>>,
 }
 
-#[cfg(target_os = "linux")]
 impl RegistryClient {
     /// Start reading recent release details while the resolver considers other packages.
+    #[cfg(target_os = "linux")]
     pub fn prefetch_recent_files(&self, page: &SimplePage) {
         const READ_AHEAD_BYTES: u64 = 128 * 1024;
 
-        if let Details::Disk { path, .. } = &page.data.details
+        if let Details::Disk(path) = &page.data.details
             && let Some(last) = page.data.manifest.blocks.last()
         {
             let path = path.clone();
@@ -156,10 +151,37 @@ impl RegistryClient {
                 });
         }
     }
+
+    /// Fold the releases on a Simple API page newest first on the cache-read pool.
+    pub async fn fold_version_files<T: Send + 'static>(
+        &self,
+        page: SimplePage,
+        mut state: T,
+        mut visit: impl FnMut(&mut T, VersionFiles) + Send + 'static,
+    ) -> Result<T, Error> {
+        self.client
+            .uncached()
+            .cache_read_runtime()
+            .spawn_blocking(move || {
+                let mut reader = page.data.reader()?;
+                for index in (0..page.data.manifest.blocks.len()).rev() {
+                    let block = page.data.read_block(index, &mut reader)?;
+                    for files in block.iter().rev() {
+                        let files = rkyv::deserialize(files).map_err(|err: rancor::Error| {
+                            ErrorKind::ArchiveRead(err.to_string())
+                        })?;
+                        visit(&mut state, files);
+                    }
+                }
+                Ok(state)
+            })
+            .await
+            .expect("release file scan panicked")
+    }
 }
 
 impl SimplePage {
-    pub(super) fn new(data: SimplePageData, cache: Arc<RegistryCache>) -> Self {
+    pub(super) fn new(data: SimplePageData, cache: Arc<BlockCache>) -> Self {
         Self { data, cache }
     }
 
@@ -250,21 +272,6 @@ impl SimplePage {
         rkyv::deserialize(&block[index % size])
             .map_err(|err: rancor::Error| ErrorKind::ArchiveRead(err.to_string()).into())
     }
-
-    /// Visit all releases newest first, opening external file details only once.
-    pub fn visit_files(&self, mut visit: impl FnMut(VersionFiles)) -> Result<(), Error> {
-        let mut reader = self.data.reader()?;
-        for index in (0..self.data.manifest.blocks.len()).rev() {
-            let block = self.data.read_block(index, &mut reader)?;
-            for files in block.iter().rev() {
-                visit(
-                    rkyv::deserialize(files)
-                        .map_err(|err: rancor::Error| ErrorKind::ArchiveRead(err.to_string()))?,
-                );
-            }
-        }
-        Ok(())
-    }
 }
 
 enum DetailReader<'a> {
@@ -273,13 +280,8 @@ enum DetailReader<'a> {
 }
 
 impl SimplePageData {
-    pub(super) fn from_metadata(page: SimpleDetailMetadata) -> Result<Self, Error> {
-        Self::with_inline_threshold(page, INLINE_THRESHOLD)
-    }
-
-    fn with_inline_threshold(
+    pub(super) fn from_metadata<const CACHE_LOCKED: bool>(
         page: SimpleDetailMetadata,
-        inline_threshold: usize,
     ) -> Result<Self, Error> {
         let mut releases = Vec::with_capacity(page.versions.len());
         let mut blocks = Vec::new();
@@ -305,7 +307,7 @@ impl SimplePageData {
             files.clear();
         }
 
-        let (inline, details) = if bytes.len() <= inline_threshold {
+        let (inline, details) = if !CACHE_LOCKED || bytes.len() <= INLINE_THRESHOLD {
             (bytes, Details::Inline)
         } else {
             (Vec::new(), Details::Memory(bytes))
@@ -327,8 +329,8 @@ impl SimplePageData {
         match &self.details {
             Details::Inline => Ok(DetailReader::Memory(&self.manifest.inline)),
             Details::Memory(bytes) => Ok(DetailReader::Memory(bytes)),
-            Details::Disk { path, .. } => Ok(DetailReader::Disk(
-                fs_err::File::open(path).map_err(ErrorKind::Io)?,
+            Details::Disk(path) => Ok(DetailReader::Disk(
+                uv_fs::open_with_write_attributes(path).map_err(ErrorKind::Io)?,
             )),
         }
     }
@@ -339,19 +341,17 @@ impl SimplePageData {
         reader: &mut DetailReader<'_>,
     ) -> Result<OwnedArchive<Vec<VersionFiles>>, Error> {
         self.read_block_inner(index, reader).map_err(|err| {
-            let Details::Disk { path, .. } = &self.details else {
+            let Details::Disk(path) = &self.details else {
                 return err;
             };
-            if matches!(err.kind(), ErrorKind::ArchiveRead(_))
-                || matches!(err.kind(), ErrorKind::Io(err) if err.kind() == std::io::ErrorKind::UnexpectedEof)
+            // A speculative read can encounter corruption in a block the solver never needs.
+            // Keep the other blocks readable, and verify the whole pack on the next cache hit.
+            if let DetailReader::Disk(file) = reader
+                && (matches!(err.kind(), ErrorKind::ArchiveRead(_))
+                    || matches!(err.kind(), ErrorKind::Io(err) if err.kind() == std::io::ErrorKind::UnexpectedEof))
+                && let Err(err) = file.set_modified(UNIX_EPOCH)
             {
-                // Make a later request refetch this generation. Another process might already
-                // have published a replacement, so only remove the immutable detail file.
-                if let Err(err) = fs_err::remove_file(path)
-                    && err.kind() != std::io::ErrorKind::NotFound
-                {
-                    tracing::warn!("Failed to remove invalid release files: {err}");
-                }
+                tracing::warn!("Failed to mark corrupt release files for revalidation: {err}");
             }
             ErrorKind::InvalidReleaseBlock(path.clone(), index, Box::new(err)).into()
         })
@@ -412,12 +412,7 @@ pub(super) struct CachedSimplePage<const CACHE_LOCKED: bool>(SimplePageData);
 
 impl<const CACHE_LOCKED: bool> CachedSimplePage<CACHE_LOCKED> {
     pub(super) fn from_metadata(page: SimpleDetailMetadata) -> Result<Self, Error> {
-        let inline_threshold = if CACHE_LOCKED {
-            INLINE_THRESHOLD
-        } else {
-            usize::MAX
-        };
-        SimplePageData::with_inline_threshold(page, inline_threshold).map(Self)
+        SimplePageData::from_metadata::<CACHE_LOCKED>(page).map(Self)
     }
 }
 
@@ -449,86 +444,80 @@ impl<const CACHE_LOCKED: bool> Cacheable for CachedSimplePage<CACHE_LOCKED> {
             }
             expected_len = end;
         }
-        let invalid_len = || ErrorKind::ArchiveRead("invalid release data length".into());
-        let (details, len, validate_details) =
-            if !manifest.inline.is_empty() || manifest.blocks.is_empty() {
-                (Details::Inline, manifest.inline.len() as u64, true)
-            } else {
-                let path = simple_detail_path(path, &generation);
-                if CACHE_LOCKED {
-                    let metadata = fs_err::metadata(&path).map_err(ErrorKind::Io)?;
-                    let changed =
-                        timestamp == 0 || SimplePageData::modified_nanos(&metadata) != timestamp;
-                    (Details::Disk { path, timestamp }, metadata.len(), changed)
-                } else {
-                    let file = fs_err::File::open(&path).map_err(ErrorKind::Io)?;
-                    if file.metadata().map_err(ErrorKind::Io)?.len() != expected_len {
-                        return Err(invalid_len().into());
-                    }
-                    let mut bytes = Vec::new();
-                    file.take(expected_len)
-                        .read_to_end(&mut bytes)
-                        .map_err(ErrorKind::Io)?;
-                    let len = bytes.len() as u64;
-                    (Details::Memory(bytes), len, true)
-                }
-            };
-        if len != expected_len {
-            return Err(invalid_len().into());
-        }
-
-        let page = SimplePageData {
+        let mut page = SimplePageData {
             generation,
             manifest,
-            details,
+            details: Details::Inline,
         };
-        if validate_details {
-            // Restores and copies can change timestamps without changing any bytes. Verify on
-            // change so valid offline caches still work, and damaged entries can be refetched.
-            let mut reader = match &page.details {
-                Details::Disk { path, .. } => DetailReader::Disk(
-                    uv_fs::open_with_write_attributes(path).map_err(ErrorKind::Io)?,
-                ),
-                Details::Inline | Details::Memory(_) => page.reader()?,
-            };
-            for index in 0..page.manifest.blocks.len() {
-                page.read_block(index, &mut reader)?;
+        let invalid_len = || ErrorKind::ArchiveRead("invalid release data length".into());
+        let mut reader = if !page.manifest.inline.is_empty() || expected_len == 0 {
+            if page.manifest.inline.len() as u64 != expected_len {
+                return Err(invalid_len().into());
             }
-            // A restored cache should only require a full scan once. Update the verified file
-            // through its open handle, leaving a concurrently published manifest untouched.
-            if let DetailReader::Disk(file) = reader
-                && timestamp != 0
-                && let Some(modified) = UNIX_EPOCH.checked_add(Duration::from_nanos(timestamp))
-            {
-                let _ = file.set_modified(modified);
+            page.reader()?
+        } else {
+            let path = simple_detail_path(path, &generation);
+            let metadata = fs_err::metadata(&path).map_err(ErrorKind::Io)?;
+            if metadata.len() != expected_len {
+                return Err(invalid_len().into());
             }
+            if CACHE_LOCKED {
+                if timestamp != 0 && SimplePageData::modified_nanos(&metadata) == timestamp {
+                    page.details = Details::Disk(path);
+                    return Ok(page);
+                }
+                let file = uv_fs::open_with_write_attributes(&path).map_err(ErrorKind::Io)?;
+                page.details = Details::Disk(path);
+                DetailReader::Disk(file)
+            } else {
+                let mut bytes = Vec::new();
+                fs_err::File::open(&path)
+                    .map_err(ErrorKind::Io)?
+                    .take(expected_len.saturating_add(1))
+                    .read_to_end(&mut bytes)
+                    .map_err(ErrorKind::Io)?;
+                if bytes.len() as u64 != expected_len {
+                    return Err(invalid_len().into());
+                }
+                page.details = Details::Memory(bytes);
+                page.reader()?
+            }
+        };
+        for index in 0..page.manifest.blocks.len() {
+            page.read_block(index, &mut reader)?;
+        }
+        // Restoring a cache may change an immutable file's timestamp. Record verification on the
+        // open file so subsequent cache hits can skip reading its contents again.
+        if let DetailReader::Disk(file) = reader
+            && timestamp != 0
+            && let Some(modified) = UNIX_EPOCH.checked_add(Duration::from_nanos(timestamp))
+        {
+            let _ = file.set_modified(modified);
         }
         Ok(page)
     }
 
     async fn serialize_for_cache(&mut self, manifest: &Path) -> Result<Cow<'_, [u8]>, Error> {
         let page = &mut self.0;
-        let timestamp = match &page.details {
-            Details::Memory(bytes) => {
-                let path = simple_detail_path(manifest, &page.generation);
-                let directory = path
-                    .parent()
-                    .expect("release files have a package directory");
-                fs_err::tokio::create_dir_all(directory)
-                    .await
-                    .map_err(ErrorKind::CacheWrite)?;
-                uv_fs::write_atomic(&path, bytes)
-                    .await
-                    .map_err(ErrorKind::CacheWrite)?;
-                let metadata = fs_err::tokio::metadata(&path)
-                    .await
-                    .map_err(ErrorKind::Io)?;
-                let timestamp = SimplePageData::modified_nanos(&metadata);
-                page.details = Details::Disk { path, timestamp };
-                timestamp
-            }
-            Details::Disk { timestamp, .. } => *timestamp,
-            Details::Inline => 0,
+        if let Details::Memory(bytes) = &page.details {
+            let path = simple_detail_path(manifest, &page.generation);
+            fs_err::tokio::create_dir_all(
+                path.parent()
+                    .expect("release files have a package directory"),
+            )
+            .await
+            .map_err(ErrorKind::CacheWrite)?;
+            uv_fs::write_atomic(&path, bytes)
+                .await
+                .map_err(ErrorKind::CacheWrite)?;
+            page.details = Details::Disk(path);
+        }
+        let timestamp = if let Details::Disk(path) = &page.details {
+            SimplePageData::modified_nanos(
+                &fs_err::tokio::metadata(path).await.map_err(ErrorKind::Io)?,
+            )
+        } else {
+            0
         };
         let manifest = OwnedArchive::as_bytes(&page.manifest);
         let header = PageHeader {
@@ -552,6 +541,8 @@ impl<const CACHE_LOCKED: bool> Cacheable for CachedSimplePage<CACHE_LOCKED> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
     use std::str::FromStr;
     use std::time::UNIX_EPOCH;
 
@@ -561,16 +552,21 @@ mod tests {
     use uv_normalize::PackageName;
     use uv_redacted::SafeUrl;
 
-    use super::{CachedSimplePage, SimpleDetailMetadata};
+    use super::{CachedSimplePage, RELEASES_PER_BLOCK, SimpleDetailMetadata};
     use crate::cached_client::Cacheable;
 
     /// Include enough file metadata to store release details in an external pack.
-    fn large_package() -> Result<SimpleDetailMetadata> {
+    fn large_package(versions: u32) -> Result<SimpleDetailMetadata> {
         let reason = "x".repeat(64 * 1024);
+        let mut html = String::new();
+        for version in 1..=versions {
+            writeln!(
+                html,
+                r#"<a href="example-{version}.0.tar.gz" data-yanked="{reason}">example-{version}.0.tar.gz</a>"#
+            )?;
+        }
         Ok(SimpleDetailMetadata::from_html(
-            &format!(
-                r#"<a href="example-1.0.tar.gz" data-yanked="{reason}">example-1.0.tar.gz</a>"#
-            ),
+            &html,
             &PackageName::from_str("example")?,
             &SafeUrl::parse("https://example.com/simple/example/")?,
         )?)
@@ -582,7 +578,7 @@ mod tests {
     async fn restored_pack_recovers_recorded_modification_time() -> Result<()> {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
-        let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
+        let mut page = CachedSimplePage::<true>::from_metadata(large_package(1)?)?;
         let mut bytes = AlignedVec::new();
         bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
 
@@ -598,12 +594,37 @@ mod tests {
         Ok(())
     }
 
+    /// A speculative read can fail while another release in the same pack is still usable.
+    #[tokio::test]
+    async fn corrupt_block_leaves_other_releases_readable() -> Result<()> {
+        let cache = tempfile::tempdir()?;
+        let manifest = cache.path().join("example.rkyv");
+        let mut page =
+            CachedSimplePage::<true>::from_metadata(large_package(RELEASES_PER_BLOCK + 1)?)?;
+        let mut bytes = AlignedVec::new();
+        bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
+
+        let pack = simple_detail_path(&manifest, &page.0.generation);
+        let mut file = fs_err::OpenOptions::new().write(true).open(&pack)?;
+        let timestamp = file.metadata()?.modified()?;
+        file.write_all(b"bad")?;
+        file.set_modified(timestamp)?;
+        drop(file);
+
+        let snapshot = CachedSimplePage::<true>::from_aligned_bytes(bytes.clone(), &manifest)?;
+        assert!(snapshot.read_block(0, &mut snapshot.reader()?).is_err());
+        let intact = snapshot.read_block(1, &mut snapshot.reader()?)?;
+        assert_eq!(intact.len(), 1);
+        assert!(CachedSimplePage::<true>::from_aligned_bytes(bytes, &manifest).is_err());
+        Ok(())
+    }
+
     /// Cleanup can delete the external generation immediately after a lockless cache hit.
     #[tokio::test]
     async fn lockless_page_snapshots_external_details() -> Result<()> {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
-        let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
+        let mut page = CachedSimplePage::<true>::from_metadata(large_package(1)?)?;
         let mut bytes = AlignedVec::new();
         bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
 
@@ -621,7 +642,7 @@ mod tests {
     async fn lockless_page_is_published_inline() -> Result<()> {
         let cache = tempfile::tempdir()?;
         let manifest = cache.path().join("example.rkyv");
-        let mut page = CachedSimplePage::<false>::from_metadata(large_package()?)?;
+        let mut page = CachedSimplePage::<false>::from_metadata(large_package(1)?)?;
         let mut bytes = AlignedVec::new();
         bytes.extend_from_slice(&page.serialize_for_cache(&manifest).await?);
         assert!(!simple_detail_path(&manifest, &page.0.generation).exists());

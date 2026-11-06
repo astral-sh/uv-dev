@@ -449,32 +449,63 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
     ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
-        let passes: &[PrereleaseCandidates] = match prerelease_selection {
-            PrereleaseSelection::Allow => &[PrereleaseCandidates::All],
-            PrereleaseSelection::Disallow => &[PrereleaseCandidates::Stable],
-            PrereleaseSelection::PreferStable => &[
+        match prerelease_selection {
+            PrereleaseSelection::Allow => self.select_no_preference_from(
+                package_name,
+                range,
+                version_maps,
+                PrereleaseCandidates::All,
+                env,
+            ),
+            PrereleaseSelection::Disallow => self.select_no_preference_from(
+                package_name,
+                range,
+                version_maps,
                 PrereleaseCandidates::Stable,
-                PrereleaseCandidates::Prerelease,
-            ],
-        };
-
-        // With unsafe-first-match, exhaust an index (including its pre-releases) before
-        // considering any versions from the next index.
-        let index_groups = if self.index_strategy == IndexStrategy::UnsafeFirstMatch {
-            Either::Left(version_maps.iter().map(std::slice::from_ref))
-        } else {
-            Either::Right(std::iter::once(version_maps))
-        };
-        for indexes in index_groups {
-            for &pass in passes {
-                if let Some(candidate) =
-                    self.select_no_preference_from(package_name, range, indexes, pass, env)?
-                {
-                    return Ok(Some(candidate));
-                }
+                env,
+            ),
+            PrereleaseSelection::PreferStable
+                if self.index_strategy == IndexStrategy::UnsafeFirstMatch =>
+            {
+                version_maps.iter().find_map(|version_map| {
+                    let version_maps = std::slice::from_ref(version_map);
+                    self.select_no_preference_from(
+                        package_name,
+                        range,
+                        version_maps,
+                        PrereleaseCandidates::Stable,
+                        env,
+                    )
+                    .or_else(|| {
+                        self.select_no_preference_from(
+                            package_name,
+                            range,
+                            version_maps,
+                            PrereleaseCandidates::Prerelease,
+                            env,
+                        )
+                    })
+                })
             }
+            PrereleaseSelection::PreferStable => self
+                .select_no_preference_from(
+                    package_name,
+                    range,
+                    version_maps,
+                    PrereleaseCandidates::Stable,
+                    env,
+                )
+                .or_else(|| {
+                    self.select_no_preference_from(
+                        package_name,
+                        range,
+                        version_maps,
+                        PrereleaseCandidates::Prerelease,
+                        env,
+                    )
+                }),
         }
-        Ok(None)
+        .transpose()
     }
 
     fn select_no_preference_from<'a>(
@@ -484,7 +515,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
-    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
+    ) -> Option<Result<Candidate<'a>, uv_client::Error>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
             version_maps.iter().map(VersionMap::len).sum::<usize>(),
@@ -545,24 +576,27 @@ impl CandidateSelector {
                 )
             }
         } else {
-            for version_map in version_maps {
-                let versions = version_map.iter_included(range);
-                let versions = if highest {
-                    Either::Left(versions.rev())
-                } else {
-                    Either::Right(versions)
-                };
-                if let Some(candidate) = Self::select_candidate(
-                    versions,
-                    package_name,
-                    range,
-                    prerelease_candidates,
-                    highest,
-                )? {
-                    return Ok(Some(candidate));
-                }
+            if highest {
+                version_maps.iter().find_map(|version_map| {
+                    Self::select_candidate(
+                        version_map.iter_included(range).rev(),
+                        package_name,
+                        range,
+                        prerelease_candidates,
+                        highest,
+                    )
+                })
+            } else {
+                version_maps.iter().find_map(|version_map| {
+                    Self::select_candidate(
+                        version_map.iter_included(range),
+                        package_name,
+                        range,
+                        prerelease_candidates,
+                        highest,
+                    )
+                })
             }
-            Ok(None)
         }
     }
 
@@ -597,7 +631,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
-    ) -> Result<Option<Candidate<'a>>, uv_client::Error> {
+    ) -> Option<Result<Candidate<'a>, uv_client::Error>> {
         let segments = range.iter();
         let segments = if highest {
             Either::Left(segments.rev())
@@ -606,7 +640,7 @@ impl CandidateSelector {
         };
         let Some(mut cursor) = RangeCursor::new(segments, highest) else {
             trace!("Exhausted all candidates for package {package_name} with empty range");
-            return Ok(None);
+            return None;
         };
         let mut steps = 0usize;
         let mut incompatible: Option<Candidate> = None;
@@ -621,7 +655,7 @@ impl CandidateSelector {
                 trace!(
                     "Returning incompatible candidate for package {package_name} with range {range} after {steps} steps",
                 );
-                return Ok(incompatible);
+                return incompatible.map(Ok);
             }
 
             let candidate = {
@@ -635,8 +669,10 @@ impl CandidateSelector {
                 if !cursor.contains(version) {
                     continue;
                 }
-                let Some(dist) = maybe_dist.prioritized_dist()? else {
-                    continue;
+                let dist = match maybe_dist.prioritized_dist() {
+                    Ok(Some(dist)) => dist,
+                    Ok(None) => continue,
+                    Err(err) => return Some(Err(err)),
                 };
                 trace!(
                     "Found candidate for package {package_name} with range {range} after {steps} steps: {version} version"
@@ -692,20 +728,20 @@ impl CandidateSelector {
             trace!(
                 "Returning candidate for package {package_name} with range {range} after {steps} steps",
             );
-            return Ok(Some(candidate));
+            return Some(Ok(candidate));
         }
 
         if incompatible.is_some() {
             trace!(
                 "Returning incompatible candidate for package {package_name} with range {range} after {steps} steps",
             );
-            return Ok(incompatible);
+            return incompatible.map(Ok);
         }
 
         trace!(
             "Exhausted all candidates for package {package_name} with range {range} after {steps} steps"
         );
-        Ok(None)
+        None
     }
 }
 

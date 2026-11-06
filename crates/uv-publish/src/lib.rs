@@ -920,19 +920,20 @@ impl<'a> PublishSession<'a> {
         let files = simple_metadata
             .files(version_index)
             .map_err(PublishError::CheckUrlIndex)?;
-        let distributions = match filename {
+        let archived_files = match filename {
             DistFilename::SourceDistFilename(_) => &files.source_dists,
             DistFilename::WheelFilename(_) => &files.wheels,
         };
-        let Some(existing) = distributions.iter().find(|file| {
+        let archived_file = archived_files.iter().find(|file| {
             DistFilename::try_from_filename(file.filename(), filename.name())
                 .is_some_and(|candidate| &candidate == filename)
-        }) else {
+        });
+        let Some(archived_file) = archived_file else {
             return Ok(false);
         };
 
         // TODO(konsti): Do we have a preference for a hash here?
-        if let Some(remote_hash) = existing.hashes().first() {
+        if let Some(remote_hash) = archived_file.hashes().first() {
             // We accept the risk for TOCTOU errors here, since we already read the file once before the
             // streaming upload to compute the hash for the form metadata.
             let [local_hash] = hash_file(

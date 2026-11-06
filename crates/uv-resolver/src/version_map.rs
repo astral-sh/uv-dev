@@ -63,7 +63,9 @@ impl VersionMap {
     ) -> Self {
         let mut local = false;
         let mut entries = Vec::with_capacity(simple_metadata.num_versions());
-        // Index the versions without reading their distribution files.
+        // Create stubs for each entry in simple metadata. The full conversion
+        // from a `VersionFiles` to a PrioritizedDist for each version
+        // isn't done until that specific version is requested.
         for datum_index in 0..simple_metadata.num_versions() {
             // Index metadata alone does not provide an installable distribution.
             if !simple_metadata.has_installable(datum_index) {
@@ -264,6 +266,14 @@ impl VersionMap {
         range: &Ranges<Version>,
     ) -> impl DoubleEndedIterator<Item = (&Version, VersionMapDistHandle<'_>)> {
         self.iter(range).filter(|(_, dist)| dist.is_included())
+    }
+
+    /// Return the hashes for the given version, if any.
+    pub(crate) fn hashes(
+        &self,
+        version: &Version,
+    ) -> Result<Option<&[HashDigest]>, uv_client::Error> {
+        Ok(self.get(version)?.map(PrioritizedDist::hashes))
     }
 
     /// Returns the total number of distinct versions in this map.

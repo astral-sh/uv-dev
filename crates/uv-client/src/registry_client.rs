@@ -54,7 +54,7 @@ use crate::{
 
 mod simple_page;
 pub use simple_page::SimplePage;
-use simple_page::{CachedSimplePage, RegistryCache, SimplePageData};
+use simple_page::{BlockCache, CachedSimplePage, SimplePageData};
 
 /// Cache parsed core metadata and variant requirements from the same wheel.
 #[derive(Serialize, Deserialize)]
@@ -227,7 +227,8 @@ impl<'a> RegistryClientBuilder<'a> {
             indexes: self.index_locations,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
-            cache: Arc::new(RegistryCache::new(self.cache)),
+            block_cache: Arc::new(BlockCache::new(self.cache.clone())),
+            cache: self.cache,
             connectivity,
             client,
             read_timeout,
@@ -252,8 +253,10 @@ pub struct RegistryClient {
     torch_backend: Option<TorchStrategy>,
     /// The underlying HTTP client.
     client: CachedClient,
-    /// The on-disk cache and shared Simple API release block.
-    cache: Arc<RegistryCache>,
+    /// Used for the remote wheel METADATA cache.
+    cache: Cache,
+    /// Release details shared across Simple API pages.
+    block_cache: Arc<BlockCache>,
     /// The connectivity mode to use.
     connectivity: Connectivity,
     /// Client HTTP read timeout.
@@ -527,8 +530,7 @@ impl RegistryClient {
             return Ok(entries.get(package_name).cloned().unwrap_or_default());
         }
 
-        let client =
-            FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache.disk);
+        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
 
         // Fetch the entries for the index.
         let (entries, _) = client
@@ -580,7 +582,7 @@ impl RegistryClient {
 
         trace!("Fetching metadata for `{package_name}` from `{url}`");
 
-        let cache_entry = self.cache.disk.entry(
+        let cache_entry = self.cache.entry(
             CacheBucket::Simple,
             WheelCache::Index(index).root(),
             format!("{package_name}.rkyv"),
@@ -593,7 +595,6 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
-                    .disk
                     .freshness(&cache_entry, Some(package_name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -609,7 +610,7 @@ impl RegistryClient {
 
         let result = if matches!(index, IndexUrl::Path(_)) {
             self.fetch_local_simple_detail(package_name, &url).await
-        } else if self.cache.disk.is_locked() {
+        } else if self.cache.is_locked() {
             self.fetch_remote_simple_detail::<true>(package_name, &url, &cache_entry, cache_control)
                 .await
         } else {
@@ -625,7 +626,7 @@ impl RegistryClient {
         match result {
             Ok(data) => Ok(SimpleMetadataSearchOutcome::Found(SimplePage::new(
                 data,
-                self.cache.clone(),
+                self.block_cache.clone(),
             ))),
             Err(err) => match err.kind() {
                 // The package could not be found in the remote index.
@@ -812,7 +813,7 @@ impl RegistryClient {
             }
         };
         let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
-        SimplePageData::from_metadata(metadata)
+        SimplePageData::from_metadata::<true>(metadata)
     }
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
@@ -847,7 +848,7 @@ impl RegistryClient {
         url: &SafeUrl,
         index: &IndexUrl,
     ) -> Result<OwnedArchive<SimpleIndexMetadata>, Error> {
-        let cache_entry = self.cache.disk.entry(
+        let cache_entry = self.cache.entry(
             CacheBucket::Simple,
             WheelCache::Index(index).root(),
             "index.html.rkyv",
@@ -860,7 +861,6 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
-                    .disk
                     .freshness(&cache_entry, None, None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -990,7 +990,7 @@ impl RegistryClient {
                     .collect::<Vec<_>>()
             ))
         );
-        let cache_entry = self.cache.disk.entry(
+        let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             WheelCache::Index(index).wheel_dir(package_name.as_ref()),
             format!("{cache_key}.msgpack"),
@@ -1004,7 +1004,6 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
-                    .disk
                     .freshness(&cache_entry, Some(package_name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -1116,7 +1115,7 @@ impl RegistryClient {
                     .fetch(
                         &wheel.git,
                         self.git_http_settings(wheel.git.url()),
-                        self.cache.disk.bucket(CacheBucket::Git),
+                        self.cache.bucket(CacheBucket::Git),
                         reporter,
                     )
                     .await
@@ -1203,7 +1202,7 @@ impl RegistryClient {
             let path = format!("{}.metadata", url.path());
             url.set_path(&path);
 
-            let cache_entry = self.cache.disk.entry(
+            let cache_entry = self.cache.entry(
                 CacheBucket::Wheels,
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
                 format!("{}.msgpack", filename.cache_key()),
@@ -1216,7 +1215,6 @@ impl RegistryClient {
                 }
                 Connectivity::Online => CacheControl::from(
                     self.cache
-                        .disk
                         .freshness(&cache_entry, Some(&filename.name), None)
                         .map_err(ErrorKind::Io)?,
                 ),
@@ -1302,7 +1300,7 @@ impl RegistryClient {
         // Index variants wheels get variant requirements from a separate index file, which has its
         // separate cache entry. Except when the file is missing, in that case (TODO(konsti):
         // implement) the index wheel will use that same case.
-        let entry = self.cache.disk.entry(
+        let entry = self.cache.entry(
             CacheBucket::Wheels,
             WheelCache::Url(&wheel.url).wheel_dir(wheel.filename.name.as_ref()),
             format!("{}.variant.msgpack", wheel.filename.cache_key()),
@@ -1327,7 +1325,7 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
-        let cache_entry = self.cache.disk.entry(
+        let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),
             format!("{}.msgpack", filename.cache_key()),
@@ -1372,7 +1370,6 @@ impl RegistryClient {
             }
             Connectivity::Online => CacheControl::from(
                 self.cache
-                    .disk
                     .freshness(&cache_entry, Some(&filename.name), None)
                     .map_err(ErrorKind::Io)?,
             ),
@@ -2012,7 +2009,7 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
-    use super::{MetadataFormat, RegistryCache, SimpleDetailMetadata, SimplePage, SimplePageData};
+    use super::{BlockCache, MetadataFormat, SimpleDetailMetadata, SimplePage, SimplePageData};
     use crate::{
         BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
         html::SimpleDetailHTML,
@@ -2434,8 +2431,8 @@ mod tests {
             &base,
         );
         let page = SimplePage::new(
-            SimplePageData::from_metadata(simple_metadata)?,
-            Arc::new(RegistryCache::new(Cache::temp()?)),
+            SimplePageData::from_metadata::<true>(simple_metadata)?,
+            Arc::new(BlockCache::new(Cache::temp()?)),
         );
         let files: Vec<_> = page.files(0)?.all(&package_name).collect();
         let filenames: Vec<_> = files
@@ -2504,8 +2501,8 @@ mod tests {
             &base,
         );
         let page = SimplePage::new(
-            SimplePageData::from_metadata(metadata)?,
-            Arc::new(RegistryCache::new(Cache::temp()?)),
+            SimplePageData::from_metadata::<true>(metadata)?,
+            Arc::new(BlockCache::new(Cache::temp()?)),
         );
         let entries: Vec<_> = page.files(0)?.all_entries(&package_name).collect();
 
