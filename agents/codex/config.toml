@@ -107,3 +107,17 @@ enabled = true
 [permissions.pull-request-labels.network.domains]
 "api.github.com" = "allow"
 "github.com" = "allow"
+
+[permissions.pull-request-comments]
+description = "Pull request comment handling with workspace and Git metadata access."
+extends = ":workspace"
+
+[permissions.pull-request-comments.filesystem.":workspace_roots"]
+".git" = "write"
+
+[permissions.pull-request-comments.network]
+enabled = true
+
+[permissions.pull-request-comments.network.domains]
+"api.github.com" = "allow"
+"github.com" = "allow"
