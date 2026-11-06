@@ -935,18 +935,16 @@ async fn index_username_used_for_keyring() {
 /// A publish index check reads cached release details and must wait for cache cleanup.
 #[tokio::test]
 async fn check_url_waits_for_cache_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
+    let context = uv_test::test_context_with_versions!(&[]);
     let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
         .await?;
 
     uv_snapshot!(context.filters(), context.publish()
+        .arg("--offline")
         .arg("--dry-run")
         .arg("--check-url")
-        .arg(format!("{}/simple/", server.uri()))
-        .arg("--publish-url")
-        .arg(format!("{}/upload", server.uri()))
+        .arg("https://pypi.org/simple/")
         .arg(dummy_wheel())
         .env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 2 (failure)

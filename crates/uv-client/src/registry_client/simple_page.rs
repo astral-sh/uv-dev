@@ -43,7 +43,7 @@ pub(super) struct SimplePageData {
 enum Details {
     /// Embedded in the HTTP cache entry, including empty pages.
     Inline,
-    /// A newly parsed response, before publication or when the response is uncached.
+    /// Details owned by this page before publication, or when disk reads cannot be deferred.
     Memory(Vec<u8>),
     Disk {
         path: PathBuf,
@@ -141,12 +141,8 @@ impl SimplePage {
     }
 
     /// The number of versions on this page.
-    pub fn len(&self) -> usize {
+    pub fn num_versions(&self) -> usize {
         self.data.manifest.releases.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.manifest.releases.is_empty()
     }
 
     /// The version at the given index, in ascending PEP 440 order.
@@ -202,7 +198,7 @@ impl SimplePage {
 
     /// Load the files for a single release.
     pub fn files(&self, index: usize) -> Result<VersionFiles, Error> {
-        if index >= self.len() {
+        if index >= self.num_versions() {
             return Err(ErrorKind::ArchiveRead("invalid release index".into()).into());
         }
         let size = self.data.manifest.releases_per_block.to_native() as usize;
@@ -255,6 +251,13 @@ enum DetailReader<'a> {
 
 impl SimplePageData {
     pub(super) fn from_metadata(page: SimpleDetailMetadata) -> Result<Self, Error> {
+        Self::with_inline_threshold(page, INLINE_THRESHOLD)
+    }
+
+    fn with_inline_threshold(
+        page: SimpleDetailMetadata,
+        inline_threshold: usize,
+    ) -> Result<Self, Error> {
         let mut releases = Vec::with_capacity(page.versions.len());
         let mut blocks = Vec::new();
         let mut bytes = Vec::new();
@@ -279,7 +282,7 @@ impl SimplePageData {
             files.clear();
         }
 
-        let (inline, details) = if bytes.len() <= INLINE_THRESHOLD {
+        let (inline, details) = if bytes.len() <= inline_threshold {
             (bytes, Details::Inline)
         } else {
             (Vec::new(), Details::Memory(bytes))
@@ -380,10 +383,25 @@ impl SimplePageData {
     }
 }
 
-impl Cacheable for SimplePageData {
-    type Target = Self;
+/// Without a cache lock, cleanup may remove a generation at any time. Publish new responses
+/// as a single manifest and snapshot existing external details before returning a page.
+pub(super) struct CachedSimplePage<const CACHE_LOCKED: bool>(SimplePageData);
 
-    fn from_aligned_bytes(mut data: AlignedVec, path: &Path) -> Result<Self, Error> {
+impl<const CACHE_LOCKED: bool> CachedSimplePage<CACHE_LOCKED> {
+    pub(super) fn from_metadata(page: SimpleDetailMetadata) -> Result<Self, Error> {
+        let inline_threshold = if CACHE_LOCKED {
+            INLINE_THRESHOLD
+        } else {
+            usize::MAX
+        };
+        SimplePageData::with_inline_threshold(page, inline_threshold).map(Self)
+    }
+}
+
+impl<const CACHE_LOCKED: bool> Cacheable for CachedSimplePage<CACHE_LOCKED> {
+    type Target = SimplePageData;
+
+    fn from_aligned_bytes(mut data: AlignedVec, path: &Path) -> Result<SimplePageData, Error> {
         let (header, manifest) = PageHeader::ref_from_prefix(&data)
             .map_err(|_| ErrorKind::ArchiveRead("missing Simple API page header".into()))?;
         let generation = std::str::from_utf8(&header.generation)
@@ -400,28 +418,43 @@ impl Cacheable for SimplePageData {
             return Err(ErrorKind::ArchiveRead("invalid release block count".into()).into());
         }
 
+        let mut expected_len = 0;
+        for block in manifest.blocks.iter() {
+            let end = block.end.to_native();
+            if end <= expected_len {
+                return Err(ErrorKind::ArchiveRead("invalid release block bounds".into()).into());
+            }
+            expected_len = end;
+        }
+        let invalid_len = || ErrorKind::ArchiveRead("invalid release data length".into());
         let (details, len, validate_details) =
             if !manifest.inline.is_empty() || manifest.blocks.is_empty() {
                 (Details::Inline, manifest.inline.len() as u64, true)
             } else {
                 let path = simple_detail_path(path, &generation);
-                let metadata = fs_err::metadata(&path).map_err(ErrorKind::Io)?;
-                let changed = timestamp == 0 || Self::modified_nanos(&metadata) != timestamp;
-                (Details::Disk { path, timestamp }, metadata.len(), changed)
+                if CACHE_LOCKED {
+                    let metadata = fs_err::metadata(&path).map_err(ErrorKind::Io)?;
+                    let changed =
+                        timestamp == 0 || SimplePageData::modified_nanos(&metadata) != timestamp;
+                    (Details::Disk { path, timestamp }, metadata.len(), changed)
+                } else {
+                    let file = fs_err::File::open(&path).map_err(ErrorKind::Io)?;
+                    if file.metadata().map_err(ErrorKind::Io)?.len() != expected_len {
+                        return Err(invalid_len().into());
+                    }
+                    let mut bytes = Vec::new();
+                    file.take(expected_len)
+                        .read_to_end(&mut bytes)
+                        .map_err(ErrorKind::Io)?;
+                    let len = bytes.len() as u64;
+                    (Details::Memory(bytes), len, true)
+                }
             };
-        let mut start = 0;
-        for block in manifest.blocks.iter() {
-            let end = block.end.to_native();
-            if end <= start || end > len {
-                return Err(ErrorKind::ArchiveRead("invalid release block bounds".into()).into());
-            }
-            start = end;
-        }
-        if start != len {
-            return Err(ErrorKind::ArchiveRead("invalid release data length".into()).into());
+        if len != expected_len {
+            return Err(invalid_len().into());
         }
 
-        let page = Self {
+        let page = SimplePageData {
             generation,
             manifest,
             details,
@@ -429,7 +462,12 @@ impl Cacheable for SimplePageData {
         if validate_details {
             // Restores and copies can change timestamps without changing any bytes. Verify on
             // change so valid offline caches still work, and damaged entries can be refetched.
-            let mut reader = page.reader()?;
+            let mut reader = match &page.details {
+                Details::Disk { path, .. } => DetailReader::Disk(
+                    uv_fs::open_with_write_attributes(path).map_err(ErrorKind::Io)?,
+                ),
+                Details::Inline | Details::Memory(_) => page.reader()?,
+            };
             for index in 0..page.manifest.blocks.len() {
                 page.read_block(index, &mut reader)?;
             }
@@ -446,8 +484,9 @@ impl Cacheable for SimplePageData {
     }
 
     async fn prepare_to_cache(&mut self, manifest: &Path) -> Result<(), Error> {
-        if let Details::Memory(bytes) = &self.details {
-            let path = simple_detail_path(manifest, &self.generation);
+        let page = &mut self.0;
+        if let Details::Memory(bytes) = &page.details {
+            let path = simple_detail_path(manifest, &page.generation);
             let directory = path
                 .parent()
                 .expect("release files have a package directory");
@@ -460,22 +499,23 @@ impl Cacheable for SimplePageData {
             let metadata = fs_err::tokio::metadata(&path)
                 .await
                 .map_err(ErrorKind::Io)?;
-            self.details = Details::Disk {
+            page.details = Details::Disk {
                 path,
-                timestamp: Self::modified_nanos(&metadata),
+                timestamp: SimplePageData::modified_nanos(&metadata),
             };
         }
         Ok(())
     }
 
     fn to_bytes(&self) -> Result<Cow<'_, [u8]>, Error> {
-        let manifest = OwnedArchive::as_bytes(&self.manifest);
-        let timestamp = match &self.details {
+        let page = &self.0;
+        let manifest = OwnedArchive::as_bytes(&page.manifest);
+        let timestamp = match &page.details {
             Details::Disk { timestamp, .. } => *timestamp,
             Details::Inline | Details::Memory(_) => 0,
         };
         let header = PageHeader {
-            generation: *self
+            generation: *page
                 .generation
                 .as_bytes()
                 .as_array()
@@ -488,7 +528,94 @@ impl Cacheable for SimplePageData {
         Ok(Cow::Owned(bytes))
     }
 
-    fn into_target(self) -> Self {
-        self
+    fn into_target(self) -> SimplePageData {
+        self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::time::UNIX_EPOCH;
+
+    use anyhow::Result;
+    use rkyv::util::AlignedVec;
+    use uv_cache::simple_detail_path;
+    use uv_normalize::PackageName;
+    use uv_redacted::SafeUrl;
+
+    use super::{CachedSimplePage, SimpleDetailMetadata};
+    use crate::cached_client::Cacheable;
+
+    /// Include enough file metadata to store release details in an external pack.
+    fn large_package() -> Result<SimpleDetailMetadata> {
+        let reason = "x".repeat(64 * 1024);
+        Ok(SimpleDetailMetadata::from_html(
+            &format!(
+                r#"<a href="example-1.0.tar.gz" data-yanked="{reason}">example-1.0.tar.gz</a>"#
+            ),
+            &PackageName::from_str("example")?,
+            &SafeUrl::parse("https://example.com/simple/example/")?,
+        )?)
+    }
+
+    /// A cache restore can change a valid pack's mtime. After verifying the contents once,
+    /// subsequent cache hits should be able to load just the requested block.
+    #[tokio::test]
+    async fn restored_pack_recovers_recorded_modification_time() -> Result<()> {
+        let cache = tempfile::tempdir()?;
+        let manifest = cache.path().join("example.rkyv");
+        let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
+        page.prepare_to_cache(&manifest).await?;
+        let mut bytes = AlignedVec::new();
+        bytes.extend_from_slice(&page.to_bytes()?);
+
+        let pack = simple_detail_path(&manifest, &page.0.generation);
+        let recorded = fs_err::metadata(&pack)?.modified()?;
+        fs_err::OpenOptions::new()
+            .write(true)
+            .open(&pack)?
+            .set_modified(UNIX_EPOCH)?;
+
+        CachedSimplePage::<true>::from_aligned_bytes(bytes, &manifest)?;
+        assert_eq!(fs_err::metadata(&pack)?.modified()?, recorded);
+        Ok(())
+    }
+
+    /// Cleanup can delete the external generation immediately after a lockless cache hit.
+    #[tokio::test]
+    async fn lockless_page_snapshots_external_details() -> Result<()> {
+        let cache = tempfile::tempdir()?;
+        let manifest = cache.path().join("example.rkyv");
+        let mut page = CachedSimplePage::<true>::from_metadata(large_package()?)?;
+        page.prepare_to_cache(&manifest).await?;
+        let mut bytes = AlignedVec::new();
+        bytes.extend_from_slice(&page.to_bytes()?);
+
+        let snapshot = CachedSimplePage::<false>::from_aligned_bytes(bytes, &manifest)?;
+        fs_err::remove_file(simple_detail_path(&manifest, &page.0.generation))?;
+        let mut reader = snapshot.reader()?;
+        let files = snapshot.read_block(0, &mut reader)?;
+        assert_eq!(files.len(), 1);
+        Ok(())
+    }
+
+    /// A lockless writer must publish one self-contained file: a concurrent prune could
+    /// otherwise remove its detail file before the writer publishes the manifest.
+    #[tokio::test]
+    async fn lockless_page_is_published_inline() -> Result<()> {
+        let cache = tempfile::tempdir()?;
+        let manifest = cache.path().join("example.rkyv");
+        let mut page = CachedSimplePage::<false>::from_metadata(large_package()?)?;
+        page.prepare_to_cache(&manifest).await?;
+        assert!(!simple_detail_path(&manifest, &page.0.generation).exists());
+
+        let mut bytes = AlignedVec::new();
+        bytes.extend_from_slice(&page.to_bytes()?);
+        let snapshot = CachedSimplePage::<true>::from_aligned_bytes(bytes, &manifest)?;
+        let mut reader = snapshot.reader()?;
+        let files = snapshot.read_block(0, &mut reader)?;
+        assert_eq!(files.len(), 1);
+        Ok(())
     }
 }

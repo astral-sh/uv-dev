@@ -456,6 +456,11 @@ impl Cache {
         Ok(id)
     }
 
+    /// Whether this handle holds a lock that prevents ordinary cache cleanup.
+    pub fn is_locked(&self) -> bool {
+        self.lock_file.is_some()
+    }
+
     /// Returns `true` if the [`Cache`] is temporary.
     pub fn is_temporary(&self) -> bool {
         self.temp_dir.is_some()

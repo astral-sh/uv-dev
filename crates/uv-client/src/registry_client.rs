@@ -54,7 +54,7 @@ use crate::{
 
 mod simple_page;
 pub use simple_page::SimplePage;
-use simple_page::{RegistryCache, SimplePageData};
+use simple_page::{CachedSimplePage, RegistryCache, SimplePageData};
 
 /// Cache parsed core metadata and variant requirements from the same wheel.
 #[derive(Serialize, Deserialize)]
@@ -609,9 +609,17 @@ impl RegistryClient {
 
         let result = if matches!(index, IndexUrl::Path(_)) {
             self.fetch_local_simple_detail(package_name, &url).await
-        } else {
-            self.fetch_remote_simple_detail(package_name, &url, &cache_entry, cache_control)
+        } else if self.cache.disk.is_locked() {
+            self.fetch_remote_simple_detail::<true>(package_name, &url, &cache_entry, cache_control)
                 .await
+        } else {
+            self.fetch_remote_simple_detail::<false>(
+                package_name,
+                &url,
+                &cache_entry,
+                cache_control,
+            )
+            .await
         };
 
         match result {
@@ -650,7 +658,7 @@ impl RegistryClient {
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a remote URL, using the PEP 503 Simple Repository API.
-    async fn fetch_remote_simple_detail(
+    async fn fetch_remote_simple_detail<const CACHE_LOCKED: bool>(
         &self,
         package_name: &PackageName,
         url: &SafeUrl,
@@ -707,7 +715,7 @@ impl RegistryClient {
                                 data.project_status,
                                 &url,
                             );
-                            SimplePageData::from_metadata(unarchived)
+                            CachedSimplePage::<CACHE_LOCKED>::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -722,7 +730,7 @@ impl RegistryClient {
                         self.parse_simple_body(text.len(), move || {
                             let unarchived =
                                 SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
-                            SimplePageData::from_metadata(unarchived)
+                            CachedSimplePage::<CACHE_LOCKED>::from_metadata(unarchived)
                         })
                         .await
                     }
@@ -749,11 +757,11 @@ impl RegistryClient {
     /// bodies or bodies that cannot fit the shared worker and byte budgets are parsed inline
     /// without waiting. Offloaded work retains both permits until its result is collected or
     /// dropped, even if the caller is cancelled.
-    async fn parse_simple_body(
+    async fn parse_simple_body<T: Send + 'static>(
         &self,
         body_size: usize,
-        parse: impl FnOnce() -> Result<SimplePageData, Error> + Send + 'static,
-    ) -> Result<SimplePageData, Error> {
+        parse: impl FnOnce() -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
         // Small responses are cheaper to parse inline than to dispatch to another thread.
         if body_size < 512 * 1024 {
             return parse();
@@ -1836,23 +1844,19 @@ impl SimpleIndexMetadata {
 ///
 /// Abstracts over both HTML and JSON index formats.
 #[derive(Default, Debug)]
-pub struct SimpleDetailMetadata {
+struct SimpleDetailMetadata {
     project_status: ProjectStatus,
     versions: Vec<SimpleDetailMetadatum>,
 }
 
 #[derive(Debug)]
-pub struct SimpleDetailMetadatum {
-    pub version: Version,
-    pub files: VersionFiles,
-    pub metadata: Option<Box<ResolutionMetadata>>,
+struct SimpleDetailMetadatum {
+    version: Version,
+    files: VersionFiles,
+    metadata: Option<Box<ResolutionMetadata>>,
 }
 
 impl SimpleDetailMetadata {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &SimpleDetailMetadatum> {
-        self.versions.iter()
-    }
-
     fn from_pypi_files(
         files: Vec<uv_pypi_types::PypiFile>,
         package_name: &PackageName,
@@ -1943,15 +1947,6 @@ impl SimpleDetailMetadata {
     }
 }
 
-impl IntoIterator for SimpleDetailMetadata {
-    type Item = SimpleDetailMetadatum;
-    type IntoIter = std::vec::IntoIter<SimpleDetailMetadatum>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.versions.into_iter()
-    }
-}
-
 #[derive(Debug)]
 enum MediaType {
     PypiV1Json,
@@ -2017,10 +2012,10 @@ mod tests {
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
-    use super::{MetadataFormat, RegistryCache, SimplePage, SimplePageData};
+    use super::{MetadataFormat, RegistryCache, SimpleDetailMetadata, SimplePage, SimplePageData};
     use crate::{
         BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
-        SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
+        html::SimpleDetailHTML,
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
@@ -2401,8 +2396,9 @@ mod tests {
             &base,
         );
         let versions: Vec<String> = simple_metadata
+            .versions
             .iter()
-            .map(|SimpleDetailMetadatum { version, .. }| version.to_string())
+            .map(|datum| datum.version.to_string())
             .collect();
         assert_eq!(versions, ["1.7.8".to_string()]);
     }

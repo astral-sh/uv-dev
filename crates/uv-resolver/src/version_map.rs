@@ -62,9 +62,9 @@ impl VersionMap {
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) -> Self {
         let mut local = false;
-        let mut entries = Vec::with_capacity(simple_metadata.len());
+        let mut entries = Vec::with_capacity(simple_metadata.num_versions());
         // Index the versions without reading their distribution files.
-        for datum_index in 0..simple_metadata.len() {
+        for datum_index in 0..simple_metadata.num_versions() {
             // Index metadata alone does not provide an installable distribution.
             if !simple_metadata.has_installable(datum_index) {
                 continue;

@@ -15,6 +15,8 @@ use std::io::Read;
 
 #[cfg(feature = "tokio")]
 use encoding_rs_io::DecodeReaderBytes;
+#[cfg(windows)]
+use fs_err::os::windows::fs::OpenOptionsExt;
 #[cfg(target_os = "linux")]
 use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, StatxFlags, statx};
 #[cfg(feature = "tokio")]
@@ -23,7 +25,10 @@ use tracing::{debug, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
 #[cfg(windows)]
-use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+use windows::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES,
+    GetFileInformationByHandle,
+};
 
 pub use crate::locked_file::*;
 #[cfg(feature = "tokio")]
@@ -43,6 +48,19 @@ mod path;
 mod read;
 mod space;
 pub mod which;
+
+/// Open a file for reading, requesting permission to update its timestamps when available.
+pub fn open_with_write_attributes(path: &Path) -> io::Result<fs_err::File> {
+    // Windows requires FILE_WRITE_ATTRIBUTES on the handle passed to `set_modified`.
+    #[cfg(windows)]
+    if let Ok(file) = fs_err::OpenOptions::new()
+        .access_mode((FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES).0)
+        .open(path)
+    {
+        return Ok(file);
+    }
+    fs_err::File::open(path)
+}
 
 /// Return the number of hardlinks to a file.
 #[cfg(unix)]

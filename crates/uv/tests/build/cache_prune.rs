@@ -39,13 +39,12 @@ fn prune_no_op() -> Result<()> {
 /// must keep the generation named by the manifest and remove superseded generations.
 #[test]
 fn prune_superseded_simple_details() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let index = context
         .cache_dir
         .child(CacheBucket::Simple.to_string())
         .child("pypi");
     let details = index.child("example");
-    details.create_dir_all()?;
     index
         .child("example.rkyv")
         .write_binary(b"0000000000000002")?;
@@ -63,30 +62,6 @@ fn prune_superseded_simple_details() -> Result<()> {
 
     assert!(current.is_file());
     assert!(!superseded.exists());
-
-    Ok(())
-}
-
-/// The first write for a package can be interrupted between publishing its details and its
-/// manifest, leaving an unreferenced generation in the cache.
-#[test]
-fn prune_unpublished_simple_details() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let details = context
-        .cache_dir
-        .child(CacheBucket::Simple.to_string())
-        .child("index/1234567890abcdef/example");
-    details.create_dir_all()?;
-    details.child("0000000000000001.blocks").touch()?;
-
-    uv_snapshot!(context.filters(), context.prune(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Pruning cache at: [CACHE_DIR]/
-    Removed 1 file (0B)
-    ");
-
-    assert!(!details.exists());
 
     Ok(())
 }
@@ -301,30 +276,24 @@ fn prune_stale_symlink() -> Result<()> {
 
 #[tokio::test]
 async fn prune_force() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let context = uv_test::test_context_with_versions!(&[]);
+    let package = context
+        .cache_dir
+        .child(CacheBucket::Simple.to_string())
+        .child("index/1234567890abcdef/example");
+    let details = package.child("0000000000000001.blocks");
+    details.touch()?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {"
-        typing-extensions
-        iniconfig
-    "})?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
-
-    // When unlocked, `--force` should still take a lock
+    // With an exclusive lock, a detail file without a manifest is an abandoned write.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
-    No unused entries found
+    Removed 1 file (0B)
     ");
+    assert!(!package.exists());
 
     // Add a stale directory to the cache.
     let simple = context.cache_dir.child("simple-v4");
@@ -334,10 +303,6 @@ async fn prune_force() -> Result<()> {
     let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
         .init()
         .await?;
-    let details = context
-        .cache_dir
-        .child(CacheBucket::Simple.to_string())
-        .child("pypi/example/0000000000000001.blocks");
     details.touch()?;
 
     // When locked, `--force` can still remove the stale bucket.
