@@ -363,7 +363,7 @@ enum VersionMapInner {
     Eager(VersionMapEager),
     /// Some distributions might be fully materialized (i.e., by initializing
     /// a `VersionMap` with a `FlatDistributions`), but some distributions
-    /// might still live in an archived release block. In this case, a
+    /// might still live in the Simple index cache. In this case, a
     /// `PrioritizedDist` isn't actually created in memory until the
     /// specific version has been requested.
     Lazy(VersionMapLazy),
