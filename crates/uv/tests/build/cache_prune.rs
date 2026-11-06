@@ -2,10 +2,12 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
+use serde_json::json;
 
 use uv_cache::CacheBucket;
 use uv_static::EnvVars;
 
+use uv_test::package_server::PackageServer;
 use uv_test::uv_snapshot;
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
@@ -37,31 +39,53 @@ fn prune_no_op() -> Result<()> {
 
 /// A package refresh publishes its new release details before replacing its manifest. Prune
 /// must keep the generation named by the manifest and remove superseded generations.
-#[test]
-fn prune_superseded_simple_details() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let index = context
-        .cache_dir
-        .child(CacheBucket::Simple.to_string())
-        .child("pypi");
-    let details = index.child("example");
-    index
-        .child("example.rkyv")
-        .write_binary(b"0000000000000002")?;
-    let superseded = details.child("0000000000000001.blocks");
-    let current = details.child("0000000000000002.blocks");
-    superseded.touch()?;
-    current.touch()?;
+#[tokio::test]
+async fn prune_superseded_simple_details() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
+    let server = PackageServer::new(&"example".parse()?).await;
+    let filename = "example-1.0-py3-none-any.whl";
+    // Put the file details in an external block.
+    let url = format!("{}?{}", server.file_url(filename), "x".repeat(32 * 1024));
+    server
+        .serve_with(filename, b"", None, json!({ "url": url }))
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example")?;
+
+    context
+        .pip_compile()
+        .arg("--default-index")
+        .arg(server.index_url())
+        .args(["--no-deps", "requirements.in"])
+        .assert()
+        .success();
+    context
+        .pip_compile()
+        .arg("--default-index")
+        .arg(server.index_url())
+        .args(["--refresh", "--no-deps", "requirements.in"])
+        .assert()
+        .success();
 
     uv_snapshot!(context.filters(), context.prune(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Pruning cache at: [CACHE_DIR]/
-    Removed 1 file (0B)
+    Removed 1 file ([SIZE])
     ");
 
-    assert!(current.is_file());
-    assert!(!superseded.exists());
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("--default-index").arg(server.index_url())
+        .args(["--offline", "--no-deps", "--no-header", "--no-annotate", "requirements.in"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     Ok(())
 }
