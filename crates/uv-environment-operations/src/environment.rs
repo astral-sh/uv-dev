@@ -123,10 +123,10 @@ impl CachedEnvironment {
     /// Prefer [`Self::from_spec`] when starting from unresolved requirements; it selects the base
     /// interpreter and resolves the requirements for that interpreter before delegating here.
     ///
-    /// This method checks `resolution` for malware when enabled and verifies its recorded hashes.
-    /// Both checks run before cache lookup. `interpreter` must be the base interpreter for which
-    /// `resolution` was produced. In particular, callers materializing a universal lock must derive
-    /// its markers and tags from the same interpreter.
+    /// When enabled, malware checks run before cache lookup. On a cache miss, the environment
+    /// is created with verification of the recorded hashes. `interpreter` must be the base
+    /// interpreter for which `resolution` was produced. In particular, callers materializing a
+    /// universal lock must derive its markers and tags from the same interpreter.
     pub async fn from_locked_resolution(
         resolution: &Resolution,
         build_constraints: Constraints,

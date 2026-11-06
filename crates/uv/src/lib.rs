@@ -1609,6 +1609,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             };
 
             Box::pin(commands::tool_run(
+                args.locked.into(),
                 args.command,
                 args.from,
                 &requirements,
@@ -1806,6 +1807,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .with_refresh(Refresh::All(Timestamp::now()));
 
             Box::pin(commands::tool_upgrade(
+                args.locked.into(),
                 args.names,
                 args.python,
                 args.python_platform,
