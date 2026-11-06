@@ -10,7 +10,8 @@ use tracing::info_span;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{
-    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade,
+    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Override,
+    PackageOverride, Upgrade,
 };
 use uv_distribution::LoweredRequirement;
 use uv_distribution_types::{
@@ -30,6 +31,12 @@ use uv_workspace::pyproject::{BuildConstraintDependency, OverrideDependency};
 use uv_workspace::{Editability, Workspace, WorkspaceCache, WorkspaceMember};
 
 use crate::{LockError, MissingLockfileSource};
+
+pub(crate) struct RuntimeResolutionInputs {
+    pub(crate) constraints: Vec<Requirement>,
+    pub(crate) overrides: Vec<Override<Requirement>>,
+    pub(crate) excludes: Vec<ExcludeDependency>,
+}
 
 /// A target that can be resolved into a lockfile.
 #[derive(Debug, Copy, Clone)]
@@ -61,7 +68,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of overrides for the [`LockTarget`].
-    pub(crate) fn overrides(self) -> Vec<OverrideDependency> {
+    fn overrides(self) -> Vec<OverrideDependency> {
         match self {
             Self::Workspace(workspace) => workspace.overrides(),
             Self::Script(script) => script
@@ -78,7 +85,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of dependency exclusions for the [`LockTarget`].
-    pub(crate) fn exclude_dependencies(self) -> Vec<ExcludeDependency> {
+    fn exclude_dependencies(self) -> Vec<ExcludeDependency> {
         match self {
             Self::Workspace(workspace) => workspace.exclude_dependencies(),
             Self::Script(script) => script
@@ -95,7 +102,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of constraints for the [`LockTarget`].
-    pub(crate) fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    fn constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
         match self {
             Self::Workspace(workspace) => workspace.constraints(),
             Self::Script(script) => script
@@ -436,6 +443,70 @@ impl<'lock> LockTarget<'lock> {
             );
         }
         Ok(Constraints::from_specifications(constraints))
+    }
+
+    pub(crate) async fn lower_runtime_resolution_inputs(
+        self,
+        locations: &IndexLocations,
+        sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<RuntimeResolutionInputs, uv_distribution::MetadataError> {
+        let overrides = {
+            let mut lowered_overrides = Vec::new();
+            for entry in self.overrides() {
+                match entry {
+                    Override::Requirement(requirement) => {
+                        lowered_overrides.extend(
+                            self.lower(
+                                vec![requirement],
+                                locations,
+                                sources,
+                                cache,
+                                workspace_cache,
+                                credentials_cache,
+                            )
+                            .await?
+                            .into_iter()
+                            .map(Override::Requirement),
+                        );
+                    }
+                    Override::Package(package) => {
+                        lowered_overrides.push(Override::Package(PackageOverride {
+                            package: package.package,
+                            dependencies: self
+                                .lower(
+                                    package.dependencies.into_vec(),
+                                    locations,
+                                    sources,
+                                    cache,
+                                    workspace_cache,
+                                    credentials_cache,
+                                )
+                                .await?
+                                .into_boxed_slice(),
+                        }));
+                    }
+                }
+            }
+            lowered_overrides
+        };
+        let constraints = self
+            .lower(
+                self.constraints(),
+                locations,
+                sources,
+                cache,
+                workspace_cache,
+                credentials_cache,
+            )
+            .await?;
+        Ok(RuntimeResolutionInputs {
+            constraints,
+            overrides,
+            excludes: self.exclude_dependencies(),
+        })
     }
 
     /// Lower the requirements for the [`LockTarget`], relative to the target root.
