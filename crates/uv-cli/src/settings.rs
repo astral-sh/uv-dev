@@ -29,13 +29,13 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
-    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
+    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification, PYPI_URL,
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, RequirementOrigin};
+use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrl};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
@@ -5018,12 +5018,15 @@ pub struct PublishSettings {
     pub index: Option<String>,
     pub dry_run: bool,
     pub no_attestations: bool,
+    pub locked: bool,
+    pub allow_non_pypi: bool,
 
     // Both CLI and configuration.
     pub publish_url: SafeUrl,
     pub trusted_publishing: TrustedPublishing,
     pub keyring_provider: KeyringProviderType,
     pub check_url: Option<IndexUrl>,
+    pub sources: NoSources,
 
     // Configuration only
     pub index_locations: IndexLocations,
@@ -5038,10 +5041,13 @@ impl fmt::Debug for PublishSettings {
             .field("index", &self.index)
             .field("dry_run", &self.dry_run)
             .field("no_attestations", &self.no_attestations)
+            .field("locked", &self.locked)
+            .field("allow_non_pypi", &self.allow_non_pypi)
             .field("publish_url", &self.publish_url)
             .field("trusted_publishing", &self.trusted_publishing)
             .field("keyring_provider", &self.keyring_provider)
             .field("check_url", &self.check_url)
+            .field("sources", &self.sources)
             .field("index_locations", &self.index_locations)
             .finish()
     }
@@ -5049,7 +5055,11 @@ impl fmt::Debug for PublishSettings {
 
 impl PublishSettings {
     /// Resolve the [`PublishSettings`] from the CLI and filesystem configuration.
-    pub fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {
+    pub fn resolve(
+        args: PublishArgs,
+        filesystem: Option<FilesystemOptions>,
+        environment: &EnvironmentOptions,
+    ) -> Self {
         let Options {
             publish, top_level, ..
         } = filesystem
@@ -5066,6 +5076,8 @@ impl PublishSettings {
             index,
             extra_index_url,
             index_url,
+            no_sources,
+            no_sources_package,
             ..
         } = top_level;
 
@@ -5076,16 +5088,32 @@ impl PublishSettings {
             (args.username, args.password)
         };
 
+        let publish_url = args
+            .publish_url
+            .combine(publish_url)
+            .unwrap_or_else(|| SafeUrl::parse(PYPI_PUBLISH_URL).unwrap());
+        let check_url = args.check_url.combine(check_url).or_else(|| {
+            (args.locked && publish_url.as_str() == PYPI_PUBLISH_URL)
+                .then(|| IndexUrl::from(VerbatimUrl::from_url(PYPI_URL.clone())))
+        });
+        let sources = NoSources::from_args(
+            args.sources.no_sources.then_some(true).combine(no_sources),
+            (!args.sources.no_sources_package.is_empty())
+                .then_some(args.sources.no_sources_package)
+                .or_else(|| environment.no_sources_package.clone())
+                .combine(no_sources_package)
+                .unwrap_or_default(),
+        );
+
         Self {
             files: args.files,
             username,
             password,
             dry_run: args.dry_run,
             no_attestations: args.no_attestations,
-            publish_url: args
-                .publish_url
-                .combine(publish_url)
-                .unwrap_or_else(|| SafeUrl::parse(PYPI_PUBLISH_URL).unwrap()),
+            locked: args.locked,
+            allow_non_pypi: args.allow_non_pypi,
+            publish_url,
             trusted_publishing: args
                 .trusted_publishing
                 .combine(trusted_publishing)
@@ -5094,7 +5122,8 @@ impl PublishSettings {
                 .keyring_provider
                 .combine(keyring_provider)
                 .unwrap_or_default(),
-            check_url: args.check_url.combine(check_url),
+            check_url,
+            sources,
             index: args.index,
             index_locations: IndexLocations::new(
                 index

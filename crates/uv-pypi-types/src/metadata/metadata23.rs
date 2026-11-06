@@ -8,7 +8,7 @@ use std::str::FromStr;
 use indexmap::IndexMap;
 
 use crate::MetadataError;
-use crate::metadata::Headers;
+use crate::metadata::{Headers, validate_pkg_info_version};
 
 /// Core Metadata 2.x as specified in
 /// <https://packaging.python.org/specifications/core-metadata/>.
@@ -116,6 +116,11 @@ pub struct Metadata23 {
 }
 
 impl Metadata23 {
+    /// Check whether the metadata version of this `PKG-INFO` supports static fields.
+    pub fn validate_pkg_info_version(&self) -> Result<(), MetadataError> {
+        validate_pkg_info_version(&self.metadata_version)
+    }
+
     /// Parse distribution metadata from metadata `MetadataError`
     pub fn parse(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content);
