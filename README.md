@@ -12,6 +12,10 @@ The reporter installed signed Python.org CPython, set `UV_PYTHON_PREFERENCE=only
 
 astral-sh/python-build-standalone#89 is the canonical signing request. astral-sh/uv#6584 reports related policy blocks, astral-sh/uv#10288 discusses antivirus effects on unsigned venv executables, and closed astral-sh/uv#10336 covers signing uv itself.
 
+## Maintainer status
+
+Maintainer zanieb confirmed on November 6, 2026, in astral-sh/uv#22869 (comment ID 6690654781) that the team intends to add code signing to its Python executables on Windows and can investigate these reports. The comment gives no implementation details, delivery date, target release, or plan for replacing existing installations and venv executables. It does not confirm a fix or establish that signing will address the separate PowerShell activation-script failure.
+
 ## Report components
 
 - Managed-interpreter execution: Windows Smart App Control blocks Python installed under `C:\tools\uv\python`; the requested outcome is usable managed CPython with the policy enabled.
@@ -98,4 +102,4 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged PRs wi
 
 ## Maintainer next step
 
-Centralize the Python-distribution signing request in astral-sh/python-build-standalone#89 and carry over this concrete Smart App Control reproduction, including the managed CPython 3.14.2 path, binary hashes, and correlated enforcement/signature event fields. Investigation should distinguish the blocked base interpreter from the venv process that launched it. Keep the uv documentation and warning suggestions visible as possible follow-ups; no implementation or schedule is established. The reporter already has a working supported workaround, so an additional generic reproduction request is unnecessary.
+Centralize the Python-distribution signing request in astral-sh/python-build-standalone#89 and carry over this concrete Smart App Control reproduction, including the managed CPython 3.14.2 path, binary hashes, and correlated enforcement/signature event fields. Investigation should distinguish the blocked base interpreter from the venv process that launched it. Track the maintainer-confirmed intent to sign Windows Python executables alongside astral-sh/python-build-standalone#89; implementation and release timing remain unspecified. Keep the uv documentation and warning suggestions visible as possible follow-ups. The reporter already has a working supported workaround, so an additional generic reproduction request is unnecessary.
