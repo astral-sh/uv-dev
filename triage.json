@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 22040,
+        "title": "Varying order of resolution-markers from the same `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/22040",
+        "state": "open",
+        "reason": "Includes the same repeated --upgrade-package workflow on uv 0.12.15 with Git-pinned dependencies. Those runs succeed and reorder or simplify markers; they do not fail to resolve on the second pass."
+      },
+      {
+        "kind": "issue",
+        "number": 6176,
+        "title": "Apply fork markers at fork time",
+        "url": "https://github.com/astral-sh/uv/issues/6176",
+        "state": "open",
+        "reason": "Tracks dependencies being solved in forks disjoint from their markers. Maintainers discuss instability between discovering forks during resolution and starting with existing forks. That mechanism has not been established for this wheel-rejection failure."
+      },
+      {
+        "kind": "issue",
+        "number": 17747,
+        "title": "`uv lock` not working as expected in some cases when `upgrade_package` is set",
+        "url": "https://github.com/astral-sh/uv/issues/17747",
+        "state": "open",
+        "reason": "Another package-specific-upgrade report involving new forks and unstable lock output. Its --locked invocation rejects the new lock as outdated, whereas this report's --locked succeeds and the next upgrade cannot resolve. A marker-canonicalization experiment helped that separate case."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17752,
+        "title": "Fix canonicalization of incompatible marker pairs compound disjunctions",
+        "url": "https://github.com/astral-sh/uv/pull/17752",
+        "state": "open",
+        "reason": "Experimental marker-canonicalization fix linked from astral-sh/uv#17747. A maintainer said it could not ship as-is; it remains unmerged. There is no evidence it fixes this second-pass resolution failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21672,
+        "title": "Scope required-environment checks to the current fork",
+        "url": "https://github.com/astral-sh/uv/pull/21672",
+        "state": "merged",
+        "reason": "Changed wheel-coverage checks to use the current resolver fork, allowing backtracking or an unsupported-environment error. Released in uv 0.12.14, before the reported version. Relevant historical context, but neither a confirmed cause nor a fix for this report."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs for literal errors and identifiers (--upgrade-package, No solution, macOS-compatible wheels, resolution-markers, pytorch-cpu, PyPy, paperless), repeated-run symptoms, and conceptual terms including idempotence, existing forks, preferences, wheel coverage, and upgrades retaining Git pins. PR keyword searches returned no matches, so supplemented them with title filtering over 1,200 recent PRs across all states and inspection of referenced historical PRs. Read candidate discussions and followed linked fixes; compared release notes and uv 0.12.15 source. Inspected but ruled out astral-sh/uv#5180 and its fork-persistence fixes as proof of the same regression; astral-sh/uv#20368 and astral-sh/uv#20369 concern impossible cross-variable markers; astral-sh/uv#9963 and astral-sh/uv#10046 concern CPU/local-version fallback; astral-sh/uv#21820 and astral-sh/uv#21835 concern installation after selecting incompatible wheels for an older Python fork. Also ruled out astral-sh/uv#23073, involving edited or merged inconsistent locks, and astral-sh/uv#22805, involving Android wheel-tag recognition. No confirmed duplicate or fix was found."
+  },
+  "type": "bug",
+  "type_reason": "The reported unchanged-input workflow succeeds once and then cannot resolve using the lock it just generated, while full upgrade succeeds repeatedly. That is a resolver correctness problem. Source confirms that package-specific upgrades can reuse stored forks while --upgrade discards them, but does not establish why this fork fails. Related reports have different outcomes or unconfirmed mechanisms, so duplicate classification is not supported. No recurrence of a previously fixed bug has been established.",
+  "summary": "Closest are astral-sh/uv#22040 for the repeated-upgrade workflow and astral-sh/uv#6176 for differences between discovered and pre-existing forks. astral-sh/uv#17747 and astral-sh/uv#17752 cover a distinct marker-canonicalization failure; astral-sh/uv#21672 supplies relevant wheel-check history. No confirmed duplicate or fix was found.",
+  "draft_response": "The second-pass resolution failure is distinct from the marker reordering tracked in astral-sh/uv#22040. Package-specific upgrades can reuse the lockfile's resolution forks, while --upgrade starts without them; this explains a difference between the code paths, but does not establish the cause of the failure.\n\nPlease retry the same two-pass reproduction with the latest uv release. If it still fails, attach the uv.lock produced by the successful first pass and verbose output from both passes. Keeping the Git revisions unchanged will help isolate the resolver behavior. We haven't confirmed a fix for this failure."
+}
