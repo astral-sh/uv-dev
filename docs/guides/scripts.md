@@ -217,6 +217,21 @@ print(Point)
 is not installed — see the documentation on [Python versions](../concepts/python-versions.md) for
 more details.
 
+## Running a script through another command
+
+To reuse a script's declared dependencies with another command, pass the script to
+[`--with-requirements`](../reference/cli.md#uv-run--with-requirements). For example, to run the
+script under the [Python debugger](https://docs.python.org/3/library/pdb.html):
+
+```console
+$ uv run --with-requirements example.py python -m pdb example.py
+```
+
+The usual `uv run` project and Python selection still applies. The script's `requires-python` and
+script lockfile do not select the environment for this command. Use
+[`--python`](../reference/cli.md#uv-run--python) to request a particular interpreter, and
+[`--no-project`](../reference/cli.md#uv-run--no-project) to avoid discovering the current project.
+
 ## Using a shebang to create an executable file
 
 A shebang can be added to make a script executable without using `uv run` — this makes it easy to
