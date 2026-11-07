@@ -89,6 +89,22 @@ $ uv pip install -r requirements.txt
 See the [`uv pip compile`](./compile.md) documentation for more information on `requirements.txt`
 files.
 
+Install from a `pylock.toml` file:
+
+```console
+$ uv pip install -r pylock.toml
+```
+
+Use `-r -` to read from stdin. uv detects `pylock.toml` and PEP 723 script metadata from the input
+contents and otherwise parses the input as `requirements.txt`:
+
+```console
+$ uv export --format pylock.toml | uv pip install -r -
+```
+
+Relative paths in a `pylock.toml` read from stdin are resolved against the current working
+directory.
+
 Install from a `pyproject.toml` file:
 
 ```console

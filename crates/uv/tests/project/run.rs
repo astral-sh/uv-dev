@@ -8078,3 +8078,23 @@ fn run_centralized_environment_path_file() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[test]
+fn run_pylock_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--no-project").arg("--with-requirements").arg("-").arg("python").arg("-c").arg("")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Adding requirements from a `pylock.toml` is not supported in `uv run`
+    ");
+
+    Ok(())
+}

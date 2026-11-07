@@ -195,14 +195,6 @@ pub async fn pip_compile(
         }
     }
 
-    // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
-    // return an error.
-    if !extras.is_empty() && !requirements.iter().any(RequirementsSource::allows_extras) {
-        return Err(anyhow!(
-            "Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file."
-        ));
-    }
-
     let client_builder = client_builder.clone().keyring(keyring_provider);
 
     // Read all requirements from the provided sources.
@@ -241,6 +233,12 @@ pub async fn pip_compile(
     if pylock.is_some() {
         return Err(anyhow!(
             "`pylock.toml` is not a supported input format for `uv pip compile`"
+        ));
+    }
+
+    if !extras.is_empty() && source_trees.is_empty() {
+        return Err(anyhow!(
+            "Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file."
         ));
     }
 

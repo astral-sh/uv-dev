@@ -5818,6 +5818,29 @@ fn semicolon_no_space() -> Result<()> {
 }
 
 #[test]
+fn pep_751_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("-")
+        .stdin(fs::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn pep_751() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
