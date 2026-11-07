@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Confirmed that newly discovered forks retain wheel selections that fail coverage checks when those forks are reused. Both parent regressions pass with the undesirable behavior and fail when changed to expect successful repeats. A fix requires deciding whether to reject the initial unsupported lock or relax per-fork wheel coverage. Restored the checkout unchanged and documented the findings in the investigation README.",
+  "validation": [],
+  "pull_request": null
+}

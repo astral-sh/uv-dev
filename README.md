@@ -8,13 +8,13 @@ Reproduced on Linux x86_64 with CPython 3.12.3 and the installed uv 0.13.6 (GNU 
 
 A reduced project containing torch and a `dev` dependency on daphne also reproduces the successful-upgrade / successful-locked-check / failed-repeat sequence. Its failing split starts at Python 3.12 rather than 3.15. Git dependencies are therefore not necessary to reproduce the repeated-upgrade failure, although retaining Git pins is the reporter's reason for using package-specific upgrades.
 
-Plain locking accepts the full project's first-pass lock unchanged. Two full upgrades also succeed, but the first moves its Git dependency, confirming that full upgrade changes the intended workflow. No root cause or fix has been confirmed.
+Plain locking accepts the full project's first-pass lock unchanged. Two full upgrades also succeed, but the first moves its Git dependency, confirming that full upgrade changes the intended workflow. The fix investigation traced the discrepancy to artifact coverage being checked before newly discovered forks but checked against narrower stored forks on the next solve. No fix was retained: making the repeat succeed would require a decision about wheel-coverage guarantees, while enforcing those guarantees on late forks would instead reject the initial solve.
 
 ## Classification
 
-Bug report; the inconsistent repeated-resolution behavior is confirmed. Acceptance by `--locked` validates the existing lock against the project and does not establish that a fresh resolution or installation on every represented platform succeeds. The evidence does not determine whether the first solve should reject the unsupported environment or the repeated solve should retain the first solve's selection.
+Bug report; the inconsistent repeated-resolution behavior is confirmed. Acceptance by `--locked` validates the existing lock against the project and does not establish that a fresh resolution or installation on every represented platform succeeds. The parent fixtures contain only CPython 3.12 wheels, which do not support their Python >=3.15 / PyPy branch. Choosing whether to reject the initial solve or relax coverage for such branches remains the unresolved behavior decision.
 
-The reporter's description that the second solve “loses the fallback” remains a hypothesis. Source inspection identifies different treatment of stored forks for full and package-specific upgrades, but does not establish the responsible constraint or fallback. Duplicate classification and recurrence of a previously fixed bug are not established.
+The reporter's description that the second solve “loses the fallback” remains a hypothesis. Executed parent regressions and source inspection identify a check-order discrepancy: wheel coverage is checked when selecting a candidate, while later dependency forks retain already assigned candidates without repeating that check. Reusing the saved forks runs candidate checks with the narrower markers from the start. No missing fallback has been established. Duplicate classification and recurrence of a previously fixed bug are not established.
 
 ## Reproduction
 
@@ -25,7 +25,7 @@ The reporter's description that the second solve “loses the fallback” remain
 - Reported: uv 0.12.15, `uv-x86_64-unknown-linux-musl`, Linux x86_64, CPython 3.12.
 - Tested: installed `uv 0.13.6 (x86_64-unknown-linux-gnu)` at `/opt/hostedtoolcache/uv/0.13.6/x86_64/uv`; CPython 3.12.3 at `/usr/bin/python3.12`; Linux x86_64 / Ubuntu 24.04.
 - All project files, cache, configuration directories, temporary build files, and command artifacts were placed under `/tmp/uv-23142-ZVY4aR`. Commands ran with an explicit environment and isolated uv/XDG paths; managed Python downloads and Git global/system configuration were disabled. The successful reproduction used normal source-build behavior, not `--no-build`.
-- The reported uv 0.12.15 build and checkout's uv 0.13.7 were not executed. There is no reported last known-good uv release to compare. No uv binary was built from this checkout.
+- The original reproduction used installed uv 0.13.6. The subsequent fix investigation built checkout uv 0.13.7 in the debug/test profile and executed the parent integration regressions. The reported uv 0.12.15 build was not executed; there is no reported last known-good uv release to compare.
 
 ### Full reported project
 
@@ -140,9 +140,11 @@ Searched the integration tests under `crates/uv/tests/` (including the current `
 - `crates/uv/tests/lock/lock.rs::lock_upgrade_drop_fork_markers` verifies that full `--upgrade` drops obsolete forks after relaxing a dependency bound. It does not exercise the reported repeated package-specific path.
 - `crates/uv/tests/lock/lock.rs::lock_required_environment_python_fork` verifies per-Python-fork wheel coverage with `required-environments` and a stable-ABI fallback. The reported project does not configure `required-environments`.
 
-These four tests are gated by `test-universal`. None of these inspected tests covers the exact reproduced sequence. No repository tests were added or executed; verification used the installed uv executable.
+These four tests are gated by `test-universal`. None covers the exact reproduced sequence. The subsequent parent regression pull request added `lock_upgrade_package_supported_environment_forks` and `lock_upgrade_package_required_environment_forks`, also gated by `test-universal`. Both were executed during the fix investigation; see the Fix section. No new tests were retained in the fix attempt.
 
 ## Related
+
+- astral-sh/uv-dev#3116 — Parent regression pull request already present in the checkout. Its two local-index integration tests preserve the successful first solve and locked validation, then snapshot the undesirable repeated-upgrade failure for supported and required environments. Both passed unchanged in the debug build.
 
 - astral-sh/uv#22040 — Open issue about varying resolution-marker order. It includes the same two-pass package-specific workflow with Git pins on uv 0.12.15, but its runs succeed. It explains the reporter's reason for a second pass, not this observed resolution failure.
 - astral-sh/uv#6176 — Open issue about applying fork markers at fork time. Maintainers discuss differences between discovering fork points during resolution and starting with existing forks. Relevant context, without a confirmed shared mechanism.
@@ -163,10 +165,48 @@ Earlier research also considered the following alternatives without establishing
 
 ## Implementation context and next steps
 
-Release notes and the current implementation were inspected alongside the reproduction. In `crates/uv-lock-operations/src/validated_lock.rs`, full upgrade makes the existing lock unusable, while package-specific upgrade can retain it as preferable after fork-coverage checks. In `crates/uv-lock-operations/src/lock.rs`, satisfying/preferable locks supply initial universal fork markers. `crates/uv-resolver/src/resolver/mod.rs::fork_version_registry` handles local-version/non-local platform fallback and required-environment artifact checks. This distinction supports comparing fresh and reused forks, but does not confirm the faulty step.
+The relevant implementation is in `crates/uv-resolver/src/resolver/mod.rs`:
 
-Use the saved successful first-pass lock and the reduced daphne/dev fixture to trace torch selection before and after introducing or reusing the PyPy fork. A future regression test should retain the successful first upgrade, successful `--locked`, and repeated identical package-specific upgrade, and use the relevant `test-universal` gate. Full upgrade is a diagnostic comparison because it also advances Git sources. The existing information is sufficient to reproduce; requesting the reporter's first-pass lock is no longer a prerequisite for investigation.
+- `fork_version_registry` checks required artifact coverage against the current resolver fork when selecting a registry candidate.
+- `implied_markers` in `crates/uv-resolver/src/prioritized_distribution.rs` includes the wheel's Python version and implementation, not just its operating system. The parent fixture's cp312 wheels are disjoint from Python >=3.15 / PyPy.
+- `materialize_fork` and `ForkState::with_env` narrow the environment while retaining the parent PubGrub partial solution. Clearing `selected_versions` invalidates candidate-selection memoization, not already assigned decisions. A dependency discovered after torch selection can therefore introduce a fork in which torch has no wheel coverage without revisiting torch.
+- `crates/uv-lock-operations/src/lock.rs` supplies stored resolution markers on the next package-specific upgrade. Candidate selection now starts inside the narrower fork, and the artifact-coverage check rejects torch. Full upgrade discards those stored forks and repeats the initial ordering.
+
+No source-build fallback is available for torch in the parent fixture. The accepted initial lock and successful `--locked` check therefore do not demonstrate wheel availability in the failing branch.
+
+Before implementation, decide whether newly discovered forks should revalidate assigned artifacts and reject this initial solve, or whether wheel-coverage guarantees should be narrowed so both solves succeed. Simply discarding stored forks would mask the late-check discrepancy and interfere with the deliberate fork persistence used by preference-dependent resolution.
+
+## Fix
+
+**Outcome: not_fixed.** The checkout was restored byte-for-byte; no production or regression-test change was retained.
+
+The two original parent tests were first verified to pass while snapshotting the undesirable behavior. Their repeated-upgrade output snapshots were then temporarily changed to require exit 0 and `Resolved 5 packages`. Both failed at precisely that assertion with the reported missing macOS-compatible wheel error; the preceding initial lock and `--locked` checks still succeeded. The temporary expectation changes were restored after this red-test verification. The failure log is `/tmp/uv-23142-desired-regressions.log`.
+
+The production change needed to make those desired snapshots pass is not established within the requested behavior-preservation constraint. Ignoring Python/implementation markers or dropping existing forks can make a repeat avoid the error, but would relax required-environment checks or conceal the ordering discrepancy. Rechecking already assigned artifacts after narrowing a fork would enforce coverage, but would reject the initially successful parent fixture instead of preserving its successful-first-pass workflow. Selecting between these behaviors requires a design decision; no speculative workaround was implemented.
+
+Neighboring coverage was inspected before reaching that conclusion:
+
+- `lock_required_environment_python_fork` deliberately selects a stable-ABI fallback because a cp312-only Linux wheel cannot cover the Python 3.13 fork. Its existing assertion contradicts a proposed blanket relaxation of Python-aware artifact checks.
+- `lock_required_environment_wheel_url_fork` verifies that a direct URL wheel cannot satisfy Linux coverage in an x86_64 fork when its Linux wheel tag is aarch64. The distinct URL candidate path also checks artifact coverage against the current fork; no new late-fork failure was demonstrated for that producer/consumer path.
+- `crates/uv/tests/pip_compile/pip_compile.rs::universal_required_environment` and `universal_required_environment_find_links_no_build` retain rejection of missing required wheels. They were read as compatibility constraints, not duplicated as additional regression cases.
+- The preference-dependent forking tests in `crates/uv/tests/lock_scenarios/lock_scenarios.rs` and the lock producer's comments explain why stored forks are reused. Removing that behavior globally is not a focused coverage-check fix.
+
+Successful focused debug/test-profile validation:
+
+```sh
+cargo test -p uv --test lock --features test-universal lock_upgrade_package_ -- --nocapture
+# Original parent expectations: 2 passed, including lock production, --locked consumption,
+# the captured failed repeat, and the supported-environment test's full-upgrade comparison.
+
+cargo test -p uv --test lock --features test-universal lock::lock_required_environment_python_fork -- --exact
+# 1 passed.
+
+cargo test -p uv --test lock --features test-universal lock::lock_required_environment_wheel_url_fork -- --exact
+# 1 passed.
+```
+
+With the temporary desired-success snapshots, the first command failed both parent tests for the reported reason. `cargo nextest` was unavailable, so checks used `cargo test`. `cargo fmt --all` was attempted after restoring the test file, but rustfmt is absent from the installed 1.99.0 toolchain; no changed Rust file remains to format. No full suite or release-profile build was run.
 
 ## Verification and scope
 
-The outcome is based on executed commands and saved lockfiles, supplemented by source, release-note, and test inspection. Earlier issue/PR research is retained as related context and does not establish a root cause. No fix was implemented or tested. Only temporary reproduction files and this issue-context README were written. No checkout files or GitHub state were changed; existing checkout modifications were left untouched.
+The reproduction remains confirmed. The fix investigation adds executed debug-profile parent regressions, red-test verification of desired repeat success, and two passing compatibility controls. The artifact-check ordering is identified, but the intended policy and a behavior-preserving fix remain unresolved. No production fix or permanent regression-test update was made. The checkout is clean, including byte-for-byte restoration of the parent regression file. Only temporary investigation/build files and this README were written; no GitHub state or Git configuration was changed.
