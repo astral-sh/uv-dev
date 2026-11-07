@@ -16908,6 +16908,363 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
     Ok(())
 }
 
+/// A group dependency narrows the environment after the wheel-only dependency is selected.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_upgrade_package_supported_environment_forks() -> Result<()> {
+    let server = PackseServer::from_toml(indoc! {r#"
+        name = "upgrade-package-supported-environment-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.torch.versions."2.14.1"]
+        sdist = false
+        wheel_tags = ["cp312-cp312-macosx_11_0_arm64", "cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.daphne.versions."1.0.0"]
+        requires = [
+            "a<2; python_version < '3.15' or platform_python_implementation != 'PyPy'",
+            "a>=2; python_version >= '3.15' and platform_python_implementation == 'PyPy'",
+        ]
+
+        [packages.a.versions."1.0.0"]
+
+        [packages.a.versions."2.0.0"]
+    "#})?;
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["torch>=2.13,<2.15"]
+
+        [dependency-groups]
+        testing = ["daphne"]
+
+        [tool.uv]
+        environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
+
+        [tool.uv.sources]
+        torch = {{ index = "pytorch-cpu" }}
+
+        [[tool.uv.index]]
+        name = "pytorch-cpu"
+        url = "{index_url}"
+        explicit = true
+    "#, index_url = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
+        "--upgrade-package", "torch", "--upgrade-package", "daphne", "--upgrade-package", "a",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'darwin'",
+            "(python_full_version < '3.15' and sys_platform == 'darwin') or (platform_python_implementation != 'PyPy' and sys_platform == 'darwin')",
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'linux'",
+            "(python_full_version < '3.15' and sys_platform == 'linux') or (platform_python_implementation != 'PyPy' and sys_platform == 'linux')",
+        ]
+        supported-markers = [
+            "sys_platform == 'darwin'",
+            "sys_platform == 'linux'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "(python_full_version < '3.15' and sys_platform == 'darwin') or (platform_python_implementation != 'PyPy' and sys_platform == 'darwin')",
+            "(python_full_version < '3.15' and sys_platform == 'linux') or (platform_python_implementation != 'PyPy' and sys_platform == 'linux')",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:[SHA256:a-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'darwin'",
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'linux'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-2.0.0.tar.gz", hash = "sha256:[SHA256:a-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "daphne"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "a", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.15' or platform_python_implementation != 'PyPy'" },
+            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.15' and platform_python_implementation == 'PyPy'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/daphne-1.0.0.tar.gz", hash = "sha256:[SHA256:daphne-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/daphne-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:daphne-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "torch" },
+        ]
+
+        [package.dev-dependencies]
+        testing = [
+            { name = "daphne" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "torch", specifier = ">=2.13,<2.15", index = "http://[LOCALHOST]/simple/" }]
+
+        [package.metadata.requires-dev]
+        testing = [{ name = "daphne" }]
+
+        [[package]]
+        name = "torch"
+        version = "2.14.1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/torch-2.14.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:[SHA256:torch-2.14.1-cp312-cp312-macosx_11_0_arm64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/torch-2.14.1-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:torch-2.14.1-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Reusing the saved forks rejects a lockfile that the same command just wrote and
+    // `--locked` accepts, making selective upgrades non-repeatable (astral-sh/uv#23142).
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
+        "--upgrade-package", "torch", "--upgrade-package", "daphne", "--upgrade-package", "a",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'darwin')
+      cause: Because torch==2.14.1 has no macOS-compatible wheels and your project depends on torch==2.14.1, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // A full upgrade starts from the supported environments instead of the saved forks.
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Required environments check artifact coverage without partitioning the initial resolution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_upgrade_package_required_environment_forks() -> Result<()> {
+    let server = PackseServer::from_toml(indoc! {r#"
+        name = "upgrade-package-required-environment-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.torch.versions."2.14.1"]
+        sdist = false
+        wheel_tags = ["cp312-cp312-macosx_11_0_arm64", "cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.daphne.versions."1.0.0"]
+        requires = [
+            "a<2; python_version < '3.15' or platform_python_implementation != 'PyPy'",
+            "a>=2; python_version >= '3.15' and platform_python_implementation == 'PyPy'",
+        ]
+
+        [packages.a.versions."1.0.0"]
+
+        [packages.a.versions."2.0.0"]
+    "#})?;
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["torch>=2.13,<2.15"]
+
+        [dependency-groups]
+        testing = ["daphne"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
+
+        [tool.uv.sources]
+        torch = {{ index = "pytorch-cpu" }}
+
+        [[tool.uv.index]]
+        name = "pytorch-cpu"
+        url = "{index_url}"
+        explicit = true
+    "#, index_url = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
+        "--upgrade-package", "torch", "--upgrade-package", "daphne", "--upgrade-package", "a",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy'",
+            "python_full_version < '3.15' or platform_python_implementation != 'PyPy'",
+        ]
+        required-markers = [
+            "sys_platform == 'darwin'",
+            "sys_platform == 'linux'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.15' or platform_python_implementation != 'PyPy'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:[SHA256:a-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.15' and platform_python_implementation == 'PyPy'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-2.0.0.tar.gz", hash = "sha256:[SHA256:a-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "daphne"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "a", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.15' or platform_python_implementation != 'PyPy'" },
+            { name = "a", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.15' and platform_python_implementation == 'PyPy'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/daphne-1.0.0.tar.gz", hash = "sha256:[SHA256:daphne-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/daphne-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:daphne-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "torch" },
+        ]
+
+        [package.dev-dependencies]
+        testing = [
+            { name = "daphne" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "torch", specifier = ">=2.13,<2.15", index = "http://[LOCALHOST]/simple/" }]
+
+        [package.metadata.requires-dev]
+        testing = [{ name = "daphne" }]
+
+        [[package]]
+        name = "torch"
+        version = "2.14.1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/torch-2.14.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:[SHA256:torch-2.14.1-cp312-cp312-macosx_11_0_arm64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/torch-2.14.1-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:torch-2.14.1-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Required wheel coverage also rejects an accepted lockfile on a repeated selective
+    // upgrade once the dependency's narrower forks are saved (astral-sh/uv#23142).
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
+        "--upgrade-package", "torch", "--upgrade-package", "daphne", "--upgrade-package", "a",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.15' and platform_python_implementation == 'PyPy')
+      cause: Because torch==2.14.1 has no macOS-compatible wheels and your project depends on torch==2.14.1, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
 /// Warn when there are missing bounds on transitive dependencies with `--resolution lowest`.
 #[cfg(feature = "test-universal")]
 #[test]
