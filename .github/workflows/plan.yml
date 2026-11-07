@@ -3,6 +3,10 @@ name: plan
 on:
   workflow_call:
     inputs:
+      free-runners:
+        description: "Use only standard GitHub runners"
+        type: boolean
+        default: false
       base-sha:
         description: "The base SHA used to determine changed files"
         required: false
@@ -12,6 +16,12 @@ on:
         required: false
         type: string
     outputs:
+      runners:
+        description: "Resolved runner roles"
+        value: ${{ jobs.plan.outputs.runners }}
+      free-runners:
+        description: "Whether only free runners were selected"
+        value: ${{ jobs.plan.outputs.free-runners }}
       cargo-vet-workspaces:
         description: "JSON array of Cargo workspace directories to vet"
         value: ${{ jobs.plan.outputs.cargo-vet-workspaces }}
@@ -85,6 +95,8 @@ jobs:
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
     cache-mode: none
     outputs:
+      runners: ${{ steps.runners.outputs.runners }}
+      free-runners: ${{ steps.runners.outputs.free-only }}
       cargo-vet-workspaces: ${{ steps.cargo-vet.outputs.workspaces }}
       test-code: ${{ steps.plan.outputs.test_code }}
       review-security: ${{ steps.plan.outputs.review_security }}
@@ -106,6 +118,17 @@ jobs:
       build-docker: ${{ steps.plan.outputs.build_docker }}
       push-docker: ${{ steps.plan.outputs.push_docker }}
     steps:
+      - name: "Select runners"
+        id: runners
+        uses: astral-sh/github-actions/select-runners@d50d08cb8e679878ab643cbd115a801c252a312e
+        with:
+          free-only: ${{ inputs.free-runners && 'true' || '' }}
+          required: >-
+            ubuntu-x86_64-2 ubuntu-x86_64-2-slim ubuntu-x86_64-4 ubuntu-x86_64-4-github
+            ubuntu-x86_64-8 ubuntu-x86_64-8-github ubuntu-x86_64-16 ubuntu-aarch64-2
+            ubuntu-aarch64-4 macos-aarch64-8 windows-x86_64-4 windows-x86_64-16
+            windows-aarch64-8
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head-sha }}

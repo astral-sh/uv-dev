@@ -1,5 +1,10 @@
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -23,7 +28,7 @@ jobs:
           )
         )
       }}
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-16 }}
     environment:
       name: automations
       deployment: false
@@ -128,7 +133,7 @@ jobs:
   prepare:
     needs: review
     if: needs.review.outputs.result != ''
-    runs-on: github-ubuntu-24.04-x86_64-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -157,7 +162,7 @@ jobs:
   report:
     needs: prepare
     if: needs.prepare.outputs.result != '' && fromJSON(needs.prepare.outputs.result).comments[0] != null
-    runs-on: github-ubuntu-24.04-x86_64-4
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     environment:
       name: automations
       deployment: false
