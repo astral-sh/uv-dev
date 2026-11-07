@@ -31,6 +31,8 @@ The issue was opened on October 6, 2026. astral-sh/uv#22258 is its companion rep
 
 Outcome: **reproducible**. Two independently reconstructed public-API tests failed at the same assertions as the report; Cargo exited 101 with zero passed and two failed.
 
+A November 7, 2026 follow-up from rezamuliawijaya reports that both reproduction tests from astral-sh/uv#22258 also fail against `main` at commit `5ce3450`, with zero passed and two failed. This extends the reported affected revisions beyond the independent checkout above. The comment supplies the test names and failure summary but no compiler, host platform, or exact invocation; this later run has not been independently verified. It does not establish a maintainer decision on fallback semantics or refresh the related pull request statuses.
+
 ### Environment and isolation
 
 - Host: Linux x86_64. The supplied environment uses `sys_platform = "darwin"`, `platform_system = "Darwin"`, and `platform_machine = "arm64"`; no macOS host is required for these API calls.
