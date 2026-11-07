@@ -99,6 +99,45 @@ serialized order for initial forks supplied through `environments`. It does not 
 full resolution with a package-specific resolution seeded from an existing lockfile, so it would
 not detect this command-dependent reorder.
 
+### Additional public reproductions reported with uv 0.12.15
+
+In the November 7 comment on astral-sh/uv#22040, the reporter supplies another reproduction using
+uv 0.12.15 (`uv-x86_64-unknown-linux-musl`) in a Linux x86_64 container. These additional fixtures
+have not been independently replayed or tested against the fix described below.
+
+For `Flaminis/Dalaran` at commit `da14440f40a86b3035832827de740ec28538ef4b`, use the root
+`uv.lock`. The project has Git-pinned dependencies and `requires-python = ">=3.10, <3.12"`.
+The reported procedure is:
+
+1. Read the starting lockfile and collect the unique package names whose `source` contains
+   `registry`, sorted by name. Construct one `--upgrade-package NAME` argument for each name,
+   leaving Git dependencies outside the upgrade selection.
+2. Run `uv lock` with that argument list three times, retaining the same list for all three runs
+   and saving each resulting lockfile for comparison.
+3. Compare the first and second outputs, then the second and third outputs.
+
+The reporter observes 270 removed/added lines between the first two outputs, with no package
+version changes and identical sorted lines. The changes reorder top-level and per-package
+`resolution-markers`, including those for `av` 18.1.0: markers for Python `>=3.11,<3.11.5` move
+after the `>=3.11.5` group. The second and third outputs are identical. A plain `uv lock` after
+the first pass reportedly leaves that first output unchanged. The reporter also observes stable
+repeated `uv lock --upgrade` output on projects without Git pins; that observation is not a
+verified workaround for this Git-pinned fixture.
+
+This extends the original full-versus-partial upgrade example to repeated identical partial
+upgrades and supplies a fixture for checking package-level marker ordering as well as top-level
+ordering. It does not establish that the previously validated fix fails: the reported uv 0.12.15
+binary has not been shown to include that fix.
+
+The same comment supplies a distinct adjacent case in `OpenPipe/ART` at commit
+`5f0c1fbfd1a25bda9b106d50be8a903df34ab466`, using `megatron_runtime/uv.lock`. A second partial
+upgrade reportedly changes no versions but drops `resolution-markers` entries for Windows and
+Emscripten and expands dependency marker expressions, including `cuda-pathfinder` under the
+`cuda12` conflict extra. The reporter describes those expressions as equivalent. Unlike the
+Dalaran case, this is not a pure reorder: semantic equivalence and any shared mechanism remain
+unverified. Investigate it separately before attributing it to initial-fork scheduling or assuming
+an ordering fix covers it.
+
 ## Fix
 
 Outcome: **fixed**.
@@ -173,4 +212,4 @@ The following plausible results are not the same report:
 - astral-sh/uv#16839 involved a false dry-run message without a written lockfile diff.
 - astral-sh/uv#17752 targets astral-sh/uv#17747's compound-disjunction canonicalization failure.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2121
+Pull request: astral-sh/uv-dev#2121
