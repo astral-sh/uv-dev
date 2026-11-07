@@ -2,82 +2,171 @@
 
 Issue: astral-sh/uv#23142
 
-Classification: bug
-
 ## Summary
 
-On Linux x86_64 with CPython 3.12 and uv 0.12.15 (musl), the reporter runs package-specific upgrades for every non-Git package in a public paperless-ngx checkout. The first run succeeds, updating torch from 2.14.0 to 2.14.1. A subsequent `uv lock --python 3.12 --locked` accepts the resulting lock, but repeating the original upgrade command fails with “No solution found.”
+Reproduced on Linux x86_64 with CPython 3.12.3 and the installed uv 0.13.6 (GNU build). Using the reported paperless-ngx revision, the first package-specific upgrade succeeds and updates torch from 2.14.0 to 2.14.1. `uv lock --python 3.12 --locked` accepts that lock without changing it. Repeating the same package-specific upgrade fails on the reported Python >=3.15 / PyPy / macOS split with a torch wheel-availability error.
 
-The failing split is `python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'darwin'`. The explanation says torch>=2.13.0 has no macOS-compatible wheels. The first run introduced this split among its resolution markers. Plain `uv lock` accepts the first-pass lock, and full `uv lock --upgrade` reportedly succeeds on both passes.
+A reduced project containing torch and a `dev` dependency on daphne also reproduces the successful-upgrade / successful-locked-check / failed-repeat sequence. Its failing split starts at Python 3.12 rather than 3.15. Git dependencies are therefore not necessary to reproduce the repeated-upgrade failure, although retaining Git pins is the reporter's reason for using package-specific upgrades.
 
-The closest discussions concern repeated-upgrade marker changes, discrepancies between discovered and pre-existing forks, and a separate marker-canonicalization problem. None establishes the same second-pass wheel-rejection failure or a confirmed fix.
-
-## Report details
-
-- Public repository: paperless-ngx/paperless-ngx, revision `5f17b1a310aa011f43b56474221d97f8d6bfe689`.
-- Reported requirement: `torch>=2.13,<2.15`, sourced from a named `pytorch-cpu` index.
-- The project lock contains multiple resolution forks and Git sources.
-- The reproduction extracts unique package names whose lock sources do not contain a Git entry and passes one `--upgrade-package` argument for each name. The same argument list is reused on the second pass.
-- Git sources are intentionally excluded so their pinned revisions remain unchanged. Full `--upgrade` is therefore a diagnostic comparison, not a verified replacement workflow.
-- Expected behavior: the second package-specific upgrade succeeds, with no change or another valid lock.
-- The reporter repeats upgrades because of the marker-ordering behavior discussed in astral-sh/uv#22040.
-
-## Draft response
-
-The second-pass resolution failure is distinct from the marker reordering tracked in astral-sh/uv#22040. Package-specific upgrades can reuse the lockfile's resolution forks, while --upgrade starts without them; this explains a difference between the code paths, but does not establish the cause of the failure.
-
-Please retry the same two-pass reproduction with the latest uv release. If it still fails, attach the uv.lock produced by the successful first pass and verbose output from both passes. Keeping the Git revisions unchanged will help isolate the resolver behavior. We haven't confirmed a fix for this failure.
+Plain locking accepts the full project's first-pass lock unchanged. Two full upgrades also succeed, but the first moves its Git dependency, confirming that full upgrade changes the intended workflow. No root cause or fix has been confirmed.
 
 ## Classification
 
-The reported unchanged-input workflow succeeds once and then cannot resolve using the lock it just generated, while full upgrade succeeds repeatedly. That is a resolver correctness problem. Source confirms that package-specific upgrades can reuse stored forks while --upgrade discards them, but does not establish why this fork fails. The related issues have materially different outcomes or unconfirmed mechanisms, so duplicate classification is not supported. No recurrence of a previously fixed bug has been established.
+Bug report; the inconsistent repeated-resolution behavior is confirmed. Acceptance by `--locked` validates the existing lock against the project and does not establish that a fresh resolution or installation on every represented platform succeeds. The evidence does not determine whether the first solve should reject the unsupported environment or the repeated solve should retain the first solve's selection.
 
-Acceptance by `--locked` alone does not prove that a fresh resolution succeeds. The material correctness concern is the reported difference between repeated package-specific upgrades and repeated full upgrades on unchanged project inputs. Reproduction and confirmation of the responsible code remain downstream work.
+The reporter's description that the second solve “loses the fallback” remains a hypothesis. Source inspection identifies different treatment of stored forks for full and package-specific upgrades, but does not establish the responsible constraint or fallback. Duplicate classification and recurrence of a previously fixed bug are not established.
 
-The reporter's explanation that the second solve “loses the fallback” is a hypothesis. The wheel error and additional forks are reported observations; no specific fallback, index-selection defect, or marker-canonicalization defect has been confirmed.
+## Reproduction
+
+**Outcome: reproducible.** These are observed command results, not conclusions inferred from related issues or source code.
+
+### Environment and isolation
+
+- Reported: uv 0.12.15, `uv-x86_64-unknown-linux-musl`, Linux x86_64, CPython 3.12.
+- Tested: installed `uv 0.13.6 (x86_64-unknown-linux-gnu)` at `/opt/hostedtoolcache/uv/0.13.6/x86_64/uv`; CPython 3.12.3 at `/usr/bin/python3.12`; Linux x86_64 / Ubuntu 24.04.
+- All project files, cache, configuration directories, temporary build files, and command artifacts were placed under `/tmp/uv-23142-ZVY4aR`. Commands ran with an explicit environment and isolated uv/XDG paths; managed Python downloads and Git global/system configuration were disabled. The successful reproduction used normal source-build behavior, not `--no-build`.
+- The reported uv 0.12.15 build and checkout's uv 0.13.7 were not executed. There is no reported last known-good uv release to compare. No uv binary was built from this checkout.
+
+### Full reported project
+
+Fetched only `pyproject.toml` and `uv.lock` from paperless-ngx/paperless-ngx revision `5f17b1a310aa011f43b56474221d97f8d6bfe689`, reviewed their resolver inputs, and used temporary copies. A full project clone was unnecessary because the root is a virtual project (`package = false`) with static dependency declarations.
+
+Relevant configuration includes:
+
+- `requires-python = ">=3.11"`, `prerelease = "disallow"`, and supported environments `sys_platform == 'darwin'` and `sys_platform == 'linux'`.
+- `torch>=2.13,<2.15`, explicitly sourced from `pytorch-cpu` at `https://download.pytorch.org/whl/cpu`.
+- Extras `mariadb`, `postgres`, and `webserver`; `dev` includes `docs`, `lint`, and `testing`; a separate `typing` group contains the Git dependency. These declarations were retained, including the default `dev` group. This is a root project, not a workspace-member selection scenario.
+- Platform/Python-specific direct wheel sources for psycopg-c, and a locked Git dependency on microsoft/python-type-stubs at `692c37c3969d22612b295ddf7e7af5907204a386`.
+- The original lock has 274 package records and ten resolution markers. The upgrade list contains 268 unique names with no Git source, including the virtual root and non-Git URL-source packages, matching the reporter's extraction rule.
+
+Starting from the original two files, the command sequence was reconstructed using argument arrays rather than executing the issue's shell script:
+
+```python
+import subprocess
+import tomllib
+from pathlib import Path
+
+lock = tomllib.loads(Path("uv.lock").read_text())
+names = sorted({
+    package["name"] for package in lock["package"]
+    if "git" not in package.get("source", {})
+})
+upgrade_arguments = [
+    argument for name in names
+    for argument in ("--upgrade-package", name)
+]
+subprocess.run(["uv", "lock", "--python", "3.12", *upgrade_arguments], check=True)
+subprocess.run(["uv", "lock", "--python", "3.12", "--locked"], check=True)
+subprocess.run(["uv", "lock", "--python", "3.12", *upgrade_arguments], check=False)
+```
+
+| Invocation | Observed result |
+| --- | --- |
+| First package-specific upgrade | Exit 0; 283 package records; torch 2.14.0 / 2.14.0+cpu become 2.14.1 / 2.14.1+cpu; ten stored forks become twenty, introducing PyPy splits. |
+| `uv lock --python 3.12 --locked` | Exit 0; first-pass lock is byte-identical. |
+| Same package-specific upgrade, same argument list | Exit 1; the exact reported Python >=3.15 / PyPy / Darwin split fails. The lock remains unchanged. |
+| Plain `uv lock --python 3.12` on first-pass lock | Exit 0; lock remains byte-identical. |
+| `uv lock --python 3.12 --upgrade`, in a separate copy of first-pass state | Exit 0; Git pin advances from `692c37c3` to `19affca5`. |
+| Repeated full upgrade in that separate copy | Exit 0. |
+
+The failing output is:
+
+```text
+error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'darwin')
+  cause: Because torch>=2.13.0,<=2.14.1+cpu has no macOS-compatible wheels and only the following versions of torch are available:
+             torch<=2.14.1+cpu
+             torch>=2.15
+         we can conclude that torch>=2.13.0,<2.15 cannot be used.
+         And because your project depends on torch>=2.13,<2.15 and your project requires paperless-ngx[mariadb], we can conclude that your project's requirements are unsatisfiable.
+```
+
+The package-specific first pass retains the original Git revision. Its lock is saved at `/tmp/uv-23142-ZVY4aR/current-normal-pass1.lock` (SHA256 `06dcc694bd28a23476189cfd861fc016e902019988042205bc3dab02a3411a45`). The original inputs are `/tmp/uv-23142-ZVY4aR/pyproject.toml` and `/tmp/uv-23142-ZVY4aR/uv.lock`; the fixed upgrade argument list is `upgrade-arguments.json`; the failing output is `current-normal-pass2.log` in the same directory.
+
+### Reduced reproduction
+
+This temporary `pyproject.toml` reproduces the same sequence without Git sources, direct wheel URLs, extras, or the other paperless dependencies:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["torch>=2.13,<2.15"]
+
+[dependency-groups]
+dev = ["daphne==4.2.3"]
+
+[tool.uv]
+package = false
+prerelease = "disallow"
+environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+```
+
+Run these explicit commands in a fresh temporary directory containing that file:
+
+```sh
+# Seed an older lock; these version restrictions are CLI inputs only.
+uv lock --python 3.12 --upgrade-package torch==2.14.0 --upgrade-package autobahn==26.7.1
+# Exit 0: 35 package records.
+
+uv lock --python 3.12 --upgrade-package torch --upgrade-package autobahn --upgrade-package cbor2
+# Exit 0: 36 records; upgrades torch and autobahn, and selects two cbor2 versions.
+
+uv lock --python 3.12 --locked
+# Exit 0, byte-identical lock.
+
+uv lock --python 3.12 --upgrade-package torch --upgrade-package autobahn --upgrade-package cbor2
+# Exit 1: torch has no macOS-compatible wheels in the Python >=3.12 / PyPy / Darwin split.
+```
+
+The first upgrade selects autobahn 26.11.1 and cbor2 5.9.0 / 6.2.1; autobahn's cbor2 dependencies differ across `platform_python_implementation == 'PyPy'`. This provides a concrete dependency-group fixture for investigating the additional forks, without establishing a root cause. The reduced fixture is `/tmp/uv-23142-ZVY4aR/group-project/pyproject.toml`; its seed and successful first-upgrade locks are `group-seed.lock` and `group-pass1.lock`, with `group-pass2.log` containing the failure. The failed repeat leaves its first-pass lock unchanged.
+
+A torch/mysqlclient-only reduction succeeded on both passes, so the error mentioning the mariadb extra does not establish that mysqlclient is necessary. Making autobahn a direct dependency instead of reaching it through daphne produced the wheel error on the first upgrade rather than reproducing the precise successful-first-pass sequence. Retain the demonstrated group fixture when reducing further. An initial full-project attempt with `--no-build` stopped at psycopg-c on its first pass; that separate build-policy failure is not evidence for this issue.
+
+### Existing test coverage
+
+Searched the integration tests under `crates/uv/tests/` (including the current `lock/`, `project/`, `lock_scenarios/`, and `it/` modules) and `crates/uv-client/tests/it/`, then read the relevant setup and assertions:
+
+- `crates/uv/tests/lock/lock.rs::lock_upgrade_package` covers selectively upgrading anyio while retaining idna, subsequent successful `--locked` validation, and a full upgrade. It does not repeat a package-specific upgrade across wheel/fork boundaries.
+- `crates/uv/tests/lock/lock.rs::lock_pytorch_local_preference` snapshots torch 2.6.0 for Darwin and 2.6.0+cpu elsewhere, using a dated PyTorch mirror and predeclared platform environments. It performs one lock operation, without a PyPy split or repeated upgrade.
+- `crates/uv/tests/lock/lock.rs::lock_upgrade_drop_fork_markers` verifies that full `--upgrade` drops obsolete forks after relaxing a dependency bound. It does not exercise the reported repeated package-specific path.
+- `crates/uv/tests/lock/lock.rs::lock_required_environment_python_fork` verifies per-Python-fork wheel coverage with `required-environments` and a stable-ABI fallback. The reported project does not configure `required-environments`.
+
+These four tests are gated by `test-universal`. None of these inspected tests covers the exact reproduced sequence. No repository tests were added or executed; verification used the installed uv executable.
 
 ## Related
 
-- astral-sh/uv#22040 — Varying order of resolution-markers from the same `pyproject.toml` (issue, open). The reporter's linked issue includes the same two-pass --upgrade-package workflow on uv 0.12.15 with Git-pinned dependencies. Its runs succeed and reorder or simplify markers; it does not track the second-pass unsatisfiable resolution reported here.
-- astral-sh/uv#6176 — Apply fork markers at fork time (issue, open). Tracks dependencies being solved in forks disjoint from their markers. Maintainers explicitly discuss instability between discovering fork points during resolution and starting with existing forks. This is relevant resolver context, but that mechanism has not been established for this wheel-rejection failure.
-- astral-sh/uv#17747 — `uv lock` not working as expected in some cases when `upgrade_package` is set (issue, open). Another package-specific-upgrade report involving newly introduced forks and unstable lock output. Its --locked invocation rejects the new lock as out of date, whereas this report's --locked succeeds and the next upgrade fails to solve. The reporter confirmed a marker-canonicalization experiment helped that separate case.
-- astral-sh/uv#17752 — Fix canonicalization of incompatible marker pairs compound disjunctions (pull request, open). The experimental fix linked from astral-sh/uv#17747 targets marker-tree canonicalization. A maintainer said it could not ship as-is; it remains unmerged. There is no evidence it fixes this issue's second-pass resolution failure.
-- astral-sh/uv#21672 — Scope required-environment checks to the current fork (pull request, merged). Changed wheel-coverage checks to use the current resolver fork, allowing backtracking or an unsupported-environment error. Released in uv 0.12.14, before the reported 0.12.15. It is relevant historical context for fork-specific wheel rejection, not a confirmed cause or fix for this report.
+- astral-sh/uv#22040 — Open issue about varying resolution-marker order. It includes the same two-pass package-specific workflow with Git pins on uv 0.12.15, but its runs succeed. It explains the reporter's reason for a second pass, not this observed resolution failure.
+- astral-sh/uv#6176 — Open issue about applying fork markers at fork time. Maintainers discuss differences between discovering fork points during resolution and starting with existing forks. Relevant context, without a confirmed shared mechanism.
+- astral-sh/uv#17747 — Open package-specific-upgrade issue involving new forks and unstable output. Its subsequent `--locked` rejects the generated lock, unlike this reproduced sequence.
+- astral-sh/uv#17752 — Open, unmerged marker-canonicalization experiment linked from astral-sh/uv#17747. A maintainer said it could not ship as-is. No demonstrated fix for this issue.
+- astral-sh/uv#21672 — Merged change scoping required-environment checks to the current fork, released in uv 0.12.14 before the reported version. Relevant to wheel/fork checks, without a confirmed causal connection.
+- astral-sh/uv#21825 — Merged Darwin-baseline wheel-boundary fix, released in uv 0.12.17. It does not establish a fix for the repeated-upgrade failure, which still occurs on tested uv 0.13.6.
+- astral-sh/uv#21820 and astral-sh/uv#21835 — ONNX Runtime wheel selection across Python forks and its merged fix; astral-sh/uv#21836 also corrects generic/stable-ABI wheel handling. The fixes shipped in uv 0.12.18. Their successful-resolution/installation mismatch differs from this second-resolution failure.
 
-## Supporting evidence
+Earlier research also considered the following alternatives without establishing a duplicate or fix:
 
-### Source and release timing
+- astral-sh/uv#5180 and merged astral-sh/uv#5480, astral-sh/uv#5481, astral-sh/uv#5485: historical fork persistence and second-run version collapse.
+- astral-sh/uv#20368 and merged astral-sh/uv#20369: impossible cross-variable platform-marker memoization and alternating dependencies.
+- astral-sh/uv#9963 and merged astral-sh/uv#10046: PyTorch local-version/non-local fallback. Related functionality, not proof of the cause here.
+- astral-sh/uv#23073: invalid locks accepted after manual edits or merges. Here uv itself writes the lock and no manual edit is needed.
+- astral-sh/uv#22805 and merged astral-sh/uv#22806: Android wheel-tag recognition, distinct from the Darwin split.
+- astral-sh/uv#4987 and astral-sh/uv#13373: corrected private-index/workspace-source configuration, without an established connection.
 
-The uv 0.12.15 version of `crates/uv/src/commands/project/lock.rs` confirms:
+## Implementation context and next steps
 
-- Lines 1227–1234 mark an existing lock unusable for full `--upgrade`.
-- Lines 1348–1354 mark it preferable for package-specific upgrades after fork-coverage checks.
-- Lines 999–1026 reuse fork markers from satisfying or preferable locks as initial universal resolver environments.
+Release notes and the current implementation were inspected alongside the reproduction. In `crates/uv-lock-operations/src/validated_lock.rs`, full upgrade makes the existing lock unusable, while package-specific upgrade can retain it as preferable after fork-coverage checks. In `crates/uv-lock-operations/src/lock.rs`, satisfying/preferable locks supply initial universal fork markers. `crates/uv-resolver/src/resolver/mod.rs::fork_version_registry` handles local-version/non-local platform fallback and required-environment artifact checks. This distinction supports comparing fresh and reused forks, but does not confirm the faulty step.
 
-The checkout implements the same distinction in `crates/uv-lock-operations/src/validated_lock.rs` at lines 109 and 242, and `crates/uv-lock-operations/src/lock.rs` at lines 886–910. This supports investigating the reused-fork path; it does not identify the failing constraint.
-
-The 0.12.x changelog places astral-sh/uv#21672 in uv 0.12.14, released September 15, 2026. The reported uv 0.12.15 was also released that day. Later changes include astral-sh/uv#21825 in 0.12.17 (Darwin baseline wheel boundaries) and astral-sh/uv#21835 plus astral-sh/uv#21836 in 0.12.18 (Python-fork wheel validation). Their descriptions do not confirm a fix for repeated package-specific upgrades, so a current-version retest is needed.
-
-### Inspected alternatives
-
-- astral-sh/uv#5180 describes a historical second-run collapse of forks and versions. Its maintainer explanation motivated storing and reusing fork markers. The referenced merged changes include astral-sh/uv#5480, astral-sh/uv#5481, and astral-sh/uv#5485. The new failure has not been shown to be a recurrence of that resolved instability.
-- astral-sh/uv#20368 and merged astral-sh/uv#20369 concern memoization of impossible cross-variable platform markers and alternating dependencies under plain locking. That specific trigger is absent from the report.
-- astral-sh/uv#9963 points to merged astral-sh/uv#10046 for PyTorch CPU local-version fallback. That fix considers a non-local release when it supports a missing platform and otherwise retains the local version. It does not establish the cause of this existing-lock failure.
-- astral-sh/uv#21820 and merged astral-sh/uv#21835 concern a successful resolution selecting ONNX Runtime wheels unsuitable for an older Python fork, followed by installation failure. The new report fails during resolution on a subsequent upgrade.
-- astral-sh/uv#23073 concerns lock validation accepting dependency-specifier violations after manual edits or merges. The reporter here says uv itself wrote the lock; no such edit is reported.
-- astral-sh/uv#22805 and merged astral-sh/uv#22806 concern missing Android wheel-tag mappings. They do not explain a Darwin split.
-- astral-sh/uv#4987 was resolved by supplying the private package index. astral-sh/uv#13373 was closed after correcting a workspace dependency source. Neither establishes the reported fork-dependent failure.
-
-## Search coverage
-
-Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using literal errors and identifiers (--upgrade-package, No solution, macOS-compatible wheels, resolution-markers, pytorch-cpu, PyPy, paperless), repeated-run and own-output symptoms, and conceptual terms including idempotence, existing forks, preferences, unsatisfiable resolution, wheel coverage, and upgrades retaining Git pins. PR keyword searches returned no matches, so supplemented them with title filtering over 1,200 recent PRs across all states and direct inspection of referenced historical PRs. Read the strongest candidates and their comments and followed their linked fixes. Compared release notes and the 0.12.15 source with the checkout. Inspected but ruled out astral-sh/uv#5180 and its historical fork-persistence fixes as proof of the same regression; astral-sh/uv#20368 and astral-sh/uv#20369 concern impossible cross-variable markers; astral-sh/uv#9963 and astral-sh/uv#10046 concern CPU/local-version fallback; astral-sh/uv#21820 and astral-sh/uv#21835 concern installation after selecting wheels incompatible with an older Python fork. Also ruled out astral-sh/uv#23073, whose accepted invalid locks follow manual edits or merges, and astral-sh/uv#22805, whose regression is Android wheel-tag recognition. No existing discussion or fix was confirmed to cover this exact failure.
-
-The report was decomposed before searching into: repeated-run failure; differences among package-specific upgrade, full upgrade, plain locking, and locked validation; fork and marker persistence; wheel availability in a non-current Python/implementation/platform split; and upgrading registry packages while retaining Git pins. Symptom searches were kept separate from possible-cause searches.
-
-## Maintainer next steps
-
-Request a retest of the unchanged two-pass reproduction on the current uv release. If it persists, obtain the first-pass lockfile and verbose logs for the successful and failing passes, then reduce the failing fork while retaining the original Git revisions. Compare the reused-fork solve with full upgrade before attributing the behavior to wheel coverage, marker canonicalization, or fallback selection.
+Use the saved successful first-pass lock and the reduced daphne/dev fixture to trace torch selection before and after introducing or reusing the PyPy fork. A future regression test should retain the successful first upgrade, successful `--locked`, and repeated identical package-specific upgrade, and use the relevant `test-universal` gate. Full upgrade is a diagnostic comparison because it also advances Git sources. The existing information is sufficient to reproduce; requesting the reporter's first-pass lock is no longer a prerequisite for investigation.
 
 ## Verification and scope
 
-This handoff is based on the report, live GitHub issue and pull request discussions, release notes, and source inspection. The project reproduction was not executed, and no fix was tested. No GitHub changes were made. Only this temporary README was authored; existing checkout changes were left untouched.
+The outcome is based on executed commands and saved lockfiles, supplemented by source, release-note, and test inspection. Earlier issue/PR research is retained as related context and does not establish a root cause. No fix was implemented or tested. Only temporary reproduction files and this issue-context README were written. No checkout files or GitHub state were changed; existing checkout modifications were left untouched.

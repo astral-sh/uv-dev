@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced on Linux x86_64 with CPython 3.12.3 and installed uv 0.13.6 (GNU). Using pyproject.toml and uv.lock from paperless-ngx/paperless-ngx revision 5f17b1a310aa011f43b56474221d97f8d6bfe689, ran `uv lock --python 3.12` with one `--upgrade-package` argument for each original non-Git package name. The first pass succeeded, updating torch 2.14.0 to 2.14.1; `uv lock --python 3.12 --locked` succeeded unchanged; repeating the original upgrade command exited 1 with the reported torch wheel error for Python >=3.15, PyPy, and Darwin. Plain locking and two full upgrades succeeded. A reduced torch/daphne dependency-group fixture also reproduced the successful-first-pass/failed-repeat sequence. Updated $RUNNER_TEMP/issue-context/README.md with commands, configuration, artifacts, and test coverage. No root cause was confirmed; no checkout or GitHub changes were made."
+}
