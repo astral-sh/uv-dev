@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 22905,
+        "title": "Allow user-level `uv.toml` to be split",
+        "url": "https://github.com/astral-sh/uv/issues/22905",
+        "state": "open",
+        "reason": "Requests uv.toml.d fragments applied after the main file in lexicographical order. This closely overlaps the drop-in capability, but concerns user configuration across machines; astral-sh/uv#23145 explicitly retains user-level behavior and requests system-level vendor/administrator separation."
+      },
+      {
+        "kind": "issue",
+        "number": 6742,
+        "title": "Provide system-level configuration files",
+        "url": "https://github.com/astral-sh/uv/issues/6742",
+        "state": "closed",
+        "reason": "Established the system-wide configuration layer for administrators, merged below user and project settings. Closed after astral-sh/uv#7851 landed; it requested a single system file, not separate vendor defaults, administrator overrides, or drop-ins."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7851,
+        "title": "Add support for system-level `uv.toml` configuration",
+        "url": "https://github.com/astral-sh/uv/pull/7851",
+        "state": "merged",
+        "reason": "Implemented astral-sh/uv#6742 and merged on 2024-10-21. Maintainers explicitly chose the first matching XDG_CONFIG_DIRS file, defaulting to /etc/xdg, with /etc/uv/uv.toml last, rather than combining system files. This establishes the current baseline, not an implementation of UAPI.6 or evidence of a regression."
+      },
+      {
+        "kind": "issue",
+        "number": 5596,
+        "title": "Feature Request: `extend` config option",
+        "url": "https://github.com/astral-sh/uv/issues/5596",
+        "state": "open",
+        "reason": "Requests explicit inheritance of shared configuration across repositories, similar to Ruff's extend directive. Related to composing configuration, but does not request automatic system drop-in discovery or vendor/administrator paths. It is labeled wish, and a maintainer said in October 2024 that it was unlikely to receive near-term work."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separate literal searches covered UAPI, hermetic-usr, /usr with uv.toml, /etc/uv/uv.toml, XDG_CONFIG_DIRS, drop-in/drop-ins, and uv.toml.d. Conceptual searches covered vendor/packager defaults, administrator configuration, system/global configuration, fragments, splitting, merging, includes, and inheritance, including area:configuration. Fix-oriented PR searches covered system configuration, XDG, drop-ins, and extend; followed astral-sh/uv#6742 to astral-sh/uv#7851 and read comments and reviews. Compared the candidates with current discovery/loading code and documentation. Inspected but ruled out astral-sh/uv#9985, which concerns XDG storage locations and Python executable links, and astral-sh/uv#17509, which concerns distro test isolation. The reporter's uapi-group/specifications#76 lead discusses general adoption, not an existing uv implementation. No existing item found tracks the complete UAPI.6 system-level request."
+  },
+  "type": "enhancement",
+  "type_reason": "Requests new Linux system-configuration discovery and composition capabilities: vendor defaults under /usr, administrator overrides under /etc, and drop-ins while retaining XDG user configuration. Current documentation and source consistently select one system file, and astral-sh/uv#7851 records that design choice; no incorrect implementation or returned fix is established. The related fragment and inheritance requests have materially different scopes, so they do not centralize this complete request.",
+  "summary": "astral-sh/uv#22905 overlaps user-level drop-ins, and astral-sh/uv#5596 covers explicit configuration inheritance. astral-sh/uv#6742 and merged astral-sh/uv#7851 establish the current single-system-file behavior. No existing discussion found covers the full UAPI.6 system-level proposal.",
+  "draft_response": "uv currently loads the first system configuration file found through XDG_CONFIG_DIRS (defaulting to /etc/xdg), falling back to /etc/uv/uv.toml. It merges that file with user and project configuration, but does not discover vendor defaults under /usr or load drop-ins. This follows the design in astral-sh/uv#7851.\n\nYour proposal adds a distinct system-level capability. astral-sh/uv#22905 discusses user-level configuration fragments, and astral-sh/uv#5596 discusses explicit inheritance; both are related but have different scopes. The next step is to define how UAPI.6 system paths and drop-in precedence interact with XDG_CONFIG_DIRS and uv's existing scalar and array merging rules, while retaining XDG user configuration. This needs design agreement before implementation."
+}
