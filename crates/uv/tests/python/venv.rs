@@ -4,6 +4,8 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
+#[cfg(target_os = "linux")]
+use insta::assert_snapshot;
 use predicates::prelude::*;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
@@ -2151,6 +2153,17 @@ fn create_venv_apostrophe() {
     Activate with: source 'Testing'\"'\"'s/[BIN]/activate'
     "
     );
+
+    // POSIX escaping corrupts the path in cmd.exe, so batch activation points to a nonexistent
+    // environment when the path contains an apostrophe. See astral-sh/uv#23149.
+    let activate_bat = context.read(venv_dir.join("bin/activate.bat"));
+    let virtual_env = activate_bat
+        .lines()
+        .find(|line| line.starts_with("@for %%i"))
+        .expect("VIRTUAL_ENV assignment not found");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(virtual_env, @r#"@for %%i in ("[TEMP_DIR]/Testing'"'"'s") do @set "VIRTUAL_ENV=%%~fi""#);
+    });
 
     // One of them should be commonly available on a linux developer machine, if not, we have to
     // extend the fallbacks.
