@@ -2154,15 +2154,14 @@ fn create_venv_apostrophe() {
     "
     );
 
-    // POSIX escaping corrupts the path in cmd.exe, so batch activation points to a nonexistent
-    // environment when the path contains an apostrophe. See astral-sh/uv#23149.
+    // Batch paths are double-quoted, so apostrophes must remain literal in cmd.exe.
     let activate_bat = context.read(venv_dir.join("bin/activate.bat"));
     let virtual_env = activate_bat
         .lines()
         .find(|line| line.starts_with("@for %%i"))
         .expect("VIRTUAL_ENV assignment not found");
     insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(virtual_env, @r#"@for %%i in ("[TEMP_DIR]/Testing'"'"'s") do @set "VIRTUAL_ENV=%%~fi""#);
+        assert_snapshot!(virtual_env, @r#"@for %%i in ("[TEMP_DIR]/Testing's") do @set "VIRTUAL_ENV=%%~fi""#);
     });
 
     // One of them should be commonly available on a linux developer machine, if not, we have to
