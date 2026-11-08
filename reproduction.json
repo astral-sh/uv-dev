@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.13.6 on Linux x86_64 with CPython 3.12.3, ran `uv venv --no-project --offline --python \"$(command -v python)\"` in a temporary directory named \"it's a test\". Executing the unmodified generated .venv/bin/activate.bat under Wine 9.0 cmd.exe set VIRTUAL_ENV to a path containing it'\"'\"'s instead of it's; that path could not locate pyvenv.cfg. A control containing spaces without an apostrophe worked. Native Windows 11 and reported uv 0.13.7 were not tested. Updated $RUNNER_TEMP/issue-context/README.md with commands, results, limitations, and existing test coverage. No checkout or GitHub changes were made."
+}
