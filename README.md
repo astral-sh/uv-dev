@@ -23,7 +23,7 @@ There is no confirmed regression point. This is not an established duplicate of 
 
 The reporter confirms in the discussion of astral-sh/uv#23118 that they manually renamed the files using `mv`. The reported filenames therefore result from a manual rename; they are not evidence that a build tool emitted those names. The original filenames and archive build steps have not been provided.
 
-Maintainer woodruffw notes that PEP 625 source-distribution filenames must follow `{name}-{version}.tar.gz`, with neither component containing `#`. The reporter's clarification narrows the case to installing manually renamed archives with nonstandard filenames. It does not establish whether the original archives were conforming sdists or general source archives.
+Maintainer woodruffw notes that PEP 625 source-distribution filenames must follow `{name}-{version}.tar.gz`, with neither component containing `#`. The reporter's clarification narrows the case to installing manually renamed archives with nonstandard filenames. It does not establish whether the original archives were conforming sdists or general source archives. Woodruffw favors not supporting this case as part of stricter PEP 625 conformance and explicitly connects it to astral-sh/uv#19883. This is a tentative maintainer preference, not a final decision or evidence that the observed diagnostics are appropriate.
 
 Maintainer charliermarsh explicitly leaves support for this case undecided and identifies a parsing difference: uv treats the suffix as a fragment, while pip appears to treat a bare path literally and require a `file://` URL to attach SHA hash fragments. The uv interpretation agrees with the source findings below, and pip's literal-filename behavior agrees with the existing reproduction. The statement about pip requiring a file URL for SHA fragments is a maintainer observation; that distinction was not independently tested in the recorded reproduction.
 
@@ -207,11 +207,13 @@ The observed errors are consistent with the following source paths; these observ
 - astral-sh/uv#2501 (issue, closed): uv fails to install wheel from path with fragment. Also produced Distribution not found for a local path containing #, but the reporter intended #hash=somehash as a URL fragment. Here #10458 is part of the actual archive filename: the intended interpretation is the opposite.
 - astral-sh/uv#2502 (pull request, merged): Allow direct file path requirements to include fragments. Merged on 2024-03-18 to fix astral-sh/uv#2501 by separating the path at # and restoring the suffix as a URL fragment. The checkout still splits supplied paths this way, explaining the relevant parsing behavior; the PR did not add support for literal # characters in filenames.
 
+- astral-sh/uv#19883 (issue): Roadmap: strict PEP 625 conformance. Woodruffw explicitly cites this roadmap when favoring rejection of the manually renamed, nonstandard archive filenames. It is relevant policy context for deciding support, rather than a confirmed fix or duplicate discussion for the literal-`#` lookup failure.
+
 ## Prior related-issue search
 
 The earlier context investigation searched open and closed issues and pull requests in astral-sh/uv for literal-`#` path handling, fragments, percent encoding, local/source archive names, and the two reported diagnostic messages. It inspected the historical fixes listed above and found no canonical discussion or fix for this precise local-filename case. That GitHub search was retained as context and was not repeated during behavioral reproduction.
 
-Previously excluded candidates remain distinct: astral-sh/uv#7714 concerns stale `PKG-INFO`; astral-sh/uv#9743 and astral-sh/uv#2727 concern Git/subdirectory metadata selection; astral-sh/uv#14345 concerns commas inside wheel `RECORD`; astral-sh/uv#17526 concerns HTTP `Content-Disposition`; and astral-sh/uv#19883 tracks source-distribution conformance. None establishes prior coverage of literal `#` in the installation argument.
+Previously excluded candidates remain distinct: astral-sh/uv#7714 concerns stale `PKG-INFO`; astral-sh/uv#9743 and astral-sh/uv#2727 concern Git/subdirectory metadata selection; astral-sh/uv#14345 concerns commas inside wheel `RECORD`; and astral-sh/uv#17526 concerns HTTP `Content-Disposition`. None establishes prior coverage of literal `#` in the installation argument. Although astral-sh/uv#19883 was previously excluded as a canonical match for the failure, it is now explicitly linked by a maintainer as relevant conformance policy and is included under Related on that basis.
 
 ## Changes made
 
