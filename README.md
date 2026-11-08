@@ -6,7 +6,7 @@ Classification: bug
 
 ## Summary
 
-No closely related issue or pull request was found. Existing SIGABRT, UnixStream, ENOSYS, and i686 reports concern different operations or mechanisms; none establishes the cause of this container-specific abort.
+A uv maintainer attributes this failure to the upstream Docker/seccomp bug tracked in actions/runner-images#14790 and identifies Docker 29.4.3 as containing the fix. The upstream discussion reports a reproduced socketcall denial returning ENOSYS in i386 glibc containers on ubuntu-26.04 with Docker 29.4.2. This closely matches the reported architecture, host, Docker version, and error. The runner-image update in actions/runner-images#15205 remains open; availability of a fixed Docker release does not establish that the affected hosted runner image has received it. The exact uv workload has not been retested with a fixed daemon in the available evidence.
 
 The reporter observes `/usr/local/bin/uv pip install` terminating with SIGABRT while `python -m build --installer=uv` installs isolated build requirements under cibuildwheel. The diagnostic is:
 
@@ -68,30 +68,45 @@ Searches of Rust tests under `crates/uv/tests/` and `crates/uv-client/tests/it/`
 
 ### Information needed to resolve the outcome
 
-1. The version and architecture of `/usr/local/bin/uv` inside the failing container, and preferably the corresponding values from the successful run. Host setup-uv versions do not provide this information.
-2. A run of the minimal wheel install on the affected Ubuntu 26.04 runner using the pinned container digest and pinned container uv, with verbose output. Compare the same inputs on Ubuntu 24.04 to isolate the runner change.
-3. If it aborts, a syscall trace identifying which socket operation returns ENOSYS and a comparison with `--security-opt seccomp=unconfined`. These are diagnostic experiments, not confirmed workarounds.
-4. If the standalone install succeeds, the cibuildwheel version and relevant configuration, including how it installs uv and invokes the build frontend, are needed to reconstruct the additional conditions.
+1. The Docker server version on the affected runner and the result of retrying the original workload with Docker 29.4.3 or later. The maintainer's upstream attribution makes this the first comparison to perform; no such uv retest is currently available.
+2. The version and architecture of `/usr/local/bin/uv` inside the failing container, and preferably the corresponding values from the successful run. Host setup-uv versions do not provide this information.
+3. If the failure persists with a fixed daemon, run the minimal wheel install on the affected Ubuntu 26.04 runner using the pinned container digest and pinned container uv, with verbose output. Compare the same inputs on Ubuntu 24.04 to isolate the runner change.
+4. If it aborts, capture a syscall trace identifying which socket operation returns ENOSYS and compare with `--security-opt seccomp=unconfined`. This comparison is validated in the upstream Debian reproduction, but has not been tested for this uv workload.
+5. If the standalone install succeeds, the cibuildwheel version and relevant configuration, including how it installs uv and invokes the build frontend, are needed to reconstruct the additional conditions.
 
-The successful controls do not establish a uv regression or validate the proposed seccomp/kernel cause.
+The successful local controls do not establish a uv regression or independently validate the upstream diagnosis for the affected uv workload.
 
-## Draft response
+## Investigation priority
 
-Linux i686 is a supported Tier 2 target. A minimal wheel install and your full build-requirement install both succeeded here with uv 0.13.6 and Python 3.10.22 on Ubuntu 24.04 x86_64. This environment cannot access Docker or test the affected Ubuntu 26.04/i686 combination, so those results do not rule out the reported failure. Please capture `/usr/local/bin/uv --version` and `file /usr/local/bin/uv` inside the failing container; the host setup-uv version does not identify that binary. Then compare a minimal wheel install on ubuntu-24.04 and ubuntu-26.04 with the container digest and uv version pinned. Please include verbose output and a syscall trace covering socket creation if it aborts. Comparing the default seccomp profile with `--security-opt seccomp=unconfined` would help test the filtering hypothesis; no such comparison has been observed here.
+First verify the Docker **server** version on the affected runner and retry the original i686 workload with Docker 29.4.3 or later, which the uv maintainer and upstream discussion identify as carrying the seccomp fix. Keep the container digest and container uv version recorded for the comparison. No successful retest of this exact uv workload on a fixed daemon has been supplied.
+
+The upstream runner-image issue is still open, and actions/runner-images#15205 proposes updating Ubuntu 26.04 to Docker 29.7.2 but has not merged. Do not assume that changing or rerunning the runner label selects a fixed image; inspect the actual daemon version. If the failure persists with a fixed daemon, return to the pinned minimal reproduction and socket syscall diagnostics below.
 
 ## Classification
 
-The reported uv pip install process aborts with SIGABRT after UnixStream creation returns ENOSYS on Linux i686, a documented Tier 2 target. This is an operational failure, even though the responsible component and syscall remain unconfirmed. No existing issue or pull request was found that tracks the same failure. The container uv version is unknown, so the report does not establish a regression between uv 0.13.6 and 0.13.7 or a recurrence of a previously fixed bug.
+Classification remains bug. The reported uv pip install process aborts with SIGABRT after UnixStream creation returns ENOSYS on Linux i686, a documented Tier 2 target. The uv maintainer now attributes the failure to an upstream Docker bug with a fix in Docker 29.4.3. This changes the investigation priority to daemon/runner compatibility; it does not establish a uv implementation regression or a need for a uv code change. The crashing container's uv version remains unknown.
 
-Errno 38 is ENOSYS. A seccomp policy difference, kernel compatibility difference, and the precise socket syscall are hypotheses from the report, not confirmed findings. Neither the proposed standalone Docker reproduction nor a rerun on ubuntu-24.04 nor the seccomp comparison has been performed by the reporter. No fix or validated workaround for this exact failure was found.
+The upstream socketcall/seccomp mechanism is supported by the linked discussion's reported reproduction and source analysis. There is still no syscall trace or fixed-daemon retest of this exact uv workload, so the connection is a maintainer attribution supported by a strong upstream match rather than a locally verified diagnosis. The initial x86_64 controls and their needs_more_information outcome remain accurate for the reproduction work performed here.
 
 ## Related
 
-No closely related existing issue or pull request was found. The candidates below were inspected and ruled out rather than treated as duplicate or adjacent tracking discussions.
+- actions/runner-images#14790 — Open: “Ubuntu 26.04: Docker 29.4.2 blocks socketcall, so i386 containers have no network.” The uv maintainer links this as the upstream cause. An upstream contributor reports reproducing the default-seccomp failure on a real ubuntu-26.04 runner, success with seccomp unconfined, and success after upgrading the daemon to a build carrying seccomp v0.2.3. The reproduction uses i386 Debian/glibc name resolution, whereas this issue aborts during UnixStream creation in manylinux i686; the matching socketcall denial, ENOSYS, Docker version, and runner make this directly relevant.
+- actions/runner-images#15205 — Open, not merged: “[Ubuntu 26.04] Update Docker to 29.7.2.” Proposes the runner-image Docker upgrade and explicitly fixes actions/runner-images#14790. Its author reports i386 Debian networking working after upgrading Docker to 29.7.2. This tracks delivery of a fixed daemon to the runner image, not a uv change, and does not establish completed image rollout.
 
 ## Supporting evidence
 
-The current issue has the bug label and no comments at the time of inspection.
+The issue discussion includes a 2026-11-08 comment from uv maintainer charliermarsh identifying the failure as apparently upstream and resolved in Docker 29.4.3. The comment links to the upstream confirmation in actions/runner-images#14790 (comment ID 5868616762). This supersedes the initial finding that no relevant upstream fix was known.
+
+### Upstream mechanism and fix evidence
+
+The linked upstream comment from v-davit-ioramashvili reports source verification and a live reproduction on ubuntu-26.04:
+
+- Docker 29.4.2 vendors moby/profiles/seccomp v0.2.2, which denies socketcall with ENOSYS. Docker 29.4.3 moves to seccomp v0.2.3, reverting that denial.
+- The comment explains that Debian i386 glibc socket wrappers use socketcall because of their minimum-kernel baseline. Its i386 Alpine/musl control is unaffected. This is evidence for the upstream reproduction; the exact libc wrapper path in the reported manylinux uv executable has not been independently established here.
+- `docker run --rm i386/debian:bookworm getent hosts github.com` exits 2 with Docker 29.4.2 and default seccomp, and exits 0 with `--security-opt seccomp=unconfined`.
+- After upgrading and restarting the daemon with seccomp v0.2.3, the default-seccomp Debian case exits 0. These are upstream-reported results, distinct from the local x86_64 uv controls above.
+
+Docker 29.4.3 or later is therefore a concrete fix candidate for this uv failure, supported by the maintainer attribution and upstream results. Disabling seccomp is an upstream-validated diagnostic comparison for the Debian case; it has not been validated for the exact uv workload. The upstream issue and runner-image PR were both open when inspected. No fixed-image rollout date or successful reporter retest is established.
 
 The platform policy at `docs/reference/policies/platforms.md` lists Linux i686 as Tier 2, publishes both GNU and musl artifacts, and explains that Tier 2 targets are continuously built without running the full test suite. This supports treating the failure as a bug report while avoiding a guarantee that this runner/container combination was tested.
 
@@ -118,7 +133,7 @@ The 0.13.6 and 0.13.7 release notes were inspected before choosing the fixture. 
 
 ## Search coverage
 
-Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Literal searches covered "failed to create UnixStream", "Function not implemented", UnixStream, ENOSYS, SIGABRT, socketpair, i686/manylinux, ubuntu-26.04, and cibuildwheel. Conceptual searches covered 32-bit failures, container crashes, sockets, Tokio runtime initialization, and signals; separate cause-oriented searches covered seccomp and Docker permissions. Historical/fix searches included uv 0.13.6/0.13.7 crashes and merged runtime/platform changes. Included comments in targeted searches and inspected candidate discussions and linked historical PRs. PR text searches returned no matches; supplemented them by screening 1,500 recent PR titles across all states. Ruled out astral-sh/uv#22170 (nonblocking stderr/EAGAIN), astral-sh/uv#21935 (SIGPIPE forwarding), astral-sh/uv#9050 (disabled flock), astral-sh/uv#12433 (compiler memory exhaustion), and astral-sh/uv#2732 (iSH emulation crashes). The merged signal-forwarding change astral-sh/uv#13017 and open Docker-image change astral-sh/uv#23140 do not track this failure. No matching prior fix or existing regression tracker was found.
+The initial repository-scoped investigation searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Literal searches covered "failed to create UnixStream", "Function not implemented", UnixStream, ENOSYS, SIGABRT, socketpair, i686/manylinux, ubuntu-26.04, and cibuildwheel. Conceptual searches covered 32-bit failures, container crashes, sockets, Tokio runtime initialization, and signals; separate cause-oriented searches covered seccomp and Docker permissions. Historical/fix searches included uv 0.13.6/0.13.7 crashes and merged runtime/platform changes. Included comments in targeted searches and inspected candidate discussions and linked historical PRs. PR text searches returned no matches; supplemented them by screening 1,500 recent PR titles across all states. Ruled out astral-sh/uv#22170 (nonblocking stderr/EAGAIN), astral-sh/uv#21935 (SIGPIPE forwarding), astral-sh/uv#9050 (disabled flock), astral-sh/uv#12433 (compiler memory exhaustion), and astral-sh/uv#2732 (iSH emulation crashes). The merged signal-forwarding change astral-sh/uv#13017 and open Docker-image change astral-sh/uv#23140 do not track this failure. No matching prior uv fix or uv regression tracker was found in that initial repository-scoped search. The subsequent maintainer-linked upstream issue and runner-image PR are documented in Related.
 
 Exact identifiers and observable symptoms were searched separately from the reporter's proposed causes. Searches included both issue states, pull request states including merged changes, and targeted title/body/comment searches. A temporary search rate limit was allowed to reset and the affected searches were retried. Pull request keyword searches returned no matches even for broad terms, so coverage was supplemented with the 1,500 most recent pull request titles across all states and direct inspection of relevant historical references. This is a search limitation, not proof that no related historical pull request exists.
 
