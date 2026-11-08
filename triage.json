@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8947,
+        "title": "Uv fails to activate environment in folder with apostrophe",
+        "url": "https://github.com/astral-sh/uv/issues/8947",
+        "state": "closed",
+        "reason": "Historical apostrophe-path activation bug in uv 0.4.25 on Fedora, using source .venv/bin/activate. Maintainer comments discuss POSIX quoting; astral-sh/uv#8984 closed it. The new report concerns cmd.exe receiving POSIX escape syntax, so it is a Windows bug arising from the historical fix, rather than the original POSIX failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8984,
+        "title": "Allow apostrophe in venv name",
+        "url": "https://github.com/astral-sh/uv/pull/8984",
+        "state": "merged",
+        "reason": "Merged November 15, 2024 and released in uv 0.5.3 to fix astral-sh/uv#8947. Its diff applies escape_posix_for_single_quotes to the default activation-template branch, including non-relocatable activate.bat, and adds a Linux-only apostrophe test. That fallback remains in the checkout and explains the reported batch-path corruption."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9466,
+        "title": "Escape path in batch script",
+        "url": "https://github.com/astral-sh/uv/pull/9466",
+        "state": "closed",
+        "reason": "Proposed a dedicated non-relocatable activate.bat path branch that bypassed POSIX escaping, but focused on doubling double quotes during the astral-sh/uv#9424 discussion. Closed without merging after the author noted that Windows filenames cannot contain double quotes. This is a relevant abandoned approach, not a shipped apostrophe fix or an open tracker for this failure."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Literal searches covered activate.bat, apostrophe, VIRTUAL_ENV, single quote, and escape_posix_for_single_quotes; conceptual and fix-oriented searches covered activation, escaping, quoting, batch, special characters, and area:environments. Inspected issue bodies, maintainer comments, timelines, PR reviews and diffs, the uv 0.5.3 changelog, and current activation code/tests. PR searches returned no hits, so historical PRs were recovered through issue references and inspected directly. Followed astral-sh/uv#8947 to astral-sh/uv#8984 and astral-sh/uv#9424 to astral-sh/uv#9466. Ruled out astral-sh/uv#11828 and its merged fix astral-sh/uv#11831 (non-ASCII code-page corruption), astral-sh/uv#1763 (Windows extended-length path prefixes), astral-sh/uv#23060 (fish prompt/path command execution), and astral-sh/uv#15294 (general activation-test coverage) as duplicate trackers. A final broader venv/quote issue query hit the GitHub API rate limit."
+  },
+  "type": "bug",
+  "type_reason": "The current source applies POSIX apostrophe escaping to ordinary activate.bat paths and then uses that value for VIRTUAL_ENV and PATH, incorrectly changing a valid Windows path. This is a Windows correctness bug introduced by the broad fallback in astral-sh/uv#8984, rather than a recurrence of the POSIX-shell failure fixed for astral-sh/uv#8947. The related batch proposal astral-sh/uv#9466 was never merged and addressed double quotes. No existing open tracker for the same Windows apostrophe failure was found.",
+  "summary": "astral-sh/uv#8947 and merged astral-sh/uv#8984 explain the historical POSIX apostrophe fix and the fallback now corrupting batch paths. Closed, unmerged astral-sh/uv#9466 proposed separate batch handling but did not ship a fix.",
+  "draft_response": "Your example matches the current source: non-relocatable activate.bat paths go through POSIX apostrophe escaping before being inserted into the batch script. astral-sh/uv#8984 added this for POSIX activation, and the existing apostrophe test only runs on Linux. The fix needs batch-specific path handling and a Windows activation regression test. For now, create the environment at a path with no apostrophes in any directory component."
+}
