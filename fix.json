@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Render ordinary batch activation paths without POSIX apostrophe escaping so VIRTUAL_ENV and PATH identify the actual environment. Update the existing apostrophe regression snapshot to require the literal path while retaining its POSIX activation check.",
+  "validation": [
+    "Updated create_venv_apostrophe regression: confirmed failure before the fix and success afterward.",
+    "verify_pyvenv_cfg_relocatable integration test passed.",
+    "Wine batch execution confirmed the correct VIRTUAL_ENV and successful pyvenv.cfg lookup.",
+    "Windows-target cargo xwin clippy passed for uv-virtualenv with warnings denied.",
+    "cargo fmt --all -- --check and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3118"
+}

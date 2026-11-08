@@ -10,7 +10,7 @@ The reporter uses uv 0.13.7 (316c827e0, November 3, 2026) and CPython 3.15.2 on 
 
 The malformed batch environment value was reproduced using the installed uv 0.13.6 on Linux with CPython 3.12.3, then executing its unmodified generated `activate.bat` under Wine 9.0. The batch variable contained the exact reported apostrophe expansion and failed to locate the environment's `pyvenv.cfg`. A control path containing spaces but no apostrophe worked. POSIX activation of the apostrophe-containing environment also worked. Native Windows 11, the Windows uv binary, uv 0.13.7, and Python 3.15.2 were not executed.
 
-The generated artifact and current source agree: ordinary, non-relocatable batch activation receives a path processed by the POSIX single-quote escaping helper. Historical context links this shared fallback to astral-sh/uv#8984, which fixed the POSIX activation issue astral-sh/uv#8947. Closed, unmerged astral-sh/uv#9466 proposed separate batch handling but did not ship a fix.
+The pre-fix generated artifact and implementation agree: ordinary, non-relocatable batch activation received a path processed by the POSIX single-quote escaping helper. The focused fix below bypasses that helper for ordinary batch activation. Historical context links this shared fallback to astral-sh/uv#8984, which fixed the POSIX activation issue astral-sh/uv#8947. Closed, unmerged astral-sh/uv#9466 proposed separate batch handling but did not ship a fix.
 
 ## Classification
 
@@ -86,25 +86,26 @@ The control establishes that the Wine path mapping and configuration-file check 
 
 Relevant integration tests and their actual setup/assertions were read in `crates/uv/tests/python/venv.rs`:
 
-- `create_venv_apostrophe` (approximately lines 2129–2177) creates an environment named `Testing's`, checks the POSIX activation instruction, sources `bin/activate` in a shell, and asserts that Python's `sys.prefix` matches the environment directory. It has `#[cfg(target_os = "linux")]`; it does not execute `activate.bat` or check cmd's `VIRTUAL_ENV`. The module is gated on `test-python` in `crates/uv/tests/python/main.rs`.
+- `create_venv_apostrophe` creates an environment named `Testing's`, checks the POSIX activation instruction, sources `bin/activate` in a shell, and asserts that Python's `sys.prefix` matches the environment directory. It has `#[cfg(target_os = "linux")]`; it does not execute `activate.bat` or check cmd's `VIRTUAL_ENV`. Parent regression pull request astral-sh/uv-dev#3117 extended it with a snapshot of the generated batch assignment; the fix updates that snapshot to require a literal apostrophe. The module is gated on `test-python` in `crates/uv/tests/python/main.rs`.
 - `verify_pyvenv_cfg_relocatable` (approximately lines 1836–1912) creates an environment with `--relocatable` and checks the generated batch line using `%~dp0..`. It does not use an apostrophe-containing path or execute batch activation, and it exercises a different template-dispatch branch from this report.
 - `create_venv_powershell_unc` uses Windows PowerShell and a UNC path containing a space, then checks `VIRTUAL_ENV` and `uv python find`. It does not cover batch apostrophe handling.
 
-No matching ordinary batch apostrophe activation regression test was found in the searched integration tests under `crates/uv/tests/` and `crates/uv-client/tests/it/`. No Rust tests or builds were run. No last known-good version comparison was performed because the report does not supply one. Native Windows confirmation should execute the generated batch file and check both the exact `VIRTUAL_ENV` and the selected Python executable; the present reproduction establishes the malformed variable and invalid environment path under Wine.
+The original reproduction investigation found no matching ordinary batch apostrophe activation regression test under `crates/uv/tests/` or `crates/uv-client/tests/it/` and ran no Rust tests or builds. The parent regression and focused debug-profile fix validation are documented below. No last known-good version comparison was performed because the report does not supply one. Native Windows confirmation should execute the generated batch file and check both the exact `VIRTUAL_ENV` and the selected Python executable; the present reproduction establishes the malformed variable and invalid environment path under Wine.
 
 ## Implementation evidence
 
-- `crates/uv-virtualenv/src/virtualenv.rs:494–508`: only relocatable `activate.bat` has a dedicated path branch. Ordinary batch activation reaches `escape_posix_for_single_quotes(location_string)`. Lines 533–538 substitute that value into the activation template. The installed executable's generated file independently exhibits the same transformation.
+- `crates/uv-virtualenv/src/virtualenv.rs`, `create`: before the fix, only relocatable `activate.bat` had a dedicated path branch, and ordinary batch activation reached `escape_posix_for_single_quotes(location_string)`. The installed executable and pre-fix debug build independently generated this transformation. The fixed dispatch borrows the unmodified location string for ordinary batch activation; the template substitution and relocatable branch are unchanged.
 - `crates/uv-shell/src/shlex.rs:22–38`: the POSIX helper replaces an apostrophe with `'"'"'`, matching the observed generated file and runtime variable.
 - `crates/uv-virtualenv/src/activator/activate.bat:29`: the batch `for` statement assigns the substituted path to `VIRTUAL_ENV`. Line 66 uses `%VIRTUAL_ENV%` to prepend the environment's script directory to `PATH`.
 - `changelogs/0.5.x.md:248–310`: uv 0.5.3 includes the apostrophe-name change from astral-sh/uv#8984. This historical release entry does not establish native execution results for the present report.
 
 ## Related
 
-The related-item states and GitHub search findings below are retained from the existing issue-context investigation; this reproduction pass did not make additional GitHub requests.
+The historical related-item states and GitHub search findings below are retained from the existing issue-context investigation. The parent regression pull request is identified by the supplied local metadata. No additional GitHub requests were made for the fix.
 
+- astral-sh/uv-dev#3117 (parent regression pull request): adds a batch-assignment snapshot to `create_venv_apostrophe`. Its original snapshot records the malformed path and passes before the production fix. The fix retains this test and changes its expectation to the actual directory path.
 - astral-sh/uv#8947 (closed; issue): historical apostrophe-path activation failure in uv 0.4.25 on Fedora, using `source .venv/bin/activate`. Maintainer discussion concerns POSIX quoting, and astral-sh/uv#8984 closed it. The present report concerns cmd.exe receiving POSIX escape syntax.
-- astral-sh/uv#8984 (merged; pull request): Allow apostrophe in venv name. Merged November 15, 2024 and released in uv 0.5.3. The prior investigation found that its diff applies `escape_posix_for_single_quotes` to the default activation-template branch, including ordinary batch activation, and adds the Linux-only apostrophe test. That shared fallback remains in the checkout.
+- astral-sh/uv#8984 (merged; pull request): Allow apostrophe in venv name. Merged November 15, 2024 and released in uv 0.5.3. The prior investigation found that its diff applies `escape_posix_for_single_quotes` to the default activation-template branch, including ordinary batch activation, and adds the Linux-only apostrophe test. That shared fallback was present in the pre-fix checkout; the fix excludes ordinary batch activation from it.
 - astral-sh/uv#9466 (closed, unmerged; pull request): Escape path in batch script. Proposed a dedicated ordinary batch path branch bypassing POSIX escaping, but focused on double quotes during discussion of astral-sh/uv#9424. It was closed after the author noted that Windows filenames cannot contain double quotes. This was an abandoned proposal, not a shipped apostrophe fix or an open tracker for this failure.
 - astral-sh/uv#11828 and merged astral-sh/uv#11831 concern non-ASCII paths decoded using the wrong Windows code page. The template already includes that code-page change. The ASCII apostrophe expansion reproduced here is a different failure.
 - astral-sh/uv#1763 concerns extended-length Windows path prefixes in `PATH`.
@@ -115,8 +116,27 @@ The related-item states and GitHub search findings below are retained from the e
 
 The earlier investigation searched astral-sh/uv open and closed issues and open, closed, and merged pull requests for `activate.bat`, apostrophes, `VIRTUAL_ENV`, single quotes, escaping, batch activation, special characters, and `area:environments`. It inspected issue bodies, maintainer comments, timelines, reviews, diffs, and the uv 0.5.3 changelog. Historical pull requests were recovered through issue references after PR searches returned no hits. It followed astral-sh/uv#8947 to astral-sh/uv#8984 and astral-sh/uv#9424 to astral-sh/uv#9466. No existing open tracker for this exact Windows apostrophe failure was found within that search; a final broader query hit the GitHub API rate limit.
 
-## Suggested next step
+## Fix
 
-Give ordinary `activate.bat` paths batch-appropriate rendering, and add a Windows activation regression test with an apostrophe in a parent directory. Check the exact environment variable and Python executable selection while keeping the POSIX apostrophe test. Creating an environment at a path without apostrophes avoids the observed trigger; the control supports that workaround.
+**Outcome: fixed.** Ordinary `activate.bat` generation now uses the literal environment path inside the batch template's double quotes. The production change adds the `(false, "activate.bat")` dispatch branch in `crates/uv-virtualenv/src/virtualenv.rs`; it does not alter POSIX escaping, the batch template, or relocatable activation.
 
-Only this handoff README and temporary reproduction/runtime files were written. No checkout files were modified, no builds were performed, and no changes were made on GitHub.
+The parent regression in `crates/uv/tests/python/venv.rs`, `create_venv_apostrophe`, now snapshots an ordinary apostrophe in the batch assignment. Its original command-output snapshot and POSIX activation/Python `sys.prefix` round trip remain intact. The existing Linux gate and enclosing `test-python` feature gate remain appropriate.
+
+The unchanged parent regression passed against the original implementation. Changing only its expectation to the desired literal path then failed exactly on `Testing's` versus `Testing'"'"'s` in the generated batch assignment. After adding the production branch, the updated regression passed.
+
+The neighboring dispatch branches and activator consumers were reviewed. Relocatable batch activation uses `%~dp0..` and already has a correct assertion in `verify_pyvenv_cfg_relocatable`; that test passes without changes. PowerShell, xonsh, and `activate_this.py` determine the environment directory from the script location instead of consuming this interpolated path. The remaining batch templates do not interpolate `VIRTUAL_ENV_DIR`. The POSIX-shell templates retain their existing quoting. The relevant integration tests in the Python and pip-install modules exposed no additional assertion encoding this same ordinary-batch escaping error. No additional distinct failure justified a new test or broader production changes.
+
+Successful focused validation:
+
+- `INSTA_UPDATE=no cargo test -p uv --test python venv::create_venv_apostrophe -- --exact` — passes in the debug test profile after demonstrating the expected pre-fix failure. It covers batch generation and a real POSIX activation/Python round trip with CPython 3.12.16.
+- `INSTA_UPDATE=no cargo test -p uv --test python venv::verify_pyvenv_cfg_relocatable -- --exact` — passes, including the existing batch `%~dp0..` assertion.
+- Debug uv 0.13.7 generated an environment under `$TMPDIR/it's a test/.venv` with explicit CPython 3.12.16. Wine 9.0 executed the unmodified generated batch activator. Before the fix, `VIRTUAL_ENV` contained the unwanted POSIX apostrophe expansion and `CONFIG_EXISTS=no`. After regenerating with the fixed debug binary, expected and observed values both equal `Z:\home\runner\work\_temp\fix-bug\it's a test\.venv`, and `CONFIG_EXISTS=yes`. The explicit probe and its output are retained in `$TMPDIR/check-apostrophe.cmd` and `$TMPDIR/check-apostrophe.cmd.output.txt`, with the isolated runtime driver in `$TMPDIR/run-batch.py`.
+- `cargo xwin clippy -p uv-virtualenv --all-targets --target x86_64-pc-windows-msvc --target-dir "$TMPDIR/windows-target" --locked -- -D warnings` — passes in the debug dev profile for the affected production crate. The check used a temporary Rust 1.99.0 toolchain, LLVM 18, and an isolated Windows SDK/cache.
+- `cargo fmt --all` and `cargo fmt --all -- --check` — pass using Rust 1.99.0's rustfmt from a temporary toolchain installation.
+- `git diff --check` — passes.
+
+The batch runtime check uses Wine on Linux, not native Windows 11 or a Windows Python executable. It verifies the corrected variable and downstream configuration-file lookup. Native Windows Python executable selection remains unverified.
+
+Checkout changes are limited to the affected production file and the original parent regression-test file. No manifests, lockfiles, automation files, Git configuration, or other tracked files were changed. No commits, pushes, or GitHub changes were made.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3118
