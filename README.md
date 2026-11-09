@@ -66,6 +66,14 @@ advertisements from the rewritten index representation. This targets the client-
 layer, rather than establishing that either repository's original response is itself invalid.
 How Pixi can adjust that representation remains unverified.
 
+In a subsequent clarification, woodruffw endorses pre-flighting requests as a Pixi-side
+approach and identifies stripping standalone-metadata advertisements entirely from both HTML
+and JSON as another valid option. The maintainer cautions that unconditional stripping could
+reduce both pip and uv performance. This provides maintainer support for those design directions,
+not a tested Pixi implementation or approval for a uv bypass. The reporter's preceding proposal
+also included trying other mirrors and ultimately the original URL; no detailed fallback policy
+or implementation has been established.
+
 For the broader design, woodruffw notes that Python packaging lacks a strong concept of package
 identity across multiple indexes, limiting what it can currently specify about cross-index
 reconciliation. The maintainer nevertheless considers the resulting advertised-but-unavailable
@@ -144,8 +152,11 @@ metadata-sidecar bypass.
 Investigate the maintainer's Pixi-side diagnosis: distribution URL rewriting must account for
 sidecar availability at the destination. Establish whether Pixi can confirm that capability or
 remove the corresponding PEP 658/714 advertisements from the index representation seen by uv,
-covering both HTML and JSON forms. Mirroring all advertised sidecars is the other valid server-side
-option. No code change or test has yet established a working correction for Pixi's architecture.
+covering both HTML and JSON forms. Woodruffw also endorses unconditional removal of those
+advertisements as a simpler Pixi-side option, with a potential performance cost for pip and uv;
+compare that tradeoff with pre-flight checks. Mirroring all advertised sidecars is the other valid
+server-side option. No code change or test has yet established a working correction for Pixi's
+architecture.
 
 Pixi maintainer lucascolley has asked the reporter to determine whether Pixi can always pass
 `file.dist_info_metadata` to uv in a way that accurately reflects the selected mirror's
@@ -156,7 +167,7 @@ approach works or that the uv issue has been resolved.
 If that investigation leaves a need for uv changes, distinguish lucascolley's preference for
 general support for retrieval from multiple sources from the reporter's narrower proposals:
 an explicit standalone-metadata override or silent fallback after a failed metadata fetch.
-No approach has been accepted by uv maintainers. A broader design would need a concrete scope
+Neither proposed uv API change has been accepted by uv maintainers. A broader design would need a concrete scope
 before it could replace the bypass proposal. Keep any API decision separate from future CLI or
 per-index configuration design. The supplied patch and downstream
 reproduction already explain the requested behavior; no additional package-specific
