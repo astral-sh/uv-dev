@@ -19,12 +19,27 @@ file host. No existing uv duplicate or implementing pull request was found.
 The linked patch adds a default-enabled `use_dist_info_metadata(bool)` setting to
 `RegistryClientBuilder`, carries it into `RegistryClient`, and uses it to select the existing
 wheel-reading path. It proposes a Rust API setting, not a CLI flag or configuration-file option.
+The current issue body also proposes silently falling back to wheel-based metadata retrieval
+when standalone metadata cannot be fetched. This is an alternative requested behavior, not
+implemented or accepted functionality.
 
-## Draft response
+Maintainer woodruffw questions whether bypassing advertised metadata belongs in uv and suggests
+fixing Pixi's mirroring instead. That feedback explicitly assumes Pixi controls its index
+responses; the supplied discussion does not establish that assumption.
 
-uv already supports indexes without PEP 658/714: when no standalone metadata is advertised, it reads metadata from the wheel. In prefix-dev/pixi#7479, the index advertises metadata files but Pixi rewrites their URLs to a mirror that does not serve them, so the fetch fails.
+## Maintainer feedback and open questions
 
-Your patch proposes a new uv-client builder setting to override that advertisement. The next step is a maintainer decision on that API and its scope; there is no existing bypass switch. For now, using a mirror that serves the advertised metadata files avoids this mismatch.
+In astral-sh/uv#23150, woodruffw's November 9 comment raises installer/tool/index consistency
+and compatibility as reasons to question the proposed bypass. The maintainer suggests the problem
+may belong in Pixi's mirroring, explicitly conditional on Pixi controlling its own index responses.
+This is an initial objection and suggested investigation direction, not a final rejection or a
+confirmed root cause in Pixi.
+
+The existing reproduction reads the upstream index and rewrites artifact URLs. Clarify whether
+Pixi can adjust the metadata advertisements seen by uv, or otherwise keep index advertisements
+consistent with the selected file mirror. Do not assume that Pixi owns or serves the upstream
+index. This architectural question should precede deciding whether uv needs a new override.
+The comment adds no reproduction steps, version information, or demonstrated workaround.
 
 ## Classification
 
@@ -32,9 +47,10 @@ The request adds an explicit uv-client control to ignore advertised PEP 658/714 
 
 The existing enhancement label agrees with this assessment. The external reports support the
 index/file-host mismatch; they do not demonstrate a regression in uv's PEP 714 parsing.
-The explicit override requires a maintainer decision, including whether it belongs on the
-whole client or should have a narrower scope. The linked patch is a proposal, not accepted
-upstream functionality.
+The explicit override and the proposed silent fallback require a maintainer decision. Current
+feedback first questions whether either workaround belongs in uv rather than Pixi. If an
+override is considered, its whole-client versus narrower scope remains undecided. The linked
+patch is a proposal, not accepted upstream functionality.
 
 ## Related
 
@@ -88,10 +104,17 @@ metadata-sidecar bypass.
 
 ## Handoff
 
-Review whether the Rust client should expose an explicit standalone-metadata override for
-embedding applications such as Pixi. Keep that API decision separate from any future CLI or
-per-index configuration design. The supplied patch and downstream reproduction already explain
-the requested behavior; no additional package-specific reproduction is needed to classify it.
+First establish how Pixi obtains index responses and whether its mirroring layer can keep
+metadata advertisements consistent with the selected artifact host. Evaluate the suggested
+Pixi-side fix against that architecture; index-response control is an explicit, unverified
+assumption in the maintainer feedback.
+
+If that investigation leaves a need for uv changes, review whether the Rust client should
+expose an explicit standalone-metadata override or support the reporter's alternative of silent
+fallback after a failed metadata fetch. Neither has been accepted. Keep any API decision
+separate from future CLI or per-index configuration design. The supplied patch and downstream
+reproduction already explain the requested behavior; no additional package-specific
+reproduction is needed to classify it.
 
 Only this issue-context README was updated. No GitHub changes, checkout edits, builds, or tests
 were performed.
