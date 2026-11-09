@@ -7,9 +7,9 @@ use rustc_hash::FxHashMap;
 
 use uv_configuration::{Constraints, HashCheckingMode};
 use uv_distribution_types::{
-    ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, MetadataHashPolicy,
-    Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement, VersionId,
-    satisfies_require_hashes,
+    ArchiveHashGroups, ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation,
+    MetadataHashPolicy, Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement,
+    VersionId, parse_all_url_hashes, satisfies_require_hashes,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -38,6 +38,11 @@ pub enum HashVerification {
     IfPresent(Arc<FxHashMap<VersionId, Vec<HashDigest>>>),
     /// Every distribution must have a matching trusted hash.
     Required(Arc<FxHashMap<VersionId, Vec<HashDigest>>>),
+    /// Validate user-supplied hash groups and URL hashes discovered during metadata lookahead.
+    Independent {
+        by_package: Arc<FxHashMap<PackageName, ArchiveHashGroups>>,
+        by_url: Arc<FxHashMap<VersionId, Vec<HashDigest>>>,
+    },
 }
 
 impl HashStrategy {
@@ -59,7 +64,7 @@ impl HashStrategy {
         Self::default().with_verification(HashVerification::Required(hashes))
     }
 
-    /// Set verification independently of hash collection.
+    /// Replace the verification policy while retaining the hash collection policy.
     #[must_use]
     pub fn with_verification(mut self, verification: HashVerification) -> Self {
         self.verification = verification;
@@ -70,22 +75,58 @@ impl HashStrategy {
     ///
     /// Preserve hash collection and require hashes if either strategy requires them. Constraints
     /// for identities absent from this strategy remain available for newly resolved dependencies.
+    /// Independent policies require all groups from both inputs. Independent and ordinary
+    /// policies cannot be combined because they use different lookup keys.
     pub fn with_constraint_hashes(mut self, constraints: &Self) -> Result<Self, HashStrategyError> {
-        let (requirement_hashes, mode) = match &self.verification {
-            HashVerification::Unspecified => {
-                self.verification = constraints.verification.clone();
+        let (requirement_hashes, mode) = match (&mut self.verification, &constraints.verification) {
+            (HashVerification::Unspecified, verification) => {
+                self.verification = verification.clone();
                 return Ok(self);
             }
-            HashVerification::IfPresent(hashes) => {
-                let mode = match &constraints.verification {
-                    HashVerification::Required(_) => HashCheckingMode::Require,
-                    HashVerification::Unspecified | HashVerification::IfPresent(_) => {
-                        HashCheckingMode::Verify
-                    }
-                };
-                (hashes, mode)
+            (_, HashVerification::Unspecified) => return Ok(self),
+            (
+                HashVerification::Independent { by_package, by_url },
+                HashVerification::Independent {
+                    by_package: constraint_packages,
+                    by_url: constraint_urls,
+                },
+            ) => {
+                let by_package = Arc::make_mut(by_package);
+                for (name, groups) in constraint_packages.iter() {
+                    by_package
+                        .entry(name.clone())
+                        .and_modify(|current| {
+                            *current = ArchiveHashGroups::new(
+                                current
+                                    .groups()
+                                    .iter()
+                                    .chain(groups.groups())
+                                    .cloned()
+                                    .collect(),
+                            );
+                        })
+                        .or_insert_with(|| groups.clone());
+                }
+                let by_url = Arc::make_mut(by_url);
+                for (id, digests) in constraint_urls.iter() {
+                    merge_digests(by_url.entry(id.clone()).or_default(), digests, id)?;
+                }
+                return Ok(self);
             }
-            HashVerification::Required(hashes) => (hashes, HashCheckingMode::Require),
+            (HashVerification::Independent { .. }, _)
+            | (_, HashVerification::Independent { .. }) => {
+                return Err(HashStrategyError::IncompatibleIndependentPolicies);
+            }
+            (HashVerification::IfPresent(hashes), HashVerification::IfPresent(_)) => {
+                (hashes, HashCheckingMode::Verify)
+            }
+            (
+                HashVerification::IfPresent(hashes) | HashVerification::Required(hashes),
+                HashVerification::Required(_),
+            )
+            | (HashVerification::Required(hashes), HashVerification::IfPresent(_)) => {
+                (hashes, HashCheckingMode::Require)
+            }
         };
 
         let mut constraints = constraints.clone();
@@ -93,6 +134,9 @@ impl HashStrategy {
             HashVerification::Unspecified => return Ok(self),
             HashVerification::IfPresent(hashes) | HashVerification::Required(hashes) => {
                 Arc::make_mut(hashes)
+            }
+            HashVerification::Independent { .. } => {
+                return Err(HashStrategyError::IncompatibleIndependentPolicies);
             }
         };
         if mode.is_require() {
@@ -133,11 +177,22 @@ impl HashStrategy {
         &self.verification
     }
 
+    /// Return whether independent user-supplied hashes are being enforced.
+    pub fn has_independent_hashes(&self) -> bool {
+        matches!(&self.verification, HashVerification::Independent { .. })
+    }
+
     /// Return the [`ArchiveHashPolicy`] for the given distribution.
     pub fn archive_policy<T: DistributionMetadata>(
         &self,
         distribution: &T,
     ) -> ArchiveHashPolicy<'_> {
+        if let HashVerification::Independent { by_package, by_url } = &self.verification {
+            return independent_archive_policy(
+                by_package.get(distribution.name()),
+                by_url.get(&distribution.version_id()).map(Vec::as_slice),
+            );
+        }
         self.archive_policy_for_id(|| distribution.version_id())
     }
 
@@ -148,7 +203,16 @@ impl HashStrategy {
     ) -> MetadataHashPolicy<'_> {
         MetadataHashPolicy {
             collection: self.collection,
-            validation: self.validation_for_id(|| distribution.version_id()),
+            validation: if let HashVerification::Independent { by_package, by_url } =
+                &self.verification
+            {
+                HashValidation::Independent {
+                    groups: by_package.get(distribution.name()),
+                    url_hashes: by_url.get(&distribution.version_id()).map(Vec::as_slice),
+                }
+            } else {
+                self.policies_for_id(|| distribution.version_id()).1
+            },
         }
     }
 
@@ -158,6 +222,11 @@ impl HashStrategy {
         name: &PackageName,
         version: &Version,
     ) -> ArchiveHashPolicy<'_> {
+        if let HashVerification::Independent { by_package, .. } = &self.verification {
+            return by_package
+                .get(name)
+                .map_or(ArchiveHashPolicy::None, ArchiveHashPolicy::all_of_any);
+        }
         self.archive_policy_for_id(|| VersionId::from_registry(name.clone(), version.clone()))
     }
 
@@ -172,47 +241,54 @@ impl HashStrategy {
     pub fn metadata_policy_for_url(&self, url: &SafeUrl) -> MetadataHashPolicy<'_> {
         MetadataHashPolicy {
             collection: self.collection,
-            validation: self.validation_for_id(|| VersionId::from_url(url)),
+            validation: if let HashVerification::Independent { by_url, .. } = &self.verification {
+                HashValidation::Independent {
+                    groups: None,
+                    url_hashes: by_url.get(&VersionId::from_url(url)).map(Vec::as_slice),
+                }
+            } else {
+                self.policies_for_id(|| VersionId::from_url(url)).1
+            },
         }
     }
 
     /// Return the archive hash policy for a distribution identity.
     fn archive_policy_for_id(&self, id: impl FnOnce() -> VersionId) -> ArchiveHashPolicy<'_> {
-        let validation = self.validation_for_id(id);
-        match validation {
-            HashValidation::None => match self.collection {
-                HashCollection::None => ArchiveHashPolicy::None,
-                HashCollection::Url | HashCollection::All => ArchiveHashPolicy::Generate,
-            },
-            HashValidation::Any(_) | HashValidation::All(_) => validation.into(),
+        if let HashVerification::Independent { by_url, .. } = &self.verification {
+            return independent_archive_policy(None, by_url.get(&id()).map(Vec::as_slice));
         }
+        self.policies_for_id(id).0
     }
 
-    /// Construct an identity only when verification requires a lookup.
-    fn validation_for_id(&self, id: impl FnOnce() -> VersionId) -> HashValidation<'_> {
+    /// Look up ordinary hash policies, constructing an identity only when a lookup is needed.
+    fn policies_for_id(
+        &self,
+        id: impl FnOnce() -> VersionId,
+    ) -> (ArchiveHashPolicy<'_>, HashValidation<'_>) {
         match &self.verification {
             HashVerification::IfPresent(_) => {
                 let id = id();
                 if let Some(hashes) = self.hashes_for_id(&id) {
-                    return hash_validation(&id, hashes);
+                    return hash_policies(&id, hashes);
                 }
             }
             HashVerification::Required(hashes) => {
                 let id = id();
-                return hash_validation(
-                    &id,
-                    hashes.get(&id).map(Vec::as_slice).unwrap_or_default(),
-                );
+                return hash_policies(&id, hashes.get(&id).map(Vec::as_slice).unwrap_or_default());
             }
-            HashVerification::Unspecified => {}
+            HashVerification::Independent { .. } | HashVerification::Unspecified => {}
         }
-        HashValidation::None
+        let archive = match self.collection {
+            HashCollection::None => ArchiveHashPolicy::None,
+            HashCollection::Url | HashCollection::All => ArchiveHashPolicy::Generate,
+        };
+        (archive, HashValidation::None)
     }
 
     /// Look up supplied hashes, including public-version pins in verification mode.
     fn hashes_for_id(&self, id: &VersionId) -> Option<&[HashDigest]> {
         match &self.verification {
-            HashVerification::Unspecified => None,
+            HashVerification::Unspecified | HashVerification::Independent { .. } => None,
             HashVerification::IfPresent(hashes) => hashes
                 .get(id)
                 .or_else(|| {
@@ -240,7 +316,9 @@ impl HashStrategy {
             HashVerification::Required(hashes) => {
                 hashes.contains_key(&VersionId::from_registry(name.clone(), version.clone()))
             }
-            HashVerification::Unspecified | HashVerification::IfPresent(_) => true,
+            HashVerification::Unspecified
+            | HashVerification::IfPresent(_)
+            | HashVerification::Independent { .. } => true,
         }
     }
 
@@ -248,7 +326,9 @@ impl HashStrategy {
     pub fn allows_url(&self, url: &SafeUrl) -> bool {
         match &self.verification {
             HashVerification::Required(hashes) => hashes.contains_key(&VersionId::from_url(url)),
-            HashVerification::Unspecified | HashVerification::IfPresent(_) => true,
+            HashVerification::Unspecified
+            | HashVerification::IfPresent(_)
+            | HashVerification::Independent { .. } => true,
         }
     }
 
@@ -260,6 +340,21 @@ impl HashStrategy {
     ) -> Result<Self, HashStrategyError> {
         match &mut self.verification {
             HashVerification::Unspecified => {}
+            HashVerification::Independent { by_url, .. } => {
+                let hashes = Arc::make_mut(by_url);
+                for requirement in requirements {
+                    let Some(url) = requirement.source.to_verbatim_parsed_url() else {
+                        continue;
+                    };
+                    let digests = parse_all_url_hashes(&url.verbatim)?;
+                    let Some(id) = Self::pin(requirement) else {
+                        continue;
+                    };
+                    if !digests.is_empty() {
+                        merge_digests(hashes.entry(id).or_default(), &digests, requirement)?;
+                    }
+                }
+            }
             HashVerification::IfPresent(existing) | HashVerification::Required(existing) => {
                 if let Some(hashes) = Self::augment_hashes(existing, requirements)? {
                     *existing = Arc::new(hashes);
@@ -554,14 +649,35 @@ impl HashStrategy {
     }
 }
 
-fn hash_validation<'a>(id: &VersionId, digests: &'a [HashDigest]) -> HashValidation<'a> {
+fn independent_archive_policy<'a>(
+    groups: Option<&'a ArchiveHashGroups>,
+    url_hashes: Option<&'a [HashDigest]>,
+) -> ArchiveHashPolicy<'a> {
+    let url_hashes = url_hashes.unwrap_or_default();
+    if groups.is_none() && url_hashes.is_empty() {
+        ArchiveHashPolicy::None
+    } else {
+        ArchiveHashPolicy::AllOfAny { groups, url_hashes }
+    }
+}
+
+fn hash_policies<'a>(
+    id: &VersionId,
+    digests: &'a [HashDigest],
+) -> (ArchiveHashPolicy<'a>, HashValidation<'a>) {
     match id {
-        VersionId::NameVersion { .. } => HashValidation::Any(digests),
+        VersionId::NameVersion { .. } => (
+            ArchiveHashPolicy::Any(digests),
+            HashValidation::Any(digests),
+        ),
         VersionId::ArchiveUrl { .. }
         | VersionId::Git { .. }
         | VersionId::Path { .. }
         | VersionId::Directory { .. }
-        | VersionId::Unknown { .. } => HashValidation::All(digests),
+        | VersionId::Unknown { .. } => (
+            ArchiveHashPolicy::All(digests),
+            HashValidation::All(digests),
+        ),
     }
 }
 
@@ -689,6 +805,8 @@ fn merge_digests<'a>(
 
 #[derive(thiserror::Error, Debug)]
 pub enum HashStrategyError {
+    #[error("Cannot combine independent hash verification with another verification policy")]
+    IncompatibleIndependentPolicies,
     #[error(transparent)]
     Hash(#[from] HashError),
     #[error("Conflicting archive URL hashes for `{0}`: `{1}` conflicts with `{2}`")]
@@ -720,8 +838,9 @@ mod tests {
     use uv_configuration::HashCheckingMode;
     use uv_distribution_filename::DistExtension;
     use uv_distribution_types::{
-        ArchiveHashPolicy, HashCollection, HashValidation, MetadataHashPolicy, Requirement,
-        RequirementScope, RequirementSource, UnresolvedRequirement, VersionId,
+        ArchiveHashGroups, ArchiveHashPolicy, Dist, HashCollection, HashValidation,
+        MetadataHashPolicy, Requirement, RequirementScope, RequirementSource,
+        UnresolvedRequirement, VersionId,
     };
     use uv_normalize::PackageName;
     use uv_pep440::Version;
@@ -792,6 +911,51 @@ mod tests {
                 ArchiveHashPolicy::All(expected.as_slice())
             );
         }
+    }
+
+    #[test]
+    fn independent_archive_policy_checks_package_groups_and_url_hashes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const URL: &str = concat!(
+            "https://files.pythonhosted.org/packages/36/55/",
+            "ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/",
+            "anyio-4.0.0-py3-none-any.whl",
+        );
+        let package_hash = HashDigest::from_str("md5:0123456789abcdef0123456789abcdef")?;
+        let sha256 = HashDigest::from_str(
+            "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
+        )?;
+        let sha512 = concat!(
+            "f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e7733",
+            "64ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+        );
+        let url_hash = HashDigest::from_str(&format!("sha512:{sha512}"))?;
+        let metadata_requirement = requirement(&format!("{URL}#sha512={sha512}"));
+        let strategy = HashStrategy::default()
+            .with_verification(HashVerification::Independent {
+                by_package: Arc::new(FxHashMap::from_iter([(
+                    metadata_requirement.name.clone(),
+                    ArchiveHashGroups::new(vec![vec![package_hash.clone()]]),
+                )])),
+                by_url: Arc::default(),
+            })
+            .augment_with_metadata_requirements([&metadata_requirement].into_iter())?;
+
+        let url = metadata_requirement
+            .source
+            .to_verbatim_parsed_url()
+            .ok_or_else(|| std::io::Error::other("Expected a direct URL requirement"))?;
+        let distribution = Dist::from_url(metadata_requirement.name, url.clone())?;
+        let policy = strategy.archive_policy(&distribution);
+        assert!(policy.matches(&[sha256.clone(), package_hash.clone(), url_hash.clone()]));
+        assert!(!policy.matches(&[sha256.clone(), package_hash]));
+        assert!(!policy.matches(&[sha256.clone(), url_hash.clone()]));
+
+        let policy = strategy.archive_policy_for_url(&url.verbatim);
+        assert!(!policy.matches(std::slice::from_ref(&sha256)));
+        assert!(policy.matches(&[sha256, url_hash]));
+
+        Ok(())
     }
 
     #[test]

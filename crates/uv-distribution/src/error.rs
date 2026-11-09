@@ -44,6 +44,8 @@ pub enum Error {
         label: VariantLabel,
         properties: UnsupportedVariantProperties,
     },
+    #[error(transparent)]
+    Hash(#[from] uv_pypi_types::HashError),
     #[error("Building source distributions is disabled")]
     NoBuild,
     #[error("Building source distributions for `{0}` is disabled")]
@@ -136,6 +138,8 @@ pub enum Error {
     WheelMetadata(PathBuf, #[source] Box<uv_metadata::Error>),
     #[error("Failed to read metadata from installed package `{0}`")]
     ReadInstalled(Box<InstalledDist>, #[source] InstalledDistError),
+    #[error("Failed to read `pylock.toml` from the source distribution `{0}`")]
+    ReadSourceLock(String, #[source] std::io::Error),
     #[error("Failed to extract archive: {0}")]
     Extract(String, #[source] uv_extract::Error),
     #[error("The source distribution is missing a `PKG-INFO` file")]
@@ -304,6 +308,7 @@ impl Error {
         match self {
             Self::WheelVariantsDisabled(_)
             | Self::IncompatibleWheelVariant { .. }
+            | Self::Hash(_)
             | Self::NoBuild
             | Self::NoBuildPackage(_)
             | Self::InvalidUrl(_)
@@ -343,6 +348,7 @@ impl Error {
             Self::Reqwest(error) => error.is_user_failure(),
             Self::Client(error) => error.is_user_failure(),
             Self::ClientBuild(error) => error.is_user_failure(),
+            Self::ReadSourceLock(_, error) => error.kind() == std::io::ErrorKind::InvalidData,
             Self::CacheRead(_)
             | Self::CacheWrite(_)
             | Self::CacheLock(_)
@@ -360,12 +366,13 @@ impl Error {
     }
 
     /// Construct a hash mismatch error.
-    pub fn hash_mismatch(
+    pub fn hash_mismatch<'a>(
         distribution: String,
-        expected: &[HashDigest],
+        expected: impl IntoIterator<Item = &'a HashDigest>,
         actual: &[HashDigest],
     ) -> Self {
-        match (expected.is_empty(), actual.is_empty()) {
+        let mut expected = expected.into_iter().peekable();
+        match (expected.peek().is_none(), actual.is_empty()) {
             (true, true) => Self::MissingHashes { distribution },
             (true, false) => {
                 let actual = actual
@@ -381,7 +388,6 @@ impl Error {
             }
             (false, true) => {
                 let expected = expected
-                    .iter()
                     .map(|hash| format!("  {hash}"))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -393,7 +399,6 @@ impl Error {
             }
             (false, false) => {
                 let expected = expected
-                    .iter()
                     .map(|hash| format!("  {hash}"))
                     .collect::<Vec<_>>()
                     .join("\n");

@@ -205,22 +205,23 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
 
         // Determine the hash policy. Since we don't have a package name, we perform a
         // manual match.
-        let collection = match self.hasher.verification() {
+        let hashes = match self.hasher.verification() {
             HashVerification::Required(_) => {
                 return Err(anyhow::anyhow!(
                     "Hash-checking is not supported for local directories: {}",
                     path.user_display()
                 ));
             }
-            HashVerification::IfPresent(_) => match self.hasher.collection() {
-                HashCollection::None => HashCollection::All,
-                collection @ (HashCollection::Url | HashCollection::All) => collection,
+            HashVerification::IfPresent(_) => MetadataHashPolicy {
+                collection: match self.hasher.collection() {
+                    HashCollection::None => HashCollection::All,
+                    collection @ (HashCollection::Url | HashCollection::All) => collection,
+                },
+                validation: HashValidation::None,
             },
-            HashVerification::Unspecified => self.hasher.collection(),
-        };
-        let hashes = MetadataHashPolicy {
-            collection,
-            validation: HashValidation::None,
+            HashVerification::Unspecified | HashVerification::Independent { .. } => {
+                self.hasher.metadata_policy_for_url(&url)
+            }
         };
 
         // Fetch the metadata for the distribution.

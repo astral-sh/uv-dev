@@ -214,7 +214,7 @@ impl FlatDistributions {
         let hash = if hash_policy.requires_validation() {
             if hashes.is_empty() {
                 HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
+            } else if hash_policy.matches_index_hashes(hashes) {
                 HashComparison::Matched
             } else {
                 HashComparison::Mismatched
@@ -259,7 +259,7 @@ impl FlatDistributions {
         let hash = if hash_policy.requires_validation() {
             if hashes.is_empty() {
                 HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
+            } else if hash_policy.matches_index_hashes(hashes) {
                 HashComparison::Matched
             } else {
                 HashComparison::Mismatched
@@ -290,5 +290,72 @@ impl From<FlatDistributions> for BTreeMap<Version, PrioritizedDist> {
 impl From<BTreeMap<Version, PrioritizedDist>> for FlatDistributions {
     fn from(distributions: BTreeMap<Version, PrioritizedDist>) -> Self {
         Self(distributions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::slice;
+    use std::sync::Arc;
+
+    use uv_configuration::BuildOptions;
+    use uv_distribution_filename::WheelFilename;
+    use uv_distribution_types::ArchiveHashGroups;
+    use uv_pypi_types::HashDigest;
+    use uv_types::{HashStrategy, HashVerification};
+
+    use super::FlatDistributions;
+    use crate::prioritized_distribution::{HashComparison, WheelCompatibility};
+
+    /// A matching SHA-512 must rank above the higher build tag before either wheel is downloaded.
+    #[test]
+    fn rank_wheels_with_advertised_sha512() -> Result<(), Box<dyn std::error::Error>> {
+        let matching: WheelFilename = "example-1.0-1-py3-none-any.whl".parse()?;
+        let other: WheelFilename = "example-1.0-2-py3-none-any.whl".parse()?;
+        let sha512: HashDigest = concat!(
+            "sha512:f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e7733",
+            "64ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+        )
+        .parse()?;
+        let other_sha512: HashDigest = concat!(
+            "sha512:e30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e7733",
+            "64ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+        )
+        .parse()?;
+        let sha256: HashDigest =
+            "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f".parse()?;
+        let groups = ArchiveHashGroups::new(vec![vec![sha512.clone()]]);
+        let hasher = HashStrategy::default().with_verification(HashVerification::Independent {
+            by_package: Arc::new([(matching.name.clone(), groups)].into_iter().collect()),
+            by_url: Arc::default(),
+        });
+        let build_options = BuildOptions::default();
+
+        assert!(matches!(
+            FlatDistributions::wheel_compatibility(
+                &matching,
+                slice::from_ref(&sha512),
+                None,
+                &hasher,
+                &build_options,
+            ),
+            WheelCompatibility::Compatible(HashComparison::Matched, ..)
+        ));
+        assert!(matches!(
+            FlatDistributions::wheel_compatibility(
+                &other,
+                &[other_sha512],
+                None,
+                &hasher,
+                &build_options,
+            ),
+            WheelCompatibility::Compatible(HashComparison::Mismatched, ..)
+        ));
+
+        let archive_policy = hasher.archive_policy_for_package(&matching.name, &matching.version);
+        assert!(!archive_policy.matches(slice::from_ref(&sha512)));
+        assert!(archive_policy.matches(&[sha512, sha256]));
+
+        Ok(())
     }
 }

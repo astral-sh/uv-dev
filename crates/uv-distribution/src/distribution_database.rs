@@ -25,9 +25,10 @@ use uv_client::{
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, GitPathBuiltDist,
-    HashCollection, HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name,
-    ResolutionRecorder, SourceDist, SourceUrl, VariantsJsonContent, parse_url_hashes,
+    ArchiveHashGroups, ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef,
+    GitPathBuiltDist, HashCollection, HashValidation, Hashed, IndexUrl, InstalledDist,
+    MetadataHashPolicy, Name, ResolutionRecorder, SourceDist, SourceUrl, VariantsJsonContent,
+    parse_all_url_hashes, parse_url_hashes,
 };
 use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
@@ -38,7 +39,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
-use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
 use uv_python_types::PythonVariant;
 use uv_redacted::SafeUrl;
 use uv_threads::initialize_rayon_once;
@@ -677,6 +678,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: MetadataHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
+        let independent_groups;
         let hash_policy = match hashes.validation {
             HashValidation::None => {
                 let compute_hashes = match hashes.collection {
@@ -698,14 +700,79 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     ArchiveHashPolicy::None
                 }
             }
-            HashValidation::Any(_) | HashValidation::All(_) => hashes.validation.into(),
+            HashValidation::Any(hashes) => ArchiveHashPolicy::Any(hashes),
+            HashValidation::All(hashes) => ArchiveHashPolicy::All(hashes),
+            HashValidation::Independent { groups, url_hashes } => {
+                let mut groups = groups.map_or_else(Vec::new, |groups| groups.groups().to_vec());
+                groups.extend(
+                    url_hashes
+                        .into_iter()
+                        .flatten()
+                        .cloned()
+                        .map(|hash| vec![hash]),
+                );
+                match dist {
+                    BuiltDist::Registry(dist) => {
+                        let index_hashes = dist
+                            .best_wheel()
+                            .file
+                            .hashes
+                            .iter()
+                            .filter(|hash| hash.algorithm() != HashAlgorithm::Md5)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        groups.extend(index_hashes.into_iter().map(|hash| vec![hash]));
+                        let url = dist.best_wheel().file.url.to_url()?;
+                        groups.extend(
+                            parse_all_url_hashes(&url)?
+                                .into_iter()
+                                .map(|hash| vec![hash]),
+                        );
+                    }
+                    BuiltDist::DirectUrl(dist) => {
+                        groups.extend(
+                            parse_all_url_hashes(&dist.url)?
+                                .into_iter()
+                                .map(|hash| vec![hash]),
+                        );
+                    }
+                    BuiltDist::Path(dist) => {
+                        groups.extend(
+                            parse_all_url_hashes(&dist.url)?
+                                .into_iter()
+                                .map(|hash| vec![hash]),
+                        );
+                    }
+                    BuiltDist::GitPath(dist) => {
+                        if !groups.is_empty() || !parse_all_url_hashes(&dist.url)?.is_empty() {
+                            return Err(Error::HashesNotSupportedGit(dist.to_string()));
+                        }
+                    }
+                }
+                if matches!(dist, BuiltDist::GitPath(_)) {
+                    ArchiveHashPolicy::None
+                } else {
+                    independent_groups = ArchiveHashGroups::new(groups);
+                    ArchiveHashPolicy::all_of_any(&independent_groups)
+                }
+            }
         };
 
         // Box the full-wheel futures to keep their state out of metadata-only requests.
-        // Fetch the entire wheel only when we need to compute a hash for resolution.
+        // Fetch the entire wheel when resolution needs computed or independently verified hashes.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hash_policy == ArchiveHashPolicy::Generate {
+        if matches!(
+            hash_policy,
+            ArchiveHashPolicy::Generate | ArchiveHashPolicy::AllOfAny { .. }
+        ) {
             let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
+            if hash_policy.requires_validation() && !wheel.satisfies(hash_policy) {
+                return Err(Error::hash_mismatch(
+                    dist.to_string(),
+                    hash_policy.digests(),
+                    wheel.hashes(),
+                ));
+            }
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) =
                 self.dependency_metadata(dist.name(), Some(dist.version()))
@@ -752,10 +819,16 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
 
         let wheel = Box::pin(self.get_wheel(dist, hash_policy)).await?;
-        Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(wheel.metadata()?),
-            hashes: wheel.hashes,
-        })
+        let metadata = Metadata::from_metadata23(wheel.metadata()?);
+        let hashes = if matches!(hashes.validation, HashValidation::Independent { .. })
+            && matches!(dist, BuiltDist::GitPath(_))
+        {
+            // The Git revision identifies the wheel. Digests in a warm cache are incidental.
+            HashDigests::empty()
+        } else {
+            wheel.hashes
+        };
+        Ok(ArchiveMetadata { metadata, hashes })
     }
 
     /// Build the wheel metadata for a source distribution, or fetch it from the cache if possible.
@@ -767,6 +840,66 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         source: &BuildableSource<'_>,
         hashes: MetadataHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
+        let independent_groups = if let HashValidation::Independent { groups, url_hashes } =
+            hashes.validation
+        {
+            let mut groups = groups.map_or_else(Vec::new, |groups| groups.groups().to_vec());
+            groups.extend(
+                url_hashes
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+                    .map(|hash| vec![hash]),
+            );
+            let url = match source {
+                BuildableSource::Dist(SourceDist::Registry(dist)) => {
+                    groups.extend(
+                        dist.file
+                            .hashes
+                            .iter()
+                            .filter(|hash| hash.algorithm() != HashAlgorithm::Md5)
+                            .cloned()
+                            .map(|hash| vec![hash]),
+                    );
+                    Cow::Owned(dist.file.url.to_url()?)
+                }
+                BuildableSource::Dist(SourceDist::DirectUrl(dist)) => Cow::Borrowed(&*dist.url),
+                BuildableSource::Dist(SourceDist::Path(dist)) => Cow::Borrowed(&*dist.url),
+                BuildableSource::Dist(SourceDist::Directory(dist)) => Cow::Borrowed(&*dist.url),
+                BuildableSource::Dist(SourceDist::GitDirectory(dist)) => Cow::Borrowed(&*dist.url),
+                BuildableSource::Dist(SourceDist::GitPath(dist)) => Cow::Borrowed(&*dist.url),
+                BuildableSource::Url(url) => Cow::Borrowed(url.url()),
+            };
+            groups.extend(
+                parse_all_url_hashes(&url)?
+                    .into_iter()
+                    .map(|hash| vec![hash]),
+            );
+            match source {
+                BuildableSource::Dist(SourceDist::GitDirectory(_) | SourceDist::GitPath(_))
+                | BuildableSource::Url(SourceUrl::GitDirectory(_) | SourceUrl::GitPath(_)) => {
+                    if !groups.is_empty() {
+                        return Err(Error::HashesNotSupportedGit(source.to_string()));
+                    }
+                    None
+                }
+                BuildableSource::Dist(SourceDist::Directory(_))
+                | BuildableSource::Url(SourceUrl::Directory(_)) => {
+                    if !groups.is_empty() {
+                        return Err(Error::HashesNotSupportedSourceTree(source.to_string()));
+                    }
+                    None
+                }
+                BuildableSource::Dist(
+                    SourceDist::Registry(_) | SourceDist::DirectUrl(_) | SourceDist::Path(_),
+                )
+                | BuildableSource::Url(SourceUrl::Direct(_) | SourceUrl::Path(_)) => {
+                    Some(ArchiveHashGroups::new(groups))
+                }
+            }
+        } else {
+            None
+        };
         // If the metadata was provided by the user directly, prefer it.
         if let Some(dist) = source.as_dist() {
             if let Some(metadata) = self.dependency_metadata(dist.name(), dist.version()) {
@@ -778,14 +911,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             }
         }
 
-        let url_hashes = if let BuildableSource::Dist(SourceDist::DirectUrl(dist)) = source {
-            parse_url_hashes(&dist.url)
-        } else if let BuildableSource::Url(SourceUrl::Direct(url)) = source {
-            parse_url_hashes(url.url)
-        } else {
-            None
+        let url_hashes = match source {
+            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => parse_url_hashes(&dist.url),
+            BuildableSource::Url(SourceUrl::Direct(url)) => parse_url_hashes(url.url),
+            _ => None,
         };
-
         let build_hash_policy = match hashes.validation {
             HashValidation::None => match hashes.collection {
                 HashCollection::None => ArchiveHashPolicy::None,
@@ -796,9 +926,16 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     None => ArchiveHashPolicy::Generate,
                 },
             },
-            HashValidation::Any(_) | HashValidation::All(_) => hashes.validation.into(),
+            HashValidation::Independent { .. } => independent_groups
+                .as_ref()
+                .map_or(ArchiveHashPolicy::None, ArchiveHashPolicy::all_of_any),
+            HashValidation::Any(hashes) => ArchiveHashPolicy::Any(hashes),
+            HashValidation::All(hashes) => ArchiveHashPolicy::All(hashes),
         };
-        let ArchiveMetadata { metadata, hashes } = self
+        let ArchiveMetadata {
+            metadata,
+            hashes: archive_hashes,
+        } = self
             .builder
             .for_metadata(self.first_party_packages)
             .download_and_build_metadata(source, build_hash_policy, &self.client)
@@ -810,7 +947,14 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // `with_force_relative(false)` to respect the user's relative/absolute path preference.
         Ok(ArchiveMetadata {
             metadata: metadata.with_force_relative(true),
-            hashes,
+            hashes: if matches!(hashes.validation, HashValidation::Independent { .. })
+                && independent_groups.is_none()
+            {
+                // Local source trees and Git revisions do not use archive hashes.
+                HashDigests::empty()
+            } else {
+                archive_hashes
+            },
         })
     }
 
