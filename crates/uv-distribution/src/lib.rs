@@ -1,3 +1,4 @@
+pub use archive::rewrite::add_lock_to_distribution;
 pub use diagnostics::dist_hints;
 pub use distribution_database::{DistributionDatabase, HttpArchivePointer, PathArchivePointer};
 pub use download::{LocalWheel, check_supported_wheel_variant, check_wheel_variant_compatibility};

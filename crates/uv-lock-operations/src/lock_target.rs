@@ -445,6 +445,37 @@ impl<'lock> LockTarget<'lock> {
         Ok(Constraints::from_specifications(constraints))
     }
 
+    /// Check the runtime dependency modifiers against an existing lock without resolving.
+    pub async fn matches_runtime_resolution_inputs(
+        self,
+        lock: &Lock,
+        locations: &IndexLocations,
+        sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<bool, LockError> {
+        let RuntimeResolutionInputs {
+            constraints,
+            overrides,
+            excludes,
+        } = self
+            .lower_runtime_resolution_inputs(
+                locations,
+                sources,
+                cache,
+                workspace_cache,
+                credentials_cache,
+            )
+            .await?;
+        Ok(lock.matches_runtime_resolution_inputs(
+            self.install_path(),
+            &constraints,
+            &overrides,
+            &excludes,
+        )?)
+    }
+
     pub(crate) async fn lower_runtime_resolution_inputs(
         self,
         locations: &IndexLocations,

@@ -3,8 +3,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::Hashed;
 use uv_pypi_types::{HashDigest, HashDigests};
 
-#[cfg(test)]
-mod rewrite;
+pub(crate) mod rewrite;
 
 /// An archive (unzipped wheel) that exists in the local cache.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

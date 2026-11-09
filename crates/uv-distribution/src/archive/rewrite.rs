@@ -25,7 +25,7 @@ use uv_metadata::find_archive_dist_info;
 /// Write a copy of a distribution with a packaged `pylock.toml` to a new path.
 ///
 /// An existing `pylock.toml` is replaced. Wheels also get an updated `RECORD` entry.
-async fn add_lock_to_distribution(
+pub async fn add_lock_to_distribution(
     source: &Path,
     destination: &Path,
     filename: &DistFilename,

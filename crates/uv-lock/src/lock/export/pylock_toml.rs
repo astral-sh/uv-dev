@@ -1,3 +1,5 @@
+mod publish;
+
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -47,6 +49,8 @@ use uv_resolver_types::ResolverOutput;
 use crate::lock::export::{ExportableRequirements, VirtualPackages};
 use crate::lock::{Source, WheelTagHint, is_wheel_unreachable};
 use crate::{Installable, LockError};
+
+pub use publish::{PublishLock, PublishLockError};
 
 /// Format an array so that each element is on its own line and has a trailing comma.
 fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value>>) -> Array {

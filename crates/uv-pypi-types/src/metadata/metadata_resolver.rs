@@ -103,11 +103,7 @@ impl ResolutionMetadata {
             .get_first_value("Metadata-Version")?
             .ok_or(MetadataError::FieldNotFound("Metadata-Version"))?;
 
-        // Parse the version into (major, minor).
-        let (major, minor) = metadata::parse_version(&metadata_version)?;
-        if (major, minor) < (2, 2) || (major, minor) >= (3, 0) {
-            return Err(MetadataError::UnsupportedMetadataVersion(metadata_version));
-        }
+        metadata::validate_pkg_info_version(&metadata_version)?;
 
         // If any of the fields we need are marked as dynamic, we can't use the `PKG-INFO` file.
         let mut dynamic = false;

@@ -108,8 +108,8 @@ impl<'a> Headers<'a> {
     }
 }
 
-/// Parse a `Metadata-Version` field into a (major, minor) tuple.
-fn parse_version(metadata_version: &str) -> Result<(u8, u8), MetadataError> {
+/// Check the version of a `PKG-INFO` file before relying on its static fields.
+fn validate_pkg_info_version(metadata_version: &str) -> Result<(), MetadataError> {
     let (major, minor) = metadata_version
         .split_once('.')
         .ok_or_else(|| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
@@ -119,5 +119,10 @@ fn parse_version(metadata_version: &str) -> Result<(u8, u8), MetadataError> {
     let minor = minor
         .parse::<u8>()
         .map_err(|_| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
-    Ok((major, minor))
+    if (major, minor) < (2, 2) || (major, minor) >= (3, 0) {
+        return Err(MetadataError::UnsupportedMetadataVersion(
+            metadata_version.to_string(),
+        ));
+    }
+    Ok(())
 }

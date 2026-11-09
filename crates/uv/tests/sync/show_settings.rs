@@ -443,6 +443,8 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         index: None,
         dry_run: false,
         no_attestations: false,
+        locked: false,
+        allow_non_pypi: false,
         publish_url: SafeUrl {
             scheme: "https",
             cannot_be_a_base: false,
@@ -488,6 +490,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
                 },
             ),
         ),
+        sources: None,
         index_locations: IndexLocations {
             indexes: [
                 Index {
@@ -4031,6 +4034,7 @@ fn preview_features() {
     +            PackagedInit,
     +            CentralizedProjectEnvs,
     +            ToolInstallLocks,
+    +            LockedTools,
     +            WorkspaceListScripts,
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,

@@ -74,7 +74,8 @@ use uv_workspace::{Editability, WorkspaceMember};
 pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
-    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
+    Metadata, PublishLock, PublishLockError, PylockToml, PylockTomlError, PylockTomlErrorKind,
+    PythonReport, cyclonedx_json,
 };
 use crate::lock::inputs::ManifestFilter;
 pub use crate::lock::installable::{Installable, InstallableRootKind};
@@ -4194,6 +4195,22 @@ impl Lock {
                 }
             }
         }
+    }
+
+    /// Check the runtime dependency modifiers recorded in the lockfile without resolving.
+    pub fn matches_runtime_resolution_inputs(
+        &self,
+        root: &Path,
+        constraints: &[Requirement],
+        overrides: &[Override<Requirement>],
+        excludes: &[ExcludeDependency],
+    ) -> Result<bool, LockError> {
+        let normalizer = RequirementNormalizer::new(root, &self.requires_python);
+        let filter = ManifestFilter::from_lock(self);
+        Ok(matches!(
+            self.validate_runtime_inputs(&normalizer, &filter, constraints, overrides, excludes)?,
+            ValidatedRuntimeInputs::Matched { .. }
+        ))
     }
 
     fn validate_runtime_inputs<'lock>(

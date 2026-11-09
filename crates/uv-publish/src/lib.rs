@@ -62,6 +62,15 @@ pub enum PublishError {
     Fmt(#[from] fmt::Error),
     #[error("File is neither a wheel nor a source distribution: {}", _0.user_display())]
     InvalidFilename(PathBuf),
+    #[error(
+        "More than one input matches distribution `{filename}` (`{}` and `{}`)",
+        first.user_display(), second.user_display()
+    )]
+    DuplicateFilename {
+        filename: String,
+        first: PathBuf,
+        second: PathBuf,
+    },
     #[error("Failed to publish: {}", _0.user_display())]
     PublishPrepare(PathBuf, #[source] Box<PublishPrepareError>),
     #[error("Failed to publish `{}` to `{}`", _0.user_display(), _1)]
@@ -119,6 +128,11 @@ pub enum PublishPrepareError {
     TokioTarRead(String, #[source] io::Error),
     #[error("Invalid PEP 740 attestation (not JSON): {0}")]
     InvalidAttestation(PathBuf, #[source] serde_json::Error),
+    #[error(
+        "Embedding a lockfile changes `{0}` and invalidates its attestations. \
+         Pass `--no-attestations` to publish it without them"
+    )]
+    RewriteWithAttestations(DistFilename),
 }
 
 /// Failure in or after (HTTP) transport for a specific file.
@@ -243,6 +257,48 @@ pub struct PreparedDistribution {
 }
 
 impl PreparedDistribution {
+    /// The path to the local archive.
+    pub fn path(&self) -> &Path {
+        &self.file
+    }
+
+    /// Check whether this archive can be rewritten with its upload options.
+    pub fn check_rewrite(&self) -> Result<(), PublishPrepareError> {
+        if !self.attestations.is_empty() {
+            return Err(PublishPrepareError::RewriteWithAttestations(
+                self.filename.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Use a rewritten copy of this distribution with the same filename.
+    pub fn with_rewritten_path(mut self, path: PathBuf) -> Result<Self, PublishPrepareError> {
+        self.check_rewrite()?;
+        self.file = path;
+        Ok(self)
+    }
+
+    /// Read the core metadata from the archive.
+    pub async fn metadata(
+        &self,
+        tar_backend: TarBackend,
+    ) -> Result<Metadata23, PublishPrepareError> {
+        metadata(&self.file, &self.filename, tar_backend).await
+    }
+
+    /// Compute the hash of the local archive.
+    pub async fn sha256(&self, reporter: Arc<impl Reporter>) -> Result<HashDigest, io::Error> {
+        let [hash] = hash_file(
+            &self.file,
+            &self.filename,
+            [Hasher::from(HashAlgorithm::Sha256)],
+            reporter,
+        )
+        .await?;
+        Ok(hash)
+    }
+
     /// The parsed distribution filename.
     pub fn filename(&self) -> &DistFilename {
         &self.filename
@@ -660,14 +716,40 @@ impl<'a> PublishSession<'a> {
         paths: Vec<String>,
         no_attestations: bool,
     ) -> Result<Vec<PreparedDistribution>, PublishError> {
-        let mut distributions = group_files(unroll_paths(paths)?, no_attestations);
+        Ok(Self::prepare_files(unroll_paths(paths)?, no_attestations))
+    }
+
+    /// Collect distributions for locked publishing, requiring a unique path for each filename.
+    pub fn prepare_locked(
+        paths: Vec<String>,
+        no_attestations: bool,
+    ) -> Result<Vec<PreparedDistribution>, PublishError> {
+        let files = unroll_paths(paths)?;
+        let mut paths_by_filename = FxHashMap::default();
+        for file in &files {
+            if let Some(filename) = file.file_name().and_then(|filename| filename.to_str())
+                && let Some(previous) = paths_by_filename.insert(filename, file)
+                && DistFilename::try_from_normalized_filename(filename).is_some()
+            {
+                return Err(PublishError::DuplicateFilename {
+                    filename: filename.to_owned(),
+                    first: previous.clone(),
+                    second: file.clone(),
+                });
+            }
+        }
+        Ok(Self::prepare_files(files, no_attestations))
+    }
+
+    fn prepare_files(files: Vec<PathBuf>, no_attestations: bool) -> Vec<PreparedDistribution> {
+        let mut distributions = group_files(files, no_attestations);
         // Preserve filename order within each type, with wheels before source distributions.
         distributions.sort_by(|left, right| left.raw_filename.cmp(&right.raw_filename));
         distributions.sort_by_key(|distribution| match &distribution.filename {
             DistFilename::WheelFilename(_) => false,
             DistFilename::SourceDistFilename(_) => true,
         });
-        Ok(distributions)
+        distributions
     }
 
     /// Validate a distribution's metadata and attestations without uploading it.
@@ -861,7 +943,7 @@ impl<'a> PublishSession<'a> {
     }
 
     /// Check whether an identical distribution already exists at the check URL, if configured.
-    pub async fn check_existing(
+    async fn check_existing(
         &self,
         prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
@@ -873,7 +955,7 @@ impl<'a> PublishSession<'a> {
     }
 
     /// Find the registry entry for a distribution whose hash matches the local file.
-    async fn find_published_file(
+    pub async fn find_published_file(
         &self,
         prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
@@ -1497,9 +1579,9 @@ mod tests {
     use uv_static::TarBackend;
 
     use crate::{
-        FormMetadata, PublishError, PublishOutcome, PublishPrepareError, PublishSendError,
-        PublishSession, PublishingCredentials, Reporter, UploadOutcome, group_files,
-        source_dist_pkg_info,
+        FormMetadata, PreparedDistribution, PublishError, PublishOutcome, PublishPrepareError,
+        PublishSendError, PublishSession, PublishingCredentials, Reporter, UploadOutcome,
+        group_files, source_dist_pkg_info,
     };
     use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
     use wiremock::matchers::{basic_auth, method, path};
@@ -1508,6 +1590,22 @@ mod tests {
     struct DummyReporter;
 
     const TAR_BACKENDS: [TarBackend; 2] = [TarBackend::TarCodec, TarBackend::TokioTar];
+
+    #[test]
+    fn rewritten_archive_rejects_attestations() {
+        let raw_filename = "example-1.0-py3-none-any.whl";
+        let original = PreparedDistribution {
+            file: PathBuf::from(raw_filename),
+            raw_filename: raw_filename.to_string(),
+            filename: DistFilename::try_from_normalized_filename(raw_filename)
+                .expect("valid wheel filename"),
+            attestations: vec![PathBuf::from("example.whl.publish.attestation")],
+        };
+        let error = original
+            .with_rewritten_path(PathBuf::from("staging").join(raw_filename))
+            .expect_err("rewriting invalidates the attached attestation");
+        assert_snapshot!(error, @"Embedding a lockfile changes `example-1.0-py3-none-any.whl` and invalidates its attestations. Pass `--no-attestations` to publish it without them");
+    }
 
     impl Reporter for DummyReporter {
         fn on_progress(&self, _name: &str, _id: usize) {}

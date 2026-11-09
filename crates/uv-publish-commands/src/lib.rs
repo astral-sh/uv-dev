@@ -1,9 +1,13 @@
 //! Commands for publishing Python distributions.
 
+mod locked;
 mod reporters;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use console::Term;
@@ -15,9 +19,11 @@ use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
 };
 use uv_command_support::{ExitStatus, Printer};
-use uv_configuration::{KeyringProviderType, TrustedPublishing};
-use uv_distribution_types::{IndexLocations, IndexUrl};
+use uv_configuration::{KeyringProviderType, NoSources, TrustedPublishing};
+use uv_distribution::add_lock_to_distribution;
+use uv_distribution_types::{File, FileLocation, IndexLocations, IndexUrl};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+use uv_preview::PreviewFeature;
 use uv_publish::{
     PreparedDistribution, PublishError, PublishFinalizeError, PublishOutcome, PublishSession,
     PublishingCredentials, TrustedPublishResult, TrustedPublishingError, UploadOutcome,
@@ -28,7 +34,15 @@ use uv_settings::EnvironmentOptions;
 use uv_static::TarBackend;
 use uv_warnings::{warn_user, warn_user_once};
 
+use crate::locked::{PublishLocks, PublishedArtifacts};
 use crate::reporters::PublishReporter;
+
+/// Options for embedding project locks in the distributions selected for publication.
+pub struct LockedPublish<'a> {
+    pub project_dir: &'a Path,
+    pub allow_non_pypi: bool,
+    pub sources: &'a NoSources,
+}
 
 /// Publish distributions to a package index.
 pub async fn publish(
@@ -45,11 +59,15 @@ pub async fn publish(
     index_locations: IndexLocations,
     dry_run: bool,
     no_attestations: bool,
+    locked: Option<LockedPublish<'_>>,
     cache: &Cache,
     printer: Printer,
 ) -> Result<ExitStatus> {
     if client_builder.is_offline() {
         bail!("Unable to publish files in offline mode");
+    }
+    if locked.is_some() && !uv_preview::is_enabled(PreviewFeature::LockedTools) {
+        bail!("`uv publish --locked` requires `--preview-features locked-tools`");
     }
 
     let (publish_url, check_url) = if let Some(index_name) = index {
@@ -89,7 +107,11 @@ pub async fn publish(
         (publish_url, check_url)
     };
 
-    let distributions = PublishSession::prepare(paths, no_attestations)?;
+    let distributions = if locked.is_some() {
+        PublishSession::prepare_locked(paths, no_attestations)?
+    } else {
+        PublishSession::prepare(paths, no_attestations)?
+    };
     match distributions.len() {
         0 => bail!("No files found to publish"),
         1 => {
@@ -107,6 +129,24 @@ pub async fn publish(
             }
         }
     }
+
+    let locks = if let Some(locked) = locked {
+        validate_locked_inputs(&distributions)?;
+        let cache = cache.clone().init().await?;
+        Some(
+            PublishLocks::load(
+                locked,
+                &distributions,
+                check_url.as_ref(),
+                &cache,
+                &index_locations,
+                client_builder.credentials_cache(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
     // * For the uploads themselves, we roll our own retries due to
     //   https://github.com/seanmonstar/reqwest/issues/2416, but for trusted publishing, we want
@@ -174,7 +214,11 @@ pub async fn publish(
     }
 
     // Keep the result so finalization also runs after a preparation or upload error.
-    let result = publish_files(distributions, &mut session, dry_run, printer).await;
+    let result = if let Some(locks) = locks {
+        publish_locked_files(distributions, locks, &mut session, dry_run, printer).await
+    } else {
+        publish_files(distributions, &mut session, dry_run, printer).await
+    };
     let outcome = result.as_ref().copied().unwrap_or(PublishOutcome::Failed);
     match session.finalize(outcome).await {
         Ok(()) => {}
@@ -226,7 +270,7 @@ async fn publish_files(
     for prepared in distributions {
         let reporter = Arc::new(PublishReporter::single(printer, dry_run));
         match publish_file(&prepared, session, reporter, dry_run, printer).await {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(err) => {
                 if !dry_run {
                     return Err(err);
@@ -254,6 +298,118 @@ async fn publish_files(
     })
 }
 
+fn validate_locked_inputs(distributions: &[PreparedDistribution]) -> Result<()> {
+    for distribution in distributions {
+        let filename = distribution.filename();
+        if distribution.raw_filename() != filename.to_string() {
+            bail!(
+                "`{}` has a non-normalized filename (expected `{filename}`)",
+                distribution.raw_filename()
+            );
+        }
+        distribution.check_rewrite()?;
+    }
+    Ok(())
+}
+
+/// Publish the distributions for each workspace member before rewriting dependent locks.
+async fn publish_locked_files(
+    distributions: Vec<PreparedDistribution>,
+    mut locks: PublishLocks,
+    session: &mut PublishSession<'_>,
+    dry_run: bool,
+    printer: Printer,
+) -> Result<PublishOutcome> {
+    let mut by_package = BTreeMap::new();
+    for distribution in distributions {
+        by_package
+            .entry(distribution.filename().name().clone())
+            .or_insert_with(Vec::new)
+            .push(distribution);
+    }
+
+    let mut published = PublishedArtifacts::new();
+    let mut simulated = BTreeSet::new();
+    for package in locks.order().to_vec() {
+        let distributions = by_package
+            .remove(&package)
+            .with_context(|| format!("No distributions selected for `{package}`"))?;
+        let (lock, uses_simulated) = locks.export(&package, &published, &simulated)?;
+        for original in distributions {
+            let filename = original.filename().clone();
+            let staging = tempfile::tempdir()?;
+            let destination = staging.path().join(original.raw_filename());
+            add_lock_to_distribution(original.path(), &destination, &filename, lock.as_bytes())
+                .await
+                .with_context(|| format!("Failed to embed a lockfile in `{filename}`"))?;
+
+            let prepared = original.with_rewritten_path(destination)?;
+            let reporter = Arc::new(PublishReporter::single(printer, dry_run));
+            let existing = if uses_simulated {
+                // The temporary lock contains simulated URLs, so its archive hash cannot match
+                // a published file even when the original distribution is identical.
+                session.dry_run(&prepared, reporter.clone()).await?;
+                None
+            } else {
+                publish_file(&prepared, session, reporter.clone(), dry_run, printer).await?
+            };
+
+            if locks.needed_as_dependency(&package) {
+                let file = if let Some(file) = existing {
+                    file
+                } else if dry_run {
+                    // Use the staged file's hash so dry runs can validate the dependent lock.
+                    // This URL is used only in temporary artifacts that never leave this process.
+                    let url = SafeUrl::parse(&format!("https://example.invalid/{filename}"))?;
+                    simulated.insert(package.clone());
+                    File {
+                        dist_info_metadata: None,
+                        filename: filename.to_string().into(),
+                        hashes: prepared.sha256(reporter).await?.into(),
+                        requires_python: None,
+                        size: None,
+                        upload_time_utc_ms: None,
+                        url: FileLocation::AbsoluteUrl(url.into()),
+                        yanked: None,
+                    }
+                } else {
+                    wait_for_published_file(session, &prepared, reporter).await?
+                };
+                published.entry(package.clone()).or_default().push(file);
+            }
+        }
+    }
+
+    Ok(if dry_run {
+        PublishOutcome::DryRun
+    } else {
+        PublishOutcome::Success
+    })
+}
+
+async fn wait_for_published_file(
+    session: &PublishSession<'_>,
+    prepared: &PreparedDistribution,
+    reporter: Arc<PublishReporter>,
+) -> Result<File> {
+    // A successful upload may take a few seconds to appear in the Simple API.
+    for delay in [0, 1, 2, 4, 8, 16] {
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+        }
+        if let Some(file) = session
+            .find_published_file(prepared, reporter.clone())
+            .await?
+        {
+            return Ok(file);
+        }
+    }
+    bail!(
+        "`{}` was uploaded but could not be verified at the index. Retry once the file is visible",
+        prepared.filename()
+    )
+}
+
 /// Upload a prepared distribution unless this is a dry run.
 async fn publish_file(
     prepared: &PreparedDistribution,
@@ -261,28 +417,31 @@ async fn publish_file(
     reporter: Arc<PublishReporter>,
     dry_run: bool,
     printer: Printer,
-) -> Result<()> {
+) -> Result<Option<File>> {
     let normalized_filename = prepared.filename().to_string();
     if prepared.raw_filename() != normalized_filename {
         warn_user_once!(
             "`{}` has a non-normalized filename (expected `{normalized_filename}`), skipping",
             prepared.raw_filename()
         );
-        return Ok(());
+        return Ok(None);
     }
 
-    if session.check_existing(prepared, reporter.clone()).await? {
+    if let Some(file) = session
+        .find_published_file(prepared, reporter.clone())
+        .await?
+    {
         writeln!(
             printer.stderr(),
             "File {} already exists, skipping",
             prepared.filename()
         )?;
-        return Ok(());
+        return Ok(Some(file));
     }
 
     if dry_run {
         session.dry_run(prepared, reporter).await?;
-        return Ok(());
+        return Ok(None);
     }
 
     let uploaded = session.upload(prepared, reporter).await?;
@@ -299,7 +458,7 @@ async fn publish_file(
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 /// The publish URL and credentials, with any ignored trusted publishing error.
