@@ -26,11 +26,11 @@ def emit(kind, record):
 
 def fetch(source, destination, budget):
     """Use separate GETs per redirect so every timing belongs to exactly one host."""
-    start = time.monotonic()
+    start = time.perf_counter()
     url = URLS[source]
     hops = []
     for _ in range(8):
-        remaining = budget - (time.monotonic() - start)
+        remaining = budget - (time.perf_counter() - start)
         if remaining <= 0:
             break
         run = subprocess.run(
@@ -66,12 +66,14 @@ def fetch(source, destination, budget):
         url = raw.get("redirect_url", "")
         if urlsplit(url).scheme != "https":
             break
-    return {"source": source, "wall_s": round(time.monotonic() - start, 4), "hops": hops}
+    return {"source": source, "wall_s": round(time.perf_counter() - start, 4), "hops": hops}
 
 
 def main():
     sample = int(os.environ["ZIP_SAMPLE"])
     order = ["astral", "github"] if sample % 2 else ["github", "astral"]
+    if os.environ.get("ZIP_FIRST") != order[0] and os.environ.get("ZIP_FIRST") in URLS:
+        order.reverse()
     root = Path(os.environ["RUNNER_TEMP"])
     results = {
         "sample": sample, "runner": os.environ.get("RUNNER_NAME"), "order": order,
@@ -88,20 +90,20 @@ def main():
             last = result["hops"][-1]
             result["validated"] = False
             if not last["curl_exit"] and last["http"] == 200:
-                start = time.monotonic()
+                start = time.perf_counter()
                 with archive.open("rb") as reader:
                     digest = hashlib.sha256()
                     for chunk in iter(lambda: reader.read(1024 * 1024), b""):
                         digest.update(chunk)
-                result["hash_s"] = round(time.monotonic() - start, 5)
+                result["hash_s"] = round(time.perf_counter() - start, 5)
                 result["sha256"] = digest.hexdigest()
                 if result["sha256"] == SHA256 and archive.stat().st_size == SIZE:
                     target = temp / source
                     target.mkdir()
                     tar = Path(os.environ["SYSTEMROOT"]) / "System32/tar.exe" if os.name == "nt" else "tar"
-                    start = time.monotonic()
+                    start = time.perf_counter()
                     extracted = subprocess.run([tar, "-xf", archive, "-C", target], capture_output=True)
-                    result["extract_s"] = round(time.monotonic() - start, 5)
+                    result["extract_s"] = round(time.perf_counter() - start, 5)
                     result["validated"] = extracted.returncode == 0 and (target / "uv.exe").is_file()
             results["files"].append(result)
         # Repeat a slow or failed transfer without writing the ZIP, while the runner is still here.
