@@ -126,6 +126,12 @@ with the selected artifact host. Index-response control remains an explicit, unv
 in the initial feedback; the follow-up confirms the expected consistency rule without resolving
 how to apply it to Pixi's architecture.
 
+Pixi maintainer lucascolley has asked the reporter to determine whether Pixi can always pass
+`file.dist_info_metadata` to uv in a way that accurately reflects the selected mirror's
+capabilities. If feasible, lucascolley proposes continuing the implementation discussion in
+prefix-dev/pixi#7479. This is a conditional downstream next step, not confirmation that the
+approach works or that the uv issue has been resolved.
+
 If that investigation leaves a need for uv changes, review whether the Rust client should
 expose an explicit standalone-metadata override or support the reporter's alternative of silent
 fallback after a failed metadata fetch. Neither has been accepted. Keep any API decision
