@@ -74,6 +74,13 @@ pub(super) fn root_selection_error(err: anyhow::Error) -> Result<EnvironmentErro
         .map(|selection| selection.error)
 }
 
+pub(super) fn unwrap_root_selection_error(err: anyhow::Error) -> anyhow::Error {
+    match root_selection_error(err) {
+        Ok(err) => err.into(),
+        Err(err) => err,
+    }
+}
+
 /// Resolve the tool, retrying root selection with a compatible interpreter when possible.
 pub(super) async fn resolve_with_interpreter(
     spec: RequirementsSpecification,
@@ -337,7 +344,7 @@ fn check_hashed_source(requirement: &Requirement) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn resolve(
+pub(super) async fn resolve(
     spec: RequirementsSpecification,
     interpreter: &Interpreter,
     python_platform: Option<&TargetTriple>,
