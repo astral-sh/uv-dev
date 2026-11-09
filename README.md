@@ -32,11 +32,18 @@ uv bypass has been accepted.
 ## Maintainer feedback and open questions
 
 In astral-sh/uv#23150, woodruffw raises installer/tool/index consistency and compatibility as
-reasons to question the proposed bypass. In the November 9 reply to lucascolley's clarification
-about Chinese university mirrors, woodruffw agrees that rejecting such an inconsistent mirror
-is working as intended: an index must not advertise PEP 714 metadata that it cannot serve.
-The maintainer's concrete recommendation is to omit PEP 658/714 sidecar advertisements from
-index responses when the corresponding files will not be served.
+reasons to question the proposed bypass and considers rejection of inconsistent advertisements
+expected behavior. The maintainer identifies two valid mirror implementations: copy everything
+the index advertises, including metadata sidecars, or rewrite responses to omit advertisements
+for files the mirror does not serve. For the latter approach, woodruffw specifically names the
+HTML `data-core-metadata` attribute and says the JSON index form must be handled similarly.
+Correcting only one response format would leave the same consistency problem in the other.
+
+The maintainer cites PEP 658's requirement that advertised Core Metadata be served alongside the
+distribution with `.metadata` appended to its filename. This supports deriving the sidecar URL
+from the distribution URL; it does not require the index page and distribution to share an origin.
+The recommendation concerns consistent advertisements and served files, not a tested correction
+to Pixi's upstream-index/file-host rewriting architecture.
 
 For the client integration, woodruffw further confirms that `file.dist_info_metadata` should be
 `None` when standalone metadata is not advertised. If metadata is advertised but cannot be
@@ -124,8 +131,8 @@ metadata-sidecar bypass.
 
 ## Handoff
 
-Prioritize the maintainer's recommendation: indexes or mirrors that cannot serve standalone
-metadata should omit the corresponding PEP 658/714 advertisements. Establish how Pixi obtains
+Prioritize the maintainer's recommendation: mirror the advertised sidecars or omit the
+corresponding PEP 658/714 advertisements in both HTML and JSON index responses. Establish how Pixi obtains
 index responses and whether its mirroring layer can make the advertisements seen by uv consistent
 with the selected artifact host. Index-response control remains an explicit, unverified assumption
 in the initial feedback; the follow-up confirms the expected consistency rule without resolving
