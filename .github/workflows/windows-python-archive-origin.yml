@@ -1,0 +1,58 @@
+name: Windows managed Python archive origins
+
+on:
+  push:
+    branches: [ee/windows-python-archive-origin]
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    timeout-minutes: 20
+    env:
+      UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 6b7f0a4e94ca32e2bb6d015dd58cef8edb68b76c
+          persist-credentials: false
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - uses: $/.github/actions/setup-uv-toolchain
+        with:
+          enable-cache: false
+      - name: Trace the normal 14 setup archives
+        run: uv -v python install
+      - name: Trace the 14 CPython archives from the preload trial
+        shell: bash
+        run: |
+          uv -v python install 3.10.16 3.10.17 3.11.8 3.12.4 3.12.5 3.12.6 3.12.8 \
+            3.12.9 3.12.11 3.13.1 3.13.1t 3.14.5rc1 3.15.0a2 3.15.0rc3
+      - name: Trace the other eight archives in the Windows test inventory
+        shell: bash
+        run: |
+          uv -v python install 3.9.24 3.12.7 3.14.0rc2 3.13.18-x86 cpython-3.12.12-linux-armv7-gnueabi \
+            pypy@3.10.16 pypy@3.11.17 graalpy@3.12.0
+      - name: Verify a cache hit with the network disabled
+        if: ${{ !cancelled() }}
+        run: |
+          $env:UV_PYTHON_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'origin-reinstall'
+          $env:UV_PYTHON_BIN_DIR = Join-Path $env:RUNNER_TEMP 'origin-reinstall-bin'
+          uv --offline -v python install 3.15.0rc3
+      - name: Verify the serving host and bytes for both CPython routes
+        if: ${{ !cancelled() }}
+        run: |
+          $catalogue = Get-Content -Raw $env:UV_PYTHON_DOWNLOADS_JSON_URL | ConvertFrom-Json -AsHashtable
+          $entry = $catalogue['cpython-3.15.0rc3-windows-x86_64-none']
+          $mirror = $entry.url.Replace('https://github.com/astral-sh/', 'https://releases.astral.sh/github/')
+          foreach ($url in @($mirror, $entry.url)) {
+            $archive = Join-Path $env:RUNNER_TEMP 'origin-python-archive.tar.gz'
+            $details = curl.exe -q --silent --show-error --fail --location --max-time 180 --output $archive --write-out '%{json}' $url
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $response = $details | ConvertFrom-Json
+            $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+            if ($hash -ne $entry.sha256) { throw 'Hash does not match pinned catalogue' }
+            Write-Output ("requested={0} served_by={1} redirects={2} status={3} bytes={4} sha256={5}" -f ([uri]$url).Host, ([uri]$response.url_effective).Host, $response.num_redirects, $response.http_code, $response.size_download, $hash)
+          }
