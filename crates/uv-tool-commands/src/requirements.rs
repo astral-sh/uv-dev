@@ -6,10 +6,13 @@ use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
-use uv_distribution_types::{Requirement, UnresolvedRequirementSpecification};
+use uv_distribution_types::{
+    NameRequirementSpecification, Requirement, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
+};
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_requirements::{NamedRequirementsResolver, partition_requirements};
+use uv_requirements::NamedRequirementsResolver;
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
@@ -34,20 +37,62 @@ pub(super) async fn resolve_names(
     preview: Preview,
     lfs: GitLfsSetting,
 ) -> Result<Vec<Requirement>, ToolError> {
-    let requirements: Vec<_> = requirements
-        .into_iter()
-        .map(|mut spec| {
-            spec.requirement =
-                spec.requirement
-                    .augment_requirement(None, None, None, lfs.into(), None);
-            spec
-        })
-        .collect();
-    let (mut requirements, unnamed) = partition_requirements(requirements);
+    Ok(resolve_specifications(
+        requirements,
+        interpreter,
+        settings,
+        build_constraints,
+        client_builder,
+        state,
+        concurrency,
+        cache,
+        workspace_cache,
+        printer,
+        preview,
+        lfs,
+    )
+    .await?
+    .into_iter()
+    .map(|entry| entry.requirement)
+    .collect())
+}
+
+/// Resolve requirement names while retaining the hashes from each input specification.
+pub(super) async fn resolve_specifications(
+    requirements: Vec<UnresolvedRequirementSpecification>,
+    interpreter: &Interpreter,
+    settings: &ResolverSettings,
+    build_constraints: &Constraints,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &SharedState,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+    lfs: GitLfsSetting,
+) -> Result<Vec<NameRequirementSpecification>, ToolError> {
+    let mut named = Vec::new();
+    let mut unnamed = Vec::new();
+    for UnresolvedRequirementSpecification {
+        requirement,
+        hashes,
+    } in requirements
+    {
+        match requirement.augment_requirement(None, None, None, lfs.into(), None) {
+            UnresolvedRequirement::Named(requirement) => {
+                named.push(NameRequirementSpecification {
+                    requirement,
+                    hashes,
+                });
+            }
+            UnresolvedRequirement::Unnamed(requirement) => unnamed.push((requirement, hashes)),
+        }
+    }
 
     // Short-circuit if there are no unnamed requirements.
     if unnamed.is_empty() {
-        return Ok(requirements);
+        return Ok(named);
     }
 
     // Extract the project settings.
@@ -160,7 +205,7 @@ pub(super) async fn resolve_names(
     );
 
     // Resolve the unnamed requirements.
-    requirements.extend(
+    named.extend(
         NamedRequirementsResolver::new(
             &hasher,
             state.index(),
@@ -171,9 +216,9 @@ pub(super) async fn resolve_names(
             ),
         )
         .with_reporter(Arc::new(ResolverReporter::from(printer)))
-        .resolve(unnamed.into_iter())
+        .resolve_with_hashes(unnamed.into_iter())
         .await?,
     );
 
-    Ok(requirements)
+    Ok(named)
 }

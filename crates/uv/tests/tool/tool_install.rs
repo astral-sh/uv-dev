@@ -5147,6 +5147,79 @@ fn tool_install_overrides() -> Result<()> {
     Ok(())
 }
 
+/// Reinstall a dependency that still satisfies the package metadata but violates a scoped override.
+#[test]
+fn tool_install_scoped_override_environment_drift() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+
+    let (filename, wheel) = WheelBuilder::new(&"scoped-tool".parse()?, &"1.0.0".parse()?)
+        .requires(&["ok>=1".parse()?])
+        .entry_points(&["scoped-tool".to_string()])
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+
+    context.temp_dir.child("scoped.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = []
+        #
+        # [tool.uv]
+        # override-dependencies = [
+        #   { package = { name = "scoped-tool", version = "1.0.0" }, dependencies = ["ok==1.0.0"] },
+        # ]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["scoped-tool", "--with-requirements", "scoped.py", "--no-preview"])
+        .args(["--no-index", "--find-links", "wheels"])
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0
+     + scoped-tool==1.0.0
+    Installed 1 executable: scoped-tool
+    ");
+
+    context
+        .pip_install()
+        .args(["ok==2.0.0", "--python", "tools/scoped-tool", "--no-index"])
+        .arg("--find-links")
+        .arg(&links)
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["scoped-tool", "--with-requirements", "scoped.py", "--no-preview"])
+        .args(["--no-index", "--find-links", "wheels"])
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - ok==2.0.0
+     + ok==1.0.0
+    Installed 1 executable: scoped-tool
+    ");
+
+    Ok(())
+}
+
 /// `uv tool install python` is not allowed
 #[test]
 fn tool_install_python() {

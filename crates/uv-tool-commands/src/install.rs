@@ -13,7 +13,7 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
-    HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
+    HashCheckingMode, Modifications, Override, Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
@@ -45,7 +45,7 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_names;
+use crate::requirements::{resolve_names, resolve_specifications};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -438,14 +438,15 @@ pub async fn install(
     };
 
     // Resolve the constraints.
-    let receipt_constraints = spec
+    let receipt_constraints = spec.constraints.clone();
+    let constraint_requirements = spec
         .constraints
-        .into_iter()
-        .map(|constraint| constraint.requirement)
+        .iter()
+        .map(|constraint| constraint.requirement.clone())
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let receipt_overrides = resolve_names(
+    let resolved_overrides = resolve_specifications(
         spec.overrides,
         &interpreter,
         &settings.resolver,
@@ -460,16 +461,42 @@ pub async fn install(
         lfs,
     )
     .await?;
+    let mut receipt_overrides = spec
+        .override_dependencies
+        .iter()
+        .filter_map(|entry| match entry {
+            Override::Requirement(requirement) => Some(requirement.clone().into()),
+            Override::Package(_) => None,
+        })
+        .collect::<Vec<NameRequirementSpecification>>();
+    receipt_overrides.extend(resolved_overrides);
+    let receipt_scoped_overrides = spec
+        .override_dependencies
+        .iter()
+        .filter_map(|entry| match entry {
+            Override::Package(package) => Some(package.clone()),
+            Override::Requirement(_) => None,
+        })
+        .collect::<Vec<_>>();
 
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
+    let same_receipt = |tool_receipt: &Tool| {
+        requirements == tool_receipt.requirements()
+            && receipt_constraints == tool_receipt.constraints()
+            && receipt_overrides == tool_receipt.overrides()
+            && receipt_scoped_overrides == tool_receipt.scoped_overrides()
+            && receipt_excludes == tool_receipt.excludes()
+            && receipt_build_constraints == tool_receipt.build_constraints()
+    };
 
     // Convert to tool options.
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(
         &requirements,
-        &receipt_constraints,
+        &constraint_requirements,
         &receipt_overrides,
+        &receipt_scoped_overrides,
         &receipt_excludes,
         &receipt_build_constraints,
         &settings.resolver.dependency_metadata,
@@ -539,8 +566,9 @@ pub async fn install(
         if let Some(lock) = ToolLock::read(&tool_dir) {
             match Box::pin(lock.validate(
                 &requirements,
-                &receipt_constraints,
+                &constraint_requirements,
                 &receipt_overrides,
+                &receipt_scoped_overrides,
                 &receipt_excludes,
                 &build_constraints,
                 &refresh,
@@ -584,13 +612,7 @@ pub async fn install(
         !request.is_latest() && settings.reinstall.is_none() && settings.resolver.upgrade.is_none()
     }) {
         if let Some(tool_receipt) = existing_tool_receipt.as_ref() {
-            if !tool_locks
-                && requirements == tool_receipt.requirements()
-                && receipt_constraints == tool_receipt.constraints()
-                && receipt_overrides == tool_receipt.overrides()
-                && receipt_excludes == tool_receipt.excludes()
-                && receipt_build_constraints == tool_receipt.build_constraints()
-            {
+            if !tool_locks && same_receipt(tool_receipt) {
                 let ResolverInstallerSettings {
                     resolver:
                         ResolverSettings {
@@ -631,9 +653,20 @@ pub async fn install(
                 let already_installed = matches!(
                     site_packages.satisfies_requirements(
                         requirements.iter(),
-                        receipt_constraints.iter().chain(latest.iter()),
+                        constraint_requirements.iter().chain(latest.iter()),
                         &DependencyModifiers::new(
-                            Overrides::from_requirements(receipt_overrides.clone()),
+                            Overrides::from_entries(
+                                receipt_overrides
+                                    .iter()
+                                    .map(|entry| Override::Requirement(entry.requirement.clone()))
+                                    .chain(
+                                        receipt_scoped_overrides
+                                            .iter()
+                                            .cloned()
+                                            .map(Override::Package),
+                                    )
+                                    .collect(),
+                            )?,
                             Excludes::from_entries(receipt_excludes.iter().cloned()),
                         ),
                         dependency_metadata,
@@ -678,16 +711,22 @@ pub async fn install(
             .cloned()
             .map(UnresolvedRequirementSpecification::from)
             .collect(),
-        constraints: receipt_constraints
+        constraints: spec
+            .constraints
             .iter()
             .cloned()
-            .chain(latest)
-            .map(NameRequirementSpecification::from)
+            .chain(latest.map(NameRequirementSpecification::from))
             .collect(),
         overrides: receipt_overrides
             .iter()
             .cloned()
             .map(UnresolvedRequirementSpecification::from)
+            .collect(),
+        override_dependencies: spec
+            .override_dependencies
+            .iter()
+            .filter(|entry| matches!(entry, Override::Package(_)))
+            .cloned()
             .collect(),
         excludes: receipt_excludes.clone(),
         ..spec
@@ -824,7 +863,8 @@ pub async fn install(
                         python,
                         existing_tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
-                    ),
+                    )
+                    .with_scoped_overrides(receipt_scoped_overrides.clone()),
                 )?;
                 writeln!(
                     printer.stderr(),
@@ -1080,6 +1120,7 @@ pub async fn install(
         requirements,
         receipt_constraints,
         receipt_overrides,
+        receipt_scoped_overrides,
         receipt_excludes,
         receipt_build_constraints,
         tool_lock.as_ref(),

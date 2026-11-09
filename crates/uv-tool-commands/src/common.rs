@@ -15,7 +15,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
-    ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple,
+    ExtrasSpecification, GitLfsSetting, InstallOptions, Override, PackageOverride, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::{
@@ -318,7 +318,8 @@ impl ToolLock {
     pub(super) fn manifest(
         requirements: &[Requirement],
         constraints: &[Requirement],
-        overrides: &[Requirement],
+        overrides: &[NameRequirementSpecification],
+        scoped_overrides: &[PackageOverride<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &[NameRequirementSpecification],
         dependency_metadata: &DependencyMetadata,
@@ -327,7 +328,10 @@ impl ToolLock {
             std::iter::empty::<PackageName>(),
             requirements.iter().cloned(),
             constraints.iter().cloned(),
-            overrides.iter().cloned().map(Override::Requirement),
+            overrides
+                .iter()
+                .map(|entry| Override::Requirement(entry.requirement.clone()))
+                .chain(scoped_overrides.iter().cloned().map(Override::Package)),
             excludes.iter().cloned(),
             build_constraints.iter().cloned(),
             std::iter::empty::<(GroupName, Vec<Requirement>)>(),
@@ -406,7 +410,8 @@ impl ToolLock {
         self,
         requirements: &[Requirement],
         constraints: &[Requirement],
-        overrides: &[Requirement],
+        overrides: &[NameRequirementSpecification],
+        scoped_overrides: &[PackageOverride<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &Constraints,
         refresh: &Refresh,
@@ -522,8 +527,8 @@ impl ToolLock {
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
         let overrides = overrides
             .iter()
-            .cloned()
-            .map(Override::Requirement)
+            .map(|entry| Override::Requirement(entry.requirement.clone()))
+            .chain(scoped_overrides.iter().cloned().map(Override::Package))
             .collect::<Vec<_>>();
         let Self { root, lock } = self;
         let validated = ValidatedLock::validate(
@@ -749,8 +754,9 @@ pub(super) fn finalize_tool_install(
     force: bool,
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
-    constraints: Vec<Requirement>,
-    overrides: Vec<Requirement>,
+    constraints: Vec<NameRequirementSpecification>,
+    overrides: Vec<NameRequirementSpecification>,
+    scoped_overrides: Vec<PackageOverride<Requirement>>,
     excludes: Vec<ExcludeDependency>,
     build_constraints: Vec<NameRequirementSpecification>,
     lock: Option<&ToolLock>,
@@ -952,7 +958,7 @@ pub(super) fn finalize_tool_install(
         options.clone(),
     );
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
-    installed_tools.add_tool_receipt(name, tool)?;
+    installed_tools.add_tool_receipt(name, tool.with_scoped_overrides(scoped_overrides))?;
 
     warn_out_of_path(&executable_directory);
 
