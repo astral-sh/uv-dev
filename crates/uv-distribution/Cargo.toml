@@ -72,8 +72,16 @@ walkdir = { workspace = true }
 [dev-dependencies]
 uv-preview = { workspace = true, features = ["testing"] }
 
+astral-tokio-tar = { workspace = true }
+async-compression = { workspace = true, features = ["gzip"] }
+async_zip = { workspace = true }
+base64 = { workspace = true }
+csv = { workspace = true }
+hex = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true }
+sha2 = { workspace = true }
+tar-codec = { workspace = true }
 
 [features]
 default = []
