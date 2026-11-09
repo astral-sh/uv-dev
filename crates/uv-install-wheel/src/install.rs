@@ -1,8 +1,10 @@
 //! Like `wheel.rs`, but for installing wheels that have already been unzipped, rather than
 //! reading from a zip file.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use fs_err::File;
 use tracing::{instrument, trace};
@@ -141,7 +143,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         // 2.c If applicable, update scripts starting with #!python to point to the correct interpreter.
         // Script are unsupported through data
         // 2.e Remove empty distribution-1.0.data directory.
-        fs_err::remove_dir_all(data_dir)?;
+        remove_wheel_data_dir(data_dir)?;
     } else {
         trace!(?name, "No data");
     }
@@ -164,4 +166,205 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     write_record(site_packages, &dist_info_prefix, record)?;
 
     Ok(())
+}
+
+/// Remove an installed wheel's data directory, retrying transient filesystem errors.
+///
+/// Network filesystems can briefly retain `.nfs` files that prevent directory removal.
+/// See: <https://github.com/astral-sh/uv/issues/12036>.
+fn remove_wheel_data_dir(path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+    retry_wheel_data_cleanup(|| fs_err::remove_dir_all(path), std::thread::sleep)
+}
+
+fn retry_wheel_data_cleanup(
+    mut remove: impl FnMut() -> io::Result<()>,
+    mut sleep: impl FnMut(Duration),
+) -> io::Result<()> {
+    // Match the existing bounded file-operation retry budget: ten retries over about ten seconds.
+    let mut delays = (0..10).map(|retry| Duration::from_millis(10 << retry));
+    loop {
+        match remove() {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ResourceBusy | io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                let Some(delay) = delays.next() else {
+                    return Err(error);
+                };
+                sleep(delay);
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+    use std::fmt;
+    use std::io;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use anyhow::{Context, Result, bail};
+    use assert_fs::TempDir;
+
+    use super::{remove_wheel_data_dir, retry_wheel_data_cleanup};
+
+    #[derive(Debug)]
+    struct CleanupError {
+        attempt: usize,
+        token: Arc<()>,
+    }
+
+    impl fmt::Display for CleanupError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "cleanup error {}", self.attempt)
+        }
+    }
+
+    impl StdError for CleanupError {}
+
+    fn cleanup_error(kind: io::ErrorKind, attempt: usize, token: &Arc<()>) -> io::Error {
+        io::Error::new(
+            kind,
+            CleanupError {
+                attempt,
+                token: Arc::clone(token),
+            },
+        )
+    }
+
+    fn assert_original_error(
+        error: &io::Error,
+        kind: io::ErrorKind,
+        attempt: usize,
+        token: &Arc<()>,
+    ) -> Result<()> {
+        assert_eq!(error.kind(), kind);
+        let marker = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<CleanupError>())
+            .context("terminal error lost its original marker")?;
+        assert_eq!(marker.attempt, attempt);
+        assert!(Arc::ptr_eq(&marker.token, token));
+        assert_eq!(error.to_string(), format!("cleanup error {attempt}"));
+        Ok(())
+    }
+
+    #[test]
+    fn data_cleanup_retries_transient_errors() -> Result<()> {
+        let directory = TempDir::new()?;
+        let immediate = directory.path().join("immediate.data");
+        fs_err::create_dir_all(immediate.join("nested"))?;
+        fs_err::write(immediate.join("nested/owned.txt"), b"owned")?;
+        remove_wheel_data_dir(&immediate)?;
+        assert!(!immediate.try_exists()?);
+
+        let retried = directory.path().join("retried.data");
+        fs_err::create_dir_all(retried.join("nested"))?;
+        fs_err::write(retried.join("nested/owned.txt"), b"owned")?;
+        let mut attempts = 0;
+        let mut delays = Vec::new();
+        retry_wheel_data_cleanup(
+            || {
+                attempts += 1;
+                match attempts {
+                    1 => Err(io::ErrorKind::ResourceBusy.into()),
+                    2 => Err(io::ErrorKind::DirectoryNotEmpty.into()),
+                    _ => fs_err::remove_dir_all(&retried),
+                }
+            },
+            |delay| delays.push(delay),
+        )?;
+        assert_eq!(attempts, 3);
+        assert_eq!(
+            delays,
+            [Duration::from_millis(10), Duration::from_millis(20)]
+        );
+        assert!(!retried.try_exists()?);
+        Ok(())
+    }
+
+    #[test]
+    fn data_cleanup_preserves_terminal_errors() -> Result<()> {
+        for kind in [
+            io::ErrorKind::NotFound,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+        ] {
+            let token = Arc::new(());
+            let mut attempts = 0;
+            let mut delays = Vec::new();
+            let Err(error) = retry_wheel_data_cleanup(
+                || {
+                    attempts += 1;
+                    Err(cleanup_error(kind, attempts, &token))
+                },
+                |delay| delays.push(delay),
+            ) else {
+                bail!("injected terminal cleanup error was ignored");
+            };
+            assert_eq!(attempts, 1);
+            assert!(delays.is_empty());
+            assert_original_error(&error, kind, 1, &token)?;
+        }
+
+        let token = Arc::new(());
+        let mut attempts = 0;
+        let mut delays = Vec::new();
+        let Err(error) = retry_wheel_data_cleanup(
+            || {
+                attempts += 1;
+                let kind = if attempts == 1 {
+                    io::ErrorKind::ResourceBusy
+                } else {
+                    io::ErrorKind::PermissionDenied
+                };
+                Err(cleanup_error(kind, attempts, &token))
+            },
+            |delay| delays.push(delay),
+        ) else {
+            bail!("terminal cleanup error after a retry was ignored");
+        };
+        assert_eq!(attempts, 2);
+        assert_eq!(delays, [Duration::from_millis(10)]);
+        assert_original_error(&error, io::ErrorKind::PermissionDenied, 2, &token)?;
+        Ok(())
+    }
+
+    #[test]
+    fn data_cleanup_stops_after_retry_budget() -> Result<()> {
+        let token = Arc::new(());
+        let mut attempts: usize = 0;
+        let mut delays = Vec::new();
+        let Err(error) = retry_wheel_data_cleanup(
+            || {
+                attempts += 1;
+                let kind = if attempts.is_multiple_of(2) {
+                    io::ErrorKind::DirectoryNotEmpty
+                } else {
+                    io::ErrorKind::ResourceBusy
+                };
+                Err(cleanup_error(kind, attempts, &token))
+            },
+            |delay| delays.push(delay),
+        ) else {
+            bail!("cleanup retry budget was not enforced");
+        };
+        assert_eq!(attempts, 11);
+        assert_eq!(
+            delays,
+            [10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120].map(Duration::from_millis)
+        );
+        assert_eq!(
+            delays.iter().copied().sum::<Duration>(),
+            Duration::from_millis(10230)
+        );
+        assert_original_error(&error, io::ErrorKind::ResourceBusy, 11, &token)?;
+        Ok(())
+    }
 }
