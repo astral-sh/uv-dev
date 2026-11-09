@@ -45,6 +45,11 @@ clarifies the expected input to the existing branch; it is not approval for clea
 after a failed fetch or a demonstrated Pixi-side fix. The client derives the sidecar URL from
 the wheel URL, as documented below.
 
+From the Pixi integration perspective, lucascolley considers the linked metadata-disable patch
+a workaround and prefers general support in uv for retrieving data from multiple sources.
+This adds a broader downstream design preference beyond the explicit bypass or silent fallback;
+it is not a concrete API proposal, an accepted uv plan, or evidence that uv violates the PEPs.
+
 This establishes the maintainer's expected behavior for inconsistent advertisements, rather than
 approval for a uv override or silent fallback. The supplied discussion records no final issue
 disposition. It also does not establish that Pixi controls the upstream index responses, an
@@ -54,7 +59,7 @@ The existing reproduction reads the upstream index and rewrites artifact URLs. C
 Pixi can adjust the metadata advertisements seen by uv, or otherwise keep index advertisements
 consistent with the selected file mirror. Do not assume that Pixi owns or serves the upstream
 index. Applying the recommended consistency rule to this URL-rewriting architecture remains the
-investigation priority; the new reply supplies no tested workaround or additional reproduction.
+investigation priority. No tested Pixi-side workaround has been established in the discussion.
 
 ## Classification
 
@@ -132,10 +137,12 @@ capabilities. If feasible, lucascolley proposes continuing the implementation di
 prefix-dev/pixi#7479. This is a conditional downstream next step, not confirmation that the
 approach works or that the uv issue has been resolved.
 
-If that investigation leaves a need for uv changes, review whether the Rust client should
-expose an explicit standalone-metadata override or support the reporter's alternative of silent
-fallback after a failed metadata fetch. Neither has been accepted. Keep any API decision
-separate from future CLI or per-index configuration design. The supplied patch and downstream
+If that investigation leaves a need for uv changes, distinguish lucascolley's preference for
+general support for retrieval from multiple sources from the reporter's narrower proposals:
+an explicit standalone-metadata override or silent fallback after a failed metadata fetch.
+No approach has been accepted by uv maintainers. A broader design would need a concrete scope
+before it could replace the bypass proposal. Keep any API decision separate from future CLI or
+per-index configuration design. The supplied patch and downstream
 reproduction already explain the requested behavior; no additional package-specific
 reproduction is needed to classify it.
 
