@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use uv_configuration::{DependencyGroups, InstallOptions};
+use uv_configuration::{DependencyGroups, ExtrasSpecification, InstallOptions};
 use uv_lock::{Installable, Lock, PylockToml, PylockTomlErrorKind};
-use uv_normalize::{DefaultGroups, PackageName};
+use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 
 struct Project<'a> {
     lock: &'a Lock,
@@ -157,29 +157,67 @@ fn selectable_extras_and_groups() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// An empty multi-use selection list is represented explicitly in either TOML writer.
 #[test]
-fn rejects_missing_group_metadata() -> Result<(), Box<dyn std::error::Error>> {
-    let lock = Lock::from_toml(&LOCK.replace("revision = 5", "revision = 3"))?;
-    insta::assert_snapshot!(export_project(&lock).expect_err("expected missing group metadata"), @"A multi-use pylock.toml requires a lockfile with dependency group metadata; run `uv lock` to update it");
-    Ok(())
-}
+fn empty_selection_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let lock = Lock::from_toml(indoc::indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
 
-#[test]
-fn rejects_group_python_requirement() -> Result<(), Box<dyn std::error::Error>> {
-    let lock = Lock::from_toml(&LOCK.replace(
-        "[package.metadata]\nrequires-dist",
-        "[package.group-requires-python]\ndev = '>=3.13'\n[package.metadata]\nrequires-dist",
-    ))?;
-    insta::assert_snapshot!(export_project(&lock).expect_err("expected a group Python requirement error"), @"A multi-use pylock.toml does not support dependency groups with a Python requirement");
-    Ok(())
-}
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = { virtual = "." }
+    "#})?;
+    let project = Project {
+        lock: &lock,
+        name: "project".parse()?,
+    };
+    let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
+    let groups = DependencyGroups::default().with_defaults(DefaultGroups::default());
+    let install_options = InstallOptions::default();
 
-#[test]
-fn rejects_conflicts() -> Result<(), Box<dyn std::error::Error>> {
-    let lock = Lock::from_toml(&LOCK.replace(
-        "revision = 5",
-        "revision = 5\nconflicts = [[{ package = \"project\", extra = \"fast\" }, { package = \"project\", extra = \"slow\" }]]",
-    ))?;
-    insta::assert_snapshot!(export_project(&lock).expect_err("expected a declared conflict error"), @"A multi-use pylock.toml does not support declared conflicts");
+    let flat = PylockToml::from_lock(
+        &project,
+        Path::new("."),
+        &[],
+        &extras,
+        &groups,
+        false,
+        None,
+        &install_options,
+    )?;
+    let flat_contents = flat.to_toml()?;
+    insta::assert_snapshot!(flat_contents, @r#"
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+    packages = []
+    "#);
+    assert_eq!(
+        flat_contents.parse::<toml::Table>()?,
+        toml::to_string(&flat)?.parse::<toml::Table>()?,
+    );
+    let parsed: PylockToml = toml::from_str(&flat_contents)?;
+    assert_eq!(parsed.to_toml()?, flat_contents);
+
+    let multi_use = export_project(&lock)?;
+    let multi_use_contents = multi_use.to_toml()?;
+    insta::assert_snapshot!(multi_use_contents, @r#"
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+    extras = []
+    dependency-groups = []
+    packages = []
+    "#);
+    assert_eq!(
+        multi_use_contents.parse::<toml::Table>()?,
+        toml::to_string(&multi_use)?.parse::<toml::Table>()?,
+    );
+    let parsed: PylockToml = toml::from_str(&multi_use_contents)?;
+    assert_eq!(parsed.to_toml()?, multi_use_contents);
+
     Ok(())
 }

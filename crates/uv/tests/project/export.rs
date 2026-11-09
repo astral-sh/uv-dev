@@ -6565,6 +6565,110 @@ fn pep_751_multi_use() -> Result<()> {
     Ok(())
 }
 
+/// Keep the manifest so frozen export can read a lockfile from before revision 5.
+#[test]
+fn pep_751_multi_use_requires_group_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        test = []
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = { virtual = "." }
+
+        [package.dev-dependencies]
+        test = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--format", "pylock.toml", "--multi-use",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: A multi-use pylock.toml requires a lockfile with dependency group metadata; run `uv lock` to update it
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_multi_use_rejects_group_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        test = []
+
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.13" }
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--format", "pylock.toml", "--multi-use",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: A multi-use pylock.toml does not support dependency groups with a Python requirement
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_multi_use_rejects_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        fast = []
+        slow = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "fast" }, { extra = "slow" }]]
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--format", "pylock.toml", "--multi-use",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: A multi-use pylock.toml does not support declared conflicts
+    ");
+
+    Ok(())
+}
+
 /// Rejecting an unsupported export format must not create a lockfile.
 #[test]
 fn pep_751_multi_use_invalid_format_does_not_lock() -> Result<()> {

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
+use std::ops::Deref;
 use std::path::{Path, PathBuf, absolute};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,7 +68,7 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
     array
 }
 
-/// Write empty lists explicitly when a multi-use lock has no available selections.
+/// Format a selection list, keeping an explicitly empty list on one line.
 fn selection_array(names: &[impl ToString]) -> Array {
     if names.is_empty() {
         Array::new()
@@ -290,17 +291,40 @@ pub struct PylockToml {
     environments: Option<Vec<MarkerTree>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_python: Option<RequiresPython>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub extras: Vec<ExtraName>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub dependency_groups: Vec<GroupName>,
+    #[serde(skip_serializing_if = "PylockSelection::is_absent", default)]
+    pub extras: PylockSelection<ExtraName>,
+    #[serde(skip_serializing_if = "PylockSelection::is_absent", default)]
+    pub dependency_groups: PylockSelection<GroupName>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub default_groups: Vec<GroupName>,
     pub packages: Vec<PylockTomlPackage>,
-    #[serde(skip)]
-    multi_use: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     attestation_identities: Vec<PylockTomlAttestationIdentity>,
+}
+
+/// A list of selectable names that a pylock.toml may omit entirely.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct PylockSelection<T>(Option<Vec<T>>);
+
+impl<T> PylockSelection<T> {
+    fn is_absent(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl<T> Default for PylockSelection<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<T> Deref for PylockSelection<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or_default()
+    }
 }
 
 fn deserialize_lock_version<'de, D>(deserializer: D) -> Result<Version, D::Error>
@@ -503,15 +527,6 @@ impl<'lock> PylockToml {
 
         // Use the `requires-python` from the target lockfile.
         let requires_python = resolution.requires_python.clone();
-
-        // We don't support locking for multiple extras at time of writing.
-        let extras = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let dependency_groups = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let default_groups = vec![];
 
         // We don't support attestation identities at time of writing.
         let attestation_identities = vec![];
@@ -730,11 +745,10 @@ impl<'lock> PylockToml {
             lock_version,
             created_by,
             environments: None,
-            multi_use: false,
             requires_python: Some(requires_python),
-            extras,
-            dependency_groups,
-            default_groups,
+            extras: PylockSelection::default(),
+            dependency_groups: PylockSelection::default(),
+            default_groups: Vec::new(),
             packages,
             attestation_identities,
         })
@@ -929,9 +943,8 @@ impl<'lock> PylockToml {
             },
         )?;
         let mut lock = Self::from_nodes(target, output_dir, editable, nodes)?;
-        lock.multi_use = true;
-        lock.extras = extras;
-        lock.dependency_groups = dependency_groups;
+        lock.extras = PylockSelection(Some(extras));
+        lock.dependency_groups = PylockSelection(Some(dependency_groups));
         lock.default_groups = synthetic_default.into_iter().collect();
         Ok(lock)
     }
@@ -1204,9 +1217,8 @@ impl<'lock> PylockToml {
                 Some(target.lock().simplified_supported_environments())
             },
             requires_python: Some(requires_python),
-            multi_use: false,
-            extras: Vec::new(),
-            dependency_groups: Vec::new(),
+            extras: PylockSelection::default(),
+            dependency_groups: PylockSelection::default(),
             default_groups: Vec::new(),
             packages,
             attestation_identities,
@@ -1328,13 +1340,13 @@ impl<'lock> PylockToml {
         if let Some(ref requires_python) = self.requires_python {
             doc.insert("requires-python", value(requires_python.to_string()));
         }
-        if self.multi_use || !self.extras.is_empty() {
-            doc.insert("extras", value(selection_array(&self.extras)));
+        if let Some(extras) = &self.extras.0 {
+            doc.insert("extras", value(selection_array(extras)));
         }
-        if self.multi_use || !self.dependency_groups.is_empty() {
+        if let Some(dependency_groups) = &self.dependency_groups.0 {
             doc.insert(
                 "dependency-groups",
-                value(selection_array(&self.dependency_groups)),
+                value(selection_array(dependency_groups)),
             );
         }
         if !self.default_groups.is_empty() {
