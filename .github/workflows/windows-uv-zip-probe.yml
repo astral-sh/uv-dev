@@ -1,0 +1,45 @@
+name: Windows uv ZIP source comparison
+
+on:
+  push:
+    branches: [ee/windows-uv-zip-probe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Windows runner ${{ matrix.sample }}
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    timeout-minutes: 26
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        sample: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Measure and verify the ZIP from both sources
+        env:
+          ZIP_SAMPLE: ${{ matrix.sample }}
+        run: python scripts/ci-windows-uv-zip-probe.py
+      - name: Upload timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: uv-zip-${{ matrix.sample }}
+          path: ${{ runner.temp }}/uv-zip-result.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Measure the regular setup-uv download on the same runner
+        if: always()
+        timeout-minutes: 7
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.6
+          checksum: a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f
+          download-from-astral-mirror: true
+          enable-cache: false
