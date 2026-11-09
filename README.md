@@ -38,6 +38,13 @@ is working as intended: an index must not advertise PEP 714 metadata that it can
 The maintainer's concrete recommendation is to omit PEP 658/714 sidecar advertisements from
 index responses when the corresponding files will not be served.
 
+For the client integration, woodruffw further confirms that `file.dist_info_metadata` should be
+`None` when standalone metadata is not advertised. If metadata is advertised but cannot be
+retrieved, the maintainer considers the index invalid and says it should be rejected. This
+clarifies the expected input to the existing branch; it is not approval for clearing the field
+after a failed fetch or a demonstrated Pixi-side fix. The client derives the sidecar URL from
+the wheel URL, as documented below.
+
 This establishes the maintainer's expected behavior for inconsistent advertisements, rather than
 approval for a uv override or silent fallback. The supplied discussion records no final issue
 disposition. It also does not establish that Pixi controls the upstream index responses, an
