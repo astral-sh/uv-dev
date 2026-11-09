@@ -54,7 +54,7 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<uv_distribution::Error>(cause, &mut hints);
         collect_hint::<uv_python_interpreter::BrokenLink>(cause, &mut hints);
         collect_hint::<uv_lock::PylockTomlError>(cause, &mut hints);
-        collect_hint::<uv_pip_commands::PylockResolutionError>(cause, &mut hints);
+        collect_hint::<uv_resolve_operations::PylockResolutionError>(cause, &mut hints);
         collect_hint::<uv_requirements_txt::MakeEditableError>(cause, &mut hints);
         collect_hint::<uv_python_interpreter::InterpreterError>(cause, &mut hints);
         collect_hint::<uv_workspace::pyproject::SourceError>(cause, &mut hints);

@@ -42,10 +42,12 @@ pub mod latest;
 pub mod locked_requirements;
 pub mod loggers;
 mod markers;
+mod pylock;
 pub mod reporters;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+pub use pylock::{PylockResolutionError, resolve_pylock_toml};
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, Bound},
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fmt::Write,
     io,
@@ -43,7 +43,6 @@ use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-    PythonVariant, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
@@ -649,11 +648,13 @@ pub(super) fn tool_environment_spec<'lock>(
     specification.with_preferences(PreferenceLocation::Entries(preferences))
 }
 /// Given a no-solution error and the [`Interpreter`] that was used during the solve, attempt to
-/// discover an alternate [`Interpreter`] that satisfies the `requires-python` constraint.
+/// discover an alternate [`Interpreter`] that satisfies a `requires-python` constraint.
+/// Also consider requirements found in the metadata of excluded root distributions.
 pub(super) async fn refine_interpreter(
     interpreter: &Interpreter,
     python_request: Option<&PythonRequest>,
     err: &ResolveError,
+    additional_requires_python: &[VersionSpecifiers],
     client_builder: &BaseClientBuilder<'_>,
     reporter: &PythonDownloadReporter,
     install_mirrors: &PythonInstallMirrors,
@@ -666,78 +667,63 @@ pub(super) async fn refine_interpreter(
         return Ok(None);
     };
 
-    // Infer the `requires-python` constraint from the error.
-    let requires_python = no_solution_err.find_requires_python();
+    // Prefer a Python version close to the lower bound inferred by the resolver. Newer
+    // interpreters may lack wheels for the tool's dependencies.
+    let inferred = no_solution_err.find_requires_python();
+    let inferred = inferred
+        .specifier()
+        .filter(|_| !inferred.contains(interpreter.python_version()))
+        .map(|lower_bound| {
+            let release = lower_bound.version().release();
+            let major = release.first().copied().unwrap_or(0);
+            let minor = release.get(1).copied().unwrap_or(0);
+            let upper_bound = VersionSpecifier::less_than_version(Version::new([major, minor + 1]));
+            VersionSpecifiers::from_iter([lower_bound, upper_bound])
+        });
 
-    // If the existing interpreter already satisfies the `requires-python` constraint, we don't need
-    // to refine it. We'd expect to fail again anyway.
-    if requires_python.contains(interpreter.python_version()) {
-        return Ok(None);
-    }
+    let default_request = PythonRequest::default();
+    let metadata_request = python_request.unwrap_or(&default_request);
+    let inferred = inferred.iter().filter_map(PythonRequest::from_specifiers);
+    let additional = additional_requires_python
+        .iter()
+        .filter_map(|requires_python| metadata_request.narrow_for_requires_python(requires_python));
 
-    // We want an interpreter that's as close to the required version as possible. If we choose the
-    // "latest" Python, we risk choosing a version that lacks wheels for the tool's requirements
-    // (assuming those requirements don't publish source distributions).
-    //
-    // TODO(charlie): Solve for the Python version iteratively (or even, within the resolver
-    // itself). The current strategy can also fail if the tool's requirements have greater
-    // `requires-python` constraints, and we didn't see them in the initial solve. It can also fail
-    // if the tool's requirements don't publish wheels for this interpreter version, though that's
-    // rarer.
-    let lower_bound = match requires_python.as_ref() {
-        Bound::Included(version) => VersionSpecifier::greater_than_equal_version(version.clone()),
-        Bound::Excluded(version) => VersionSpecifier::greater_than_version(version.clone()),
-        Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
-    };
+    let mut discovery_error = None;
+    for requires_python_request in inferred.chain(additional).unique() {
+        debug!("Refining interpreter with: {requires_python_request}");
 
-    let upper_bound = match requires_python.as_ref() {
-        Bound::Included(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Excluded(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
-    };
-
-    let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
-        VersionSpecifiers::from_iter([lower_bound, upper_bound]),
-        PythonVariant::default(),
-    ));
-
-    debug!("Refining interpreter with: {requires_python_request}");
-
-    let interpreter = PythonInstallation::find_or_download(
-        Some(&requires_python_request),
-        EnvironmentPreference::OnlySystem,
-        python_preference,
-        python_arch,
-        python_downloads,
-        client_builder,
-        cache,
-        Some(reporter),
-        install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url.as_deref(),
-    )
-    .await?
-    .into_interpreter();
-
-    // If the user passed a `--python` request, and the refined interpreter is incompatible, we
-    // can't use it.
-    if let Some(python_request) = python_request {
-        if !interpreter.matches_request(
-            &python_request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
+        let installation = match PythonInstallation::find_or_download(
+            Some(&requires_python_request),
+            EnvironmentPreference::OnlySystem,
+            python_preference,
+            python_arch,
+            python_downloads,
+            client_builder,
             cache,
-        ) {
-            return Ok(None);
+            Some(reporter),
+            install_mirrors.mirrors(),
+            install_mirrors.python_downloads_json_url.as_deref(),
+        )
+        .await
+        {
+            Ok(installation) => installation,
+            Err(err) => {
+                discovery_error = Some(err);
+                continue;
+            }
+        };
+        let interpreter = installation.into_interpreter();
+
+        if python_request.is_none_or(|request| {
+            interpreter.matches_request(
+                &request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
+                cache,
+            )
+        }) {
+            return Ok(Some(interpreter));
         }
     }
-
-    Ok(Some(interpreter))
+    discovery_error.map_or(Ok(None), Err)
 }
 
 /// Finalizes a tool installation, after creation of an environment.
@@ -746,6 +732,7 @@ pub(super) async fn refine_interpreter(
 ///
 /// Adds a receipt for the tool.
 pub(super) fn finalize_tool_install(
+    locked: bool,
     environment: &PythonEnvironment,
     name: &PackageName,
     entrypoints: &[PackageName],
@@ -958,7 +945,11 @@ pub(super) fn finalize_tool_install(
         options.clone(),
     );
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
-    installed_tools.add_tool_receipt(name, tool.with_scoped_overrides(scoped_overrides))?;
+    installed_tools.add_tool_receipt(
+        name,
+        tool.with_scoped_overrides(scoped_overrides)
+            .with_locked(locked),
+    )?;
 
     warn_out_of_path(&executable_directory);
 

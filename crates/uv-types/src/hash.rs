@@ -59,6 +59,57 @@ impl HashStrategy {
         Self::default().with_verification(HashVerification::IfPresent(hashes))
     }
 
+    /// Verify each supplied set of hashes independently when resolving a tool lock.
+    pub fn from_independent_requirements<'a>(
+        requirements: impl Iterator<Item = (&'a UnresolvedRequirement, &'a [String])>,
+        constraints: impl Iterator<Item = (&'a Requirement, &'a [String])>,
+        marker_env: Option<&ResolverMarkerEnvironment>,
+    ) -> Result<Self, HashStrategyError> {
+        let marker_env = marker_env.map(ResolverMarkerEnvironment::markers);
+        let mut groups = FxHashMap::<PackageName, Vec<Vec<HashDigest>>>::default();
+        let mut add = |requirement: &Requirement, hashes: &[String]| -> Result<(), HashError> {
+            if requirement.evaluate_markers(marker_env, &[]) {
+                let digests = requirement_hash_groups(requirement, hashes)?;
+                if !digests.is_empty() {
+                    groups
+                        .entry(requirement.name.clone())
+                        .or_default()
+                        .extend(digests);
+                }
+            }
+            Ok(())
+        };
+        for (requirement, hashes) in requirements {
+            match requirement {
+                UnresolvedRequirement::Named(requirement) => add(requirement, hashes)?,
+                UnresolvedRequirement::Unnamed(unnamed)
+                    if requirement.evaluate_markers(marker_env, &[])
+                        && (!hashes.is_empty()
+                            || !parse_all_url_hashes(&unnamed.url.verbatim)?.is_empty()) =>
+                {
+                    return Err(HashStrategyError::UnnamedIndependentRequirement(
+                        requirement.to_string(),
+                    ));
+                }
+                UnresolvedRequirement::Unnamed(_) => {}
+            }
+        }
+        for (requirement, hashes) in constraints {
+            add(requirement, hashes)?;
+        }
+        Ok(
+            Self::default().with_verification(HashVerification::Independent {
+                by_package: Arc::new(
+                    groups
+                        .into_iter()
+                        .map(|(name, groups)| (name, ArchiveHashGroups::new(groups)))
+                        .collect(),
+                ),
+                by_url: Arc::default(),
+            }),
+        )
+    }
+
     /// Require a matching trusted hash for every distribution.
     fn require(hashes: Arc<FxHashMap<VersionId, Vec<HashDigest>>>) -> Self {
         Self::default().with_verification(HashVerification::Required(hashes))
@@ -715,6 +766,43 @@ fn combine_constraint_hashes(
     Ok(digests)
 }
 
+/// Parse a requirement's independent hash groups. Registry hashes identify alternatives, while
+/// hashes for a specific URL or path must all match.
+pub fn requirement_hash_groups(
+    requirement: &Requirement,
+    hashes: &[String],
+) -> Result<Vec<Vec<HashDigest>>, HashError> {
+    let digests = hashes
+        .iter()
+        .map(|hash| HashDigest::from_str(hash))
+        .collect::<Result<Vec<_>, _>>()?;
+    match &requirement.source {
+        RequirementSource::Registry { .. } => Ok(if digests.is_empty() {
+            vec![]
+        } else {
+            vec![digests]
+        }),
+        RequirementSource::Url { .. }
+        | RequirementSource::Path { .. }
+        | RequirementSource::GitDirectory { .. }
+        | RequirementSource::GitPath { .. }
+        | RequirementSource::Directory { .. } => {
+            let mut groups = digests
+                .into_iter()
+                .map(|digest| vec![digest])
+                .collect::<Vec<_>>();
+            if let Some(url) = requirement.source.to_verbatim_parsed_url() {
+                groups.extend(
+                    parse_all_url_hashes(&url.verbatim)?
+                        .into_iter()
+                        .map(|digest| vec![digest]),
+                );
+            }
+            Ok(groups)
+        }
+    }
+}
+
 /// Parse requirement-file hashes and combine them with any URL-fragment hashes.
 fn parse_declared_hashes(
     hashes: &[String],
@@ -807,6 +895,8 @@ fn merge_digests<'a>(
 pub enum HashStrategyError {
     #[error("Cannot combine independent hash verification with another verification policy")]
     IncompatibleIndependentPolicies,
+    #[error("Independent hash verification requires a package name for hashed requirement: {0}")]
+    UnnamedIndependentRequirement(String),
     #[error(transparent)]
     Hash(#[from] HashError),
     #[error("Conflicting archive URL hashes for `{0}`: `{1}` conflicts with `{2}`")]

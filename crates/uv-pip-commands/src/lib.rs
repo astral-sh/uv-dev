@@ -2,8 +2,6 @@
 
 use uv_configuration::HashCheckingMode;
 
-pub use pylock::PylockResolutionError;
-
 pub mod check;
 pub mod compile;
 pub mod freeze;
