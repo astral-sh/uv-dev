@@ -4,7 +4,7 @@ const http = require("node:http");
 const https = require("node:https");
 const path = require("node:path");
 const childProcess = require("node:child_process");
-const { performance } = require("node:perf_hooks");
+const { monitorEventLoopDelay, performance } = require("node:perf_hooks");
 
 const arm = process.env.ZIP_SOURCE;
 const root = process.env.RUNNER_TEMP;
@@ -15,6 +15,7 @@ const redirectTargets = new Set();
 const downloadedFiles = new Set();
 const events = [];
 let requests = 0;
+const loopDelay = monitorEventLoopDelay({ resolution: 20 });
 
 function emit(event, data = {}) {
     const record = { event, ms: Number(performance.now().toFixed(2)), ...data };
@@ -31,7 +32,8 @@ for (const transport of [http, https]) {
         const isZip = request.path.split("?")[0].endsWith("/uv-x86_64-pc-windows-msvc.zip");
         if (!isZip && !redirectTargets.has(key)) return request;
         const id = ++requests;
-        emit("request", { id, host });
+        if (id === 1) loopDelay.enable();
+        emit("request", { id, host, utc_ms: Date.now() });
         request.once("socket", (socket) => {
             emit("socket", { id, reused: request.reusedSocket, connecting: socket.connecting });
             if (socket.connecting) {
@@ -49,6 +51,7 @@ for (const transport of [http, https]) {
                 redirectTargets.add(next.host + next.pathname + next.search);
             }
             let bytes = 0;
+            let chunks = 0;
             let lastData = performance.now();
             let largestGap = 0;
             let gapAt = 0;
@@ -57,6 +60,7 @@ for (const transport of [http, https]) {
                 if (chunk !== null) {
                     const now = performance.now();
                     if (bytes === 0) emit("first_body", { id });
+                    chunks++;
                     if (now - lastData > largestGap) {
                         largestGap = now - lastData;
                         gapAt = bytes;
@@ -64,7 +68,9 @@ for (const transport of [http, https]) {
                     bytes += chunk.length;
                     lastData = now;
                 } else {
-                    emit("body_end", { id, bytes, max_gap_ms: Math.round(largestGap), gap_at_bytes: gapAt });
+                    emit("body_end", { id, bytes, chunks, max_gap_ms: Math.round(largestGap),
+                        gap_at_bytes: gapAt, last_payload_to_eof_ms: Math.round(performance.now() - lastData),
+                        max_event_loop_delay_ms: Math.round(loopDelay.max / 1e6) });
                 }
                 return originalPush.call(this, chunk, ...rest);
             };
@@ -120,7 +126,10 @@ childProcess.spawn = function (command, ...args) {
     const tar = /^(tar|tar\.exe)$/i.test(path.basename(command)) && requests > 0;
     if (tar) emit("tar_start");
     const child = spawn.call(this, command, ...args);
-    if (tar) child.once("close", (code) => emit("tar_end", { code }));
+    if (tar) child.once("close", (code) => {
+        loopDelay.disable();
+        emit("tar_end", { code, utc_ms: Date.now(), max_event_loop_delay_ms: Math.round(loopDelay.max / 1e6) });
+    });
     return child;
 };
 
