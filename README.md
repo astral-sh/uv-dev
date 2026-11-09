@@ -23,23 +23,31 @@ The current issue body also proposes silently falling back to wheel-based metada
 when standalone metadata cannot be fetched. This is an alternative requested behavior, not
 implemented or accepted functionality.
 
-Maintainer woodruffw questions whether bypassing advertised metadata belongs in uv and suggests
-fixing Pixi's mirroring instead. That feedback explicitly assumes Pixi controls its index
-responses; the supplied discussion does not establish that assumption.
+Maintainer woodruffw considers rejecting a mirror that cannot serve advertised PEP 658/714
+sidecars to be expected behavior. The stated corrective action is for an index or mirror to omit
+those metadata advertisements when it will not serve the files. How Pixi can enforce that
+consistency while using an upstream index remains an architectural question; neither proposed
+uv bypass has been accepted.
 
 ## Maintainer feedback and open questions
 
-In astral-sh/uv#23150, woodruffw's November 9 comment raises installer/tool/index consistency
-and compatibility as reasons to question the proposed bypass. The maintainer suggests the problem
-may belong in Pixi's mirroring, explicitly conditional on Pixi controlling its own index responses.
-This is an initial objection and suggested investigation direction, not a final rejection or a
-confirmed root cause in Pixi.
+In astral-sh/uv#23150, woodruffw raises installer/tool/index consistency and compatibility as
+reasons to question the proposed bypass. In the November 9 reply to lucascolley's clarification
+about Chinese university mirrors, woodruffw agrees that rejecting such an inconsistent mirror
+is working as intended: an index must not advertise PEP 714 metadata that it cannot serve.
+The maintainer's concrete recommendation is to omit PEP 658/714 sidecar advertisements from
+index responses when the corresponding files will not be served.
+
+This establishes the maintainer's expected behavior for inconsistent advertisements, rather than
+approval for a uv override or silent fallback. The supplied discussion records no final issue
+disposition. It also does not establish that Pixi controls the upstream index responses, an
+assumption explicitly stated in woodruffw's initial comment.
 
 The existing reproduction reads the upstream index and rewrites artifact URLs. Clarify whether
 Pixi can adjust the metadata advertisements seen by uv, or otherwise keep index advertisements
 consistent with the selected file mirror. Do not assume that Pixi owns or serves the upstream
-index. This architectural question should precede deciding whether uv needs a new override.
-The comment adds no reproduction steps, version information, or demonstrated workaround.
+index. Applying the recommended consistency rule to this URL-rewriting architecture remains the
+investigation priority; the new reply supplies no tested workaround or additional reproduction.
 
 ## Classification
 
@@ -47,10 +55,10 @@ The request adds an explicit uv-client control to ignore advertised PEP 658/714 
 
 The existing enhancement label agrees with this assessment. The external reports support the
 index/file-host mismatch; they do not demonstrate a regression in uv's PEP 714 parsing.
-The explicit override and the proposed silent fallback require a maintainer decision. Current
-feedback first questions whether either workaround belongs in uv rather than Pixi. If an
-override is considered, its whole-client versus narrower scope remains undecided. The linked
-patch is a proposal, not accepted upstream functionality.
+The explicit override and proposed silent fallback remain enhancement proposals. The maintainer
+now explicitly considers rejection of inconsistent advertisements expected behavior and recommends
+correcting the index/mirror responses instead. Neither uv proposal has been accepted; any API scope
+remains undecided. The linked patch is not accepted upstream functionality.
 
 ## Related
 
@@ -104,10 +112,12 @@ metadata-sidecar bypass.
 
 ## Handoff
 
-First establish how Pixi obtains index responses and whether its mirroring layer can keep
-metadata advertisements consistent with the selected artifact host. Evaluate the suggested
-Pixi-side fix against that architecture; index-response control is an explicit, unverified
-assumption in the maintainer feedback.
+Prioritize the maintainer's recommendation: indexes or mirrors that cannot serve standalone
+metadata should omit the corresponding PEP 658/714 advertisements. Establish how Pixi obtains
+index responses and whether its mirroring layer can make the advertisements seen by uv consistent
+with the selected artifact host. Index-response control remains an explicit, unverified assumption
+in the initial feedback; the follow-up confirms the expected consistency rule without resolving
+how to apply it to Pixi's architecture.
 
 If that investigation leaves a need for uv changes, review whether the Rust client should
 expose an explicit standalone-metadata override or support the reporter's alternative of silent
