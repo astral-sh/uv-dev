@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{GroupMetadata, Lock, ResolverManifest, RootDependencyGroup};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -330,6 +330,7 @@ async fn do_lock(
     // Collect the requirements, etc.
     let members = target.members();
     let packages = target.packages();
+    let member_group_metadata = target.member_group_metadata()?;
     let required_members = target.required_members();
     let workspace_default_groups = match target {
         LockTarget::Workspace(workspace) => {
@@ -446,9 +447,12 @@ async fn do_lock(
         .await?;
     let mut lowered_dependency_groups = BTreeMap::new();
     for (name, group) in dependency_groups {
+        // Imported requirements are resolved by their member group, whose sources may differ
+        // from the root's. Retain the references without lowering their flattened copies here.
+        let (requirements, _) = group.requirements.partition();
         let requirements = target
             .lower(
-                group.requirements,
+                requirements,
                 index_locations,
                 sources,
                 cache,
@@ -456,19 +460,18 @@ async fn do_lock(
                 client_builder.credentials_cache(),
             )
             .await?;
-        lowered_dependency_groups.insert(name, requirements);
+        lowered_dependency_groups.insert(
+            name,
+            RootDependencyGroup {
+                requirements,
+                workspace_includes: group.workspace_includes,
+            },
+        );
     }
     let dependency_groups = lowered_dependency_groups;
 
     // Collect the conflicts.
-    let mut conflicts = target.conflicts()?;
-    if let LockTarget::Workspace(workspace) = target {
-        if let Some(groups) = &workspace.pyproject_toml().dependency_groups {
-            if let Some(project) = &workspace.pyproject_toml().project {
-                conflicts.expand_transitive_group_includes(&project.name, groups);
-            }
-        }
-    }
+    let conflicts = target.conflicts()?;
 
     // Check if any conflicts contain project-level conflicts
     if !preview.is_enabled(PreviewFeature::PackageConflicts)
@@ -784,6 +787,7 @@ async fn do_lock(
             &requirements,
             &dependency_groups,
             &workspace_group_metadata,
+            &member_group_metadata,
             workspace_default_groups.as_ref(),
             &constraints,
             &overrides,
@@ -933,7 +937,7 @@ async fn do_lock(
                     .chain(
                         dependency_groups
                             .values()
-                            .flat_map(|requirements| requirements.iter().cloned()),
+                            .flat_map(|group| group.requirements.iter().cloned()),
                     )
                     .map(UnresolvedRequirementSpecification::from)
                     .collect(),
@@ -1016,7 +1020,7 @@ async fn do_lock(
                     .collect(),
             )
             .with_workspace_default_groups(workspace_default_groups)
-            .with_member_group_metadata(packages)?
+            .with_member_group_metadata(member_group_metadata)
             .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(recorder) = recorder {

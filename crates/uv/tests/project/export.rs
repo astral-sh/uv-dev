@@ -13264,6 +13264,225 @@ fn frozen_lockfile_recorded_default_groups() -> Result<()> {
     Ok(())
 }
 
+/// A recorded group in a legacy frozen lock does not require flattening unrelated manifest groups.
+#[test]
+fn requirements_txt_legacy_recorded_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        tools = ["member"]
+        broken = [{ include-group = "missing" }]
+
+        [tool.uv.sources]
+        member = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 4
+        requires-python = ">=3.12"
+
+        [manifest]
+        members = ["member"]
+
+        [manifest.dependency-groups]
+        tools = [{ name = "member", virtual = "member" }]
+
+        [[package]]
+        name = "member"
+        version = "1.0.0"
+        source = { virtual = "member" }
+    "#})?;
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--offline", "--only-group", "tools", "--no-header"]), @"exit_code: 0 (success)");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
+/// Legacy root locks use manifest declarations to identify otherwise unrecorded empty groups.
+#[test]
+fn requirements_txt_legacy_empty_root_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        lint = []
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 4
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = ["member"]
+
+        [[package]]
+        name = "member"
+        version = "1.0.0"
+        source = { virtual = "member" }
+    "#})?;
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--locked", "--offline", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "lint", "--no-header"]), @"exit_code: 0 (success)");
+
+    pyproject_toml.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        lint = ["iniconfig"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `lint` is not defined in any project's `dependency-groups` table
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "missing", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `missing` is not defined in any project's `dependency-groups` table
+    ");
+
+    fs_err::remove_file(pyproject_toml)?;
+    fs_err::remove_file(context.temp_dir.child("member/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Frozen lockfile discovery requires a lockfile with revision 5 or later; run `uv lock` to update it
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
+/// Empty root-group names must be refreshed before export validates the requested group.
+#[test]
+fn requirements_txt_empty_root_group_refresh() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    pyproject_toml.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        lint = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `lint` is not defined in any project's `dependency-groups` table
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--only-group", "lint", "--no-header"]), @"exit_code: 0 (success)");
+
+    pyproject_toml.write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--only-group", "lint", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Group `lint` is not defined in any project's `dependency-groups` table
+    ");
+
+    Ok(())
+}
+
 /// Empty member groups take precedence over groups on the workspace root.
 #[test]
 fn frozen_lockfile_empty_member_group() -> Result<()> {

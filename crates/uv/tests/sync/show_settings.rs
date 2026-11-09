@@ -4048,6 +4048,7 @@ fn preview_features() {
     +            BuildLazyImports,
     +            BuildDependencyHashes,
     +            WheelVariants,
+    +            IncludeGroupWorkspace,
     +        ],
          },
          python_preference: Managed,
