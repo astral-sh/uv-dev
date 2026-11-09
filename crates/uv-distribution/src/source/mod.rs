@@ -32,8 +32,8 @@ use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
     DirectorySourceUrl, ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, Hashed,
-    IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist,
-    SourceUrl,
+    IndexUrl, PathSourceUrl, RegistrySourceDist, RemoteSource, RequirementSource, RequiresPython,
+    SourceDist, SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
@@ -212,6 +212,7 @@ pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_stack: Option<&'a BuildStack>,
     reporter: Option<Arc<dyn Reporter>>,
     metadata_first_party_packages: Option<&'a FirstPartyPackages>,
+    capture_packaged_lock: bool,
 }
 
 /// The name of the file that contains the revision ID for a remote distribution, encoded via `MsgPack`.
@@ -229,6 +230,17 @@ const METADATA: &str = "metadata.msgpack";
 /// The directory within each entry under which to store the unpacked source distribution.
 const SOURCE: &str = "src";
 
+/// A copy of the lock, outside the source tree that the backend may modify.
+const PACKAGED_LOCK: &str = "packaged-pylock.msgpack";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PackagedLockSnapshot {
+    /// Revalidation may create a new revision for identical bytes.
+    sha256: HashDigest,
+    /// `None` records an archive that was inspected and did not contain a lock.
+    contents: Option<String>,
+}
+
 impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     /// Initialize a [`SourceDistributionBuilder`] from a [`BuildContext`].
     pub(crate) fn new(build_context: &'a T) -> Self {
@@ -237,6 +249,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             build_stack: None,
             reporter: None,
             metadata_first_party_packages: None,
+            capture_packaged_lock: false,
         }
     }
 
@@ -250,6 +263,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             build_stack: self.build_stack,
             reporter: self.reporter.clone(),
             metadata_first_party_packages: first_party_packages,
+            capture_packaged_lock: self.capture_packaged_lock,
         }
     }
 
@@ -279,6 +293,138 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
     }
 
+    fn registry_cache_shard(&self, dist: &RegistrySourceDist) -> CacheShard {
+        // Keep the extracted source, built wheels, and metadata under the same package version.
+        self.build_context.cache().shard(
+            CacheBucket::SourceDistributions,
+            WheelCache::Index(&dist.index)
+                .wheel_dir(dist.name.as_ref())
+                .join(dist.version.to_string()),
+        )
+    }
+
+    /// Read a packaged lock from a verified registry archive before running its build backend.
+    pub(crate) async fn read_registry_source_lock(
+        &self,
+        dist: &RegistrySourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+        client: &ManagedClient<'_>,
+    ) -> Result<(Option<String>, HashDigests), Error> {
+        let reader = Self {
+            capture_packaged_lock: true,
+            ..Self::new(self.build_context)
+        };
+        let cache_shard = self.registry_cache_shard(dist);
+        let source = SourceDist::Registry(dist.clone());
+        let source = BuildableSource::Dist(&source);
+        let url = dist.file.url.to_url()?;
+        let local = if url.scheme() == "file" {
+            let path = url
+                .to_file_path()
+                .map_err(|()| Error::NonFileUrl(url.clone()))?;
+            Some(PathSourceUrl {
+                url: &url,
+                path: Cow::Owned(path),
+                ext: dist.ext,
+            })
+        } else {
+            None
+        };
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+
+        let revision = if let Some(local) = &local {
+            reader
+                .archive_revision(&source, local, &cache_shard, hashes)
+                .await?
+                .into_revision()
+        } else {
+            reader
+                .url_revision(
+                    &source,
+                    dist.ext,
+                    &url,
+                    Some(&dist.index),
+                    &cache_shard,
+                    hashes,
+                    client,
+                )
+                .await?
+        };
+        // A cache hit must also satisfy the hash policy for this installation.
+        if !revision.satisfies(hashes) {
+            return Err(Error::hash_mismatch(
+                source.to_string(),
+                hashes.digests(),
+                revision.hashes(),
+            ));
+        }
+
+        let snapshot = Self::read_packaged_lock_snapshot(&cache_shard, &revision)
+            .await?
+            .ok_or_else(|| {
+                Error::ReadSourceLock(
+                    dist.to_string(),
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Missing cached lock snapshot for the source archive",
+                    ),
+                )
+            })?;
+        Ok((snapshot.contents, revision.into_hashes()))
+    }
+
+    async fn read_packaged_lock_snapshot(
+        cache_shard: &CacheShard,
+        revision: &Revision,
+    ) -> Result<Option<PackagedLockSnapshot>, Error> {
+        let snapshot = match fs::read(cache_shard.entry(PACKAGED_LOCK).path()).await {
+            Ok(bytes) => rmp_serde::from_slice::<PackagedLockSnapshot>(&bytes)?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Error::CacheRead(err)),
+        };
+        Ok(revision
+            .hashes()
+            .contains(&snapshot.sha256)
+            .then_some(snapshot))
+    }
+
+    async fn snapshot_packaged_lock(
+        source: &BuildableSource<'_>,
+        entry: &CacheEntry,
+        cache_shard: &CacheShard,
+        hashes: &[HashDigest],
+    ) -> Result<(), Error> {
+        let sha256 = hashes
+            .iter()
+            .find(|hash| hash.algorithm() == HashAlgorithm::Sha256)
+            .ok_or_else(|| Error::MissingHashes {
+                distribution: source.to_string(),
+            })?
+            .clone();
+        let lock = entry.path().join("pylock.toml");
+        let read_error = |err| Error::ReadSourceLock(source.to_string(), err);
+        // Only a regular file in the extracted archive can supply the lock.
+        let contents = match fs::symlink_metadata(&lock).await {
+            Ok(metadata) if metadata.is_file() => {
+                Some(fs::read_to_string(&lock).await.map_err(read_error)?)
+            }
+            Ok(_) => {
+                return Err(read_error(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Expected a regular file",
+                )));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(read_error(err)),
+        };
+        write_atomic(
+            cache_shard.entry(PACKAGED_LOCK).path(),
+            rmp_serde::to_vec(&PackagedLockSnapshot { sha256, contents })?,
+        )
+        .await
+        .map_err(Error::CacheWrite)
+    }
+
     /// Download and build a [`SourceDist`].
     pub(crate) async fn download_and_build(
         &self,
@@ -289,14 +435,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                // For registry source distributions, shard by package, then version, for
-                // convenience in debugging.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
-                        .wheel_dir(dist.name.as_ref())
-                        .join(dist.version.to_string()),
-                );
+                let cache_shard = self.registry_cache_shard(dist);
 
                 let url = dist.file.url.to_url()?;
 
@@ -453,13 +592,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<ArchiveMetadata, Error> {
         let metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                // For registry source distributions, shard by package, then version.
-                let cache_shard = self.build_context.cache().shard(
-                    CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
-                        .wheel_dir(dist.name.as_ref())
-                        .join(dist.version.to_string()),
-                );
+                let cache_shard = self.registry_cache_shard(dist);
 
                 let url = dist.file.url.to_url()?;
 
@@ -1008,6 +1141,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 let (hashes, size) = self
                     .download_archive(response, source, ext, entry.path(), hashes, &[])
                     .await?;
+                if self.capture_packaged_lock {
+                    Self::snapshot_packaged_lock(source, &entry, cache_shard, &hashes).await?;
+                }
 
                 Ok(revision
                     .with_hashes(HashDigests::from(hashes))
@@ -1049,8 +1185,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             });
         }
 
-        // If the archive is missing the required hashes or size, force a refresh.
-        if revision.has_digests(hashes) && (expected_size.is_none() || revision.size().is_some()) {
+        // A build backend can mutate an extracted tree. If this revision predates the lock
+        // snapshot, refresh the archive to get the original packaged lock.
+        if revision.has_digests(hashes)
+            && (expected_size.is_none() || revision.size().is_some())
+            && (!self.capture_packaged_lock
+                || Self::read_packaged_lock_snapshot(cache_shard, &revision)
+                    .await?
+                    .is_some())
+        {
             Ok(revision)
         } else {
             client
@@ -1360,7 +1503,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // we use an exact timestamp.
         if let Some(pointer) = LocalRevisionPointer::read_from(&revision_entry)? {
             if *pointer.cache_info() == cache_info {
-                if pointer.revision().has_digests(hashes) {
+                if pointer.revision().has_digests(hashes)
+                    && (!self.capture_packaged_lock
+                        || Self::read_packaged_lock_snapshot(cache_shard, pointer.revision())
+                            .await?
+                            .is_some())
+                {
                     return Ok(pointer);
                 }
             }
@@ -1382,6 +1530,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 &[],
             )
             .await?;
+        if self.capture_packaged_lock {
+            Self::snapshot_packaged_lock(source, &entry, cache_shard, &hashes).await?;
+        }
 
         // Include the hashes and cache info in the revision.
         let revision = revision.with_hashes(HashDigests::from(hashes));
@@ -2891,7 +3042,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             self.build_context.cache(),
             self.build_context.tar_backend(),
             ArchiveValidation {
-                extra_algorithms: &[],
+                extra_algorithms: if self.capture_packaged_lock {
+                    &[HashAlgorithm::Sha256]
+                } else {
+                    &[]
+                },
                 hash_policy,
                 existing_hashes,
                 expected_size: None,
