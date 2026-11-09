@@ -23,11 +23,12 @@ The current issue body also proposes silently falling back to wheel-based metada
 when standalone metadata cannot be fetched. This is an alternative requested behavior, not
 implemented or accepted functionality.
 
-Maintainer woodruffw considers rejecting a mirror that cannot serve advertised PEP 658/714
-sidecars to be expected behavior. The stated corrective action is for an index or mirror to omit
-those metadata advertisements when it will not serve the files. How Pixi can enforce that
-consistency while using an upstream index remains an architectural question; neither proposed
-uv bypass has been accepted.
+Maintainer woodruffw considers rejection of inconsistent PEP 658/714 advertisements expected
+behavior and identifies Pixi's URL rewriting without checking the destination's sidecar support
+as the likely bug. The suggested correction is to confirm sidecar availability at the new origin
+or remove the corresponding metadata advertisements from the index representation passed to uv.
+This is a maintainer diagnosis and proposed Pixi-side correction, not a verified implementation;
+neither proposed uv bypass has been accepted.
 
 ## Maintainer feedback and open questions
 
@@ -57,10 +58,19 @@ a workaround and prefers general support in uv for retrieving data from multiple
 This adds a broader downstream design preference beyond the explicit bypass or silent fallback;
 it is not a concrete API proposal, an accepted uv plan, or evidence that uv violates the PEPs.
 
-This establishes the maintainer's expected behavior for inconsistent advertisements, rather than
-approval for a uv override or silent fallback. The supplied discussion records no final issue
-disposition. It also does not establish that Pixi controls the upstream index responses, an
-assumption explicitly stated in woodruffw's initial comment.
+Applying the consistency rule to the reporter's clarified architecture, woodruffw identifies
+rewriting distribution URLs while retaining the upstream metadata declaration as the likely bug
+in Pixi. The maintainer says Pixi should confirm that the destination serves sidecars before
+retaining the declaration; otherwise it should remove `data-core-metadata` and corresponding
+advertisements from the rewritten index representation. This targets the client-side rewriting
+layer, rather than establishing that either repository's original response is itself invalid.
+How Pixi can adjust that representation remains unverified.
+
+For the broader design, woodruffw notes that Python packaging lacks a strong concept of package
+identity across multiple indexes, limiting what it can currently specify about cross-index
+reconciliation. The maintainer nevertheless considers the resulting advertised-but-unavailable
+sidecar state invalid under PEP 658/714. This is not approval for a uv override or silent fallback;
+the supplied discussion records no final issue disposition.
 
 The existing reproduction reads the upstream index and rewrites artifact URLs. Clarify whether
 Pixi can adjust the metadata advertisements seen by uv, or otherwise keep index advertisements
@@ -131,12 +141,11 @@ metadata-sidecar bypass.
 
 ## Handoff
 
-Prioritize the maintainer's recommendation: mirror the advertised sidecars or omit the
-corresponding PEP 658/714 advertisements in both HTML and JSON index responses. Establish how Pixi obtains
-index responses and whether its mirroring layer can make the advertisements seen by uv consistent
-with the selected artifact host. Index-response control remains an explicit, unverified assumption
-in the initial feedback; the follow-up confirms the expected consistency rule without resolving
-how to apply it to Pixi's architecture.
+Investigate the maintainer's Pixi-side diagnosis: distribution URL rewriting must account for
+sidecar availability at the destination. Establish whether Pixi can confirm that capability or
+remove the corresponding PEP 658/714 advertisements from the index representation seen by uv,
+covering both HTML and JSON forms. Mirroring all advertised sidecars is the other valid server-side
+option. No code change or test has yet established a working correction for Pixi's architecture.
 
 Pixi maintainer lucascolley has asked the reporter to determine whether Pixi can always pass
 `file.dist_info_metadata` to uv in a way that accurately reflects the selected mirror's
