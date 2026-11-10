@@ -1,10 +1,21 @@
+#[cfg(unix)]
+use std::fs::{DirBuilder, Permissions};
+use std::io;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
+#[cfg(unix)]
+use fs_err::os::unix::fs::OpenOptionsExt;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
+#[cfg(unix)]
+use uv_fs::{persist_with_retry_sync, tempfile_in_with_permissions};
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::SafeUrl;
 
@@ -259,12 +270,37 @@ impl TextCredentialStore {
         Ok(dir.join("credentials.toml"))
     }
 
+    /// Create an owner-only credential directory, tightening an existing directory if needed.
+    fn create_directory(path: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            DirBuilder::new().recursive(true).mode(0o700).create(path)?;
+            fs::set_permissions(path, Permissions::from_mode(0o700))?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(path)?;
+        Ok(())
+    }
+
     /// Acquire a lock on the credentials file at the given path.
     async fn lock(path: &Path) -> Result<LockedFile, TomlCredentialError> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            Self::create_directory(parent)?;
         }
         let lock = path.with_added_extension("lock");
+        #[cfg(unix)]
+        {
+            // Pre-create a private lock so the shared locking helper does not create it as 0666.
+            // Do not replace the inode: another process may already hold this lock.
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(&lock)?;
+            file.set_permissions(Permissions::from_mode(0o600))?;
+        }
         Ok(LockedFile::acquire(lock, LockedFileMode::Exclusive, "credentials store").await?)
     }
 
@@ -324,13 +360,22 @@ impl TextCredentialStore {
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
-        fs::create_dir_all(
-            path.as_ref()
-                .parent()
-                .ok_or(TomlCredentialError::CredentialsDirError)?,
-        )?;
+        let parent = path
+            .as_ref()
+            .parent()
+            .ok_or(TomlCredentialError::CredentialsDirError)?;
+        Self::create_directory(parent)?;
 
-        // TODO(zanieb): We should use an atomic write here
+        #[cfg(unix)]
+        {
+            // Restrict access before writing any credentials, including when replacing a
+            // permissive existing file. The temporary file is on the same filesystem.
+            let mut file =
+                tempfile_in_with_permissions(parent, Some(Permissions::from_mode(0o600)))?;
+            file.write_all(content.as_bytes())?;
+            persist_with_retry_sync(file, path)?;
+        }
+        #[cfg(not(unix))]
         fs::write(path, content)?;
         Ok(())
     }

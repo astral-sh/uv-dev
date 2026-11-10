@@ -1,4 +1,6 @@
 #[cfg(unix)]
+use std::fs::Permissions;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::Result;
@@ -1065,7 +1067,7 @@ async fn login_text_store() {
     ");
 }
 
-/// A store created with a permissive umask remains readable after login with a restrictive umask.
+/// Credential stores are owner-only on creation and when rewriting a permissive existing store.
 #[test]
 #[cfg(unix)]
 fn login_text_store_permissions() -> Result<()> {
@@ -1094,21 +1096,26 @@ fn login_text_store_permissions() -> Result<()> {
     Stored credentials for https://example.invalid/
     ");
 
-    // The store is readable by other users instead of being owner-only (astral-sh/uv#23202).
+    // A permissive umask must not expose the credential store to other users.
     assert_eq!(
         fs_err::metadata(&credentials_dir)?.permissions().mode() & 0o777,
-        0o755
+        0o700
     );
     assert_eq!(
         fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
-        0o644
+        0o600
     );
     assert_eq!(
         fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
-        0o666
+        0o600
     );
 
-    // Rewriting under a stricter umask does not tighten the existing permissions.
+    // Simulate a store created by a version that relies on the umask for permissions.
+    fs_err::set_permissions(&credentials_dir, Permissions::from_mode(0o755))?;
+    fs_err::set_permissions(&credentials_file, Permissions::from_mode(0o644))?;
+    fs_err::set_permissions(&lock_file, Permissions::from_mode(0o666))?;
+
+    // Rewriting must tighten existing permissions, including the coordination lock.
     uv_snapshot!(context.filters(), context.external_command("sh")
         .arg("-c")
         .arg("umask 077; exec \"$@\"")
@@ -1130,15 +1137,15 @@ fn login_text_store_permissions() -> Result<()> {
 
     assert_eq!(
         fs_err::metadata(&credentials_dir)?.permissions().mode() & 0o777,
-        0o755
+        0o700
     );
     assert_eq!(
         fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
-        0o644
+        0o600
     );
     assert_eq!(
         fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
-        0o666
+        0o600
     );
 
     Ok(())
@@ -1179,10 +1186,10 @@ fn login_text_store_permissions_restrictive_umask() -> Result<()> {
         fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
         0o600
     );
-    // Even with a restrictive umask, the lock is world-writable (astral-sh/uv#23202).
+    // Credential locks must not inherit the shared lock helper's world-writable mode.
     assert_eq!(
         fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
-        0o666
+        0o600
     );
 
     Ok(())
