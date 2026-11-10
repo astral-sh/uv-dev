@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced on Linux x86_64 with installed uv 0.13.7 using isolated temporary home/config/cache/data directories and the default plaintext backend. With umask 022, `XDG_DATA_HOME=<temporary directory> uv --no-config --offline auth login --token - https://example.invalid/simple` supplied synthetic input via stdin and exited 0. Metadata showed credential directory 0755, credentials.toml 0644, and credentials.toml.lock 0666, matching astral-sh/uv#23202. A fresh store under umask 077 had modes 0700/0600/0666; rewriting the permissive store under umask 077 retained 0755/0644/0666. Existing authentication integration tests cover persistence but do not assert these permissions. The reported uv 0.12.21 was not separately tested. Updated $RUNNER_TEMP/issue-context/README.md. No credential contents were inspected or printed; checkout and GitHub were unchanged."
+}

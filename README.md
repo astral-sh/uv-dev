@@ -7,19 +7,69 @@ Classification: bug
 
 The reporter describes `uv auth login` on Linux with uv 0.12.21 and the default plaintext backend. With umask `022`, the reported credential directory is `0755`, `credentials.toml` is `0644`, and its coordination lock is `0666`. Other local users can read the credential file when every ancestor permits traversal. The requested behavior is an owner-only directory (`0700`) and credential file (`0600`) from creation, restricted lock permissions, safe atomic replacement, and consideration of tightening existing stores.
 
-The current checkout confirms the missing restrictions on the plaintext credential file and directory. The lock has a separate mechanism: the shared locking helper explicitly sets `0666`, overriding umask. The lock itself is an empty coordination file, rather than the file containing credentials.
+The reported permissions were independently reproduced on Linux with the installed uv 0.13.7: umask `022` created a `0755` credential directory, a `0644` credential file, and a `0666` lock. A fresh store under umask `077` had directory/file modes `0700`/`0600`, but its lock remained `0666`. Writing to the permissive store under umask `077` did not tighten its modes. The lock was empty in both fresh-store cases; source inspection confirms that the shared locking helper explicitly overrides umask for that coordination file.
 
 No duplicate of the credential-store permission bug was found. astral-sh/uv#16769, astral-sh/uv#17961, and astral-sh/uv#17646 concern general lock permissions; merged astral-sh/uv#16845 explains the current 0666 lock mode.
 
 ## Draft response
 
-Your report matches the plaintext backend: it creates the credential directory and file without enforcing owner-only permissions. A fix should restrict permissions from creation, use safe replacement, and handle existing stores. The lock's 0666 mode is explicitly set by the shared locking helper; astral-sh/uv#16769 discusses that separate policy for empty coordination files. For now, umask 077 protects newly created credential files and directories; existing ones need directory mode 0700 and file mode 0600. It does not restrict the lock file.
+Reproduced with uv 0.13.7 on Linux using an isolated plaintext store and dummy input: umask 022 produces directory/file/lock modes 0755/0644/0666. A fresh store under umask 077 uses 0700/0600 for the directory and credential file, while the lock remains 0666. Rewriting the permissive store under umask 077 does not tighten existing permissions. The lock is an empty coordination file whose mode is explicitly set by the shared locking helper; astral-sh/uv#16769 discusses that separate policy. Owner-only credential contents and directory access remain the main concern.
 
 ## Classification
 
-The checked-out source confirms that the default plaintext backend creates the credential directory with create_dir_all and writes credentials with fs::write without enforcing owner-only permissions or tightening existing modes. With umask 022 and traversable ancestors, this can expose stored credentials to other local users. Documented plaintext storage does not justify that access. The 0666 lock mode is separately imposed by the shared locking helper. The open lock-permission issue and pull requests do not address owner-only credential contents or directories, so they are not duplicates of the main bug. No prior fix for this disclosure was found.
+The runtime reproduction confirms that the default plaintext backend does not enforce owner-only permissions or tighten existing modes. The checked-out source creates the credential directory with create_dir_all and writes credentials with fs::write, consistent with those observations. With umask 022 and traversable ancestors, this can expose stored credentials to other local users. Documented plaintext storage does not justify that access. The 0666 lock mode is separately imposed by the shared locking helper. The open lock-permission issue and pull requests do not address owner-only credential contents or directories, so they are not duplicates of the main bug. No prior fix for this disclosure was found.
 
 The primary correctness problem is access to private credential contents. The open request about general lock-file permissions covers only one part of this report, so it is insufficient grounds to centralize this issue there. Neither historical locking change established owner-only credential storage, and there is no evidence that a previous credential-permission fix has regressed.
+
+## Reproduction
+
+Outcome: **reproducible** for astral-sh/uv#23202.
+
+The report specifies Linux, uv 0.12.21, the default plaintext backend without native authentication/keyring, and umask `022`. It expects a credential directory created as `0700`, a credential file created as `0600`, and a restricted lock. It also requests atomic writes and consideration of tightening existing stores. This is not presented as an upgrade regression.
+
+Observed environment: Linux `7.0.0-1017-azure`, x86_64; installed `uv 0.13.7 (x86_64-unknown-linux-gnu)` from `/opt/hostedtoolcache/uv/0.13.7/x86_64/uv`. Python 3.12.3 was used only to orchestrate subprocesses and inspect filesystem metadata; `uv auth login` does not require a project or Python interpreter. The reported uv 0.12.21 was not separately tested.
+
+The reproduction used a fresh temporary directory under `/tmp`, a clean child-process environment, an isolated home/config/cache/data directory, no inherited preview or credentials-directory override, and `--no-config --offline`. Only synthetic dummy tokens were supplied over stdin. No credential contents were inspected or printed, no service was contacted, and temporary stores were deleted afterward.
+
+Equivalent minimal Bash commands using the installed executable:
+
+```bash
+uv_executable=$(command -v uv)
+reproduction_directory=$(mktemp -d /tmp/uv-23202.XXXXXX)
+mkdir -m 700 "$reproduction_directory/home"
+(
+    cd "$reproduction_directory"
+    umask 022
+    env -i PATH=/usr/bin:/bin \
+        HOME="$reproduction_directory/home" \
+        XDG_CONFIG_HOME="$reproduction_directory/config" \
+        XDG_CACHE_HOME="$reproduction_directory/cache" \
+        UV_CACHE_DIR="$reproduction_directory/cache/uv" \
+        TMPDIR="$reproduction_directory" \
+        XDG_DATA_HOME="$reproduction_directory/data-022" \
+        "$uv_executable" --no-config --offline auth login \
+        --token - https://example.invalid/simple <<<'dummy-token'
+)
+stat -c '%a %n' \
+    "$reproduction_directory/data-022/uv/credentials" \
+    "$reproduction_directory/data-022/uv/credentials/credentials.toml" \
+    "$reproduction_directory/data-022/uv/credentials/credentials.toml.lock"
+rm -rf -- "$reproduction_directory"
+```
+
+Each of the three explicitly invoked login commands exited `0` with empty stdout. The first two reported `Stored credentials for https://example.invalid/`; the rewrite used `https://second.example.invalid/simple` and reported `Stored credentials for https://second.example.invalid/`.
+
+| Scenario | Credential directory | credentials.toml | credentials.toml.lock |
+| --- | --- | --- | --- |
+| Fresh store, umask `022` | `0755` | `0644` | `0666` |
+| Separate fresh store, umask `077` | `0700` | `0600` | `0666` |
+| Add a second dummy service to the first store under umask `077` | `0755` | `0644` | `0666` |
+
+The umask `077` fresh-store variant changed only the umask and data directory. The rewrite variant reused the umask `022` store, changed the umask to `077`, and added a distinct dummy service. Both new lock files had size zero. These results distinguish credential directory/file modes, which follow umask on creation, from the lock mode, which overrides it. They also confirm that a stricter umask does not repair an existing permissive store.
+
+The temporary root itself was `0700`; no access from another user was attempted. The observed `0644` mode grants group/other read permission subject to ancestor traversal and other filesystem controls. Atomicity and permissions at every instant during creation were not tested.
+
+Existing coverage was read in `crates/uv/tests/it/auth.rs`: `login_text_store` checks successful password/token persistence and invalid inputs; `login_text_store_empty_file` checks login and token retrieval with an empty file via `UV_CREDENTIALS_DIR`; `login_text_store_comments_only_file` checks login with a comments-only file. Their `TestContext` setup isolates home/data/cache paths. None asserts Unix credential directory/file/lock modes or tightening on rewrite. Searches of the authentication source/tests and `crates/uv-client/tests/it/` found no matching permission regression test. The authentication integration module is unconditional in `crates/uv/tests/it/main.rs`; future mode assertions need a Unix gate. No repository tests were added or run, and no build was performed.
 
 ## Related
 
@@ -41,7 +91,7 @@ Source was inspected at checkout commit `c17e9952b317efd1b7a7c196dd34db262e488a7
 - In astral-sh/uv#16769, maintainer comments explain that coordination files are empty and uv does not read their contents. Later comments discuss validating tighter modes without breaking cross-user locking.
 - Both astral-sh/uv#11328 and astral-sh/uv#16845 modified the shared filesystem locking implementation, not the plaintext credential writer. Their descriptions, comments, and reviews explain the multi-user coordination requirement.
 
-This assessment confirms the source mechanism without executing authentication commands or accessing credential files. The reported numeric modes were not independently reproduced.
+The runtime observations in Reproduction independently confirm the numeric modes using the installed uv 0.13.7. Source inspection above describes the current checkout; it is supporting evidence, not a substitute for observing the installed executable. Only filesystem metadata and login status were inspected.
 
 ## Search scope and excluded candidates
 
