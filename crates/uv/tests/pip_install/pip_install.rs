@@ -268,6 +268,60 @@ fn install_wheel_script_does_not_execute_decoded_interpreter_path() -> Result<()
     Ok(())
 }
 
+/// POSIX kernels split a direct shebang at a tab in either kind of wheel launcher.
+#[test]
+#[cfg(unix)]
+fn install_scripts_in_tab_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let (filename, wheel) = WheelBuilder::new(&"tab-probe".parse()?, &"1.0.0".parse()?)
+        .entry_points(&["tab-probe".to_string()])
+        .files(&[(
+            "tab_probe-1.0.0.data/scripts/wheel-script",
+            "#!python\nprint('wheel script')\n",
+        )])
+        .build();
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+
+    let venv = context.temp_dir.join("tab\tdir");
+    context.venv().arg(&venv).assert().success();
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(&venv)
+        .arg(&filename)
+        .assert()
+        .success();
+
+    let bin = venv_bin_path(&venv);
+    let entry_point = context.external_command(bin.join("tab-probe")).output();
+    let wheel_script = context.external_command(bin.join("wheel-script")).output();
+
+    // Long paths and paths containing spaces already select the shell wrapper.
+    let python = bin.join("python");
+    if python.as_os_str().len() + 3 <= 127 && !python.as_os_str().as_encoded_bytes().contains(&b' ')
+    {
+        let shebang = format!("#!{}\n", python.display());
+        assert!(fs::read_to_string(bin.join("tab-probe"))?.starts_with(&shebang));
+        assert!(fs::read_to_string(bin.join("wheel-script"))?.starts_with(&shebang));
+        assert_eq!(
+            entry_point.unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            wheel_script.unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        return Ok(());
+    }
+
+    entry_point?
+        .assert()
+        .success()
+        .stdout("Hello from tab-probe!\n");
+    wheel_script?.assert().success().stdout("wheel script\n");
+    Ok(())
+}
+
 /// Hash the entire HTTP response even when extraction stops before trailing bytes.
 #[test]
 fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
