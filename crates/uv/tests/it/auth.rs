@@ -1,9 +1,14 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
 use insta::allow_duplicates;
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use uv_test::get_bin;
 use uv_test::uv_snapshot;
 
 #[tokio::test]
@@ -1058,6 +1063,129 @@ async fn login_text_store() {
     ----- stderr -----
     Stored credentials for testuser@http://[::1]:1324/
     ");
+}
+
+/// A store created with a permissive umask remains readable after login with a restrictive umask.
+#[test]
+#[cfg(unix)]
+fn login_text_store_permissions() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.home_dir.join("data/uv/credentials");
+    let credentials_file = credentials_dir.join("credentials.toml");
+    let lock_file = credentials_dir.join("credentials.toml.lock");
+
+    // Set the umask in the subprocess so other tests are unaffected.
+    uv_snapshot!(context.filters(), context.external_command("sh")
+        .arg("-c")
+        .arg("umask 022; exec \"$@\"")
+        .arg("sh")
+        .arg(get_bin!())
+        .arg("--no-config")
+        .arg("--offline")
+        .arg("auth")
+        .arg("login")
+        .arg("https://example.invalid/simple")
+        .arg("--token")
+        .arg("-")
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path()),
+        input="test-token\n", @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for https://example.invalid/
+    ");
+
+    // The store is readable by other users instead of being owner-only (astral-sh/uv#23202).
+    assert_eq!(
+        fs_err::metadata(&credentials_dir)?.permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(
+        fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
+        0o666
+    );
+
+    // Rewriting under a stricter umask does not tighten the existing permissions.
+    uv_snapshot!(context.filters(), context.external_command("sh")
+        .arg("-c")
+        .arg("umask 077; exec \"$@\"")
+        .arg("sh")
+        .arg(get_bin!())
+        .arg("--no-config")
+        .arg("--offline")
+        .arg("auth")
+        .arg("login")
+        .arg("https://example.invalid/simple")
+        .arg("--token")
+        .arg("-")
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path()),
+        input="replacement-test-token\n", @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for https://example.invalid/
+    ");
+
+    assert_eq!(
+        fs_err::metadata(&credentials_dir)?.permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(
+        fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
+        0o666
+    );
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn login_text_store_permissions_restrictive_umask() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.home_dir.join("data/uv/credentials");
+    let credentials_file = credentials_dir.join("credentials.toml");
+    let lock_file = credentials_dir.join("credentials.toml.lock");
+
+    uv_snapshot!(context.filters(), context.external_command("sh")
+        .arg("-c")
+        .arg("umask 077; exec \"$@\"")
+        .arg("sh")
+        .arg(get_bin!())
+        .arg("--no-config")
+        .arg("--offline")
+        .arg("auth")
+        .arg("login")
+        .arg("https://example.invalid/simple")
+        .arg("--token")
+        .arg("-")
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path()),
+        input="test-token\n", @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for https://example.invalid/
+    ");
+
+    assert_eq!(
+        fs_err::metadata(&credentials_dir)?.permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs_err::metadata(&credentials_file)?.permissions().mode() & 0o777,
+        0o600
+    );
+    // Even with a restrictive umask, the lock is world-writable (astral-sh/uv#23202).
+    assert_eq!(
+        fs_err::metadata(&lock_file)?.permissions().mode() & 0o777,
+        0o666
+    );
+
+    Ok(())
 }
 
 #[test]
