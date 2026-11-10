@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Restrict Unix credential directories to 0700 and credential files and locks to owner-only access. Write credentials through a private temporary file with atomic replacement, and tighten existing permissive stores. Update both parent regressions to assert secure permissions on creation and rewrite.",
+  "validation": [
+    "cargo test -p uv --test it text_store — 13 passed",
+    "cargo test -p uv --test it publish::trusted_publishing_falls_back_to_credential_store -- --exact — passed",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check — passed",
+    "git diff --check — passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3121"
+}
