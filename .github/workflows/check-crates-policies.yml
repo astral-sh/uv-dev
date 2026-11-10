@@ -1,5 +1,10 @@
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -9,7 +14,7 @@ env:
 jobs:
   check:
     name: "crates policies"
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     environment:
       name: automations
       deployment: false

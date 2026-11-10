@@ -1,5 +1,10 @@
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
 
 env:
   UV_LOCKED: 1
@@ -8,7 +13,7 @@ env:
 jobs:
   dist-plan:
     name: "dist plan"
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-4-github }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

@@ -1,5 +1,10 @@
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: "Resolved runner roles from select-runners"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,7 +16,7 @@ env:
 jobs:
   lock:
     timeout-minutes: 10
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
+    runs-on: ${{ fromJSON(inputs.runners).ubuntu-x86_64-2-slim }}
     name: "uv lockfiles"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

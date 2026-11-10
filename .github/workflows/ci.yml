@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      free-runners:
+        description: "Use free runners for this CI run"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,13 +27,15 @@ jobs:
     # CI on main is redundant in the security repository.
     if: ${{ github.repository != 'astral-sh/uv-security' || github.ref != 'refs/heads/main' }}
     uses: $/.github/workflows/plan.yml
+    with:
+      free-runners: ${{ inputs.free-runners || false }}
 
   check-cargo-vet:
     name: "check | crates"
     needs: plan
     uses: astral-sh/github-actions/.github/workflows/cargo-vet.yml@8d42129d24fb11f758d6c1f79abc7e30a67157a0
     with:
-      runner: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+      runner: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-4-github }}
       workspaces: ${{ needs.plan.outputs.cargo-vet-workspaces }}
       # renovate: datasource=github-release-attachments depName=astral-sh/uv
       uv-version: "0.13.7"
@@ -41,6 +48,8 @@ jobs:
     name: "check | fmt"
     needs: plan
     uses: $/.github/workflows/check-fmt.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
 
   review-security:
     name: "review | security"
@@ -50,8 +59,8 @@ jobs:
     cache-mode: read
     uses: astral-sh/github-actions/.github/workflows/pull-request-security-review.yml@f11dbff15181b71f2cc5e8487b1ac7d7bb03ea7d
     with:
-      runner: depot-ubuntu-24.04-16
-      helper-runner: github-ubuntu-24.04-x86_64-4
+      runner: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-16 }}
+      helper-runner: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-4-github }}
       # renovate: datasource=github-release-attachments depName=astral-sh/uv
       uv-version: "0.13.7"
       uv-checksum: "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"
@@ -80,6 +89,8 @@ jobs:
         needs.plan.outputs.run-checks == 'true'
       }}
     uses: $/.github/workflows/pull-request-code-quality-review.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
     secrets: inherit
     permissions:
       contents: read
@@ -92,6 +103,8 @@ jobs:
     needs: plan
     uses: $/.github/workflows/check-lint.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
       code-changed: ${{ needs.plan.outputs.test-code }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
 
@@ -100,6 +113,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.run-checks == 'true' }}
     uses: $/.github/workflows/check-docs.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
     secrets: inherit
 
   check-zizmor:
@@ -107,6 +122,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.run-checks == 'true' }}
     uses: $/.github/workflows/check-zizmor.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
     permissions:
       contents: read
       security-events: write
@@ -116,18 +133,25 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/check-publish.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
 
   check-release:
     name: "check | release"
     needs: plan
     if: ${{ needs.plan.outputs.run-checks == 'true' || needs.plan.outputs.require-check-release == 'true' }}
     uses: $/.github/workflows/check-release.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
 
   check-crates-policies:
     name: "check | crates policies"
     needs: plan
     if: ${{ needs.plan.outputs.check-crates-policies == 'true' }}
     uses: $/.github/workflows/check-crates-policies.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
     secrets: inherit
     permissions:
       contents: read
@@ -136,7 +160,7 @@ jobs:
   check-cargo-cooldowns:
     name: "check | crates cooldowns"
     needs: plan
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-2 }}
     timeout-minutes: 15
     permissions:
       actions: read # Download publication times from a successful main run.
@@ -153,13 +177,14 @@ jobs:
 
   check-cargo-lock-changes:
     name: "check | cargo lockfile changes"
+    needs: plan
     if: >-
       ${{
         github.event_name == 'pull_request' &&
         github.repository_owner == 'astral-sh' &&
         github.event.pull_request.head.repo.full_name != github.repository
       }}
-    runs-on: github-ubuntu-24.04-x86_64-2
+    runs-on: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-2 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -179,6 +204,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.run-checks == 'true' }}
     uses: $/.github/workflows/check-lock.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
 
   check-generated-files:
     name: "check | generated files"
@@ -186,6 +213,7 @@ jobs:
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/check-generated-files.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       schema-changed: ${{ needs.plan.outputs.check-schema }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
 
@@ -194,6 +222,8 @@ jobs:
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/test.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
       test-macos: ${{ needs.plan.outputs.test-macos }}
 
@@ -202,6 +232,7 @@ jobs:
     if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}
     uses: $/.github/workflows/test-windows-trampolines.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       trampoline-build: ${{ needs.plan.outputs.test-windows-trampoline-check-binary }}
 
   build-dev-binaries:
@@ -209,6 +240,8 @@ jobs:
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/build-dev-binaries.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
 
   test-smoke:
@@ -218,6 +251,8 @@ jobs:
     if: ${{ needs.plan.outputs.test-smoke == 'true' }}
     uses: $/.github/workflows/test-smoke.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
       sha: ${{ github.sha }}
 
   test-integration:
@@ -231,6 +266,7 @@ jobs:
       contents: read
       id-token: write
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       sha: ${{ github.sha }}
 
   test-system:
@@ -240,6 +276,7 @@ jobs:
     if: ${{ needs.plan.outputs.test-system == 'true' }}
     uses: $/.github/workflows/test-system.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       sha: ${{ github.sha }}
 
   test-ecosystem:
@@ -249,6 +286,7 @@ jobs:
     if: ${{ needs.plan.outputs.test-ecosystem == 'true' }}
     uses: $/.github/workflows/test-ecosystem.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       sha: ${{ github.sha }}
 
   build-release-artifacts:
@@ -256,6 +294,9 @@ jobs:
     if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
     cache-mode: none
     uses: $/.github/workflows/build-release-binaries.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
+      free-runners: ${{ needs.plan.outputs.free-runners == 'true' }}
     secrets: inherit
 
   build-docker:
@@ -263,6 +304,7 @@ jobs:
     if: ${{ needs.plan.outputs.build-docker == 'true' }}
     uses: $/.github/workflows/build-docker.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
     secrets: inherit
     permissions:
@@ -270,10 +312,11 @@ jobs:
       id-token: write
 
   publish-docker:
-    needs: build-docker
+    needs: [build-docker, plan]
     if: ${{ needs.build-docker.outputs.publish-dev == 'true' }}
     uses: $/.github/workflows/publish-docker.yml
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       manifest: ${{ needs.build-docker.outputs.manifest }}
       push-dev: true
     secrets: inherit
@@ -289,6 +332,7 @@ jobs:
     uses: $/.github/workflows/bench.yml
     secrets: inherit
     with:
+      runners: ${{ needs.plan.outputs.runners }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
     permissions:
       contents: read
@@ -303,7 +347,7 @@ jobs:
     needs:
       - plan
       - build-dev-binaries
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.runners).ubuntu-x86_64-4-github }}
     # Only the main repository is a trusted publisher
     if: ${{ github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.fork != true && needs.plan.outputs.test-publish == 'true' }}
     environment:
@@ -428,6 +472,7 @@ jobs:
       - build-dev-binaries
       - build-release-artifacts
       - build-docker
+    # This job must run even if runner selection or planning fails.
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     steps:
       - uses: $/.github/actions/setup-uv-toolchain
