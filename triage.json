@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16471,
+        "title": "Support local package-specific index overrides without modifying pyproject.toml",
+        "url": "https://github.com/astral-sh/uv/issues/16471",
+        "state": "open",
+        "reason": "Same underlying problem: a Git-installed library pins torch to cu118 while its consumer pins cu128, producing conflicting indexes. The reporter confirms the Git setup in comments; maintainer konstin proposes disabling the dependency's own sources with a per-dependency sources=false option. This directly covers the requested isolation; the new report also supplies a local-path example and documentation proposal."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14910,
+        "title": "Add `--no-sources-package`",
+        "url": "https://github.com/astral-sh/uv/pull/14910",
+        "state": "merged",
+        "reason": "Introduced the flag tested in this report, merged January 15, 2026. It disables sources by the name of the requirement being resolved, rather than by the project declaring those sources. Thus disabling lib also removes the consumer's path/Git source for lib; this PR does not implement dependency-local source isolation."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Split the report into dependency-owned index inheritance, consumer/dependency index conflicts, and selective source disabling. Literal searches included tool.uv.sources, conflicting indexes, no-sources-package, and sources = false; conceptual searches included transitive sources, sources/git/index, dependency source deactivation, inheritance, consumer overrides, and development versus published metadata. Followed astral-sh/uv#16471 to astral-sh/uv#6772 and astral-sh/uv#14694 to merged astral-sh/uv#14910. Inspected astral-sh/uv#9942 and its merged fix astral-sh/uv#10875 but ruled out a regression match: those concern conflicting optional extras, absent here. Also distinguished astral-sh/uv#10410 and astral-sh/uv#13353 (pins omitted from published wheels), astral-sh/uv#9446 (consumer sources for indirect dependencies), astral-sh/uv#20765 (uv.toml mirror precedence), and broader development/source-control discussions. PR keyword searches returned no additional candidates; referenced PRs were inspected directly. Checked source, existing integration tests, and the two documentation sections named in the report."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#16471 already tracks the same dependency-owned PyTorch index pin conflicting with a consumer's chosen index, with a confirmed Git reproduction and maintainer discussion of a dependency-local source-disable option. The local-path reproduction and documentation proposal extend that discussion without creating a separate underlying problem. Current source explicitly reads Git/directory dependency sources and rejects conflicting indexes in one resolution environment; no evidence establishes that a previously fixed isolation feature regressed.",
+  "summary": "astral-sh/uv#16471 is the canonical match for inherited dependency index pins and consumer conflicts. Merged astral-sh/uv#14910 explains the narrower semantics of --no-sources-package.",
+  "draft_response": "uv currently reads `tool.uv.sources` from Git and local-directory dependencies. Those index pins participate in the consuming project's resolution, so incompatible pins for `torch` conflict. The same Git dependency case is discussed in astral-sh/uv#16471, where disabling a dependency's own sources was proposed.\n\n`--no-sources-package lib` disables source selection for `lib`; it does not ignore the sources declared inside `lib`. A per-dependency switch for that is not implemented. Please add your local-path example and documentation proposal to astral-sh/uv#16471 so we can keep that discussion together."
+}
