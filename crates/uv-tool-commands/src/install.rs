@@ -13,17 +13,21 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
-    HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
+    HashCheckingMode, Modifications, Override, Overrides, PackageOverride, Reinstall, TargetTriple,
+    Upgrade,
 };
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{
+    GitWorkspaceMember, LoweredExtraBuildDependencies, LoweredRequirement, LoweringError,
+    StaticMetadataDatabase,
+};
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, GitDirectorySourceUrl, IndexCapabilities, NameRequirementSpecification,
+    Requirement, RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -32,19 +36,20 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
-use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
+use uv_settings::{PythonInstallMirrors, ToolInstallOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use uv_lock_operations::LockValidationError;
+use uv_lock_operations::{LockTarget, LockValidationError};
 
 use crate::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    ToolLock, ToolPython, finalize_tool_install, locked_tool_project, refine_interpreter,
+    remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
+use crate::indexes::capture_index_sources;
 use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -57,7 +62,7 @@ use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
-use uv_settings::{ResolverInstallerSettings, ResolverSettings};
+use uv_settings::{LockCheck, ResolverInstallerSettings, ResolverSettings};
 
 /// Install a tool.
 pub async fn install(
@@ -70,12 +75,13 @@ pub async fn install(
     excludes: &[RequirementsSource],
     build_constraints: &[RequirementsSource],
     entrypoints: &[PackageName],
+    lock_check: LockCheck,
     lfs: GitLfsSetting,
     python: Option<String>,
     python_platform: Option<TargetTriple>,
     install_mirrors: PythonInstallMirrors,
     force: bool,
-    options: ResolverInstallerOptions,
+    tool_options: ToolInstallOptions,
     settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -90,11 +96,34 @@ pub async fn install(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
+    let locked = match lock_check {
+        LockCheck::Enabled(_) => true,
+        LockCheck::Disabled => false,
+    };
+    let tool_locks = locked || preview.is_enabled(PreviewFeature::ToolInstallLocks);
     if settings.resolver.torch_backend.is_some() {
         warn_user_once!(
             "The `--torch-backend` option is experimental and may change without warning."
         );
+    }
+
+    if locked {
+        if !preview.is_enabled(PreviewFeature::ToolInstallLocks) {
+            warn_user_once!(
+                "The `--locked` option for tool commands is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::ToolInstallLocks
+            );
+        }
+        if !with.is_empty()
+            || !constraints.is_empty()
+            || !overrides.is_empty()
+            || !excludes.is_empty()
+            || !build_constraints.is_empty()
+        {
+            bail!(
+                "`--locked` cannot be used with additional requirements or constraints (`--with`, `--constraint`, `--override`, `--exclude`, or `--build-constraint`), since they are not represented in the project lockfile"
+            );
+        }
     }
 
     let reporter = PythonDownloadReporter::single(printer);
@@ -105,7 +134,15 @@ pub async fn install(
     // Parse the input requirement.
     let request = ToolRequest::parse(&package, from.as_deref())?;
 
-    let unresolved_target_requirements = match &request {
+    // If the user passed, e.g., `ruff@latest`, refresh the cache.
+    let refresh = if request.is_latest() {
+        refresh.combine(Refresh::All(Timestamp::now()))
+    } else {
+        refresh
+    };
+    let cache = cache.with_refresh(refresh.clone());
+
+    let mut unresolved_target_requirements = match &request {
         ToolRequest::Package {
             target: Target::Unspecified(requirement),
             ..
@@ -124,6 +161,67 @@ pub async fn install(
         _ => None,
     };
 
+    // Locked tools import source-project settings and identity before any metadata build.
+    let source_project = if let LockCheck::Enabled(lock_source) = lock_check
+        && matches!(&request, ToolRequest::Package { .. })
+    {
+        let specification = unresolved_target_requirements
+            .as_mut()
+            .and_then(|requirements| requirements.first_mut())
+            .ok_or_else(|| anyhow::anyhow!(
+                "`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{package}` is not a source tree"
+            ))?;
+        let requirement = specification.requirement.clone().augment_requirement(
+            None,
+            None,
+            None,
+            lfs.into(),
+            None,
+        );
+        let source = requirement.source();
+        let (project, git) = StaticMetadataDatabase::new(&client_builder, state.git(), &cache)
+            .source_tree_project(source.as_ref(), workspace_cache)
+            .await?
+            .ok_or_else(|| {
+                let name = match &requirement {
+                    UnresolvedRequirement::Named(requirement) => requirement.name.to_string(),
+                    UnresolvedRequirement::Unnamed(requirement) => requirement.to_string(),
+                };
+                if matches!(source.as_ref(), RequirementSource::Directory { .. } | RequirementSource::GitDirectory { .. }) {
+                    anyhow::anyhow!("`--locked` requires a source tree with a `[project]` table for `{name}`")
+                } else {
+                    anyhow::anyhow!("`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{name}` is not a source tree")
+                }
+            })?;
+        specification.requirement = match requirement {
+            UnresolvedRequirement::Named(requirement) => UnresolvedRequirement::Named(requirement),
+            UnresolvedRequirement::Unnamed(requirement) => UnresolvedRequirement::Named(
+                uv_pep508::Requirement {
+                    name: project.project_name().clone(),
+                    extras: requirement.extras,
+                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+                    marker: requirement.marker,
+                    origin: requirement.origin,
+                }
+                .into(),
+            ),
+        };
+        Some((project, git, lock_source))
+    } else {
+        None
+    };
+    let (options, settings) = if let Some((project, git, _)) = source_project.as_ref() {
+        let options = tool_options.for_project(
+            project.workspace().install_path(),
+            git.as_ref().and_then(|fetch| fetch.path().parent()),
+        )?;
+        let mut project_settings = ResolverInstallerSettings::from(options.clone());
+        project_settings.resolver.torch_backend = settings.resolver.torch_backend;
+        (options, project_settings)
+    } else {
+        (tool_options.into_options(), settings)
+    };
+
     let tool_python = ToolPython::from_request(
         python.as_deref().map(PythonRequest::parse),
         unresolved_target_requirements
@@ -135,40 +233,55 @@ pub async fn install(
         state.git(),
         &client_builder,
         &cache,
+        source_project.as_ref().map(|(project, _, _)| project),
     )
     .await?;
     let explicit_python_request = tool_python.is_explicit();
-    let python_request = tool_python.python_request;
+    let mut python_request = tool_python.python_request;
+    let requires_python = tool_python.requires_python;
 
     // Pre-emptively identify a Python interpreter. We need an interpreter to resolve any unnamed
     // requirements, even if we end up using a different interpreter for the tool install itself.
-    let interpreter = PythonInstallation::find_or_download(
-        python_request.as_ref(),
-        EnvironmentPreference::OnlySystem,
-        python_preference,
-        python_arch,
-        python_downloads,
-        &client_builder,
-        &cache,
-        Some(&reporter),
-        install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url.as_deref(),
-    )
-    .await?
-    .into_interpreter();
+    let interpreter = {
+        let find_interpreter = async |request: Option<&PythonRequest>| {
+            PythonInstallation::find_or_download(
+                request,
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &client_builder,
+                &cache,
+                Some(&reporter),
+                install_mirrors.mirrors(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await
+            .map(PythonInstallation::into_interpreter)
+        };
+        let interpreter = find_interpreter(python_request.as_ref()).await?;
+        if locked
+            && let Some(requires_python) = requires_python.as_ref()
+            && !requires_python
+                .specifiers()
+                .contains(interpreter.python_version())
+        {
+            debug!(
+                "Ignoring implicit Python request {python_request:?}: Python {} does not satisfy {}",
+                interpreter.python_version(),
+                requires_python.specifiers(),
+            );
+            python_request = PythonRequest::from_specifiers(requires_python.specifiers());
+            find_interpreter(python_request.as_ref()).await?
+        } else {
+            interpreter
+        }
+    };
 
-    let receipt_build_constraints =
+    let mut receipt_build_constraints =
         operations::read_constraints(build_constraints, &client_builder).await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
-
-    // If the user passed, e.g., `ruff@latest`, refresh the cache.
-    let refresh = if request.is_latest() {
-        refresh.combine(Refresh::All(Timestamp::now()))
-    } else {
-        refresh
-    };
-    let cache = cache.with_refresh(refresh.clone());
 
     // Resolve the `--from` requirement.
     let requirement = match &request {
@@ -349,6 +462,32 @@ pub async fn install(
 
     let package_name = &requirement.name;
 
+    let source_project_lock = if let Some((project, git, lock_source)) = source_project {
+        match locked_tool_project(
+            project,
+            git,
+            &requirement,
+            &interpreter,
+            &settings,
+            lock_source,
+            &state,
+            &client_builder,
+            &concurrency,
+            &cache,
+            workspace_cache,
+            printer,
+            preview,
+        )
+        .await
+        {
+            Ok(project) => Some(project),
+            Err(ToolLockError::Lock(err)) => return Err(UvError::from(err).into()),
+            Err(err) => return Err(err.into()),
+        }
+    } else {
+        None
+    };
+
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
     let settings = if request.is_latest() {
         ResolverInstallerSettings {
@@ -438,14 +577,14 @@ pub async fn install(
     };
 
     // Resolve the constraints.
-    let receipt_constraints = spec
+    let mut receipt_constraints = spec
         .constraints
         .into_iter()
         .map(|constraint| constraint.requirement)
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let receipt_overrides = resolve_names(
+    let mut receipt_overrides = resolve_names(
         spec.overrides,
         &interpreter,
         &settings.resolver,
@@ -459,11 +598,149 @@ pub async fn install(
         preview,
         lfs,
     )
-    .await?;
+    .await?
+    .into_iter()
+    .map(Override::Requirement)
+    .collect::<Vec<_>>();
 
     // Resolve the excludes.
-    let receipt_excludes = spec.excludes.clone();
+    let mut receipt_excludes = spec.excludes.clone();
 
+    let git_source = match (
+        &requirement.source,
+        source_project_lock
+            .as_ref()
+            .and_then(|(_, lock)| lock.git()),
+    ) {
+        (
+            RequirementSource::GitDirectory {
+                url, subdirectory, ..
+            },
+            Some(fetch),
+        ) => Some(GitDirectorySourceUrl {
+            url,
+            git: fetch.git(),
+            subdirectory: subdirectory.as_deref(),
+        }),
+        _ => None,
+    };
+    let git_member = git_source
+        .as_ref()
+        .zip(
+            source_project_lock
+                .as_ref()
+                .and_then(|(_, lock)| lock.git()),
+        )
+        .map(|(git_source, fetch)| GitWorkspaceMember {
+            fetch_root: fetch.path(),
+            git_source,
+        });
+    let preserve_git = |requirement| {
+        LoweredRequirement::preserve_git_source(requirement, git_member.as_ref())
+            .map(LoweredRequirement::into_inner)
+    };
+
+    if let Some((project, _)) = source_project_lock.as_ref() {
+        // A lock retains only inputs needed to validate its selected versions. Upgrades need the
+        // complete declared policy, including bounds and declarations pruned from that lock.
+        let target = LockTarget::Workspace(project.workspace());
+        receipt_constraints.extend(
+            target
+                .lower_constraints(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+                .into_iter()
+                .map(preserve_git)
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        receipt_overrides.extend(
+            target
+                .lower_overrides(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+                .into_iter()
+                .map(|entry| {
+                    Ok::<_, LoweringError>(match entry {
+                        Override::Requirement(requirement) => {
+                            Override::Requirement(preserve_git(requirement)?)
+                        }
+                        Override::Package(package) => Override::Package(PackageOverride {
+                            package: package.package,
+                            dependencies: package
+                                .dependencies
+                                .into_vec()
+                                .into_iter()
+                                .map(preserve_git)
+                                .collect::<Result<Vec<_>, _>>()?
+                                .into_boxed_slice(),
+                        }),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        receipt_excludes.extend(project.workspace().exclude_dependencies());
+        receipt_build_constraints.extend(
+            target
+                .lower_build_constraints(
+                    &settings.resolver.index_locations,
+                    &settings.resolver.sources,
+                    &cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+                .specifications()
+                .cloned()
+                .map(|specification| {
+                    Ok::<_, LoweringError>(NameRequirementSpecification {
+                        requirement: preserve_git(specification.requirement)?,
+                        hashes: specification.hashes,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    let build_constraints =
+        Constraints::from_specifications(receipt_build_constraints.iter().cloned());
+    let receipt_index_sources = match (
+        &requirement.source,
+        source_project_lock
+            .as_ref()
+            .and_then(|(_, lock)| lock.git()),
+    ) {
+        (
+            RequirementSource::GitDirectory {
+                git,
+                subdirectory,
+                url,
+            },
+            Some(fetch),
+        ) => {
+            let source = GitDirectorySourceUrl {
+                git,
+                subdirectory: subdirectory.as_deref(),
+                url,
+            };
+            capture_index_sources(
+                &options,
+                &GitWorkspaceMember {
+                    fetch_root: fetch.path(),
+                    git_source: &source,
+                },
+            )?
+        }
+        _ => Vec::new(),
+    };
     // Convert to tool options.
     let options = ToolOptions::from(options);
     let lock_manifest = ToolLock::manifest(
@@ -475,9 +752,45 @@ pub async fn install(
         &settings.resolver.dependency_metadata,
     );
 
+    let extra_build_requires = if let Some((project, _)) = source_project_lock.as_ref() {
+        LoweredExtraBuildDependencies::from_workspace(
+            settings.resolver.extra_build_dependencies.clone(),
+            project.workspace(),
+            git_member.as_ref(),
+            &settings.resolver.index_locations,
+            &settings.resolver.sources,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await?
+        .into_inner()
+    } else {
+        LoweredExtraBuildDependencies::from_non_lowered(
+            settings.resolver.extra_build_dependencies.clone(),
+        )
+        .into_inner()
+    };
+
+    let receipt_extra_build_requires = source_project_lock
+        .as_ref()
+        .map(|_| extra_build_requires.clone());
+
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
     let tool_dir = installed_tools.tool_dir(package_name);
+    let source_tool_lock = source_project_lock
+        .map(|(project, lock)| {
+            ToolLock::from_project_lock(
+                &tool_dir,
+                &project,
+                package_name,
+                lock,
+                &lock_manifest,
+                editable,
+            )
+        })
+        .transpose()?;
 
     // Find the existing receipt, if it exists. If the receipt is present but malformed, we'll
     // remove the environment and continue with the install.
@@ -535,7 +848,9 @@ pub async fn install(
         .map_or(&interpreter, |environment| {
             environment.environment().interpreter()
         });
-    let mut existing_tool_lock = if tool_locks {
+    let mut existing_tool_lock = if let Some(lock) = source_tool_lock {
+        Some(lock)
+    } else if tool_locks {
         if let Some(lock) = ToolLock::read(&tool_dir) {
             match Box::pin(lock.validate(
                 &requirements,
@@ -597,18 +912,11 @@ pub async fn install(
                             config_setting,
                             config_settings_package,
                             dependency_metadata,
-                            extra_build_dependencies,
                             extra_build_variables,
                             ..
                         },
                     ..
                 } = &settings;
-
-                // Lower the extra build dependencies, if any.
-                let extra_build_requires = LoweredExtraBuildDependencies::from_non_lowered(
-                    extra_build_dependencies.clone(),
-                )
-                .into_inner();
 
                 // Determine the markers and tags to use for the resolution. We use the existing
                 // environment for markers here — above we filter the environment to `None` if
@@ -633,7 +941,7 @@ pub async fn install(
                         requirements.iter(),
                         receipt_constraints.iter().chain(latest.iter()),
                         &DependencyModifiers::new(
-                            Overrides::from_requirements(receipt_overrides.clone()),
+                            Overrides::from_entries(receipt_overrides.clone())?,
                             Excludes::from_entries(receipt_excludes.iter().cloned()),
                         ),
                         dependency_metadata,
@@ -684,11 +992,8 @@ pub async fn install(
             .chain(latest)
             .map(NameRequirementSpecification::from)
             .collect(),
-        overrides: receipt_overrides
-            .iter()
-            .cloned()
-            .map(UnresolvedRequirementSpecification::from)
-            .collect(),
+        overrides: Vec::new(),
+        override_dependencies: receipt_overrides.clone(),
         excludes: receipt_excludes.clone(),
         ..spec
     };
@@ -771,15 +1076,16 @@ pub async fn install(
                     ResolverSettings {
                         config_setting,
                         config_settings_package,
-                        extra_build_dependencies,
                         extra_build_variables,
                         ..
                     },
                 ..
             } = &settings;
-            let extra_build_requires =
-                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-                    .into_inner();
+            let extra_build_requires = if locked {
+                extra_build_requires.match_runtime(&resolution)?
+            } else {
+                extra_build_requires
+            };
             let tags = resolution_tags(None, python_platform.as_ref(), environment.interpreter())?;
             let hash_strategy =
                 HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
@@ -824,7 +1130,11 @@ pub async fn install(
                         python,
                         existing_tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
-                    ),
+                    )
+                    .with_extra_build_requires(
+                        receipt_extra_build_requires.clone().unwrap_or_default(),
+                    )
+                    .with_index_sources(receipt_index_sources.clone()),
                 )?;
                 writeln!(
                     printer.stderr(),
@@ -843,6 +1153,7 @@ pub async fn install(
                     Modifications::Exact,
                     build_constraints.clone(),
                     (&settings).into(),
+                    Some(&extra_build_requires),
                     &client_builder,
                     &state,
                     Box::new(DefaultInstallLogger),
@@ -1023,6 +1334,11 @@ pub async fn install(
                 (resolution.into(), interpreter, None)
             }
         };
+        let extra_build_requires = if locked {
+            extra_build_requires.match_runtime(&resolution)?
+        } else {
+            extra_build_requires
+        };
         let hash_strategy = if tool_lock.is_some() {
             HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?
         } else {
@@ -1044,6 +1360,7 @@ pub async fn install(
             Modifications::Exact,
             build_constraints.clone(),
             (&settings).into(),
+            Some(&extra_build_requires),
             &client_builder,
             &state,
             Box::new(DefaultInstallLogger),
@@ -1082,6 +1399,8 @@ pub async fn install(
         receipt_overrides,
         receipt_excludes,
         receipt_build_constraints,
+        receipt_extra_build_requires.as_ref(),
+        &receipt_index_sources,
         tool_lock.as_ref(),
         printer,
     )?;

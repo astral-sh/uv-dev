@@ -22,14 +22,14 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
+    DependencyMetadata, ExtraBuildRequires, HashCollection, IndexLocations, InstalledDist, Name,
     NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
-use uv_git::GitResolver;
+use uv_git::{Fetch, GitResolver};
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
@@ -47,13 +47,16 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
-use uv_settings::{PythonInstallMirrors, ToolOptions};
+use uv_settings::{
+    LockedSource, PythonInstallMirrors, ResolverInstallerSettings, ResolverSettings, ToolOptions,
+};
 use uv_shell::Shell;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
+use uv_tool::{InstalledTools, Tool, ToolEntrypoint, ToolIndexSource, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{ProjectWorkspace, WorkspaceCache};
 
+use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{Error as ResolveError, resolution_markers, resolution_tags};
 
 /// An error raised when a tool package provides no executables.
@@ -115,11 +118,14 @@ impl Hinted for NoExecutablesError {
     }
 }
 use uv_command_support::Printer;
-use uv_environment_operations::{EnvironmentSpecification, PreferenceLocation};
-use uv_lock_operations::ValidatedLock;
+use uv_environment_operations::install_target::InstallTarget;
+use uv_environment_operations::{
+    EnvironmentSpecification, PreferenceLocation, apply_no_virtual_project,
+    store_credentials_from_target,
+};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, ValidatedLock};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonRequestSource;
-use uv_settings::ResolverSettings;
 
 use crate::error::ToolLockError;
 
@@ -175,6 +181,8 @@ pub(super) struct ToolPython {
     /// The selected Python request, computed by considering an explicit request, a global
     /// version file, and static `requires-python` metadata from the source requirement.
     pub(super) python_request: Option<PythonRequest>,
+    /// Static requirement used to check an implicitly selected interpreter.
+    pub(super) requires_python: Option<RequiresPython>,
 }
 
 impl ToolPython {
@@ -187,20 +195,31 @@ impl ToolPython {
         git_resolver: &GitResolver,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
+        source_project: Option<&ProjectWorkspace>,
     ) -> Result<Self, io::Error> {
         let requires_python = if python_request.is_none() {
-            match requirement {
-                Some(requirement) => {
-                    infer_requires_python_from_requirement(
-                        requirement,
-                        lfs,
-                        git_resolver,
-                        client_builder,
-                        cache,
-                    )
-                    .await
+            if let Some(project) = source_project {
+                match LockTarget::Workspace(project.workspace()).requires_python() {
+                    Ok(requires_python) => requires_python,
+                    Err(err) => {
+                        debug!("Failed to infer workspace `requires-python`: {err}");
+                        None
+                    }
                 }
-                None => None,
+            } else {
+                match requirement {
+                    Some(requirement) => {
+                        infer_requires_python_from_requirement(
+                            requirement,
+                            lfs,
+                            git_resolver,
+                            client_builder,
+                            cache,
+                        )
+                        .await
+                    }
+                    None => None,
+                }
             }
         } else {
             None
@@ -244,6 +263,7 @@ impl ToolPython {
         Ok(Self {
             source,
             python_request,
+            requires_python,
         })
     }
 
@@ -253,7 +273,7 @@ impl ToolPython {
     }
 }
 
-/// Infer [`RequiresPython`] from a direct source requirement by reading its `pyproject.toml`.
+/// Infer [`RequiresPython`] from a direct source requirement.
 ///
 /// Returns `None` when the requirement is not a directory or Git source, its metadata is not
 /// statically available, or the Git source cannot be fetched.
@@ -269,10 +289,8 @@ async fn infer_requires_python_from_requirement(
         .augment_requirement(None, None, None, lfs.into(), None);
     let source = requirement.source();
 
-    match StaticMetadataDatabase::new(client_builder, git_resolver, cache)
-        .requires_python(source.as_ref())
-        .await
-    {
+    let database = StaticMetadataDatabase::new(client_builder, git_resolver, cache);
+    match database.requires_python(source.as_ref()).await {
         Ok(requires_python) => requires_python,
         Err(err) => {
             debug!(
@@ -280,6 +298,73 @@ async fn infer_requires_python_from_requirement(
             );
             None
         }
+    }
+}
+
+/// Validate the existing lock for a discovered source-tree tool.
+pub(crate) async fn locked_tool_project(
+    project: ProjectWorkspace,
+    git: Option<Fetch>,
+    requirement: &Requirement,
+    interpreter: &Interpreter,
+    settings: &ResolverInstallerSettings,
+    lock_source: LockedSource,
+    state: &PlatformState,
+    client_builder: &BaseClientBuilder<'_>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<(ProjectWorkspace, ValidatedProjectLock), ToolLockError> {
+    if project.project_name() != &requirement.name {
+        return Err(anyhow::anyhow!(
+            "Expected project `{}`, but the source tree defines `{}`",
+            requirement.name,
+            project.project_name(),
+        )
+        .into());
+    }
+
+    let universal_state = state.fork();
+    let lock = LockOperation::new(
+        LockMode::Locked(interpreter, lock_source),
+        &settings.resolver,
+        client_builder,
+        &universal_state,
+        Box::new(DefaultResolveLogger),
+        concurrency,
+        cache,
+        workspace_cache,
+        printer,
+        preview,
+    )
+    .execute(LockTarget::Workspace(project.workspace()))
+    .await?
+    .into_lock();
+
+    let target = InstallTarget::Project {
+        workspace: project.workspace(),
+        name: &requirement.name,
+        lock: &lock,
+    };
+    target.validate_extras(&ExtrasSpecification::from_extra(
+        requirement.extras.to_vec(),
+    ))?;
+    store_credentials_from_target(target, client_builder)?;
+
+    Ok((project, ValidatedProjectLock { lock, git }))
+}
+
+/// A source-project lock checked in locked mode, with any materialized Git origin.
+pub(crate) struct ValidatedProjectLock {
+    lock: Lock,
+    git: Option<Fetch>,
+}
+
+impl ValidatedProjectLock {
+    pub(crate) fn git(&self) -> Option<&Fetch> {
+        self.git.as_ref()
     }
 }
 
@@ -318,7 +403,7 @@ impl ToolLock {
     pub(super) fn manifest(
         requirements: &[Requirement],
         constraints: &[Requirement],
-        overrides: &[Requirement],
+        overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &[NameRequirementSpecification],
         dependency_metadata: &DependencyMetadata,
@@ -327,7 +412,7 @@ impl ToolLock {
             std::iter::empty::<PackageName>(),
             requirements.iter().cloned(),
             constraints.iter().cloned(),
-            overrides.iter().cloned().map(Override::Requirement),
+            overrides.iter().cloned(),
             excludes.iter().cloned(),
             build_constraints.iter().cloned(),
             std::iter::empty::<(GroupName, Vec<Requirement>)>(),
@@ -354,6 +439,35 @@ impl ToolLock {
         Ok(Self {
             root: root.to_path_buf(),
             lock,
+        })
+    }
+
+    /// Copy a validated project lock into a tool environment.
+    pub(crate) fn from_project_lock(
+        root: &Path,
+        project: &ProjectWorkspace,
+        project_name: &PackageName,
+        lock: ValidatedProjectLock,
+        manifest: &ResolverManifest,
+        editable: bool,
+    ) -> anyhow::Result<ValidatedToolLock> {
+        let workspace = project.workspace();
+        let manifest = manifest.clone().relative_to(root)?;
+        let lock = lock.lock.into_absolute_paths(
+            workspace.install_path(),
+            project_name,
+            editable,
+            workspace.required_members(),
+            lock.git.as_ref().map(Fetch::path),
+            manifest,
+        )?;
+        Ok(ValidatedToolLock {
+            lock: Self {
+                root: root.to_path_buf(),
+                lock,
+            },
+            satisfied: true,
+            usable: true,
         })
     }
 
@@ -406,7 +520,7 @@ impl ToolLock {
         self,
         requirements: &[Requirement],
         constraints: &[Requirement],
-        overrides: &[Requirement],
+        overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
         build_constraints: &Constraints,
         refresh: &Refresh,
@@ -520,11 +634,6 @@ impl ToolLock {
 
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
-        let overrides = overrides
-            .iter()
-            .cloned()
-            .map(Override::Requirement)
-            .collect::<Vec<_>>();
         let Self { root, lock } = self;
         let validated = ValidatedLock::validate(
             lock,
@@ -537,7 +646,7 @@ impl ToolLock {
             &BTreeMap::new(),
             None,
             constraints,
-            &overrides,
+            overrides,
             excludes,
             build_constraints,
             &Conflicts::empty(),
@@ -602,8 +711,10 @@ impl ToolLock {
         }
 
         let markers = resolution_markers(None, python_platform, interpreter);
+        uv_environment_operations::validate_lock_python(&self.lock, interpreter)?;
+        uv_environment_operations::validate_lock_platform(&self.lock, &markers)?;
         let tags = resolution_tags(None, python_platform, interpreter)?;
-        Ok(ToolLockInstallTarget {
+        let resolution = ToolLockInstallTarget {
             tool_lock: self,
             project_name,
         }
@@ -614,7 +725,8 @@ impl ToolLock {
             &DependencyGroupsWithDefaults::none(),
             build_options,
             &InstallOptions::default(),
-        )?)
+        )?;
+        Ok(apply_no_virtual_project(resolution))
     }
 }
 
@@ -750,9 +862,11 @@ pub(super) fn finalize_tool_install(
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
-    overrides: Vec<Requirement>,
+    overrides: Vec<Override<Requirement>>,
     excludes: Vec<ExcludeDependency>,
     build_constraints: Vec<NameRequirementSpecification>,
+    extra_build_requires: Option<&ExtraBuildRequires>,
+    index_sources: &[ToolIndexSource],
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -950,7 +1064,9 @@ pub(super) fn finalize_tool_install(
         python,
         installed_entrypoints,
         options.clone(),
-    );
+    )
+    .with_extra_build_requires(extra_build_requires.cloned().unwrap_or_default())
+    .with_index_sources(index_sources.to_vec());
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
 
