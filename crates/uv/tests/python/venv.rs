@@ -13,7 +13,11 @@ use uv_static::EnvVars;
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::OsStr,
+    fs::Permissions,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -116,9 +120,10 @@ fn create_venv_skips_distutils_patch_on_py310() {
     assert!(!site_packages.join("_virtualenv.pth").exists());
 }
 
+/// Python 3.9 needs the distutils patch even when regenerating linked patch files.
 #[test]
 #[cfg(feature = "test-python-eol")]
-fn create_venv_keeps_distutils_patch_on_py39() {
+fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
@@ -136,7 +141,51 @@ fn create_venv_keeps_distutils_patch_on_py39() {
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
-    assert!(site_packages.join("_virtualenv.pth").is_file());
+    assert_eq!(
+        fs_err::read_to_string(site_packages.join("_virtualenv.pth"))?,
+        "import _virtualenv"
+    );
+
+    // Both patch files can be links to files outside the environment.
+    #[cfg(unix)]
+    {
+        let outside_module = context.temp_dir.child("outside-module");
+        outside_module.write_str("SENTINEL\n")?;
+        let outside_pth = context.temp_dir.child("outside-pth");
+        outside_pth.write_str("SENTINEL\n")?;
+        fs_err::remove_file(site_packages.join("_virtualenv.py"))?;
+        fs_err::remove_file(site_packages.join("_virtualenv.pth"))?;
+        symlink(&outside_module, site_packages.join("_virtualenv.py"))?;
+        symlink(&outside_pth, site_packages.join("_virtualenv.pth"))?;
+
+        uv_snapshot!(context.filters(), context.venv()
+            .arg("--offline")
+            .arg("--allow-existing")
+            .arg("--python")
+            .arg("3.9"), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+        Creating virtual environment at: .venv
+        Activate with: source .venv/[BIN]/activate
+        ");
+
+        assert_ne!(fs_err::read_to_string(outside_module.path())?, "SENTINEL\n");
+        assert_ne!(fs_err::read_to_string(outside_pth.path())?, "SENTINEL\n");
+        assert!(site_packages.join("_virtualenv.py").is_symlink());
+        assert!(site_packages.join("_virtualenv.pth").is_symlink());
+    }
+
+    // Python must load the generated module via the .pth file during startup.
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg("import sys; print('_virtualenv' in sys.modules)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    True
+    ");
+
+    Ok(())
 }
 
 #[test]
@@ -1739,6 +1788,124 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+/// A pre-existing activation script can point outside the environment.
+#[test]
+#[cfg(unix)]
+fn allow_existing_activate_symlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
+    context.venv.child("bin").create_dir_all()?;
+    symlink(&outside, context.venv.child("bin/activate"))?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_ne!(context.read("outside"), "keep");
+    uv_snapshot!(context.filters(), context.external_command("sh")
+        .args(["-c", ". .venv/bin/activate && python -c 'import sys; print(sys.prefix)'"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/
+    ");
+    Ok(())
+}
+
+#[test]
+fn allow_existing_gitignore_hardlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
+    context.venv.create_dir_all()?;
+    fs_err::hard_link(&outside, context.venv.child(".gitignore"))?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_ne!(context.read("outside"), "keep");
+    context.venv.child(".gitignore").assert("*");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_existing_pyvenv_cfg_symlink() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let outside = context.temp_dir.child("outside");
+    outside.write_str("keep")?;
+    context.venv.create_dir_all()?;
+    symlink(&outside, context.venv.child("pyvenv.cfg"))?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_ne!(context.read("outside"), "keep");
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import sys; print(sys.prefix)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_existing_preserves_generated_file_modes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let config = context.venv.child("pyvenv.cfg");
+    let activate = context.venv.child("bin/activate");
+    fs_err::set_permissions(config.path(), Permissions::from_mode(0o600))?;
+    fs_err::set_permissions(activate.path(), Permissions::from_mode(0o750))?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--prompt", "private"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs_err::metadata(config.path())?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs_err::metadata(activate.path())?.permissions().mode() & 0o777,
+        0o750
+    );
+    Ok(())
+}
+
+/// A file-size limit interrupts a write to the activation script.
+#[test]
+#[cfg(target_os = "linux")]
+fn allow_existing_reports_generated_file_write_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.venv.child("bin/activate").write_str("keep")?;
+
+    let mut command = context.external_command("sh");
+    command
+        .args(["-c", r#"trap '' XFSZ && ulimit -f 1 && exec "$@""#, "sh"])
+        .arg(uv_test::get_bin!())
+        .args(["venv", "--allow-existing", "--python"])
+        .arg(&context.python_versions[0].1)
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path());
+    uv_snapshot!(context.filters(), command, @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: failed to write to file `[VENV]/bin/activate`: File too large (os error 27)
+    ");
+    assert_ne!(context.read(".venv/bin/activate"), "keep");
     Ok(())
 }
 
