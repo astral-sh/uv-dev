@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16769,
+        "title": "Add Setting To No Longer Force Lock Files to have 777 Permissions in Linux",
+        "url": "https://github.com/astral-sh/uv/issues/16769",
+        "state": "open",
+        "reason": "Overlaps the lock-file permission concern: requests configurable permissions instead of overriding umask. Maintainers explain that these coordination files are empty and used across users or containers. It does not track readable plaintext credential contents or credential-directory permissions, so it is not a duplicate of the main bug."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17961,
+        "title": "Add preview option to respect umask when creating lock files",
+        "url": "https://github.com/astral-sh/uv/pull/17961",
+        "state": "open",
+        "reason": "Proposes a respect-umask preview feature for coordination locks and references astral-sh/uv#16769 and astral-sh/uv#17646. Its current diff explicitly keeps override_umask=true for credential-store locks and does not restrict credential-file or directory modes, so it does not fix the reported disclosure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17646,
+        "title": "Create lock files 644, only check read bit for locks, respect umask",
+        "url": "https://github.com/astral-sh/uv/pull/17646",
+        "state": "open",
+        "reason": "Attempts to resolve astral-sh/uv#16769 by changing the generic lock helper. Maintainer comments identify compatibility problems with older uv versions and suggest preview gating. It overlaps the lock-file request but does not enforce owner-only permissions on stored credentials or their directory."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16845,
+        "title": "Use 0o666 permissions for flock files instead of 0o777",
+        "url": "https://github.com/astral-sh/uv/pull/16845",
+        "state": "merged",
+        "reason": "Merged on 2025-12-01, this changed the shared locking helper from 0777 to 0666 while retaining cross-user access. It explains the reported lock-file mode but changed neither credential-file nor credential-directory permissions; this report is not a regression of that fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Decomposed the report into credential-file readability, directory traversal permissions, lock-file modes, atomic writes, and tightening existing stores. Literal searches covered credentials.toml, credentials.toml.lock, TextCredentialStore, umask, 0600, 0700, and 0666; conceptual searches covered auth permissions, world-readable files, plaintext storage, owner-only access, chmod, and restricted credentials. Text searches were supplemented by a paginated scan of all 13,511 pull-request titles across states, with targeted inspection of relevant candidates. Fix-oriented searches covered closed umask reports, atomic credential writes, and linked permission changes. Inspected candidate bodies, comments, linked issues, and pull-request reviews. Ruled out astral-sh/uv#8810 and astral-sh/uv#10878 (authentication storage/keyring capabilities), astral-sh/uv#17867 (cached package hardlink permissions), and astral-sh/uv#18205 (system-wide credential configuration). astral-sh/uv#12665 and astral-sh/uv#11324 concern generic coordination locks, not credential contents. Inspected astral-sh/uv#17961 and astral-sh/uv#17646, including the former's credential-store diff; neither addresses owner-only credential contents. Also inspected astral-sh/uv#15588 (plaintext backend introduction, including review comments) and astral-sh/uv#15610 (credential-store concurrency locking), neither a prior permissions fix."
+  },
+  "type": "bug",
+  "type_reason": "The checked-out source confirms that the default plaintext backend creates the credential directory with create_dir_all and writes credentials with fs::write without enforcing owner-only permissions or tightening existing modes. With umask 022 and traversable ancestors, this can expose stored credentials to other local users. Documented plaintext storage does not justify that access. The 0666 lock mode is separately imposed by the shared locking helper. The open lock-permission issue and pull requests do not address owner-only credential contents or directories, so they are not duplicates of the main bug. No prior fix for this disclosure was found.",
+  "summary": "No duplicate of the credential-store permission bug was found. astral-sh/uv#16769, astral-sh/uv#17961, and astral-sh/uv#17646 concern general lock permissions; merged astral-sh/uv#16845 explains the current 0666 lock mode.",
+  "draft_response": "Your report matches the plaintext backend: it creates the credential directory and file without enforcing owner-only permissions. A fix should restrict permissions from creation, use safe replacement, and handle existing stores. The lock's 0666 mode is explicitly set by the shared locking helper; astral-sh/uv#16769 discusses that separate policy for empty coordination files. For now, umask 077 protects newly created credential files and directories; existing ones need directory mode 0700 and file mode 0600. It does not restrict the lock file."
+}
