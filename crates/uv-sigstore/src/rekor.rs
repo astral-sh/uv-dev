@@ -17,6 +17,18 @@ use x509_parser::error::X509Error;
 use x509_parser::nom::Err as DerError;
 use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 
+/// The trust anchor for the production Rekor v1 log.
+///
+/// Pinning the public key lets the signer authenticate timestamps and checkpoints
+/// independently of the HTTP response. A log key rotation requires updating this key in uv.
+///
+/// Source: <https://github.com/sigstore/root-signing/blob/fa6dc24dbae1/targets/rekor.pub>
+const PUBLIC_KEY: &[u8] = b"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
+kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
+-----END PUBLIC KEY-----
+";
+
 /// An error submitting a DSSE envelope to Rekor or authenticating its receipt.
 #[derive(Debug, Error)]
 pub enum RekorError {
@@ -86,17 +98,7 @@ struct InclusionProof {
     checkpoint: String,
 }
 
-/// The trust anchor for the production Rekor v1 log.
-///
-/// Pinning the public key lets the signer authenticate timestamps and checkpoints
-/// independently of the HTTP response. A log key rotation requires updating this key in uv.
 pub(super) fn public_key() -> Result<SubjectPublicKeyInfoDer<'static>, RekorError> {
-    // <https://github.com/sigstore/root-signing/blob/fa6dc24dbae1/targets/rekor.pub>
-    const PUBLIC_KEY: &[u8] = b"-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
-kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
------END PUBLIC KEY-----
-";
     SubjectPublicKeyInfoDer::from_pem_slice(PUBLIC_KEY).map_err(RekorError::KeyPem)
 }
 
