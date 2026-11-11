@@ -7,10 +7,12 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools as _;
 use reqwest::Client;
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
+use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
+use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
+use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,9 +42,69 @@ struct InclusionProof {
     checkpoint: String,
 }
 
+/// The public Rekor v1 instance uses this key for both SETs and checkpoints.
+pub(super) fn public_key() -> Result<SubjectPublicKeyInfoDer<'static>> {
+    // https://github.com/sigstore/root-signing/blob/main/targets/rekor.pub
+    Ok(SubjectPublicKeyInfoDer::from_pem_slice(include_bytes!(
+        "rekor-v1.pub"
+    ))?)
+}
+
+impl LogEntry {
+    fn verify_signatures(&self, log_key: &SubjectPublicKeyInfoDer<'_>) -> Result<()> {
+        let key_id = Sha256::digest(log_key.as_ref());
+        ensure!(
+            hash_bytes(&self.log_id)? == key_id.as_slice(),
+            "Unexpected Rekor log ID"
+        );
+        let (_, spki) = SubjectPublicKeyInfo::from_der(log_key.as_ref())
+            .map_err(|_| anyhow::anyhow!("Invalid trusted Rekor public key"))?;
+        let key = UnparsedPublicKey::new(
+            &ECDSA_P256_SHA256_ASN1,
+            spki.subject_public_key.data.as_ref(),
+        );
+
+        // Rekor signs these four fields as canonical JSON (RFC 8785). The signed index is
+        // global, while the inclusion proof's index is relative to its log shard.
+        let signed = serde_json::to_vec(&json!({
+            "body": self.body,
+            "integratedTime": self.integrated_time,
+            "logID": self.log_id,
+            "logIndex": self.log_index,
+        }))?;
+        key.verify(
+            &signed,
+            &BASE64_STANDARD.decode(&self.verification.signed_entry_timestamp)?,
+        )
+        .map_err(|_| anyhow::anyhow!("Invalid Rekor signed entry timestamp"))?;
+
+        // A signed note includes the final newline of the note text in its signature.
+        // Signature lines can also include witness signatures with different key hints.
+        let checkpoint = &self.verification.inclusion_proof.checkpoint;
+        let (header, signatures) = checkpoint
+            .split_once("\n\n")
+            .context("Missing Rekor checkpoint signatures")?;
+        let note = &checkpoint.as_bytes()[..=header.len()];
+        let valid = signatures
+            .lines()
+            .filter_map(|line| {
+                let (_, encoded) = line.strip_prefix("— ")?.split_once(' ')?;
+                BASE64_STANDARD.decode(encoded).ok()
+            })
+            .any(|signature| {
+                signature
+                    .strip_prefix(&key_id[..4])
+                    .is_some_and(|signature| key.verify(note, signature).is_ok())
+            });
+        ensure!(valid, "Invalid Rekor checkpoint signature");
+        Ok(())
+    }
+}
+
 pub(super) async fn record(
     client: &Client,
     url: &str,
+    log_key: &SubjectPublicKeyInfoDer<'_>,
     envelope: &str,
     statement: &str,
     signature: &str,
@@ -68,6 +130,7 @@ pub(super) async fn record(
         .exactly_one()
         .ok()
         .context("Expected one Rekor entry")?;
+    entry.verify_signatures(log_key)?;
     let body = BASE64_STANDARD.decode(&entry.body)?;
     check_body(&body, envelope, statement, signature, pem)?;
     let proof = entry.verification.inclusion_proof;
@@ -89,13 +152,6 @@ pub(super) async fn record(
             && lines.next() == Some(encoded_root.as_str()),
         "Rekor checkpoint does not match its inclusion proof"
     );
-    ensure!(
-        !BASE64_STANDARD
-            .decode(&entry.verification.signed_entry_timestamp)?
-            .is_empty(),
-        "Missing Rekor signed entry timestamp"
-    );
-
     let hashes: Vec<_> = path
         .iter()
         .map(|hash| BASE64_STANDARD.encode(hash))
@@ -199,7 +255,37 @@ fn included(body: &[u8], mut index: u64, size: u64, path: &[[u8; 32]], root: [u8
 mod tests {
     use sha2::{Digest as _, Sha256};
 
-    use super::included;
+    use super::{LogEntry, included, public_key};
+
+    /// Rekor receipt from Warehouse's sampleproject-4.0.0.tar.gz.provenance fixture.
+    /// Its signed entry index is global, while the inclusion proof uses a shard-local index.
+    #[test]
+    fn verify_production_log_signatures() -> anyhow::Result<()> {
+        let mut receipt: LogEntry = serde_json::from_str(include_str!(
+            "../tests/fixtures/sampleproject-4.0.0-rekor.json"
+        ))?;
+        let key = public_key()?;
+        receipt.verify_signatures(&key)?;
+
+        receipt.integrated_time += 1;
+        let error = receipt
+            .verify_signatures(&key)
+            .expect_err("Tampered timestamp");
+        assert_eq!(error.to_string(), "Invalid Rekor signed entry timestamp");
+        receipt.integrated_time -= 1;
+
+        // Keep the Merkle root and tree size intact while changing the signed note.
+        receipt
+            .verification
+            .inclusion_proof
+            .checkpoint
+            .insert_str(0, "other-");
+        let error = receipt
+            .verify_signatures(&key)
+            .expect_err("Tampered checkpoint");
+        assert_eq!(error.to_string(), "Invalid Rekor checkpoint signature");
+        Ok(())
+    }
 
     #[test]
     fn verify_unbalanced_inclusion_proof() {

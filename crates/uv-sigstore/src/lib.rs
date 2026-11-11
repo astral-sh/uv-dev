@@ -12,7 +12,7 @@ use rcgen::{
     SigningKey as _,
 };
 use reqwest::Client;
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
+use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use x509_parser::parse_x509_certificate;
@@ -41,13 +41,15 @@ pub async fn sign_statement(
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement> {
-    sign_with_services(client, FULCIO, REKOR, token, statement).await
+    let log_key = rekor::public_key()?;
+    sign_with_services(client, FULCIO, REKOR, &log_key, token, statement).await
 }
 
 async fn sign_with_services(
     client: &Client,
     fulcio: &str,
     rekor: &str,
+    log_key: &SubjectPublicKeyInfoDer<'_>,
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement> {
@@ -77,9 +79,11 @@ async fn sign_with_services(
         "payload": payload,
         "signatures": [{"sig": signature}],
     }))?;
-    let entry = rekor::record(client, rekor, &envelope, statement, &signature, &pem)
-        .await
-        .context("Failed to record the publish attestation in Rekor")?;
+    let entry = rekor::record(
+        client, rekor, log_key, &envelope, statement, &signature, &pem,
+    )
+    .await
+    .context("Failed to record the publish attestation in Rekor")?;
     Ok(SignedStatement {
         payload,
         signature,
@@ -162,7 +166,10 @@ mod tests {
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
-    use rcgen::{CertificateParams, CertificateSigningRequestParams, Issuer, KeyPair};
+    use rcgen::{
+        CertificateParams, CertificateSigningRequestParams, Issuer, KeyPair, PublicKeyData as _,
+        SigningKey as _,
+    };
     use reqwest::Client;
     use rustls_pki_types::{CertificateDer, pem::PemObject as _};
     use serde_json::{Value, json};
@@ -205,9 +212,12 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        let log_key = KeyPair::generate()?;
+        let public_log_key = log_key.subject_public_key_info();
+        let log_id = Sha256::digest(&public_log_key);
         Mock::given(method("POST"))
             .and(path("/api/v1/log/entries"))
-            .respond_with(|request: &Request| {
+            .respond_with(move |request: &Request| {
                 let request: Value = request.body_json().expect("Rekor request");
                 let proposed = &request["spec"]["proposedContent"];
                 let envelope = proposed["envelope"].as_str().expect("DSSE envelope");
@@ -233,12 +243,23 @@ mod tests {
                     .chain_update(&body)
                     .finalize();
                 let root_b64 = BASE64_STANDARD.encode(root);
-                let checkpoint = format!("test-log\n1\n{root_b64}\n\n— test-log AAAAAAE=\n");
+                let note = format!("test-log\n1\n{root_b64}\n");
+                let mut signature = log_id[..4].to_vec();
+                signature.extend(log_key.sign(note.as_bytes()).expect("Sign checkpoint"));
+                let signature = BASE64_STANDARD.encode(signature);
+                let checkpoint = format!("{note}\n— test-log {signature}\n");
+                let timestamp_payload = json!({
+                    "body": BASE64_STANDARD.encode(&body), "integratedTime": 1,
+                    "logID": hex::encode(log_id), "logIndex": 0,
+                });
+                let timestamp = log_key
+                    .sign(timestamp_payload.to_string().as_bytes())
+                    .expect("Sign integration time");
                 ResponseTemplate::new(201).set_body_json(json!({"test-entry": {
                     "body": BASE64_STANDARD.encode(body), "integratedTime": 1, "logIndex": 0,
-                    "logID": "00".repeat(32),
+                    "logID": hex::encode(log_id),
                     "verification": {
-                        "signedEntryTimestamp": "AQ==",
+                        "signedEntryTimestamp": BASE64_STANDARD.encode(timestamp),
                         "inclusionProof": {
                             "rootHash": hex::encode(root),
                             "logIndex": 0, "treeSize": 1, "hashes": [],
@@ -259,6 +280,7 @@ mod tests {
             &Client::new(),
             &format!("{}/api/v2/signingCert", server.uri()),
             &format!("{}/api/v1/log/entries", server.uri()),
+            &public_log_key.into(),
             &token,
             &statement,
         )
