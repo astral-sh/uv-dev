@@ -6511,8 +6511,17 @@ pub struct GenerateShellCompletionArgs {
     pub version: bool,
 }
 
-#[derive(Args)]
+/// Index arguments with the ownership of modern index declarations retained.
+#[derive(Default)]
 pub struct IndexArgs {
+    options: IndexOptionsArgs,
+    explicit_index: bool,
+    explicit_default_index: bool,
+}
+
+#[derive(Args, Clone, Default)]
+#[group(id = "IndexArgs")]
+struct IndexOptionsArgs {
     /// The indexes to use when resolving dependencies, in addition to the default index.
     ///
     /// Accepts either a repository compliant with PEP 503 (the simple repository API), or a local
