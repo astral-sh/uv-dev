@@ -31,6 +31,7 @@ thiserror = { workspace = true }
 x509-parser = { workspace = true }
 
 [dev-dependencies]
+http = { workspace = true }
 insta = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser"] }
 tokio = { workspace = true, features = ["macros", "rt"] }

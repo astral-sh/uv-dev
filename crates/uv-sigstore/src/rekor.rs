@@ -353,17 +353,15 @@ mod tests {
         let first = Sha256::digest(b"\x00a");
         let second = Sha256::digest(b"\x00b");
         let third = Sha256::digest(b"\x00c");
-        let left = Sha256::new()
-            .chain_update([1])
-            .chain_update(first)
-            .chain_update(second)
-            .finalize();
-        let root = Sha256::new()
-            .chain_update([1])
-            .chain_update(left)
-            .chain_update(third)
-            .finalize()
-            .into();
+        let parent = |left: &[u8], right: &[u8]| {
+            Sha256::new()
+                .chain_update([1])
+                .chain_update(left)
+                .chain_update(right)
+                .finalize()
+        };
+        let left = parent(&first, &second);
+        let root = parent(&left, &third).into();
         assert!(included(b"c", 2, 3, &[left.into()], root));
         assert!(included(b"b", 1, 3, &[first.into(), third.into()], root));
         assert!(!included(b"a", 2, 3, &[left.into()], root));
