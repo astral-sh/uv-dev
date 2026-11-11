@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -12,12 +13,11 @@ use uv_configuration::{
     DryRun, ExtrasSpecification, InstallOptions, Modifications,
 };
 use uv_dispatch::UniversalState;
-use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
+    ProjectInterpreter, ScriptEnvironment, sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -143,7 +143,7 @@ pub async fn check(
         }
     };
 
-    if no_project {
+    if no_project && script.is_none() {
         for flag in extras.history().as_flags_pretty() {
             warn_user!("`{flag}` has no effect when used alongside `--no-project`");
         }
@@ -482,6 +482,119 @@ pub async fn check(
             );
         }
 
+        if !no_project && ty_path.is_none() && ty_version.is_none() && locked_ty_path.is_none() {
+            // The workspace supplies only the checker; the script keeps its own environment,
+            // dependency lock, and analysis targets.
+            let workspace_project = match VirtualProject::discover(
+                &target_dir,
+                &DiscoveryOptions::default(),
+                cache,
+                workspace_cache,
+            )
+            .await
+            {
+                Ok(project) => Some(project),
+                Err(error)
+                    if matches!(
+                        error.as_ref(),
+                        WorkspaceErrorKind::MissingPyprojectToml
+                            | WorkspaceErrorKind::MissingProject(_)
+                            | WorkspaceErrorKind::NonWorkspace(_),
+                    ) =>
+                {
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            if let Some(project) = workspace_project {
+                let project = if project.root() == project.workspace().install_path() {
+                    project
+                } else {
+                    VirtualProject::discover(
+                        project.workspace().install_path(),
+                        &DiscoveryOptions::default(),
+                        cache,
+                        workspace_cache,
+                    )
+                    .await?
+                };
+                let package_name = PackageName::from_str("ty")?;
+                if let Some(lock) = LockTarget::Workspace(project.workspace()).read().await?
+                    && let Some(source) =
+                        toolchain::find_workspace_tool_source(&project, &lock, &package_name)?
+                {
+                    // A workspace checker may require a different Python version than the script.
+                    let tool_groups = source.groups();
+                    // Select only the workspace root. A virtual root contributes groups without
+                    // selecting any workspace members.
+                    let roots = match project.project_name() {
+                        Some(name) => slice::from_ref(name),
+                        None => &[],
+                    };
+                    let target = InstallTarget::from_project(
+                        &project,
+                        &lock,
+                        PackageSelection::Projects(roots),
+                    );
+                    let project_python = ProjectPythonRequest::from_requirements(
+                        None,
+                        Some(project.workspace().install_path()),
+                        Some(target.python_requirement(&tool_groups)?),
+                        project.workspace().install_path(),
+                        config_discovery,
+                    )
+                    .await?;
+                    let interpreter = ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::from(project.workspace()),
+                        project_python,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        ActiveEnvironment::Ignore,
+                        cache,
+                        printer,
+                    )
+                    .await?
+                    .into_interpreter();
+
+                    if let Some(tool) = toolchain::find_locked_workspace_tool(
+                        &project,
+                        &lock,
+                        &interpreter,
+                        &package_name,
+                        &source,
+                    )? {
+                        let (environment, _) = toolchain::prepare_locked_environment(
+                            &project,
+                            &lock,
+                            target,
+                            &tool,
+                            &interpreter,
+                            &settings,
+                            &malware_settings,
+                            &client_builder,
+                            &state,
+                            installer_metadata,
+                            &concurrency,
+                            cache,
+                            printer,
+                            preview,
+                        )
+                        .await?;
+                        locked_ty_path = Some(
+                            environment
+                                .scripts()
+                                .join(format!("ty{}", std::env::consts::EXE_SUFFIX)),
+                        );
+                    }
+                }
+            }
+        }
+
         Some(venv)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
@@ -631,41 +744,25 @@ pub async fn check(
             } else {
                 // Do not modify the selected environment when synchronization is disabled or the
                 // locked tool is excluded from it. Install only the locked `ty` subgraph.
-                let base_interpreter =
-                    CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
-                let resolution = toolchain::resolution_from_lock(
+                let (environment, resolution) = toolchain::prepare_locked_environment(
                     project,
                     result.lock(),
+                    target,
                     &tool,
-                    &base_interpreter,
-                    &settings.resolver.build_options,
-                )?;
-                store_credentials_from_target(target, &client_builder)?;
-                let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
-                    &resolution,
-                    result
-                        .lock()
-                        .build_constraints(project.workspace().install_path()),
-                    &base_interpreter,
+                    lock_interpreter,
                     &settings,
                     &malware_settings,
                     &client_builder,
-                    &ty_state,
-                    Box::new(SummaryInstallLogger),
+                    &state,
                     installer_metadata,
                     &concurrency,
                     cache,
                     printer,
                     preview,
                 )
-                .await
-                {
-                    Ok(environment) => environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .await?;
                 malware_context.record_resolution(&resolution);
-                PythonEnvironment::from(environment)
+                environment
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
             });

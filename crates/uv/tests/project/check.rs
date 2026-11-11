@@ -2297,6 +2297,803 @@ fn check_script() -> Result<()> {
     Ok(())
 }
 
+/// The checker's group controls Python selection without changing the script environment or targets.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_uses_workspace_ty_from_check_group() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [dependency-groups]
+        check = ["ty==0.0.16"]
+
+        [tool.uv.dependency-groups]
+        check = { requires-python = ">=3.12" }
+
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member")
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+
+        [dependency-groups]
+        check = ["iniconfig==2.0.0"]
+
+        [tool.uv.dependency-groups]
+        check = { requires-python = "<3.12" }
+    "#})?;
+    context
+        .temp_dir
+        .child("broken.py")
+        .write_str("value: int = 'wrong'\n")?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let workspace_lock = context.read("uv.lock");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = ["typing-extensions==4.10.0"]
+        # ///
+
+        import sys
+        from typing_extensions import Literal, TypeAlias
+
+        Alias: TypeAlias = int
+        version: Literal[11] = sys.version_info[1]
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--python")
+            .arg("3.11")
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Installed 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Installed 1 package in [TIME]
+    Using ty 0.0.16
+    "
+    );
+
+    assert_eq!(workspace_lock, context.read("uv.lock"));
+    assert!(!context.venv.exists());
+    assert!(!context.temp_dir.child("script.py.lock").exists());
+    Ok(())
+}
+
+/// A virtual root's checker requirements do not include unrelated member groups.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_uses_virtual_workspace_ty() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.12" }
+
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    let member = context.temp_dir.child("member");
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["iniconfig==2.0.0"]
+
+        [tool.uv.dependency-groups]
+        dev = { requires-python = "<3.12" }
+    "#})?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let script = member.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = []
+        # ///
+
+        import sys
+        from typing import Literal
+
+        version: Literal[11] = sys.version_info[1]
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--python")
+            .arg("3.11")
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Installed 1 package in [TIME]
+    Using ty 0.0.16
+    "
+    );
+
+    assert!(!context.venv.exists());
+    assert!(!member.child(".venv").exists());
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_no_project() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str("invalid")?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--no-project")
+            .arg("--locked")
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using ty 0.0.17
+    "
+    );
+    assert_eq!(context.read("uv.lock"), "invalid");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_explicit_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str("invalid")?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--ty-version")
+            .arg("0.0.17")
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using ty 0.0.17
+    "
+    );
+    assert_eq!(context.read("uv.lock"), "invalid");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_missing_lock() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+    "#})?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using ty 0.0.17
+    "
+    );
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+/// The fallback must install the locked source and its dependency subgraph.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_uses_locked_source() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ty"]
+
+        [tool.uv.sources]
+        ty = { path = "checker" }
+    "#})?;
+    let checker = context.temp_dir.child("checker");
+    checker.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "ty"
+        version = "1.2.3"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [project.scripts]
+        ty = "ty:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    checker
+        .child("src")
+        .child("ty")
+        .child("__init__.py")
+        .write_str(indoc! {r#"
+        import sys
+        import iniconfig
+
+        def main():
+            assert iniconfig is not None
+            if "--version" in sys.argv:
+                print("ty 1.2.3")
+            else:
+                print("All checks passed!")
+    "#})?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Installed 2 packages in [TIME]
+    Using ty 1.2.3
+    "
+    );
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+/// With no workspace `requires-python`, the lockfile's inferred bound selects a Python interpreter
+/// that can use the checker's locked dependencies.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_uses_locked_python_requirement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["ty"]
+
+        [tool.uv.sources]
+        ty = { path = "checker" }
+
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    let checker = context.temp_dir.child("checker");
+    checker.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "ty"
+        version = "1.2.3"
+        requires-python = ">=3.8"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [project.scripts]
+        ty = "ty:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    checker
+        .child("src")
+        .child("ty")
+        .child("__init__.py")
+        .write_str(indoc! {r#"
+        import sys
+        import iniconfig
+
+        def main():
+            assert sys.version_info[:2] == (3, 12)
+            assert iniconfig is not None
+            if "--version" in sys.argv:
+                print("ty 1.2.3")
+            else:
+                print("All checks passed!")
+    "#})?;
+    context
+        .lock()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let workspace_lock = context.read("uv.lock");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--python")
+            .arg("3.11")
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Installed 2 packages in [TIME]
+    Using ty 1.2.3
+    "
+    );
+
+    assert_eq!(workspace_lock, context.read("uv.lock"));
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+/// Reject a virtual workspace's checker when its lockfile does not support the current platform.
+#[test]
+#[cfg(all(feature = "test-pypi", not(windows)))]
+fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["ty"]
+
+        [tool.uv]
+        environments = ["sys_platform == 'win32'"]
+
+        [tool.uv.sources]
+        ty = { path = "checker" }
+
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    let checker = context.temp_dir.child("checker");
+    checker.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "ty"
+        version = "1.2.3"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [project.scripts]
+        ty = "ty:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    checker
+        .child("src")
+        .child("ty")
+        .child("__init__.py")
+        .write_str(indoc! {r#"
+        import sys
+        import iniconfig
+
+        def main():
+            assert iniconfig is not None
+            if "--version" in sys.argv:
+                print("ty 1.2.3")
+            else:
+                print("All checks passed!")
+    "#})?;
+    context
+        .lock()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let workspace_lock = context.read("uv.lock");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--show-version"),
+        @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The current Python platform is not compatible with the lockfile's supported environments: `sys_platform == 'win32'`
+    "
+    );
+
+    assert_eq!(workspace_lock, context.read("uv.lock"));
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+/// A checker only present through another workspace dependency is not a selected tool.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_ignores_transitive_dependency() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["wrapper"]
+
+        [tool.uv.sources]
+        wrapper = { path = "wrapper" }
+    "#})?;
+    context
+        .temp_dir
+        .child("wrapper")
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "wrapper"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ty==0.0.16"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--show-version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using ty 0.0.17
+    "
+    );
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_rejects_ambiguous_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        older = ["ty==0.0.16"]
+        newer = ["ty==0.0.17"]
+
+        [tool.uv]
+        conflicts = [[{ group = "older" }, { group = "newer" }]]
+    "#})?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path()),
+        @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    error: Cannot select `ty` from workspace dependency groups `newer` and `older`; use `TY` or `--ty-version` to select the checker
+    "
+    );
+    Ok(())
+}
+
+/// Workspace lock hashes must still be enforced when only the checker is installed.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_script_workspace_ty_rejects_invalid_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"))
+        .with_filtered_http_retries();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+    "#})?;
+    context
+        .lock()
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let mut lock = context.read("uv.lock");
+    let hash_indices = lock
+        .match_indices("sha256:")
+        .map(|(index, _)| index + "sha256:".len())
+        .collect::<Vec<_>>();
+    assert!(!hash_indices.is_empty());
+    for index in hash_indices.into_iter().rev() {
+        let replacement = if lock.as_bytes()[index] == b'0' {
+            "1"
+        } else {
+            "0"
+        };
+        lock.replace_range(index..=index, replacement);
+    }
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path()),
+        @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    error: Failed to download `ty==0.0.16`
+      cause: Hash mismatch for `ty==0.0.16`
+
+             Expected:
+               sha256:[HASH]
+
+             Computed:
+               sha256:[HASH]
+    "
+    );
+    assert_eq!(lock, context.read("uv.lock"));
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_script_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
@@ -2459,6 +3256,21 @@ fn check_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
 fn check_script_uses_ty_version_from_forked_lock() -> Result<()> {
     let context =
         uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==0.0.16"]
+    "#})?;
+    // A direct script dependency takes precedence without reading the workspace lock.
+    context.temp_dir.child("uv.lock").write_str("invalid")?;
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
