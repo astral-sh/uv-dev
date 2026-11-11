@@ -300,7 +300,7 @@ async fn request_certificate(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::mpsc;
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -316,7 +316,7 @@ mod tests {
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
     use x509_parser::{asn1_rs::BitString, parse_x509_certificate, verify::verify_signature};
 
-    use super::{request_certificate, sign_with_services};
+    use super::{ServiceError, sign_with_services};
 
     #[tokio::test]
     async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
@@ -353,8 +353,7 @@ mod tests {
         let log_key = KeyPair::generate()?;
         let public_log_key = log_key.subject_public_key_info();
         let log_id = Sha256::digest(&public_log_key);
-        let receipt = Arc::new(OnceLock::new());
-        let mock_receipt = Arc::clone(&receipt);
+        let (sender, receipt) = mpsc::channel();
         Mock::given(method("POST"))
             .and(header("x-test-client", "signer"))
             .and(path("/api/v1/log/entries"))
@@ -403,13 +402,15 @@ mod tests {
                     .sign(entry.to_string().as_bytes())
                     .expect("Sign integration time");
                 entry["verification"] = json!({
-                    "signedEntryTimestamp": BASE64_STANDARD.encode(timestamp),
+                    "signedEntryTimestamp": BASE64_STANDARD.encode(&timestamp),
                     "inclusionProof": {
                         "rootHash": hex::encode(root), "logIndex": 0, "treeSize": 2,
                         "hashes": [hex::encode(sibling)], "checkpoint": checkpoint,
                     }
                 });
-                mock_receipt.set(entry.clone()).expect("A single log entry");
+                sender
+                    .send((body, root, timestamp, checkpoint))
+                    .expect("Receipt receiver");
                 ResponseTemplate::new(201).set_body_json(json!({"test-entry": entry}))
             })
             .expect(1)
@@ -433,59 +434,26 @@ mod tests {
         )
         .await?;
 
-        // Check the generated fields against the wire receipt before redacting them.
-        let wire = receipt.get().expect("Rekor responded");
-        let proof = &wire["verification"]["inclusionProof"];
-        let root = hex::decode(proof["rootHash"].as_str().expect("Hex root hash"))?;
-        let mut entry = signed.transparency_entry;
-        for (field, expected) in [
-            ("/canonicalizedBody", wire["body"].clone()),
-            ("/logId/keyId", json!(BASE64_STANDARD.encode(log_id))),
-            (
-                "/inclusionProof/rootHash",
-                json!(BASE64_STANDARD.encode(root)),
-            ),
-            (
-                "/inclusionProof/checkpoint/envelope",
-                proof["checkpoint"].clone(),
-            ),
-            (
-                "/inclusionPromise/signedEntryTimestamp",
-                wire["verification"]["signedEntryTimestamp"].clone(),
-            ),
-        ] {
-            let actual = entry.pointer_mut(field).expect("Required receipt field");
-            assert_eq!(*actual, expected, "{field}");
-            *actual = json!("[generated]");
-        }
-        insta::assert_json_snapshot!(entry, @r#"
-        {
-          "canonicalizedBody": "[generated]",
-          "inclusionPromise": {
-            "signedEntryTimestamp": "[generated]"
-          },
-          "inclusionProof": {
-            "checkpoint": {
-              "envelope": "[generated]"
-            },
-            "hashes": [
-              "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="
-            ],
-            "logIndex": "0",
-            "rootHash": "[generated]",
-            "treeSize": "2"
-          },
-          "integratedTime": "1700000000",
-          "kindVersion": {
-            "kind": "dsse",
-            "version": "0.0.1"
-          },
-          "logId": {
-            "keyId": "[generated]"
-          },
-          "logIndex": "10"
-        }
-        "#);
+        // Use the values signed by the mock log to check even the generated fields exactly.
+        let (body, root, timestamp, checkpoint) = receipt.try_recv()?;
+        assert_eq!(
+            signed.transparency_entry,
+            json!({
+                "canonicalizedBody": BASE64_STANDARD.encode(body),
+                "inclusionPromise": {"signedEntryTimestamp": BASE64_STANDARD.encode(timestamp)},
+                "inclusionProof": {
+                    "checkpoint": {"envelope": checkpoint},
+                    "hashes": ["q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="],
+                    "logIndex": "0",
+                    "rootHash": BASE64_STANDARD.encode(root),
+                    "treeSize": "2",
+                },
+                "integratedTime": "1700000000",
+                "kindVersion": {"kind": "dsse", "version": "0.0.1"},
+                "logId": {"keyId": BASE64_STANDARD.encode(log_id)},
+                "logIndex": "10",
+            })
+        );
 
         assert_eq!(
             BASE64_STANDARD.decode(signed.payload)?,
@@ -509,21 +477,11 @@ mod tests {
 
     #[tokio::test]
     async fn fulcio_rejection_retains_service_diagnostics() -> Result<(), Box<dyn Error>> {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(403).set_body_string("issuer rejected token-secret"),
-            )
-            .mount(&server)
-            .await;
-        let error = request_certificate(
-            &Client::new().into(),
-            &server.uri(),
-            "token-secret",
-            &KeyPair::generate()?,
-        )
-        .await
-        .expect_err("Fulcio rejected the request");
+        let response = http::Response::builder()
+            .status(reqwest::StatusCode::FORBIDDEN)
+            .body("issuer rejected token-secret")?;
+        let error =
+            ServiceError::from_response("Fulcio", response.into(), Some("token-secret")).await;
         insta::assert_snapshot!(error, @"Fulcio returned HTTP 403 Forbidden: issuer rejected [REDACTED]");
         let source = error
             .source()
