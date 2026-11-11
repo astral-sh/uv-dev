@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8217,
+        "title": "Notify users when a new Python patch version is available",
+        "url": "https://github.com/astral-sh/uv/issues/8217",
+        "state": "open",
+        "reason": "Shares the goal of keeping Python installations secure, but requests notification about newer patches with security fixes rather than advisory-based auditing of installed interpreters. Maintainer comments discuss updating existing virtual environments."
+      },
+      {
+        "kind": "issue",
+        "number": 19886,
+        "title": "Support `uv tool audit`",
+        "url": "https://github.com/astral-sh/uv/issues/19886",
+        "state": "closed",
+        "reason": "Tracks the installed-tool auditing workflow cited as the proposed interface model. It audits tools' locked package resolutions, not interpreter builds, and was implemented by astral-sh/uv#20921."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20921,
+        "title": "Implement `uv tool audit`",
+        "url": "https://github.com/astral-sh/uv/pull/20921",
+        "state": "merged",
+        "reason": "Merged on 2026-08-04, closing astral-sh/uv#19886. Provides an implemented precedent for installed-object selection and JSON/SARIF reports. Maintainer review requests named tools or --all for consistency with uv tool upgrade. Its scope is package auditing for tools, not interpreter vulnerability checks."
+      },
+      {
+        "kind": "issue",
+        "number": 18506,
+        "title": "Roadmap: `uv audit`",
+        "url": "https://github.com/astral-sh/uv/issues/18506",
+        "state": "open",
+        "reason": "Canonical roadmap for dependency auditing, advisory services, and machine-readable output. Relevant to including interpreter findings in uv audit, but its listed work does not track interpreter auditing. A maintainer explains that interpreter discovery and downloads support locking rather than auditing Python itself."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv with authenticated gh across open and closed issues and open, closed, and merged pull requests. Separately investigated interpreter auditing with current/default/all selection and including .python-version findings in uv audit and JSON output. Literal searches included \"uv python audit\", \"uv tool audit\", \".python-version\" with audit, eMudhra, and CPython/CVE. Conceptual searches covered interpreter/runtime auditing, Python vulnerabilities/security/advisories/scanning, python-build-standalone, and outdated versions; broader searches covered audit, security, vulnerability, vulnerabilities, and CVE. Inspected candidate bodies and comments, followed astral-sh/uv#8217 to astral-sh/uv#1795, astral-sh/uv#16646 to astral-sh/uv#9189 and the roadmap, and astral-sh/uv#19886 to merged astral-sh/uv#18937 and astral-sh/uv#20921. Inspected historical merged audit work astral-sh/uv#18119 and astral-sh/uv#18124. Ruled out astral-sh/uv#23034, which concerns interpreter selection and dependency filtering during package audits, and astral-sh/uv#22789, whose eMudhra-related Docker system certificate issue was reported fixed in uv 0.13.5. No existing discussion tracking the same interpreter-auditing capability or historical interpreter-audit fix was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The report requests new vulnerability-auditing functionality for installed Python interpreters. Source confirms that current audit operations query locked package dependencies in the PyPI ecosystem and that PythonCommand has no audit subcommand. No malfunction or regression is established; the JSON compatibility concern is prospective. Existing discussions cover patch notifications or package auditing rather than this capability.",
+  "summary": "No duplicate found. astral-sh/uv#8217 covers Python patch-update notifications; astral-sh/uv#19886 and merged astral-sh/uv#20921 provide the installed-tool auditing precedent; astral-sh/uv#18506 tracks the package-audit roadmap.",
+  "draft_response": "Current `uv audit` and `uv tool audit` check locked package dependencies; they do not audit the Python interpreter itself. Your proposal would add a new capability. astral-sh/uv#8217 covers patch-update notifications, while astral-sh/uv#20921 provides an interface precedent for auditing installed tools.\n\nBefore settling on a command or extending the package-oriented JSON output, we'd need to define the advisory source and whether coverage includes CPython, bundled libraries, and certificate stores. Could you share an example advisory and an installed Python build you would expect it to flag? That would give this proposal a concrete starting point for design."
+}
