@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 150,
+        "title": "2.45.0 (+ and 2.46) release misses eccodeslib dependency - \"Cannot find the ecCodes library\"",
+        "url": "https://github.com/ecmwf/eccodes-python/issues/150",
+        "state": "open",
+        "reason": "Direct upstream match: eccodes omits eccodeslib under uv, explicitly adding eccodeslib works, and comments include the same pip-versus-uv difference and a macOS reproduction. Independently inspected PyPI wheel metadata for eccodes 2.45.0 and 2.46.0 confirms that Windows wheels omit eccodeslib while platform-independent wheels require it on non-Windows systems."
+      },
+      {
+        "kind": "issue",
+        "number": 10693,
+        "title": "PyTorch nightly inconsistency between `uv pip install` vs `uv sync` (missing nvidia packages)",
+        "url": "https://github.com/astral-sh/uv/issues/10693",
+        "state": "open",
+        "reason": "Same resolver failure mode with another package: universal locking omits runtime dependencies that single-platform installation includes. Maintainer analysis confirms different Requires-Dist metadata between wheels of one release, selection of one wheel for universal resolution, and explicitly adding missing dependencies as a workaround."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7381,
+        "title": "Prefer compatible wheels in universal resolver",
+        "url": "https://github.com/astral-sh/uv/pull/7381",
+        "state": "closed",
+        "reason": "Historical proposal to prefer the current platform's wheel when reading metadata, directly relevant to the pip-versus-universal-resolution difference. Closed without merging because inconsistent wheel metadata would make resolution platform-dependent; this was not a shipped fix whose failure would establish a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Literal searches covered eccodes, eccodeslib, the upstream error Cannot find the ecCodes library, and uv 0.11.28. Separate symptom searches covered missing or uninstalled transitive dependencies and pip versus uv add/sync; conceptual searches covered universal resolution, conditional dependencies, inconsistent wheel metadata, differing Requires-Dist, and platform-compatible wheel selection. Followed maintainer references through astral-sh/uv#10693, astral-sh/uv#10119, astral-sh/uv#5921, astral-sh/uv#7381, and the reporter's upstream lead. Inspected astral-sh/uv#12588 for the metadata-consistency limitation. Ruled out same-package astral-sh/uv#9412 and astral-sh/uv#12205 because they concern unavailable platform wheels, and astral-sh/uv#17065 because it concerns negative extra markers. Fix-oriented review ruled out astral-sh/uv#14237 and merged astral-sh/uv#18373, which address metadata contamination across indexes rather than different wheels within one index; merged astral-sh/uv#5845 addresses incompatible build distributions. Also inspected astral-sh/uv#11463, which concerns proxy 403 errors, not missing requirements. Checked resolver documentation/source and public PyPI wheel metadata for eccodes 2.45.0 and 2.46.0."
+  },
+  "type": "duplicate",
+  "type_reason": "ecmwf/eccodes-python#150 already tracks the same package, missing dependency, pip-versus-uv behavior, and explicit-add workaround; astral-sh/uv#10693 tracks the same universal-resolution failure mode caused by inconsistent wheel requirements. Artifact metadata and uv's documented consistency assumption support this relationship. The reporter's precise eccodes version and command remain unspecified, so the wheel selected in this environment is unconfirmed. No evidence establishes a regression of a previously fixed uv bug; astral-sh/uv#18373 fixes a different, cross-index problem.",
+  "summary": "ecmwf/eccodes-python#150 directly tracks the eccodeslib omission. astral-sh/uv#10693 covers the same inconsistent-wheel-metadata failure mode; astral-sh/uv#7381 was an unmerged proposal relevant to wheel selection.",
+  "draft_response": "This matches ecmwf/eccodes-python#150 and the resolver behavior discussed in astral-sh/uv#10693. For eccodes 2.45.0 and 2.46.0, the platform-independent wheel declares eccodeslib on non-Windows systems, but the Windows wheels omit that requirement entirely. uv's universal resolver reads one wheel's metadata and assumes requirements are consistent across a release, so differing wheel metadata can leave dependencies out.\n\nPlease follow ecmwf/eccodes-python#150 for the package metadata issue. You can continue using `uv add eccodeslib` as a workaround. To confirm this explains your environment, please share your exact install command and resolved eccodes version."
+}
