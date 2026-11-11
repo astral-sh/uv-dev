@@ -7934,7 +7934,6 @@ dependencies = [
 name = "uv-sigstore"
 version = "0.0.99"
 dependencies = [
- "anyhow",
  "base64 0.23.1",
  "hex",
  "itertools 0.14.0",
@@ -7946,7 +7945,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "thiserror",
  "tokio",
+ "uv-macros",
  "wiremock",
  "x509-parser",
 ]
