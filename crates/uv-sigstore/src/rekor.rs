@@ -129,13 +129,11 @@ impl LogEntry {
             "logIndex": self.log_index,
         })
         .to_string();
-        key.verify(
-            signed.as_bytes(),
-            &BASE64_STANDARD
-                .decode(&self.verification.signed_entry_timestamp)
-                .map_err(|err| RekorError::Base64("signed entry timestamp", err))?,
-        )
-        .map_err(|_| RekorError::TimestampSignature)?;
+        let timestamp_signature = BASE64_STANDARD
+            .decode(&self.verification.signed_entry_timestamp)
+            .map_err(|err| RekorError::Base64("signed entry timestamp", err))?;
+        key.verify(signed.as_bytes(), &timestamp_signature)
+            .map_err(|_| RekorError::TimestampSignature)?;
 
         // A signed note includes the final newline of the note text in its signature.
         // Signature lines can also include witness signatures with different key hints.
