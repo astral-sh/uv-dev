@@ -22,7 +22,7 @@ use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 /// Pinning the public key lets the signer authenticate timestamps and checkpoints
 /// independently of the HTTP response. A log key rotation requires updating this key in uv.
 ///
-/// Source: <https://github.com/sigstore/root-signing/blob/fa6dc24dbae1/targets/rekor.pub>
+/// <https://github.com/sigstore/root-signing/blob/fa6dc24dbae14f94135d19716d2f03df8b1431d7/targets/rekor.pub>
 const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
 kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
