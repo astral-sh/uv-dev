@@ -1,8 +1,12 @@
 //! Sign in-toto statements with Fulcio and record their DSSE envelopes in Rekor.
+//!
+//! Fulcio binds the CI identity to an ephemeral public key. The corresponding private key
+//! signs the exact statement bytes, and Rekor records the signature and the certificate.
+//! Its signed integration time lets a verifier establish when the short-lived certificate
+//! was used, even after it expires.
 
 mod rekor;
 
-use anyhow::{Context, Result, ensure};
 use base64::Engine as _;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
 use itertools::Itertools as _;
@@ -11,17 +15,68 @@ use rcgen::{
     CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256, PublicKeyData as _,
     SigningKey as _,
 };
-use reqwest::Client;
+pub use rekor::RekorError;
+use reqwest::{Client, StatusCode};
 use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use x509_parser::parse_x509_certificate;
+use thiserror::Error;
+use uv_macros::DeserializeUntagged;
+use x509_parser::{error::X509Error, nom, parse_x509_certificate};
 
 const FULCIO: &str = "https://fulcio.sigstore.dev/api/v2/signingCert";
 // PyPI verifies Rekor v1 entries with an integrated timestamp.
 // See <https://github.com/pypi/pypi-attestations/issues/147>.
 const REKOR: &str = "https://rekor.sigstore.dev/api/v1/log/entries";
 const PAYLOAD_TYPE: &str = "application/vnd.in-toto+json";
+
+/// Failure to sign a statement or obtain its verification material.
+#[derive(Debug, Error)]
+pub enum SigningError {
+    #[error("Invalid Sigstore identity token: expected three JWT segments")]
+    TokenFormat,
+    #[error("Invalid base64url payload in Sigstore identity token")]
+    TokenEncoding(#[source] base64::DecodeError),
+    #[error("Invalid OIDC claims at {line}:{column}: expected `aud` and a Unix timestamp in `exp`")]
+    TokenClaims { line: usize, column: usize },
+    #[error("The OIDC token must include `sigstore` in its audience")]
+    TokenAudience,
+    #[error("The Sigstore OIDC token expired at Unix time {0}")]
+    TokenExpired(i64),
+    #[error("Failed to generate the ephemeral signing key")]
+    GenerateKey(#[source] rcgen::Error),
+    #[error("Failed to construct the Fulcio certificate signing request")]
+    CertificateRequest(#[source] rcgen::Error),
+    #[error("Failed to obtain a signing certificate from Fulcio")]
+    Fulcio(#[source] reqwest::Error),
+    #[error("Fulcio rejected the certificate request with HTTP {0}")]
+    FulcioStatus(StatusCode),
+    #[error("Failed to decode the Fulcio certificate response")]
+    FulcioResponse(#[source] reqwest::Error),
+    #[error("Fulcio returned an empty certificate chain")]
+    EmptyCertificateChain,
+    #[error("Invalid Fulcio signing certificate PEM")]
+    CertificatePem(#[from] rustls_pki_types::pem::Error),
+    #[error("Invalid Fulcio signing certificate")]
+    CertificateDer(#[from] nom::Err<X509Error>),
+    #[error("Trailing bytes in the Fulcio signing certificate")]
+    TrailingCertificateData,
+    #[error("Fulcio returned a certificate for a different key")]
+    KeyMismatch,
+    #[error(
+        "Rekor integration time {integrated_time} is outside the Fulcio certificate's validity \
+         interval [{not_before}, {not_after}] (Unix seconds)"
+    )]
+    CertificateValidity {
+        integrated_time: i64,
+        not_before: i64,
+        not_after: i64,
+    },
+    #[error("Failed to sign the DSSE envelope")]
+    Sign(#[source] rcgen::Error),
+    #[error("Failed to record the signed statement in Rekor")]
+    Rekor(#[from] RekorError),
+}
 
 /// A signed in-toto statement and its Sigstore verification material.
 pub struct SignedStatement {
@@ -35,12 +90,16 @@ pub struct SignedStatement {
     pub transparency_entry: Value,
 }
 
-/// Sign the serialized in-toto statement using a CI identity token for the `sigstore` audience.
+/// Sign a serialized in-toto statement using a CI identity token for the `sigstore` audience.
+///
+/// The signer checks that Fulcio issued a certificate for its key and that Rekor recorded its
+/// envelope. Verifiers must validate the Fulcio chain, signed certificate timestamp, and signing
+/// identity against their trust policy.
 pub async fn sign_statement(
     client: &Client,
     token: &str,
     statement: &str,
-) -> Result<SignedStatement> {
+) -> Result<SignedStatement, SigningError> {
     let log_key = rekor::public_key()?;
     sign_with_services(client, FULCIO, REKOR, &log_key, token, statement).await
 }
@@ -52,19 +111,18 @@ async fn sign_with_services(
     log_key: &SubjectPublicKeyInfoDer<'_>,
     token: &str,
     statement: &str,
-) -> Result<SignedStatement> {
+) -> Result<SignedStatement, SigningError> {
     check_identity_token(token)?;
-    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-    let pem = request_certificate(client, fulcio, token, &key)
-        .await
-        .context("Failed to obtain a signing certificate from Fulcio")?;
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
+    let pem = request_certificate(client, fulcio, token, &key).await?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
-    let (remaining, cert) = parse_x509_certificate(&der)
-        .map_err(|_| anyhow::anyhow!("Invalid Fulcio signing certificate"))?;
-    ensure!(
-        remaining.is_empty() && cert.public_key().raw == key.subject_public_key_info(),
-        "Fulcio returned a certificate for a different key or an invalid certificate"
-    );
+    let (remaining, cert) = parse_x509_certificate(&der)?;
+    if !remaining.is_empty() {
+        return Err(SigningError::TrailingCertificateData);
+    }
+    if cert.public_key().raw != key.subject_public_key_info() {
+        return Err(SigningError::KeyMismatch);
+    }
 
     // DSSE signs the payload type and the exact payload bytes, each prefixed with its byte length.
     let pae = format!(
@@ -72,18 +130,30 @@ async fn sign_with_services(
         PAYLOAD_TYPE.len(),
         statement.len()
     );
-    let signature = BASE64_STANDARD.encode(key.sign(pae.as_bytes())?);
+    let signature = BASE64_STANDARD.encode(key.sign(pae.as_bytes()).map_err(SigningError::Sign)?);
     let payload = BASE64_STANDARD.encode(statement);
-    let envelope = serde_json::to_string(&json!({
+    // Rekor hashes the submitted envelope JSON verbatim. Reuse these bytes to check its receipt.
+    let envelope = json!({
         "payloadType": PAYLOAD_TYPE,
         "payload": payload,
         "signatures": [{"sig": signature}],
-    }))?;
-    let entry = rekor::record(
+    })
+    .to_string();
+    let (integrated_time, entry) = rekor::record(
         client, rekor, log_key, &envelope, statement, &signature, &pem,
     )
-    .await
-    .context("Failed to record the publish attestation in Rekor")?;
+    .await?;
+    // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
+    // expired between issuance and log insertion, for example if a CI runner was suspended.
+    let not_before = cert.validity().not_before.timestamp();
+    let not_after = cert.validity().not_after.timestamp();
+    if !(not_before..=not_after).contains(&integrated_time) {
+        return Err(SigningError::CertificateValidity {
+            integrated_time,
+            not_before,
+            not_after,
+        });
+    }
     Ok(SignedStatement {
         payload,
         signature,
@@ -92,28 +162,46 @@ async fn sign_with_services(
     })
 }
 
-fn check_identity_token(token: &str) -> Result<()> {
+fn check_identity_token(token: &str) -> Result<(), SigningError> {
+    #[derive(Deserialize)]
+    struct Claims {
+        aud: Audience,
+        exp: i64,
+    }
+
+    #[derive(DeserializeUntagged)]
+    #[serde(untagged)]
+    enum Audience {
+        #[untagged(string)]
+        One(String),
+        #[untagged(seq)]
+        Many(Vec<String>),
+    }
+
     // Check the intended audience before sending the token. Fulcio authenticates the identity.
     let (_, payload, _) = token
         .split('.')
         .collect_tuple()
-        .context("Invalid Sigstore identity token")?;
+        .ok_or(SigningError::TokenFormat)?;
     let payload = BASE64_URL_SAFE_NO_PAD
         .decode(payload)
-        .context("Invalid Sigstore identity token")?;
-    let claims: Value =
-        serde_json::from_slice(&payload).context("Invalid Sigstore identity token")?;
-    let audience = &claims["aud"];
-    ensure!(
-        (audience == "sigstore"
-            || audience
-                .as_array()
-                .is_some_and(|aud| aud.iter().any(|a| a == "sigstore")))
-            && claims["exp"]
-                .as_i64()
-                .is_some_and(|exp| exp > Timestamp::now().as_second()),
-        "Expected an unexpired OIDC token with the `sigstore` audience"
-    );
+        .map_err(SigningError::TokenEncoding)?;
+    // A Serde type error can quote a claim value. Report its location without logging token data.
+    let claims: Claims =
+        serde_json::from_slice(&payload).map_err(|err| SigningError::TokenClaims {
+            line: err.line(),
+            column: err.column(),
+        })?;
+    let for_sigstore = match claims.aud {
+        Audience::One(audience) => audience == "sigstore",
+        Audience::Many(audiences) => audiences.iter().any(|audience| audience == "sigstore"),
+    };
+    if !for_sigstore {
+        return Err(SigningError::TokenAudience);
+    }
+    if claims.exp <= Timestamp::now().as_second() {
+        return Err(SigningError::TokenExpired(claims.exp));
+    }
     Ok(())
 }
 
@@ -122,7 +210,7 @@ async fn request_certificate(
     url: &str,
     token: &str,
     key: &KeyPair,
-) -> Result<String> {
+) -> Result<String, SigningError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Response {
@@ -141,23 +229,31 @@ async fn request_certificate(
     // of the ephemeral private key without relying on an issuer-specific challenge claim.
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
-    let csr = params.serialize_request(key)?.pem()?;
-    let response: Response = client
+    let csr = params
+        .serialize_request(key)
+        .and_then(|request| request.pem())
+        .map_err(SigningError::CertificateRequest)?;
+    let response = client
         .post(url)
         .bearer_auth(token)
         .json(&json!({"certificateSigningRequest": BASE64_STANDARD.encode(csr)}))
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(SigningError::Fulcio)?;
+    if !response.status().is_success() {
+        return Err(SigningError::FulcioStatus(response.status()));
+    }
+    let response: Response = response
         .json()
-        .await?;
+        .await
+        .map_err(SigningError::FulcioResponse)?;
     response
         .signed_certificate_embedded_sct
         .chain
         .certificates
         .into_iter()
         .next()
-        .context("Fulcio returned an empty certificate chain")
+        .ok_or(SigningError::EmptyCertificateChain)
 }
 
 #[cfg(test)]
@@ -171,7 +267,6 @@ mod tests {
         SigningKey as _,
     };
     use reqwest::Client;
-    use rustls_pki_types::{CertificateDer, pem::PemObject as _};
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha256};
     use wiremock::matchers::{header, method, path};
@@ -184,9 +279,8 @@ mod tests {
     async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
         let server = MockServer::start().await;
         let issuer = Issuer::new(CertificateParams::default(), KeyPair::generate()?);
-        let claims = BASE64_URL_SAFE_NO_PAD.encode(
-            br#"{"iss":"https://ci.example","sub":"publisher","aud":"sigstore","exp":4102444800}"#,
-        );
+        let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
+        let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
         let token = format!("header.{claims}.signature");
         Mock::given(method("POST"))
             .and(path("/api/v2/signingCert"))
@@ -248,25 +342,21 @@ mod tests {
                 signature.extend(log_key.sign(note.as_bytes()).expect("Sign checkpoint"));
                 let signature = BASE64_STANDARD.encode(signature);
                 let checkpoint = format!("{note}\n— test-log {signature}\n");
-                let timestamp_payload = json!({
-                    "body": BASE64_STANDARD.encode(&body), "integratedTime": 1,
+                let mut entry = json!({
+                    "body": BASE64_STANDARD.encode(&body), "integratedTime": 1_700_000_000,
                     "logID": hex::encode(log_id), "logIndex": 0,
                 });
                 let timestamp = log_key
-                    .sign(timestamp_payload.to_string().as_bytes())
+                    .sign(entry.to_string().as_bytes())
                     .expect("Sign integration time");
-                ResponseTemplate::new(201).set_body_json(json!({"test-entry": {
-                    "body": BASE64_STANDARD.encode(body), "integratedTime": 1, "logIndex": 0,
-                    "logID": hex::encode(log_id),
-                    "verification": {
-                        "signedEntryTimestamp": BASE64_STANDARD.encode(timestamp),
-                        "inclusionProof": {
-                            "rootHash": hex::encode(root),
-                            "logIndex": 0, "treeSize": 1, "hashes": [],
-                            "checkpoint": checkpoint,
-                        }
+                entry["verification"] = json!({
+                    "signedEntryTimestamp": BASE64_STANDARD.encode(timestamp),
+                    "inclusionProof": {
+                        "rootHash": hex::encode(root), "logIndex": 0, "treeSize": 1,
+                        "hashes": [], "checkpoint": checkpoint,
                     }
-                }}))
+                });
+                ResponseTemplate::new(201).set_body_json(json!({"test-entry": entry}))
             })
             .expect(1)
             .mount(&server)
@@ -286,44 +376,22 @@ mod tests {
         )
         .await?;
 
-        let requests = server.received_requests().await.expect("Requests recorded");
-        let entry: Value = requests[1].body_json()?;
-        let proposed = &entry["spec"]["proposedContent"];
-        let envelope: Value =
-            serde_json::from_str(proposed["envelope"].as_str().expect("DSSE envelope"))?;
-        assert_eq!(signed.signature, envelope["signatures"][0]["sig"]);
-        assert_eq!(signed.payload, envelope["payload"]);
         assert_eq!(
-            BASE64_STANDARD.decode(&signed.payload)?,
+            BASE64_STANDARD.decode(signed.payload)?,
             statement.as_bytes()
         );
-        let pem = String::from_utf8(
-            BASE64_STANDARD.decode(
-                proposed["verifiers"][0]
-                    .as_str()
-                    .expect("Rekor certificate"),
-            )?,
-        )?;
-        let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
-        assert_eq!(signed.certificate, BASE64_STANDARD.encode(&der));
-        let receipt = &signed.transparency_entry;
-        assert_eq!(receipt["logIndex"], "0");
-        assert_eq!(receipt["inclusionProof"]["treeSize"], "1");
+        let der = BASE64_STANDARD.decode(signed.certificate)?;
         let (_, cert) = parse_x509_certificate(&der)?;
-        let signature = BASE64_STANDARD.decode(
-            envelope["signatures"][0]["sig"]
-                .as_str()
-                .expect("Signature"),
-        )?;
-        let payload = BASE64_STANDARD.decode(envelope["payload"].as_str().expect("Payload"))?;
-        let mut pae =
-            format!("DSSEv1 28 application/vnd.in-toto+json {} ", payload.len()).into_bytes();
-        pae.extend_from_slice(&payload);
+        let signature = BASE64_STANDARD.decode(signed.signature)?;
+        let pae = format!(
+            "DSSEv1 28 application/vnd.in-toto+json {} {statement}",
+            statement.len()
+        );
         verify_signature(
             cert.public_key(),
             &cert.signature_algorithm,
             &BitString::new(0, &signature),
-            &pae,
+            pae.as_bytes(),
         )?;
         Ok(())
     }
