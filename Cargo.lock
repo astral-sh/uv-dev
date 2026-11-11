@@ -7934,8 +7934,10 @@ dependencies = [
 name = "uv-sigstore"
 version = "0.0.99"
 dependencies = [
+ "astral-reqwest-middleware",
  "base64 0.23.1",
  "hex",
+ "insta",
  "itertools 0.14.0",
  "jiff",
  "rcgen",

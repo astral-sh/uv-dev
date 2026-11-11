@@ -6,7 +6,7 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use hex::FromHex as _;
 use itertools::Itertools as _;
-use reqwest::{Client, StatusCode};
+use reqwest_middleware::ClientWithMiddleware;
 use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
 use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
 use serde::Deserialize;
@@ -16,6 +16,8 @@ use thiserror::Error;
 use x509_parser::error::X509Error;
 use x509_parser::nom::Err as DerError;
 use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
+
+use crate::ServiceError;
 
 /// The trust anchor for the production Rekor v1 log.
 ///
@@ -33,9 +35,9 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
 #[derive(Debug, Error)]
 pub enum RekorError {
     #[error("Failed to submit entry to Rekor")]
-    Request(#[source] reqwest::Error),
-    #[error("Rekor returned HTTP {0}")]
-    Status(StatusCode),
+    Request(#[source] reqwest_middleware::Error),
+    #[error(transparent)]
+    Status(ServiceError),
     #[error("Invalid Rekor response")]
     Response(#[source] reqwest::Error),
     #[error("Expected one Rekor entry")]
@@ -161,7 +163,7 @@ impl LogEntry {
 }
 
 pub(super) async fn record(
-    client: &Client,
+    client: &ClientWithMiddleware,
     url: &str,
     log_key: &SubjectPublicKeyInfoDer<'_>,
     envelope: &str,
@@ -183,7 +185,9 @@ pub(super) async fn record(
         .await
         .map_err(RekorError::Request)?;
     if !response.status().is_success() {
-        return Err(RekorError::Status(response.status()));
+        return Err(RekorError::Status(
+            ServiceError::from_response("Rekor", response, None).await,
+        ));
     }
     let entries: BTreeMap<String, LogEntry> =
         response.json().await.map_err(RekorError::Response)?;
