@@ -23,7 +23,7 @@ use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 /// independently of the HTTP response. A log key rotation requires updating this key in uv.
 ///
 /// Source: <https://github.com/sigstore/root-signing/blob/fa6dc24dbae1/targets/rekor.pub>
-const PUBLIC_KEY: &[u8] = b"-----BEGIN PUBLIC KEY-----
+const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
 kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
 -----END PUBLIC KEY-----
@@ -99,7 +99,7 @@ struct InclusionProof {
 }
 
 pub(super) fn public_key() -> Result<SubjectPublicKeyInfoDer<'static>, RekorError> {
-    SubjectPublicKeyInfoDer::from_pem_slice(PUBLIC_KEY).map_err(RekorError::KeyPem)
+    SubjectPublicKeyInfoDer::from_pem_slice(PUBLIC_KEY.as_bytes()).map_err(RekorError::KeyPem)
 }
 
 impl LogEntry {
