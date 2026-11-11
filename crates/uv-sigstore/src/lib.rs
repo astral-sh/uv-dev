@@ -16,7 +16,8 @@ use rcgen::{
     SigningKey as _,
 };
 pub use rekor::RekorError;
-use reqwest::{Client, StatusCode};
+use reqwest::{Response, StatusCode};
+use reqwest_middleware::ClientWithMiddleware;
 use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -29,6 +30,44 @@ const FULCIO: &str = "https://fulcio.sigstore.dev/api/v2/signingCert";
 // See <https://github.com/pypi/pypi-attestations/issues/147>.
 const REKOR: &str = "https://rekor.sigstore.dev/api/v1/log/entries";
 const PAYLOAD_TYPE: &str = "application/vnd.in-toto+json";
+
+/// An unsuccessful Sigstore response, including the diagnostic supplied by the service.
+#[derive(Debug, Error)]
+#[error("{service} returned HTTP {status}{detail}")]
+pub struct ServiceError {
+    service: &'static str,
+    status: StatusCode,
+    detail: String,
+    #[source]
+    source: Option<reqwest::Error>,
+}
+
+impl ServiceError {
+    async fn from_response(
+        service: &'static str,
+        response: Response,
+        bearer_token: Option<&str>,
+    ) -> Self {
+        let status = response.status();
+        let source = response.error_for_status_ref().err();
+        let body = response.text().await.unwrap_or_default();
+        let message = body.trim();
+        let detail = if message.is_empty() {
+            String::new()
+        } else if let Some(token) = bearer_token {
+            // Fulcio may echo request details when rejecting a credential.
+            format!(": {}", message.replace(token, "[REDACTED]"))
+        } else {
+            format!(": {message}")
+        };
+        Self {
+            service,
+            status,
+            detail,
+            source,
+        }
+    }
+}
 
 /// Failure to sign a statement or obtain its verification material.
 #[derive(Debug, Error)]
@@ -48,9 +87,9 @@ pub enum SigningError {
     #[error("Failed to construct the Fulcio certificate signing request")]
     CertificateRequest(#[source] rcgen::Error),
     #[error("Failed to obtain a signing certificate from Fulcio")]
-    Fulcio(#[source] reqwest::Error),
-    #[error("Fulcio rejected the certificate request with HTTP {0}")]
-    FulcioStatus(StatusCode),
+    Fulcio(#[source] reqwest_middleware::Error),
+    #[error(transparent)]
+    FulcioStatus(ServiceError),
     #[error("Failed to decode the Fulcio certificate response")]
     FulcioResponse(#[source] reqwest::Error),
     #[error("Fulcio returned an empty certificate chain")]
@@ -96,7 +135,7 @@ pub struct SignedStatement {
 /// envelope. Verifiers must validate the Fulcio chain, signed certificate timestamp, and signing
 /// identity against their trust policy.
 pub async fn sign_statement(
-    client: &Client,
+    client: &ClientWithMiddleware,
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
@@ -105,7 +144,7 @@ pub async fn sign_statement(
 }
 
 async fn sign_with_services(
-    client: &Client,
+    client: &ClientWithMiddleware,
     fulcio: &str,
     rekor: &str,
     log_key: &SubjectPublicKeyInfoDer<'_>,
@@ -206,14 +245,14 @@ fn check_identity_token(token: &str) -> Result<(), SigningError> {
 }
 
 async fn request_certificate(
-    client: &Client,
+    client: &ClientWithMiddleware,
     url: &str,
     token: &str,
     key: &KeyPair,
 ) -> Result<String, SigningError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Response {
+    struct CertificateResponse {
         signed_certificate_embedded_sct: SignedCertificate,
     }
     #[derive(Deserialize)]
@@ -241,9 +280,11 @@ async fn request_certificate(
         .await
         .map_err(SigningError::Fulcio)?;
     if !response.status().is_success() {
-        return Err(SigningError::FulcioStatus(response.status()));
+        return Err(SigningError::FulcioStatus(
+            ServiceError::from_response("Fulcio", response, Some(token)).await,
+        ));
     }
-    let response: Response = response
+    let response: CertificateResponse = response
         .json()
         .await
         .map_err(SigningError::FulcioResponse)?;
@@ -259,6 +300,7 @@ async fn request_certificate(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::{Arc, OnceLock};
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -267,13 +309,14 @@ mod tests {
         SigningKey as _,
     };
     use reqwest::Client;
+    use reqwest_middleware::{ClientBuilder, RequestBuilder};
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha256};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
     use x509_parser::{asn1_rs::BitString, parse_x509_certificate, verify::verify_signature};
 
-    use super::sign_with_services;
+    use super::{request_certificate, sign_with_services};
 
     #[tokio::test]
     async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
@@ -283,6 +326,7 @@ mod tests {
         let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
         let token = format!("header.{claims}.signature");
         Mock::given(method("POST"))
+            .and(header("x-test-client", "signer"))
             .and(path("/api/v2/signingCert"))
             .and(header("Authorization", format!("Bearer {token}")))
             .respond_with(move |request: &Request| {
@@ -309,7 +353,10 @@ mod tests {
         let log_key = KeyPair::generate()?;
         let public_log_key = log_key.subject_public_key_info();
         let log_id = Sha256::digest(&public_log_key);
+        let receipt = Arc::new(OnceLock::new());
+        let mock_receipt = Arc::clone(&receipt);
         Mock::given(method("POST"))
+            .and(header("x-test-client", "signer"))
             .and(path("/api/v1/log/entries"))
             .respond_with(move |request: &Request| {
                 let request: Value = request.body_json().expect("Rekor request");
@@ -332,19 +379,25 @@ mod tests {
                     }
                 }))
                 .expect("Canonical entry");
-                let root = Sha256::new()
+                let leaf = Sha256::new()
                     .chain_update([0])
                     .chain_update(&body)
                     .finalize();
+                let sibling = [0xab; 32];
+                let root = Sha256::new()
+                    .chain_update([1])
+                    .chain_update(leaf)
+                    .chain_update(sibling)
+                    .finalize();
                 let root_b64 = BASE64_STANDARD.encode(root);
-                let note = format!("test-log\n1\n{root_b64}\n");
+                let note = format!("test-log\n2\n{root_b64}\n");
                 let mut signature = log_id[..4].to_vec();
                 signature.extend(log_key.sign(note.as_bytes()).expect("Sign checkpoint"));
                 let signature = BASE64_STANDARD.encode(signature);
                 let checkpoint = format!("{note}\n— test-log {signature}\n");
                 let mut entry = json!({
                     "body": BASE64_STANDARD.encode(&body), "integratedTime": 1_700_000_000,
-                    "logID": hex::encode(log_id), "logIndex": 0,
+                    "logID": hex::encode(log_id), "logIndex": 10,
                 });
                 let timestamp = log_key
                     .sign(entry.to_string().as_bytes())
@@ -352,10 +405,11 @@ mod tests {
                 entry["verification"] = json!({
                     "signedEntryTimestamp": BASE64_STANDARD.encode(timestamp),
                     "inclusionProof": {
-                        "rootHash": hex::encode(root), "logIndex": 0, "treeSize": 1,
-                        "hashes": [], "checkpoint": checkpoint,
+                        "rootHash": hex::encode(root), "logIndex": 0, "treeSize": 2,
+                        "hashes": [hex::encode(sibling)], "checkpoint": checkpoint,
                     }
                 });
+                mock_receipt.set(entry.clone()).expect("A single log entry");
                 ResponseTemplate::new(201).set_body_json(json!({"test-entry": entry}))
             })
             .expect(1)
@@ -366,8 +420,11 @@ mod tests {
             "subject": [],
             "predicateType": "https://example.com/test",
         }))?;
+        let client = ClientBuilder::new(Client::new())
+            .with_init(|request: RequestBuilder| request.header("x-test-client", "signer"))
+            .build();
         let signed = sign_with_services(
-            &Client::new(),
+            &client,
             &format!("{}/api/v2/signingCert", server.uri()),
             &format!("{}/api/v1/log/entries", server.uri()),
             &public_log_key.into(),
@@ -375,6 +432,60 @@ mod tests {
             &statement,
         )
         .await?;
+
+        // Check the generated fields against the wire receipt before redacting them.
+        let wire = receipt.get().expect("Rekor responded");
+        let proof = &wire["verification"]["inclusionProof"];
+        let root = hex::decode(proof["rootHash"].as_str().expect("Hex root hash"))?;
+        let mut entry = signed.transparency_entry;
+        for (field, expected) in [
+            ("/canonicalizedBody", wire["body"].clone()),
+            ("/logId/keyId", json!(BASE64_STANDARD.encode(log_id))),
+            (
+                "/inclusionProof/rootHash",
+                json!(BASE64_STANDARD.encode(root)),
+            ),
+            (
+                "/inclusionProof/checkpoint/envelope",
+                proof["checkpoint"].clone(),
+            ),
+            (
+                "/inclusionPromise/signedEntryTimestamp",
+                wire["verification"]["signedEntryTimestamp"].clone(),
+            ),
+        ] {
+            let actual = entry.pointer_mut(field).expect("Required receipt field");
+            assert_eq!(*actual, expected, "{field}");
+            *actual = json!("[generated]");
+        }
+        insta::assert_json_snapshot!(entry, @r#"
+        {
+          "canonicalizedBody": "[generated]",
+          "inclusionPromise": {
+            "signedEntryTimestamp": "[generated]"
+          },
+          "inclusionProof": {
+            "checkpoint": {
+              "envelope": "[generated]"
+            },
+            "hashes": [
+              "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="
+            ],
+            "logIndex": "0",
+            "rootHash": "[generated]",
+            "treeSize": "2"
+          },
+          "integratedTime": "1700000000",
+          "kindVersion": {
+            "kind": "dsse",
+            "version": "0.0.1"
+          },
+          "logId": {
+            "keyId": "[generated]"
+          },
+          "logIndex": "10"
+        }
+        "#);
 
         assert_eq!(
             BASE64_STANDARD.decode(signed.payload)?,
@@ -393,6 +504,34 @@ mod tests {
             &BitString::new(0, &signature),
             pae.as_bytes(),
         )?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fulcio_rejection_retains_service_diagnostics() -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_string("issuer rejected token-secret"),
+            )
+            .mount(&server)
+            .await;
+        let error = request_certificate(
+            &Client::new().into(),
+            &server.uri(),
+            "token-secret",
+            &KeyPair::generate()?,
+        )
+        .await
+        .expect_err("Fulcio rejected the request");
+        insta::assert_snapshot!(error, @"Fulcio returned HTTP 403 Forbidden: issuer rejected [REDACTED]");
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<reqwest::Error>());
+        assert_eq!(
+            source.and_then(reqwest::Error::status),
+            Some(reqwest::StatusCode::FORBIDDEN)
+        );
         Ok(())
     }
 }

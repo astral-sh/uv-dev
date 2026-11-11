@@ -21,6 +21,7 @@ itertools = { workspace = true }
 jiff = { workspace = true }
 rcgen = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+reqwest-middleware = { workspace = true, features = ["json"] }
 ring = { workspace = true }
 rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -30,6 +31,7 @@ thiserror = { workspace = true }
 x509-parser = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 wiremock = { workspace = true }
