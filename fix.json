@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "The reproduced behavior originates in dotenvy’s parser, including intentional substitution semantics. Correcting it requires a dependency patch outside the permitted paths or a design decision to preprocess or replace dotenv parsing in uv. The checkout and parent regression tests remain unchanged, and the README records the findings. Baseline tests stopped before compilation because the offline dependency cache lacks anstream.",
+  "validation": [],
+  "pull_request": null
+}

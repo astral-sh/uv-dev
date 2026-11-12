@@ -120,9 +120,32 @@ The relevant existing tests were read, including their fixtures and snapshots:
 - `crates/uv/tests/project/run.rs::run_with_malformed_env` writes `THE_^EMPIRE_VARIABLE=darth_vader` and snapshots a parse warning, an unset queried variable, and exit 0. It covers malformed-key handling, not embedded spaces, dollar substitution, or stopping after an invalid middle assignment.
 - `crates/uv/tests/project/run.rs::run_with_multiple_env_files` covers file ordering; `run_with_env_omitted` covers disabling loading. Neither tests these syntax cases.
 - `crates/uv/tests/tool/tool_run.rs::run_with_env_file` creates a local executable project and loads literal dotenv assignments. It does not exercise these syntax cases.
-- Searches in `crates/uv/tests/` and `crates/uv-client/tests/it/` found no targeted integration coverage for the three reported syntax cases. Existing tests were inspected, not executed. No tests were added or changed. The project `run` test module is gated on `test-python` and `test-pypi` in `crates/uv/tests/project/main.rs`.
+- At initial reproduction, searches in `crates/uv/tests/` and `crates/uv-client/tests/it/` found no targeted integration coverage for the three reported syntax cases. The parent regression contribution, astral-sh/uv-dev#3126, subsequently added `run_with_env_file_unset_substitution`, `run_with_env_file_underscore_substitution`, and `run_with_env_file_unquoted_spaces` in `crates/uv/tests/project/run.rs`. Their snapshots assert the reproduced behavior: `prefix`, `short_PLAIN` versus `whole`, and a warning with partial loading, respectively. These tests were read during the fix investigation and left unchanged. The project `run` test module is gated on `test-python` and `test-pypi` in `crates/uv/tests/project/main.rs`.
 
 The checkout pins dotenvy 0.15.7 in `Cargo.toml` and `Cargo.lock`. `crates/uv-command-support/src/child.rs::read_env_files` calls `dotenvy::from_path_iter`, warns on a parse error, and breaks iteration for that file. This agrees with the observed partial loading; the runtime conclusion does not depend on source inspection alone. The existing handoff also checked the released uv 0.13.6 lockfile and found dotenvy 0.15.7. Local release notes for uv 0.13.6 and 0.13.7 list no dotenv parser fix. The report concerns migration between implementations, with no last known-good uv version supplied.
+
+## Fix
+
+**Outcome: not fixed; checkout unchanged.**
+
+The parent regression contribution is astral-sh/uv-dev#3126. Its three tests describe the existing dependency semantics, not one uv implementation error with an agreed replacement behavior. The report requests documentation and explicitly acknowledges intentional substitution behavior. Making unquoted `$MISSING` literal, resolving `$A_PLAIN` as a complete name, and accepting unquoted spaces would be separate syntax policy changes; python-dotenv 1.0.1 itself leaves the bare underscore reference literal rather than resolving it.
+
+The root causes were confirmed against the published dotenvy 0.15.7 source, downloaded to `/tmp/uv-23226-fix-zaymmco0` and verified against its SHA-256 checksum in `Cargo.lock`:
+
+- `parse_value` uses `is_alphanumeric()` to accumulate bare substitution names, so `_` terminates a reference. The upstream test `variable_without_parenthesis_is_substituted_before_separators` explicitly asserts this separator behavior.
+- `apply_substitution` replaces unknown names with empty strings. The upstream test `substitute_undefined_variables_to_empty_string` explicitly asserts that behavior.
+- `parse_value` enters `expecting_end` at unquoted whitespace and rejects subsequent non-comment text. Its substitution branch also consumes a terminating quote as output instead of closing the quote, explaining the already demonstrated double-quoted unbraced-reference failure.
+- `from_path_iter` and `from_read_iter` expose the same parser without a configurable substitution policy. By the time uv receives an item, successful substitution has already discarded the original reference text. Changing uv's error loop cannot repair those values.
+
+The affected uv integration is `crates/uv-command-support/src/child.rs::read_env_files`. Both `crates/uv-project-commands/src/run.rs` and `crates/uv-tool-commands/src/run.rs` call it; neither has a separate dotenv parser or producer requiring a distinct round-trip fix. The neighboring project loading, multiple-file, disabling, and malformed-key tests, plus `crates/uv/tests/tool/tool_run.rs::run_with_env_file`, were inspected. The tool fixture uses literal assignments and does not contradict the demonstrated parser behavior. No additional command-only test variants were added for this shared path.
+
+A dependency patch belongs in dotenvy and would require a dependency/lockfile change, outside the allowed checkout paths. Reimplementing or preprocessing dotenv syntax in uv would introduce a new parsing mechanism that must account for quoting, escaping, multiline values, and substitution order, rather than a small correction to the shared reader. That approach needs a design decision and risks changing behavior beyond the confirmed examples. The requested documentation update is also outside the permitted paths. No speculative production workaround or changed test expectations were retained.
+
+### Focused validation attempt
+
+`cargo nextest` is unavailable. The debug-profile baseline command `cargo test --offline --locked -p uv --test project run_with_env_file_ -- --nocapture` stopped before compilation because the local crates.io cache lacks `anstream`. Thus the parent tests were inspected but their passing baseline was not independently verified in this fix session; no changed-expectation failure or successful debug end-to-end fix validation is claimed. No further build was pursued once the parser ownership and syntax-policy limitations ruled out an authorized focused fix. The successful installed-binary reproduction and python-dotenv comparison remain documented above; they are not validation of a production change.
+
+`git diff --exit-code` and `git status --short` confirmed that the checkout remained clean. Only this README was revised. No tests were weakened or removed, and no GitHub or Git configuration changes were made.
 
 ## Documentation and maintainer next step
 
@@ -134,6 +157,7 @@ A focused documentation update can explain quoting or escaping spaces, single qu
 
 The following relationships are retained from the existing issue-context investigation; this reproduction did not change GitHub state or repeat its issue searches.
 
+- astral-sh/uv-dev#3126 — Parent regression contribution adding the three current-behavior integration tests inspected during the fix investigation.
 - astral-sh/uv#8862 — Closed dotenv support issue whose comments include an underscore-containing substitution failure. Closure concerned opt-in loading through astral-sh/uv#16926, not a parsing fix.
 - allan2/dotenvy#170 — Open upstream concern about inconsistent substitution of names containing underscores. Braced references are a workaround for the reproduced case.
 - allan2/dotenvy#93 — Dollar-containing values changing through substitution; closed as intended behavior, with documentation concerns.
@@ -144,4 +168,4 @@ The existing investigation excluded several superficially similar candidates: as
 
 ## Validation and scope
 
-Runtime commands used only synthetic values and temporary files. Only this issue-context README was updated outside the reproduction directory; checkout files and existing user state were not modified, and no changes were made on GitHub. The checkout already contained a modified `agents/codex/config.toml` and the untracked triage event before reproduction; both were left untouched. No build, integration test suite, or release-profile command was run.
+The original runtime reproduction used only synthetic values and temporary files. The subsequent fix investigation inspected the parent tests, the shared reader, both consumers, neighboring integration coverage, and the checksum-verified upstream parser. Its focused offline debug test attempt failed during dependency resolution before compilation. Only this issue-context README was updated; no checkout files, existing user state, Git configuration, or GitHub state were modified. No full test suite or release-profile command was run. The checkout was clean at the beginning and end of the fix investigation; the modified config and untracked event noted in the earlier reproduction session were not present in this checkout state.
