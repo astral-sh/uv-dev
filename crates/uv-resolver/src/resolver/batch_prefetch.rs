@@ -111,7 +111,7 @@ impl BatchPrefetcher {
 
         self.last_prefetch.insert(name.clone(), num_tried);
 
-        self.prefetch_runner.send_prefetch(
+        match self.prefetch_runner.send_prefetch(
             name,
             unchangeable_constraints,
             total_prefetch,
@@ -120,9 +120,14 @@ impl BatchPrefetcher {
             python_requirement,
             selector,
             env,
-        )?;
-
-        Ok(())
+        ) {
+            // The solver will read these files itself if it needs the candidate.
+            Err(ResolveError::Client(err)) => {
+                debug!("Skipping batch prefetch for `{name}`: {err}");
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     /// Each time we tried a version for a package, we register that here.
@@ -211,7 +216,7 @@ impl BatchPrefetcherRunner {
                     previous,
                 } => {
                     if let Some(candidate) =
-                        selector.select_no_preference(name, &compatible, version_map, env)
+                        selector.select_no_preference(name, &compatible, version_map, env)?
                     {
                         let compatible =
                             compatible.difference(&Range::singleton(candidate.version().clone()));
@@ -245,7 +250,7 @@ impl BatchPrefetcherRunner {
                         };
                     }
                     if let Some(candidate) =
-                        selector.select_no_preference(name, &range, version_map, env)
+                        selector.select_no_preference(name, &range, version_map, env)?
                     {
                         phase = BatchPrefetchStrategy::InOrder {
                             previous: candidate.version().clone(),

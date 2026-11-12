@@ -1422,7 +1422,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        ) else {
+        )?
+        else {
             // Short circuit: we couldn't find _any_ versions for a package.
             return Ok(None);
         };
@@ -1580,14 +1581,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // we passed over can become compatible once we know its variant properties. Revisit the
         // indexes in order, stopping as soon as one has a distribution we can use.
         let candidates = if self.selector.index_strategy() == &IndexStrategy::UnsafeBestMatch {
-            Either::Left(version_maps.iter().filter_map(|map| map.get(version)))
+            Either::Left(
+                version_maps
+                    .iter()
+                    .filter_map(|map| map.get(version).transpose()),
+            )
         } else {
-            Either::Right(std::iter::once(prioritized))
+            Either::Right(std::iter::once(Ok(prioritized)))
         };
 
         let target = tags.python_platform();
         let mut selection = WheelVariantSelection::default();
         for dist in candidates {
+            let dist = dist?;
             // Queue all metadata requests for this candidate before waiting for any of them.
             // A flat index can combine wheels from several sources, so keep each response
             // paired with its source: the same variant label can mean different things on each.
@@ -1748,7 +1754,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        ) else {
+        )?
+        else {
             return Ok(None);
         };
         let CandidateDist::Compatible(base_dist) = base_candidate.dist() else {
@@ -2321,7 +2328,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     #[instrument(skip_all, fields(%request))]
     async fn process_request<Provider: ResolverProvider>(
-        &self,
+        self: &Arc<Self>,
         request: Request,
         provider: &Provider,
     ) -> Result<Option<Response>, ResolveError> {
@@ -2492,8 +2499,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     .wait()
                     .await;
 
-                let version_map = match *versions_response {
-                    VersionsResponse::Found(ref version_map) => version_map,
+                match *versions_response {
+                    VersionsResponse::Found(_) => (),
                     // Short-circuit if we did not find any versions for the package
                     VersionsResponse::NoIndex => {
                         self.unavailable_packages
@@ -2516,102 +2523,111 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                         return Ok(None);
                     }
+                }
+
+                let select = {
+                    let state = self.clone();
+                    let name = package_name.clone();
+                    move || {
+                        let VersionsResponse::Found(maps) = &*versions_response else {
+                            return None;
+                        };
+                        // We don't have access to the fork state when prefetching.
+                        let env = ResolverEnvironment::universal(vec![]);
+                        // The solver reports any read error if it selects this candidate.
+                        let candidate = state
+                            .selector
+                            .select(
+                                &name,
+                                &range,
+                                maps,
+                                &state.preferences,
+                                &state.installed_packages,
+                                &state.exclusions,
+                                None,
+                                &env,
+                                state.tags.as_ref(),
+                            )
+                            .ok()??;
+                        let dist = candidate.compatible()?;
+                        let resolved = dist.for_resolution();
+                        let metadata = maps
+                            .iter()
+                            .filter(|map| map.index() == resolved.index())
+                            .find_map(|map| map.get_metadata(candidate.version()));
+                        if metadata.is_none() {
+                            // Keep registration on the async task, which owns the subsequent fetch.
+                            // Avoid copying a distribution if another request already registered it.
+                            if state
+                                .index
+                                .distributions()
+                                .get_registered(resolved.distribution_id())
+                                .is_some()
+                            {
+                                return None;
+                            }
+                            // Old sdists chosen from an unbounded range may require an expensive build.
+                            if dist.wheel().is_none()
+                                && !state.selector.use_highest_version(&name, &env)
+                                && range
+                                    .iter()
+                                    .next()
+                                    .is_some_and(|(lower, _)| lower == Bound::Unbounded)
+                            {
+                                debug!(
+                                    "Skipping prefetch for unbounded minimum-version range: {name} ({range})"
+                                );
+                                return None;
+                            }
+                            if dist.requires_python().is_some_and(|requires_python| {
+                                !python_requirement.target().is_contained_by(requires_python)
+                            }) || !state
+                                .hasher
+                                .allows_package(candidate.name(), candidate.version())
+                            {
+                                return None;
+                            }
+                        }
+                        Some((resolved.to_owned(), metadata))
+                    }
                 };
-
-                // We don't have access to the fork state when prefetching.
-                let env = ResolverEnvironment::universal(vec![]);
-
-                // Try to find a compatible version. If there aren't any compatible versions,
-                // short-circuit.
-                let Some(candidate) = self.selector.select(
-                    &package_name,
-                    &range,
-                    version_map,
-                    &self.preferences,
-                    &self.installed_packages,
-                    &self.exclusions,
-                    None,
-                    &env,
-                    self.tags.as_ref(),
-                ) else {
-                    return Ok(None);
-                };
-
-                // If there is not a compatible distribution, short-circuit.
-                let Some(dist) = candidate.compatible() else {
+                let Some((dist, metadata)) = provider
+                    .run_cache_read(select)
+                    .await
+                    .expect("candidate prefetch task panicked")
+                else {
                     return Ok(None);
                 };
 
                 // If the registry provided metadata for this distribution, use it.
-                for version_map in version_map {
-                    if let Some(metadata) = version_map.get_metadata(candidate.version()) {
-                        let dist = dist.for_resolution();
-                        if version_map.index() == dist.index() {
-                            debug!("Found registry-provided metadata for: {dist}");
-
-                            let metadata =
-                                MetadataResponse::Found(ArchiveMetadata::from_metadata23(metadata));
-
-                            let dist = dist.to_owned();
-                            if &package_name != dist.name() {
-                                return Err(ResolveError::MismatchedPackageName {
-                                    request: "distribution",
-                                    expected: package_name,
-                                    actual: dist.name().clone(),
-                                });
-                            }
-
-                            let response = match dist {
-                                ResolvedDist::Installable { dist, .. } => Response::Dist {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
-                                ResolvedDist::Installed { dist } => Response::Installed {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
-                            };
-
-                            return Ok(Some(response));
-                        }
+                if let Some(metadata) = metadata {
+                    debug!("Found registry-provided metadata for: {dist}");
+                    let metadata =
+                        MetadataResponse::Found(ArchiveMetadata::from_metadata23(metadata));
+                    if &package_name != dist.name() {
+                        return Err(ResolveError::MismatchedPackageName {
+                            request: "distribution",
+                            expected: package_name,
+                            actual: dist.name().clone(),
+                        });
                     }
-                }
 
-                // Avoid prefetching source distributions with unbounded lower-bound ranges. This
-                // often leads to failed attempts to build legacy versions of packages that are
-                // incompatible with modern build tools.
-                if dist.wheel().is_none() {
-                    if !self.selector.use_highest_version(&package_name, &env) {
-                        if let Some((lower, _)) = range.iter().next() {
-                            if lower == Bound::Unbounded {
-                                debug!(
-                                    "Skipping prefetch for unbounded minimum-version range: {package_name} ({range})"
-                                );
-                                return Ok(None);
-                            }
-                        }
-                    }
-                }
+                    let response = match dist {
+                        ResolvedDist::Installable { dist, .. } => Response::Dist {
+                            dist: (*dist).clone(),
+                            metadata,
+                        },
+                        ResolvedDist::Installed { dist } => Response::Installed {
+                            dist: (*dist).clone(),
+                            metadata,
+                        },
+                    };
 
-                // Validate the Python requirement.
-                if let Some(requires_python) = dist.requires_python() {
-                    if !python_requirement.target().is_contained_by(requires_python) {
-                        return Ok(None);
-                    }
-                }
-
-                // Verify that the package is allowed under the hash-checking policy.
-                if !self
-                    .hasher
-                    .allows_package(candidate.name(), candidate.version())
-                {
-                    return Ok(None);
+                    return Ok(Some(response));
                 }
 
                 // Emit a request to fetch the metadata for this version.
-                let dist = dist.for_resolution();
                 if self.index.distributions().register(dist.distribution_id()) {
-                    let dist = dist.to_owned();
                     if &package_name != dist.name() {
                         return Err(ResolveError::MismatchedPackageName {
                             request: "distribution",
@@ -2727,6 +2743,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .or_insert_with(BTreeSet::new);
 
                         for (version, dists) in version_map.iter(&Ranges::full()) {
+                            // Only materialize files when a cutoff needs their upload times.
+                            let prioritized_dist =
+                                if version_map.included_version_cutoff().is_some()
+                                    || available_version_cutoff.is_some()
+                                {
+                                    match dists.prioritized_dist() {
+                                        Ok(dist) => dist,
+                                        Err(err) => return err.into(),
+                                    }
+                                } else {
+                                    None
+                                };
+
                             // Included versions are those that survive the effective
                             // `exclude-newer` filter used during resolution. Files with
                             // missing upload times are treated as excluded (matching
@@ -2737,7 +2766,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 else {
                                     return false;
                                 };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
+                                let Some(prioritized_dist) = prioritized_dist else {
                                     return true;
                                 };
                                 prioritized_dist.files().all(|file| {
@@ -2760,7 +2789,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 let Some(ref exclude_newer) = available_version_cutoff else {
                                     return false;
                                 };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
+                                let Some(prioritized_dist) = prioritized_dist else {
                                     return false;
                                 };
                                 prioritized_dist.files().all(|file| {

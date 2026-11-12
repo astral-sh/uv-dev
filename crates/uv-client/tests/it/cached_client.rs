@@ -474,6 +474,59 @@ async fn delayed_revalidation_cannot_modify_replaced_payload() -> Result<()> {
     Ok(())
 }
 
+/// A delayed 304 can reveal a broken payload after another writer has published a valid one.
+/// Even if the unconditional retry fails, the replacement must remain available offline.
+#[tokio::test]
+async fn failed_cache_repair_keeps_concurrent_replacement() -> Result<()> {
+    let server = MockServer::start().await;
+    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let temp_dir = tempfile::tempdir()?;
+    let entry = CacheEntry::new(temp_dir.path(), "response");
+    let replacement = CacheEntry::new(temp_dir.path(), "replacement");
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .insert_header("etag", "\"cached\"")
+                .set_body_string("cached"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    cached_text(&client, &server, &entry, CacheControl::None).await?;
+    cached_text(&client, &server, &replacement, CacheControl::None).await?;
+    let mut broken = fs_err::read(&entry)?;
+    broken[0] = 0xc1; // Reserved MessagePack marker. The HTTP policy is still valid.
+    fs_err::write(&entry, broken)?;
+    server.verify().await;
+    server.reset().await;
+
+    let destination = entry.path().to_path_buf();
+    Mock::given(method("GET"))
+        .respond_with(move |request: &Request| {
+            if request.headers.contains_key("if-none-match") {
+                fs_err::rename(&replacement, &destination).expect("publish the replacement");
+                ResponseTemplate::new(304).insert_header("etag", "\"cached\"")
+            } else {
+                ResponseTemplate::new(404)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    assert!(
+        cached_text(&client, &server, &entry, CacheControl::MustRevalidate)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        cached_text(&client, &server, &entry, CacheControl::AllowStale).await?,
+        "cached"
+    );
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn torn_policy_is_refetched() -> Result<()> {
     let server = MockServer::start().await;

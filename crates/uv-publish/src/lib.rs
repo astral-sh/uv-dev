@@ -31,8 +31,8 @@ use tracing::{Level, debug, enabled, trace, warn};
 use uv_auth::{Credentials, CredentialsPrompt, CredentialsPromptError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
-    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
-    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, ProblemDetails,
+    RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -911,20 +911,21 @@ impl<'a> PublishSession<'a> {
                 };
             }
         };
-        let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
+        let Ok([(_, MetadataFormat::Simple(simple_metadata))]) = <[_; 1]>::try_from(response)
+        else {
             unreachable!("We queried a single index, we must get a single response");
         };
-        let simple_metadata = OwnedArchive::deserialize(simple_metadata);
-        let Some(metadatum) = simple_metadata
-            .iter()
-            .find(|metadatum| &metadatum.version == filename.version())
-        else {
+        let Some(version_index) = simple_metadata.find_version(filename.version()) else {
             return Ok(false);
         };
-
+        let files = registry_client
+            .spawn_cache_read(move || simple_metadata.files(version_index))
+            .await
+            .expect("release file read panicked")
+            .map_err(PublishError::CheckUrlIndex)?;
         let archived_files = match filename {
-            DistFilename::SourceDistFilename(_) => &metadatum.files.source_dists,
-            DistFilename::WheelFilename(_) => &metadatum.files.wheels,
+            DistFilename::SourceDistFilename(_) => &files.source_dists,
+            DistFilename::WheelFilename(_) => &files.wheels,
         };
         let archived_file = archived_files.iter().find(|file| {
             DistFilename::try_from_filename(file.filename(), filename.name())
