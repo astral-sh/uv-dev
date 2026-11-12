@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1910,
+        "title": "Add a command to activate the virtual environment, e.g., `uv shell`",
+        "url": "https://github.com/astral-sh/uv/issues/1910",
+        "state": "open",
+        "reason": "Canonical discussion requesting a short command that enters the project's virtual environment without manually sourcing platform-specific activation scripts. It covers both current-shell activation and spawning a shell. Maintainers redirect equivalent activation and discovery requests here."
+      },
+      {
+        "kind": "issue",
+        "number": 14856,
+        "title": "Add a command for `uv activate` for cross platform environment activation",
+        "url": "https://github.com/astral-sh/uv/issues/14856",
+        "state": "open",
+        "reason": "Direct match for the requested command and Windows versus Unix activation friction. A maintainer explicitly identifies the overlap with astral-sh/uv#1910 and directs the author to that discussion; shell hooks are discussed as an approach to current-shell activation."
+      },
+      {
+        "kind": "issue",
+        "number": 11835,
+        "title": "Shortcut to activate uv-created venv  using uv's discovery mechanism",
+        "url": "https://github.com/astral-sh/uv/issues/11835",
+        "state": "closed",
+        "reason": "Requests discovering the environment and running the appropriate activation script, matching the automatic discovery aspect. A maintainer redirected it to astral-sh/uv#1910, and it was closed with the duplicate label, not resolved by an implementation. It does not specify an interactive choice among multiple environments."
+      },
+      {
+        "kind": "issue",
+        "number": 16993,
+        "title": "`uv activate` could print an error message with the appropriate `source .venv/bin/activate` command",
+        "url": "https://github.com/astral-sh/uv/issues/16993",
+        "state": "open",
+        "reason": "The reporter cites this in the live issue's edit. It proposes a helpful activation instruction when uv activate is attempted, rather than actually activating an environment. Maintainers distinguish a helpful error from adding a top-level command that only prints instructions."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Literal searches covered uv activate, activate in titles, source .venv/bin/activate, and the Windows activation path. Separate conceptual searches covered uv shell, shell activation and hooks, environment discovery, multiple environments, selection, choosing environments, switching, and interactive activation. Implementation and fix searches covered activation, venv discovery, and shell-hook PRs; no implementing PR was found. Inspected candidate bodies and comments, followed duplicate referrals to astral-sh/uv#1910, and checked its PR cross-references. Inspected but ruled out astral-sh/uv#7744 and astral-sh/uv#4245 as automatic activation on directory changes, astral-sh/uv#11472 as script execution environment selection, and astral-sh/uv#13542 as uv sync documentation. Followed astral-sh/uv#16993 to astral-sh/uv#14038, which only requests printing activation commands."
+  },
+  "type": "duplicate",
+  "type_reason": "The core request for a convenient, cross-platform virtual-environment activation command is already tracked by open astral-sh/uv#1910 and directly repeated in astral-sh/uv#14856. Maintainer handling of astral-sh/uv#11835 confirms that environment discovery belongs in the same discussion. Choosing among multiple environments is an additional design detail that can be discussed there; no previously fixed behavior or regression is reported.",
+  "summary": "astral-sh/uv#1910 is the canonical activation-command discussion, reinforced by the exact cross-platform request in astral-sh/uv#14856 and the discovery duplicate astral-sh/uv#11835. The reporter's reference, astral-sh/uv#16993, proposes displaying instructions rather than activating the environment.",
+  "draft_response": "This request is already tracked in astral-sh/uv#1910, with the same cross-platform use case discussed in astral-sh/uv#14856. Please add your suggestion about choosing among multiple environments to astral-sh/uv#1910 so the design discussion stays together. astral-sh/uv#16993 is narrower: it proposes displaying activation instructions. For now, you can use `uv run <command>` or your shell's activation script."
+}
