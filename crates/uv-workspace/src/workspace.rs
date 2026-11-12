@@ -22,7 +22,7 @@ use uv_distribution_types::{Index, MinimumLibcVersion, Requirement, RequirementS
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_macros::DebugNoInline;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
-use uv_once_map::OnceMap;
+use uv_once_map::{OnceMap, Producer, Registration};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
@@ -168,7 +168,12 @@ impl WorkspaceCache {
     ///
     /// Once an error is inserted, it will be returned to all future callers that query the failed
     /// query path.
-    fn insert(&self, result: Result<Arc<Workspace>, WorkspaceError>, install_path: &Path) {
+    fn insert(
+        &self,
+        result: Result<Arc<Workspace>, WorkspaceError>,
+        install_path: &Path,
+        producer: Option<Producer<CachedWorkspaceResult>>,
+    ) {
         match result {
             Ok(workspace) => {
                 let mut root_project_name = None;
@@ -193,16 +198,23 @@ impl WorkspaceCache {
                         }),
                     );
                 }
-                self.workspaces.done(
-                    workspace.install_path.clone(),
-                    Ok(CachedWorkspace {
-                        workspace,
-                        project_name: root_project_name,
-                    }),
-                );
+                let workspace_root = workspace.install_path.clone();
+                let cached = CachedWorkspace {
+                    workspace,
+                    project_name: root_project_name,
+                };
+                if let Some(producer) = producer {
+                    producer.done(Ok(cached));
+                } else {
+                    self.workspaces.done(workspace_root, Ok(cached));
+                }
             }
             Err(err) => {
-                self.workspaces.done(install_path.to_path_buf(), Err(err));
+                if let Some(producer) = producer {
+                    producer.done(Err(err));
+                } else {
+                    self.workspaces.done(install_path.to_path_buf(), Err(err));
+                }
             }
         }
     }
@@ -214,11 +226,8 @@ impl WorkspaceCache {
     async fn register_or_wait(
         &self,
         workspace_root: &PathBuf,
-    ) -> Option<Result<Arc<Workspace>, WorkspaceError>> {
-        self.workspaces
-            .register_or_wait(workspace_root)
-            .await
-            .map(|result| result.map(|cached| cached.workspace))
+    ) -> Registration<Producer<CachedWorkspaceResult>, CachedWorkspaceResult> {
+        self.workspaces.register_or_wait(workspace_root).await
     }
 
     /// Get the cached workspace, if any, from the path to the workspace root or to a member root.
@@ -539,16 +548,21 @@ impl Workspace {
                 )
             };
 
-        if options.members == MemberDiscovery::All {
+        let producer = if options.members == MemberDiscovery::All {
             // Ensure that workspace discovery runs only once for any given workspace root.
             // If two threads start at different packages at the same time, they only read their
             // package `pyproject.toml` and the workspace root `pyproject.toml` before arriving
             // here. At this point, only one thread can continue and the other waits, then uses the
             // cached workspace.
-            if let Some(workspace) = workspace_cache.register_or_wait(&workspace_root).await {
-                return workspace;
+            match workspace_cache.register_or_wait(&workspace_root).await {
+                Registration::Existing(workspace) => {
+                    return workspace.map(|cached| cached.workspace);
+                }
+                Registration::New(producer) => Some(producer),
             }
-        }
+        } else {
+            None
+        };
 
         debug!(
             "Found workspace root: {}",
@@ -576,7 +590,7 @@ impl Workspace {
         )
         .await;
         if options.members == MemberDiscovery::All {
-            workspace_cache.insert(result.clone(), &workspace_root);
+            workspace_cache.insert(result.clone(), &workspace_root, producer);
         }
         result
     }
@@ -1856,7 +1870,7 @@ impl ProjectWorkspace {
             };
             let workspace = Arc::new(workspace);
             if options.members == MemberDiscovery::All {
-                workspace_cache.insert(Ok(workspace.clone()), &project_path);
+                workspace_cache.insert(Ok(workspace.clone()), &project_path, None);
             }
             return Ok(Self {
                 project_root: project_path.to_path_buf(),
@@ -1865,16 +1879,21 @@ impl ProjectWorkspace {
             });
         };
 
-        if options.members == MemberDiscovery::All {
+        let producer = if options.members == MemberDiscovery::All {
             // Ensure that workspace discovery runs only once for any given workspace root.
-            if let Some(workspace) = workspace_cache.register_or_wait(&workspace_root).await {
-                return workspace.map(|workspace| Self {
-                    project_root: project_path.to_path_buf(),
-                    project_name: project.name.clone(),
-                    workspace,
-                });
+            match workspace_cache.register_or_wait(&workspace_root).await {
+                Registration::Existing(workspace) => {
+                    return workspace.map(|cached| Self {
+                        project_root: project_path.to_path_buf(),
+                        project_name: project.name.clone(),
+                        workspace: cached.workspace,
+                    });
+                }
+                Registration::New(producer) => Some(producer),
             }
-        }
+        } else {
+            None
+        };
 
         debug!(
             "Found workspace root: {}",
@@ -1891,7 +1910,7 @@ impl ProjectWorkspace {
         )
         .await;
         if options.members == MemberDiscovery::All {
-            workspace_cache.insert(result.clone(), &workspace_root);
+            workspace_cache.insert(result.clone(), &workspace_root, producer);
         }
 
         Ok(Self {
@@ -2260,7 +2279,7 @@ impl VirtualProject {
             )
             .await;
             if options.members == MemberDiscovery::All {
-                workspace_cache.insert(result.clone(), &project_path);
+                workspace_cache.insert(result.clone(), &project_path, None);
             }
             Ok(Self::NonProject(result?))
         } else {
@@ -2280,7 +2299,7 @@ impl VirtualProject {
             )
             .await;
             if options.members == MemberDiscovery::All {
-                workspace_cache.insert(result.clone(), &project_path);
+                workspace_cache.insert(result.clone(), &project_path, None);
             }
             Ok(Self::NonProject(result?))
         }

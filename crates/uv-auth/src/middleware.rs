@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
 use uv_netrc::Netrc;
+use uv_once_map::Registration;
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
@@ -689,18 +690,21 @@ impl AuthMiddleware {
         } else {
             (FetchUrl::Realm(Realm::from(url)), username)
         };
-        if let Some(credentials) = self.cache().fetches.register_or_wait(&key).await {
-            if credentials.is_some() {
-                trace!("Using credentials from previous fetch for {}", key.0);
-            } else {
-                trace!(
-                    "Skipping fetch of credentials for {}, previous attempt failed",
-                    key.0
-                );
-            }
+        let producer = match self.cache().fetches.register_or_wait(&key).await {
+            Registration::Existing(credentials) => {
+                if credentials.is_some() {
+                    trace!("Using credentials from previous fetch for {}", key.0);
+                } else {
+                    trace!(
+                        "Skipping fetch of credentials for {}, previous attempt failed",
+                        key.0
+                    );
+                }
 
-            return Ok(credentials);
-        }
+                return Ok(credentials);
+            }
+            Registration::New(producer) => producer,
+        };
 
         // Support for known providers, like Hugging Face and S3.
         if let Some(credentials) = HuggingFaceProvider::credentials_for(url)
@@ -708,7 +712,7 @@ impl AuthMiddleware {
             .map(Arc::new)
         {
             debug!("Found Hugging Face credentials for `{url}`");
-            self.cache().fetches.done(key, Some(credentials.clone()));
+            producer.done(Some(credentials.clone()));
             return Ok(Some(credentials));
         }
 
@@ -729,7 +733,7 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found S3 credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                producer.done(Some(credentials.clone()));
                 return Ok(Some(credentials));
             }
         }
@@ -751,7 +755,7 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found GCS credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                producer.done(Some(credentials.clone()));
                 return Ok(Some(credentials));
             }
         }
@@ -773,7 +777,7 @@ impl AuthMiddleware {
 
             if let Some(credentials) = credentials {
                 debug!("Found Azure credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
+                producer.done(Some(credentials.clone()));
                 return Ok(Some(credentials));
             }
         }
@@ -891,8 +895,8 @@ impl AuthMiddleware {
 
         let credentials = credentials.map(Authentication::from).map(Arc::new);
 
-        // Register the fetch for this key
-        self.cache().fetches.done(key, credentials.clone());
+        // Cache the completed credential lookup.
+        producer.done(credentials.clone());
 
         Ok(credentials)
     }
@@ -914,8 +918,11 @@ fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> SafeU
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::future::Future;
     use std::io::{self, Write};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Waker};
+    use std::time::Duration;
 
     use http::Method;
     use reqwest::Client;
@@ -2792,6 +2799,49 @@ mod tests {
             tracing_url(&req, Some(&creds)),
             SafeUrl::parse("https://user:password@pypi-proxy.fly.dev/basic-auth/simple").unwrap()
         );
+    }
+
+    #[test(tokio::test)]
+    async fn cancelled_credential_fetch_can_retry() -> Result<(), Error> {
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_netrc(None);
+        let url = DisplaySafeUrl::parse("https://credentials.example.invalid/simple")?;
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(url.to_string())?,
+            Credentials::basic(Some("user".to_owned()), Some("password".to_owned())),
+        );
+        let TextStoreMode::Automatic(cell) = &middleware.text_store else {
+            return Err("expected lazy text store".into());
+        };
+        let (release, ready) = tokio::sync::oneshot::channel();
+        let mut initialize = Box::pin(cell.get_or_init(|| async {
+            let _ = ready.await;
+            Some(store)
+        }));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(initialize.as_mut().poll(&mut context).is_pending());
+        let mut first = Box::pin(middleware.fetch_credentials(None, &url, None, AuthPolicy::Auto));
+        assert!(first.as_mut().poll(&mut context).is_pending());
+        drop(first);
+        release
+            .send(())
+            .map_err(|()| "text store initializer was dropped")?;
+        initialize.await;
+        let credentials = tokio::time::timeout(
+            Duration::from_secs(1),
+            middleware.fetch_credentials(None, &url, None, AuthPolicy::Auto),
+        )
+        .await??
+        .ok_or("missing credentials after retry")?;
+        assert_eq!(credentials.username(), Some("user"));
+        let cached = middleware
+            .fetch_credentials(None, &url, None, AuthPolicy::Auto)
+            .await?
+            .ok_or("missing cached credentials")?;
+        assert!(Arc::ptr_eq(&credentials, &cached));
+        Ok(())
     }
 
     #[test(tokio::test)]

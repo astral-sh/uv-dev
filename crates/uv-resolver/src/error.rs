@@ -52,6 +52,9 @@ pub enum ResolveError {
     #[error("The channel closed unexpectedly")]
     ChannelClosed,
 
+    #[error(transparent)]
+    AbandonedTask(#[from] uv_once_map::Abandoned),
+
     #[error("Attempted to wait on an unregistered task: `{_0}`")]
     UnregisteredTask(String),
 
@@ -158,6 +161,7 @@ impl ResolveError {
             Self::Dist(_, _, _, error) => error.is_user_failure(),
             Self::Client(error) => error.is_user_failure(),
             Self::ChannelClosed
+            | Self::AbandonedTask(_)
             | Self::UnregisteredTask(_)
             | Self::InvalidVersion(_)
             | Self::ConflictingDistribution(_) => false,
