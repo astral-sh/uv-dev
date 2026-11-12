@@ -94,6 +94,7 @@ uv-resolver-types = { version = "0.0.99", path = "crates/uv-resolver-types" }
 uv-scripts = { version = "0.0.99", path = "crates/uv-scripts" }
 uv-settings = { version = "0.0.99", path = "crates/uv-settings" }
 uv-shell = { version = "0.0.99", path = "crates/uv-shell" }
+uv-sigstore = { version = "0.0.99", path = "crates/uv-sigstore" }
 uv-small-str = { version = "0.0.99", path = "crates/uv-small-str" }
 uv-state = { version = "0.0.99", path = "crates/uv-state" }
 uv-static = { version = "0.0.99", path = "crates/uv-static" }
@@ -230,6 +231,11 @@ pubgrub = { version = "0.7.1", package = "astral-pubgrub", default-features = fa
 quote = { version = "1.0.37", default-features = false, features = ["proc-macro"] }
 rand = { version = "0.10.2", default-features = false, features = ["thread_rng"] }
 rayon = { version = "1.10.0", default-features = false }
+rcgen = { version = "0.14.5", features = [
+  "crypto",
+  "pem",
+  "ring",
+], default-features = false }
 ref-cast = { version = "1.0.24", default-features = false }
 reflink-copy = { version = "0.1.19", default-features = false }
 # Keep the regex features used by uv-build in the base set. Other consumers opt into the full
@@ -278,6 +284,7 @@ reqwest-middleware = { version = "0.5.1", package = "astral-reqwest-middleware",
 reqwest-retry = { version = "0.9.1", package = "astral-reqwest-retry", default-features = false, features = [
   "tracing",
 ] }
+ring = { version = "0.17.14", default-features = false }
 rkyv = { version = "0.8.14", default-features = false, features = ["bytecheck", "std"] }
 rmp-serde = { version = "1.3.0", default-features = false }
 rustc-hash = { version = "2.0.0", default-features = false, features = ["std"] }
@@ -387,6 +394,7 @@ windows = { version = "0.61.0", default-features = false, features = [
 windows-registry = { version = "0.5.0", default-features = false, features = ["std"] }
 windows-version = { version = "0.100.0", default-features = false }
 wiremock = { version = "0.6.4", default-features = false }
+x509-parser = { version = "0.18.0", default-features = false }
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 zeroize = { version = "1.8.1", default-features = false, features = ["alloc"] }
 zstd = { version = "0.13.3", default-features = false }
@@ -412,11 +420,6 @@ insta = { version = "1.46.0", default-features = false, features = [
   "redactions",
 ] }
 predicates = { version = "3.1.2", default-features = false }
-rcgen = { version = "0.14.5", features = [
-  "crypto",
-  "pem",
-  "ring",
-], default-features = false }
 rustls = { version = "0.23.36", default-features = false, features = [
   "aws_lc_rs",
   "logging",
@@ -428,7 +431,6 @@ similar = { version = "3.0.0", default-features = false, features = ["std", "tex
 webpki = { version = "0.103.10", package = "rustls-webpki", default-features = false, features = [
   "std",
 ] }
-x509-parser = { version = "0.18.0", default-features = false }
 temp-env = { version = "0.3.6", default-features = false, features = ["async_closure"] }
 test-case = { version = "3.3.1", default-features = false }
 test-log = { version = "0.2.16", features = [

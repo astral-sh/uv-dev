@@ -7931,6 +7931,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-sigstore"
+version = "0.0.99"
+dependencies = [
+ "astral-reqwest-middleware",
+ "base64 0.23.1",
+ "hex",
+ "http",
+ "insta",
+ "itertools 0.14.0",
+ "jiff",
+ "rcgen",
+ "reqwest",
+ "ring",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "tokio",
+ "uv-macros",
+ "wiremock",
+ "x509-parser",
+]
+
+[[package]]
 name = "uv-small-str"
 version = "0.0.99"
 dependencies = [
