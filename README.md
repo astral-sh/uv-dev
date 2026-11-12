@@ -19,6 +19,10 @@ beginning with `eccodes` 2.45.0, includes a macOS reproduction, and contains the
 pip-versus-`uv add` observation. Public PyPI metadata independently confirms inconsistent
 requirements across wheels for versions 2.45.0 and 2.46.0.
 
+Maintainer charliermarsh also supplied a version-scoped dependency metadata override as an
+alternative to explicitly adding `eccodeslib`; see the workaround below. Its example version,
+2.50.0, does not establish the reporter's resolved version.
+
 ## Draft response
 
 This matches ecmwf/eccodes-python#150 and the resolver behavior discussed in astral-sh/uv#10693. For eccodes 2.45.0 and 2.46.0, the platform-independent wheel declares eccodeslib on non-Windows systems, but the Windows wheels omit that requirement entirely. uv's universal resolver reads one wheel's metadata and assumes requirements are consistent across a release, so differing wheel metadata can leave dependencies out.
@@ -39,6 +43,37 @@ not make a missing required runtime dependency correct.
 - ecmwf/eccodes-python#150 — 2.45.0 (+ and 2.46) release misses eccodeslib dependency - "Cannot find the ecCodes library" (open issue). Direct upstream match: eccodes omits eccodeslib under uv, explicitly adding eccodeslib works, and comments include the same pip-versus-uv difference and a macOS reproduction. Independently inspected PyPI wheel metadata for eccodes 2.45.0 and 2.46.0 confirms that Windows wheels omit eccodeslib while platform-independent wheels require it on non-Windows systems.
 - astral-sh/uv#10693 — PyTorch nightly inconsistency between `uv pip install` vs `uv sync` (missing nvidia packages) (open issue). Same resolver failure mode with another package: universal locking omits runtime dependencies that single-platform installation includes. Maintainer analysis confirms different Requires-Dist metadata between wheels of one release, selection of one wheel for universal resolution, and explicitly adding missing dependencies as a workaround.
 - astral-sh/uv#7381 — Prefer compatible wheels in universal resolver (closed pull request). Historical proposal to prefer the current platform's wheel when reading metadata, directly relevant to the pip-versus-universal-resolution difference. Closed without merging because inconsistent wheel metadata would make resolution platform-dependent; this was not a shipped fix whose failure would establish a regression.
+
+## Metadata override workaround
+
+In astral-sh/uv#23222, maintainer charliermarsh recommends overriding `eccodes` dependency
+metadata to include the missing non-Windows requirement alongside its base requirements. The
+example uses version 2.50.0. In `pyproject.toml`, the documented table form is:
+
+```toml
+[[tool.uv.dependency-metadata]]
+name = "eccodes"
+version = "2.50.0"
+requires-dist = [
+    "numpy",
+    "attrs",
+    "cffi",
+    "findlibs",
+    "eccodeslib; platform_system != 'Windows'",
+]
+```
+
+`docs/concepts/resolution.md`, under Dependency metadata, documents this mechanism for incorrect
+or incomplete package metadata. The override supplies the package's dependency list, so the
+base requirements must be included along with `eccodeslib`. This entry applies only to
+`eccodes` 2.50.0; another resolved version needs matching metadata rather than assuming the
+example applies unchanged. The Windows marker retains the platform condition found in the
+previously inspected platform-independent wheels.
+
+This is a maintainer-provided alternative to the reporter's working `uv add eccodeslib`
+approach. The override has not been reproduced locally or confirmed by the reporter. Neither
+the example nor the new comment confirms that the reporter uses `eccodes` 2.50.0 or establishes
+that version's published wheel metadata.
 
 ## Supporting evidence
 
@@ -105,5 +140,7 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged pull r
 The exact `eccodes` version, install command, and metadata artifact chosen in the reporter's
 environment remain unconfirmed. Ask for the command and resolved version to verify the match.
 The suggested `uv add eccodeslib` workaround matches both the report and the upstream discussion.
+The maintainer-provided metadata override is another option, with configuration and validation
+limits described above; its example version does not resolve the missing version information.
 No evidence supports claiming that uv uses PyPI's release-level JSON as its metadata source, or
 that a newer uv release has fixed this behavior.
