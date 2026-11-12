@@ -9,7 +9,7 @@ The reporter requests a short, cross-platform `uv activate` command instead of t
 
 astral-sh/uv#1910 is the canonical activation-command discussion, reinforced by the exact cross-platform request in astral-sh/uv#14856 and the discovery duplicate astral-sh/uv#11835. The reporter's reference, astral-sh/uv#16993, proposes displaying instructions rather than activating the environment.
 
-The live issue includes an edit pointing to astral-sh/uv#16993, which was absent from the event payload. That reference is relevant but does not track actual activation.
+The reporter explicitly distinguishes the instruction-printing proposal in astral-sh/uv#16993 from the desired direct activation and asks whether direct activation is possible. In the issue discussion, maintainer woodruffw points to astral-sh/uv#1910 in particular for the technical constraints and complications of spawning a child shell.
 
 ## Draft response
 
@@ -29,6 +29,8 @@ The issue currently carries the enhancement label. The proposed triage classific
 - astral-sh/uv#16993 (open issue), `uv activate` could print an error message with the appropriate `source .venv/bin/activate` command: The reporter cites this in the live issue's edit. It proposes a helpful activation instruction when uv activate is attempted, rather than actually activating an environment. Maintainers distinguish a helpful error from adding a top-level command that only prints instructions.
 
 ## Supporting evidence
+
+On astral-sh/uv#23227, maintainer woodruffw identifies the request as similar to astral-sh/uv#1910 and astral-sh/uv#16993, directing the reporter particularly to astral-sh/uv#1910 for discussion of the difficulty of activation without spawning a child shell and the complications of that approach. The supplied full discussion identifies woodruffw as a repository member. This directly supports the existing related-issue assessment; it does not announce an implementation, a formal duplicate closure, or a decision to reject the feature. Source: https://github.com/astral-sh/uv/issues/23227#issuecomment-6830710295
 
 In astral-sh/uv#1910, the original proposal explicitly abstracts manual activation across operating systems. The discussion distinguishes entering a new shell from modifying the current shell. Maintainer zanieb explains that another process cannot source a script into the user's shell. This establishes a shell-integration constraint, rather than a defect in the existing activation scripts. The discussion remains open.
 
@@ -55,4 +57,4 @@ The automatic-directory-activation issues require a different trigger from an ex
 
 ## Handoff
 
-Use the draft response to direct the reporter to astral-sh/uv#1910, including the multiple-environment selection detail. This handoff and proposed classification have not been posted to GitHub. No checkout files were modified for this triage.
+The maintainer reply already directs the reporter to astral-sh/uv#1910, so that referral does not need to be repeated. Retain the duplicate recommendation; choosing among multiple environments remains a design detail for the canonical discussion. The earlier draft response above is retained as existing triage context. No additional public response is proposed here. This handoff and proposed classification have not been posted to GitHub. No checkout files were modified for this triage.
