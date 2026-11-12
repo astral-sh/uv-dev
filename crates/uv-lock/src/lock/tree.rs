@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::path::Path;
+use std::slice;
 
 use either::Either;
 use itertools::Itertools;
@@ -13,12 +14,17 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::Serialize;
 
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{
+    DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers, Excludes, Override,
+    Overrides, ScopedOverrideSourceError,
+};
 use uv_console::human_readable_bytes;
+use uv_distribution::{FlatRequiresDist, Metadata as DistributionMetadata};
+use uv_distribution_types::{Requirement, RequirementSource};
 use uv_fs::PortablePathBuf;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_pypi_types::ResolverMarkerEnvironment;
 
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
@@ -27,7 +33,7 @@ use crate::lock::export::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
     MetadataWorkspaceMember,
 };
-use crate::lock::{Package, PackageId, PackageIndex};
+use crate::lock::{LockError, LockErrorKind, Package, PackageId, PackageIndex};
 use crate::{Lock, PackageMap};
 
 #[derive(Debug, Clone, Copy)]
@@ -67,6 +73,14 @@ pub struct TreeDisplay<'env> {
     lock: &'env Lock,
     /// Whether to show sizes in the rendered output.
     show_sizes: bool,
+    /// The environment used to select individual requirement declarations.
+    markers: Option<&'env ResolverMarkerEnvironment>,
+    /// The declarations used for opt-in, per-edge version specifier annotations.
+    requirements: Option<PackageMap<TreeRequirements>>,
+    root_requirements: Box<[Requirement]>,
+    root_dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
+    /// The locked dependency modifiers, kept separate from package declarations.
+    modifiers: DependencyModifiers,
     /// The marker constraints imposed by declared conflicting extras and groups.
     conflict_marker: UniversalMarker,
 }
@@ -524,100 +538,472 @@ impl<'env> TreeDisplay<'env> {
             groups: groups.clone(),
             lock,
             show_sizes,
+            markers,
+            requirements: None,
+            root_requirements: Box::new([]),
+            root_dependency_groups: BTreeMap::new(),
+            modifiers: DependencyModifiers::default(),
             conflict_marker,
         }
     }
 
-    /// Perform a depth-first traversal of the given package and its dependencies.
-    fn visit(
-        &'env self,
-        cursor: Cursor,
-        visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
-        path: &mut Vec<VisitedNode<'env>>,
-    ) -> Vec<String> {
-        // Short-circuit if the current path is longer than the provided depth.
-        if path.len() > self.depth {
-            return Vec::new();
+    /// Return the packages whose metadata is needed to annotate displayed dependency edges.
+    ///
+    /// The requirement belongs to the original parent, even in an inverted tree. Leaves and
+    /// packages beyond the requested depth do not need a metadata lookup.
+    pub fn metadata_packages(&self) -> Result<Vec<&'env Package>, ScopedOverrideSourceError> {
+        let modifiers = self.dependency_modifiers()?;
+        let static_metadata = self.lock.dependency_metadata();
+        let mut package_ids = BTreeSet::new();
+        self.walk(&mut |visit| {
+            if let Some(edge) = visit.cursor.edge()
+                && let Some((source, target)) = self.graph.edge_endpoints(edge)
+                && let Node::Package(package_index) =
+                    self.graph[if self.invert { target } else { source }]
+            {
+                package_ids.insert(&self.lock.package(package_index).id);
+            }
+        });
+        Ok(package_ids
+            .into_iter()
+            .map(|package_id| self.lock.package(self.lock.by_id[package_id]))
+            .filter(|package| {
+                (package.version().is_none() && modifiers.has_scoped_package(package.name()))
+                    || (!package.has_metadata()
+                        && static_metadata
+                            .get(package.name(), package.version())
+                            .is_none())
+            })
+            .collect())
+    }
+
+    fn dependency_modifiers(&self) -> Result<DependencyModifiers, ScopedOverrideSourceError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.lock.manifest.overrides.iter().cloned().collect())?,
+            Excludes::from_entries(self.lock.manifest.excludes.iter().cloned()),
+        ))
+    }
+
+    /// Annotate each dependency edge with its parent's requirement declarations.
+    pub fn with_metadata(
+        mut self,
+        metadata: &PackageMap<DistributionMetadata>,
+        root: &Path,
+    ) -> Result<Self, LockError> {
+        let mut overrides = self
+            .lock
+            .manifest
+            .overrides
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in &mut overrides {
+            match entry {
+                Override::Requirement(requirement) => root_requirement_url(requirement, root)?,
+                Override::Package(package) => {
+                    for requirement in &mut package.dependencies {
+                        root_requirement_url(requirement, root)?;
+                    }
+                }
+            }
+        }
+        self.modifiers = DependencyModifiers::new(
+            Overrides::from_entries(overrides)?,
+            Excludes::from_entries(self.lock.manifest.excludes.iter().cloned()),
+        );
+        self.root_requirements = self.lock.requirements().iter().cloned().collect();
+        for requirement in &mut self.root_requirements {
+            root_requirement_url(requirement, root)?;
+        }
+        self.root_dependency_groups = self
+            .lock
+            .dependency_groups()
+            .iter()
+            .map(|(group, requirements)| (group.clone(), requirements.iter().cloned().collect()))
+            .collect();
+        for requirement in self
+            .root_dependency_groups
+            .values_mut()
+            .flat_map(|requirements| requirements.iter_mut())
+        {
+            root_requirement_url(requirement, root)?;
+        }
+        let static_metadata = self.lock.dependency_metadata();
+        let mut requirements = PackageMap::default();
+        for node in self.graph.node_weights() {
+            let Node::Package(package_index) = node else {
+                continue;
+            };
+            let package = self.lock.package(*package_index);
+            let resolved_metadata = metadata.get(&package.id);
+            let version = resolved_metadata
+                .map(|metadata| metadata.version.clone())
+                .or_else(|| package.version().cloned());
+            let (requires_dist, mut dependency_groups) = if let Some(metadata) =
+                resolved_metadata.filter(|_| !package.has_metadata())
+            {
+                (
+                    metadata.requires_dist.clone(),
+                    metadata.dependency_groups.clone(),
+                )
+            } else if package.has_metadata() {
+                (
+                    package.metadata.requires_dist.iter().cloned().collect(),
+                    package
+                        .metadata
+                        .dependency_groups
+                        .iter()
+                        .map(|(group, requirements)| {
+                            (group.clone(), requirements.iter().cloned().collect())
+                        })
+                        .collect(),
+                )
+            } else if let Some(metadata) = static_metadata.get(package.name(), package.version()) {
+                (
+                    metadata
+                        .requires_dist
+                        .into_iter()
+                        .map(Requirement::from)
+                        .collect(),
+                    BTreeMap::new(),
+                )
+            } else {
+                continue;
+            };
+            // Excluded self-references must not activate recursive extras. Keep surviving
+            // declarations unchanged so override annotations still describe the original request.
+            let mut requires_dist = requires_dist.into_vec();
+            requires_dist.retain(|requirement| {
+                if let Some(version) = &version {
+                    !self
+                        .modifiers
+                        .is_excluded_for(package.name(), version, &requirement.name)
+                } else {
+                    !self.modifiers.is_excluded(&requirement.name)
+                }
+            });
+            for requirement in &mut requires_dist {
+                root_requirement_url(requirement, root)?;
+            }
+            for requirement in dependency_groups
+                .values_mut()
+                .flat_map(|requirements| requirements.iter_mut())
+            {
+                root_requirement_url(requirement, root)?;
+            }
+            let scope = version
+                .as_ref()
+                .map_or(DependencyModifierScope::Global, |version| {
+                    DependencyModifierScope::Package(package.name(), version)
+                });
+            let requires_dist = FlatRequiresDist::from_requirements_with_modifiers(
+                requires_dist.into_boxed_slice(),
+                package.name(),
+                &self.modifiers,
+                scope,
+            );
+            let requires_dist = requires_dist.into_iter().collect();
+            requirements.insert(
+                package,
+                TreeRequirements {
+                    version,
+                    requires_dist,
+                    dependency_groups,
+                },
+            );
+        }
+        self.requirements = Some(requirements);
+        Ok(self)
+    }
+
+    /// Append declarations for the immediate dependency relationship, not all paths to the node.
+    fn append_requirements(&self, line: &mut String, cursor: Cursor) {
+        let Some(metadata) = self.requirements.as_ref() else {
+            return;
+        };
+        let Some(edge_id) = cursor.edge() else {
+            return;
+        };
+        let Some((source, target)) = self.graph.edge_endpoints(edge_id) else {
+            return;
+        };
+        let (parent, dependency) = if self.invert {
+            (target, source)
+        } else {
+            (source, target)
+        };
+        let Node::Package(dependency_index) = self.graph[dependency] else {
+            return;
+        };
+        let dependency_id = &self.lock.package(dependency_index).id;
+        let edge = &self.graph[edge_id];
+        let requirements = match self.graph[parent] {
+            Node::Root => TreeDeclarations::Plain(match edge {
+                Edge::Prod(None, _) => return,
+                Edge::Prod(..) | Edge::Optional(..) => &self.root_requirements,
+                Edge::Dev(group, ..) => self
+                    .root_dependency_groups
+                    .get(*group)
+                    .map_or(&[], |requirements| requirements.as_ref()),
+            }),
+            Node::Package(parent_index) => metadata
+                .get(&self.lock.package(parent_index).id)
+                .map_or(TreeDeclarations::Plain(&[]), |metadata| match edge {
+                    Edge::Prod(..) | Edge::Optional(..) => {
+                        TreeDeclarations::Activated(&metadata.requires_dist)
+                    }
+                    Edge::Dev(group, ..) => TreeDeclarations::Plain(
+                        metadata
+                            .dependency_groups
+                            .get(*group)
+                            .map_or(&[], |requirements| requirements.as_ref()),
+                    ),
+                }),
+        };
+        let modifier_scope = match self.graph[parent] {
+            Node::Package(parent_index) => {
+                let parent_id = &self.lock.package(parent_index).id;
+                metadata
+                    .get(parent_id)
+                    .and_then(|requirements| requirements.version.as_ref())
+                    .or(parent_id.version.as_ref())
+                    .map_or(DependencyModifierScope::Global, |version| {
+                        if edge.is_dev() {
+                            DependencyModifierScope::DependencyGroup(&parent_id.name, version)
+                        } else {
+                            DependencyModifierScope::Package(&parent_id.name, version)
+                        }
+                    })
+            }
+            Node::Root => DependencyModifierScope::Global,
+        };
+        let requirement_marker = |marker: MarkerTree| {
+            let production_marker = marker.simplify_not_extras_with(|_| true);
+            match edge {
+                Edge::Optional(extra, ..) => marker
+                    .simplify_extras(slice::from_ref(*extra))
+                    .simplify_not_extras_with(|_| true)
+                    .and(production_marker.negate()),
+                Edge::Prod(..) | Edge::Dev(..) => production_marker,
+            }
+        };
+        let is_applicable = |marker: MarkerTree| {
+            let applicable = marker
+                .and(edge.marker().pep508())
+                .and(cursor.marker().pep508())
+                .and(self.lock.requires_python().to_marker_tree());
+            !applicable.is_false()
+                && self
+                    .markers
+                    .is_none_or(|markers| applicable.evaluate(markers, &[]))
+        };
+        let format_requirement = |requirement: &Requirement, overridden: bool| {
+            let mut value = match &requirement.source {
+                RequirementSource::Registry { specifier, .. } => {
+                    if specifier.is_empty() {
+                        "*".to_string()
+                    } else {
+                        specifier.to_string()
+                    }
+                }
+                RequirementSource::Url { url, .. }
+                | RequirementSource::GitDirectory { url, .. }
+                | RequirementSource::GitPath { url, .. }
+                | RequirementSource::Path { url, .. }
+                | RequirementSource::Directory { url, .. } => url.to_string(),
+            };
+            // An override can replace the marker as well as the version range. Preserve the
+            // superseded declaration's condition even when rendering a single environment.
+            if (self.markers.is_none() || overridden)
+                && let Some(marker) = requirement_marker(requirement.marker).contents()
+            {
+                let _ = write!(value, "; {marker}");
+            }
+            value
+        };
+
+        let mut annotations = BTreeSet::new();
+        for (requirement, activation_marker) in requirements.iter() {
+            if requirement.name != dependency_id.name {
+                continue;
+            }
+            let overridden = self
+                .modifiers
+                .global_overrides()
+                .any(|candidate| candidate.name == requirement.name)
+                || match modifier_scope {
+                    DependencyModifierScope::Package(name, version) => self
+                        .modifiers
+                        .scoped_overrides_for(name, version)
+                        .any(|candidate| candidate.name == requirement.name),
+                    DependencyModifierScope::Global
+                    | DependencyModifierScope::DependencyGroup(..) => false,
+                };
+            let applicable = if let Some(marker) = activation_marker {
+                is_applicable(requirement_marker(marker))
+            } else if overridden {
+                // Use the effective request only to identify the displayed edge; never present
+                // an override's range as a declaration from the parent package.
+                self.modifiers
+                    .apply(modifier_scope, [requirement])
+                    .any(|candidate| {
+                        candidate.name == dependency_id.name
+                            && is_applicable(requirement_marker(candidate.marker))
+                    })
+            } else {
+                is_applicable(requirement_marker(requirement.marker))
+            };
+            if applicable {
+                annotations.insert((format_requirement(requirement, overridden), overridden));
+            }
         }
 
+        if !requirements
+            .iter()
+            .any(|(requirement, _)| requirement.name == dependency_id.name)
+        {
+            // Scoped overrides can add dependencies absent from the original metadata. Those
+            // declarations are known, but belong to the override rather than the package.
+            let additions = self
+                .modifiers
+                .apply(
+                    modifier_scope,
+                    requirements.iter().map(|(requirement, _)| requirement),
+                )
+                .filter(|requirement| {
+                    requirement.name == dependency_id.name
+                        && is_applicable(requirement_marker(requirement.marker))
+                })
+                .map(|requirement| format_requirement(&requirement, false))
+                .collect::<BTreeSet<_>>();
+            if !additions.is_empty() {
+                for addition in additions {
+                    if self.invert {
+                        let _ = write!(
+                            line,
+                            " [added by override: {} {addition}]",
+                            dependency_id.name
+                        );
+                    } else {
+                        let _ = write!(line, " [added by override: {addition}]");
+                    }
+                }
+                return;
+            }
+        }
+
+        // Missing declarations are not the same as a known, unconstrained requirement.
+        if annotations.is_empty() {
+            annotations.insert(("unknown".to_string(), false));
+        }
+        for (annotation, overridden) in annotations {
+            if self.invert {
+                let label = if overridden { "declares" } else { "requires" };
+                let _ = write!(line, " [{label}: {} {annotation}]", dependency_id.name);
+            } else {
+                let label = if overridden { "declared" } else { "required" };
+                let _ = write!(line, " [{label}: {annotation}]");
+            }
+            if overridden {
+                line.push_str(" [overridden]");
+            }
+        }
+    }
+
+    /// Render one package row without tree prefixes or repeated-node markers.
+    fn render_node(&self, cursor: Cursor) -> String {
         let Node::Package(package_index) = self.graph[cursor.node()] else {
-            return Vec::new();
+            unreachable!("Only package nodes are rendered");
         };
         let edge = cursor.edge().map(|edge_id| &self.graph[edge_id]);
         let package = self.lock.package(package_index);
         let package_id = &package.id;
+        let mut line = format!("{}", package_id.name);
 
+        if let Some(extras) = edge.and_then(Edge::extras) {
+            if !extras.is_empty() {
+                line.push('[');
+                line.push_str(extras.iter().join(", ").as_str());
+                line.push(']');
+            }
+        }
+
+        if let Some(version) = package_id.version.as_ref() {
+            line.push(' ');
+            line.push('v');
+            let _ = write!(line, "{version}");
+        }
+
+        if let Some(edge) = edge {
+            match edge {
+                Edge::Prod(..) => {}
+                Edge::Optional(extra, ..) => {
+                    let _ = write!(line, " (extra: {extra})");
+                }
+                Edge::Dev(group, ..) => {
+                    let _ = write!(line, " (group: {group})");
+                }
+            }
+        }
+
+        self.append_requirements(&mut line, cursor);
+
+        // Append compressed wheel size, if available in the lockfile.
+        // Keep it simple: use the first wheel entry that includes a size.
+        if self.show_sizes {
+            if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
+                let bytes = human_readable_bytes(size_bytes);
+                line.push(' ');
+                line.push_str(format!("{}", format!("({bytes:.1})").dimmed()).as_str());
+            }
+        }
+
+        line
+    }
+
+    /// Traverse displayed rows without constructing their text.
+    fn walk_node(
+        &'env self,
+        cursor: Cursor,
+        visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
+        path: &mut Vec<VisitedNode<'env>>,
+        branches: &mut Vec<bool>,
+        on_visit: &mut impl FnMut(TreeVisit<'_>),
+    ) {
+        if path.len() > self.depth {
+            return;
+        }
+        let Node::Package(package_index) = self.graph[cursor.node()] else {
+            return;
+        };
+        let edge = cursor.edge().map(|edge_id| &self.graph[edge_id]);
+        let package = self.lock.package(package_index);
         let expanded_extras = self.expanded_extras(package, edge);
         let visited_node = VisitedNode {
             package_index,
             expanded_extras: expanded_extras.clone(),
             marker: self.invert.then_some(cursor.marker()),
         };
-
-        let line = {
-            let mut line = format!("{}", package_id.name);
-
-            if let Some(extras) = edge.and_then(Edge::extras) {
-                if !extras.is_empty() {
-                    line.push('[');
-                    line.push_str(extras.iter().join(", ").as_str());
-                    line.push(']');
-                }
-            }
-
-            if let Some(version) = package_id.version.as_ref() {
-                line.push(' ');
-                line.push('v');
-                let _ = write!(line, "{version}");
-            }
-
-            if let Some(edge) = edge {
-                match edge {
-                    Edge::Prod(..) => {}
-                    Edge::Optional(extra, ..) => {
-                        let _ = write!(line, " (extra: {extra})");
-                    }
-                    Edge::Dev(group, ..) => {
-                        let _ = write!(line, " (group: {group})");
-                    }
-                }
-            }
-
-            // Append compressed wheel size, if available in the lockfile.
-            // Keep it simple: use the first wheel entry that includes a size.
-            if self.show_sizes {
-                if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
-                    let bytes = human_readable_bytes(size_bytes);
-                    line.push(' ');
-                    line.push_str(format!("{}", format!("({bytes:.1})").dimmed()).as_str());
-                }
-            }
-
-            line
-        };
-
-        // Skip the traversal if:
-        // 1. The package is in the current traversal path (i.e., a dependency cycle).
-        // 2. The package has been visited and de-duplication is enabled (default).
         if path.contains(&visited_node) {
-            return vec![format!("{line} (*)")];
+            on_visit(TreeVisit {
+                cursor,
+                repeated: true,
+                include_latest: false,
+                branches,
+            });
+            return;
         }
         if !self.no_dedupe
             && let Some(requirements) = visited.get(&visited_node)
         {
-            return if requirements.is_empty() {
-                vec![line]
-            } else {
-                vec![format!("{line} (*)")]
-            };
+            on_visit(TreeVisit {
+                cursor,
+                repeated: !requirements.is_empty(),
+                include_latest: false,
+                branches,
+            });
+            return;
         }
-
-        // Incorporate the latest version of the package, if known.
-        let line = if let Some(version) = self.latest.get(package_id) {
-            format!("{line} {}", format!("(latest: v{version})").bold().cyan())
-        } else {
-            line
-        };
 
         let mut dependencies = if self.invert && edge.is_some_and(Edge::is_dev) {
             // A member's dependency group is activated for the root member. It is not part of the
@@ -673,7 +1059,12 @@ impl<'env> TreeDisplay<'env> {
             (edge, node)
         });
 
-        let mut lines = vec![line];
+        on_visit(TreeVisit {
+            cursor,
+            repeated: false,
+            include_latest: true,
+            branches,
+        });
 
         // Keep track of the dependency path to avoid cycles.
         // Only mark as visited if we're going to expand children (not at depth limit).
@@ -691,79 +1082,73 @@ impl<'env> TreeDisplay<'env> {
         }
         path.push(visited_node);
 
-        for (index, dep) in dependencies.iter().enumerate() {
-            // For sub-visited packages, add the prefix to make the tree display user-friendly.
-            // The key observation here is you can group the tree as follows when you're at the
-            // root of the tree:
-            // root_package
-            // ├── level_1_0          // Group 1
-            // │   ├── level_2_0      ...
-            // │   │   ├── level_3_0  ...
-            // │   │   └── level_3_1  ...
-            // │   └── level_2_1      ...
-            // ├── level_1_1          // Group 2
-            // │   ├── level_2_2      ...
-            // │   └── level_2_3      ...
-            // └── level_1_2          // Group 3
-            //     └── level_2_4      ...
-            //
-            // The lines in Group 1 and 2 have `├── ` at the top and `|   ` at the rest while
-            // those in Group 3 have `└── ` at the top and `    ` at the rest.
-            // This observation is true recursively even when looking at the subtree rooted
-            // at `level_1_0`.
-            let (prefix_top, prefix_rest) = if dependencies.len() - 1 == index {
-                ("└── ", "    ")
-            } else {
-                ("├── ", "│   ")
-            };
-            for (visited_index, visited_line) in self.visit(*dep, visited, path).iter().enumerate()
-            {
-                let prefix = if visited_index == 0 {
-                    prefix_top
-                } else {
-                    prefix_rest
-                };
-                lines.push(format!("{prefix}{visited_line}"));
-            }
+        for (index, dependency) in dependencies.iter().enumerate() {
+            branches.push(index + 1 == dependencies.len());
+            self.walk_node(*dependency, visited, path, branches, on_visit);
+            branches.pop();
         }
-
         path.pop();
+    }
 
+    /// Consume traversal events to construct the text tree.
+    fn render(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(self.graph.node_count());
+        self.walk(&mut |visit| {
+            let mut line = String::new();
+            if let Some((last, ancestors)) = visit.branches.split_last() {
+                for last in ancestors {
+                    line.push_str(if *last { "    " } else { "│   " });
+                }
+                line.push_str(if *last { "└── " } else { "├── " });
+            }
+            line.push_str(&self.render_node(visit.cursor));
+            if visit.repeated {
+                line.push_str(" (*)");
+            } else if visit.include_latest
+                && let Node::Package(index) = self.graph[visit.cursor.node()]
+                && let Some(version) = self.latest.get(&self.lock.package(index).id)
+            {
+                let _ = write!(line, " {}", format!("(latest: v{version})").bold().cyan());
+            }
+            lines.push(line);
+        });
         lines
     }
 
-    /// Depth-first traverse the nodes to render the tree.
-    fn render(&self) -> Vec<String> {
+    /// Share depth, cycle detection, and deduplication between metadata discovery and rendering.
+    fn walk(&self, on_visit: &mut impl FnMut(TreeVisit<'_>)) {
         let mut path = Vec::new();
-        let mut lines = Vec::with_capacity(self.graph.node_count());
+        let mut branches = Vec::new();
         let mut visited =
             FxHashMap::with_capacity_and_hasher(self.graph.node_count(), FxBuildHasher);
-
         for node in &self.roots {
             match self.graph[*node] {
                 Node::Root => {
                     for edge in self.graph.edges_directed(*node, Direction::Outgoing) {
-                        let node = edge.target();
                         path.clear();
-                        lines.extend(self.visit(
-                            Cursor::new(node, edge.id(), self.conflict_marker),
+                        branches.clear();
+                        self.walk_node(
+                            Cursor::new(edge.target(), edge.id(), self.conflict_marker),
                             &mut visited,
                             &mut path,
-                        ));
+                            &mut branches,
+                            on_visit,
+                        );
                     }
                 }
                 Node::Package(_) => {
                     path.clear();
-                    lines.extend(self.visit(
+                    branches.clear();
+                    self.walk_node(
                         Cursor::root(*node, self.conflict_marker),
                         &mut visited,
                         &mut path,
-                    ));
+                        &mut branches,
+                        on_visit,
+                    );
                 }
             }
         }
-
-        lines
     }
 
     /// Return the extras that can change this package's rendered child list.
@@ -918,6 +1303,34 @@ impl<'env> TreeDisplay<'env> {
 
         JsonTraversal { nodes, edges }
     }
+}
+
+enum TreeDeclarations<'a> {
+    Plain(&'a [Requirement]),
+    Activated(&'a [(Requirement, MarkerTree)]),
+}
+
+impl TreeDeclarations<'_> {
+    fn iter(&self) -> impl Iterator<Item = (&Requirement, Option<MarkerTree>)> {
+        match self {
+            Self::Plain(requirements) => {
+                Either::Left(requirements.iter().map(|requirement| (requirement, None)))
+            }
+            Self::Activated(requirements) => Either::Right(
+                requirements
+                    .iter()
+                    .map(|(requirement, marker)| (requirement, Some(*marker))),
+            ),
+        }
+    }
+}
+
+/// Requirement declarations kept separately from the resolved dependency graph.
+#[derive(Debug)]
+struct TreeRequirements {
+    version: Option<Version>,
+    requires_dist: Box<[(Requirement, MarkerTree)]>,
+    dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 
 #[derive(Debug)]
@@ -1603,6 +2016,14 @@ enum EdgeKind<'env> {
     Dev(&'env GroupName),
 }
 
+/// One displayed row and its traversal context; only text rendering consumes the branch prefixes.
+struct TreeVisit<'a> {
+    cursor: Cursor,
+    repeated: bool,
+    include_latest: bool,
+    branches: &'a [bool],
+}
+
 /// A node in the dependency graph along with the edge that led to it, or `None` for root nodes.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 struct Cursor(NodeIndex, Option<EdgeIndex>, UniversalMarker);
@@ -1640,7 +2061,7 @@ impl std::fmt::Display for TreeDisplay<'_> {
 
         let mut deduped = false;
         for line in self.render() {
-            deduped |= line.contains('*');
+            deduped |= line.ends_with(" (*)");
             writeln!(f, "{line}")?;
         }
 
@@ -1655,4 +2076,19 @@ impl std::fmt::Display for TreeDisplay<'_> {
 
         Ok(())
     }
+}
+
+/// Reconstruct local source URLs from paths relative to the lockfile root.
+fn root_requirement_url(requirement: &mut Requirement, root: &Path) -> Result<(), LockError> {
+    if let RequirementSource::Path {
+        install_path, url, ..
+    }
+    | RequirementSource::Directory {
+        install_path, url, ..
+    } = &mut requirement.source
+    {
+        *url = VerbatimUrl::from_path(&**install_path, root)
+            .map_err(LockErrorKind::RequirementVerbatimUrl)?;
+    }
+    Ok(())
 }

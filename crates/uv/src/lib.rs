@@ -2799,6 +2799,7 @@ async fn run_project(
 
             Box::pin(commands::tree(
                 project_dir,
+                args.show_version_specifiers,
                 args.groups,
                 args.lock_check,
                 args.frozen,
