@@ -23,7 +23,7 @@ use crate::{DependencyMode, Manifest, ResolveError, ResolverEnvironment};
 ///
 /// Workspace member sources are validated here. Other source conflicts are checked within each
 /// fork by [`crate::fork_urls::ForkUrls`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Urls {
     recorder: Option<ResolutionRecorder>,
     /// URL requirements in overrides. An override URL replaces all requirements and constraints

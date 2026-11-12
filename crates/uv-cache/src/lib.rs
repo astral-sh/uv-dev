@@ -1268,7 +1268,7 @@ pub enum CacheBucket {
     ///  * `simple-v0/pypi/<package_name>.rkyv`
     ///  * `simple-v0/<digest(index_url)>/<package_name>.rkyv`
     ///
-    /// The response is parsed into `uv_client::SimpleDetailMetadata` before storage.
+    /// Each package file contains independently readable releases followed by a version table and HTTP cache policy.
     Simple,
     /// A cache of unzipped wheels, stored as directories. This is used internally within the cache.
     /// When other buckets need to store directories, they should persist them to
@@ -1306,7 +1306,7 @@ impl CacheBucket {
             Self::Interpreter => "interpreter-v5",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_clean.rs`.
-            Self::Simple => "simple-v27",
+            Self::Simple => "simple-v29",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
             Self::Wheels => "wheels-v8",

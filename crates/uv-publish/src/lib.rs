@@ -31,8 +31,8 @@ use tracing::{Level, debug, enabled, trace, warn};
 use uv_auth::{Credentials, CredentialsPrompt, CredentialsPromptError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
-    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
-    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, ProblemDetails,
+    RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -888,43 +888,39 @@ impl<'a> PublishSession<'a> {
             .wrap_existing(self.upload_client)?;
 
         debug!("Checking for `{filename}` in the registry");
-        let response = match registry_client
-            .simple_detail(
-                filename.name(),
-                Some(index_url.into()),
-                index_capabilities,
-                &self.download_concurrency,
-            )
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                return match err.kind() {
-                    uv_client::ErrorKind::RemotePackageNotFound(_) => {
-                        // The package doesn't exist, so we can't have uploaded it.
-                        warn!(
-                            "Package not found in the registry; skipping upload check for `{filename}`"
-                        );
-                        Ok(false)
-                    }
-                    _ => Err(PublishError::CheckUrlIndex(err)),
-                };
+        let read = async || {
+            let mut response = registry_client
+                .simple_detail(
+                    filename.name(),
+                    Some(index_url.into()),
+                    index_capabilities,
+                    &self.download_concurrency,
+                )
+                .await?;
+            let Some((_, MetadataFormat::Simple(page))) = response.pop() else {
+                unreachable!("queried a single Simple index");
+            };
+            let Some(index) = page.find_version(filename.version()) else {
+                return Ok(None);
+            };
+            registry_client
+                .spawn_cache_read(move || page.files(index))
+                .await
+                .expect("release file read panicked")
+                .map(Some)
+        };
+        let files = match registry_client.retry_simple_read(read).await {
+            Ok(Some(files)) => files,
+            Ok(None) => return Ok(false),
+            Err(err) if matches!(err.kind(), uv_client::ErrorKind::RemotePackageNotFound(_)) => {
+                warn!("Package not found in the registry; skipping upload check for `{filename}`");
+                return Ok(false);
             }
+            Err(err) => return Err(PublishError::CheckUrlIndex(err)),
         };
-        let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
-            unreachable!("We queried a single index, we must get a single response");
-        };
-        let simple_metadata = OwnedArchive::deserialize(simple_metadata);
-        let Some(metadatum) = simple_metadata
-            .iter()
-            .find(|metadatum| &metadatum.version == filename.version())
-        else {
-            return Ok(false);
-        };
-
         let archived_files = match filename {
-            DistFilename::SourceDistFilename(_) => &metadatum.files.source_dists,
-            DistFilename::WheelFilename(_) => &metadatum.files.wheels,
+            DistFilename::SourceDistFilename(_) => &files.source_dists,
+            DistFilename::WheelFilename(_) => &files.wheels,
         };
         let archived_file = archived_files.iter().find(|file| {
             DistFilename::try_from_filename(file.filename(), filename.name())

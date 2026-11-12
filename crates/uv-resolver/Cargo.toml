@@ -57,7 +57,6 @@ owo-colors = { workspace = true }
 petgraph = { workspace = true }
 pubgrub = { workspace = true }
 reqwest = { workspace = true }
-rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 same-file = { workspace = true }
 smallvec = { workspace = true }

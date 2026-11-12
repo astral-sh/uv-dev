@@ -23,7 +23,11 @@ use tracing::{debug, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
 #[cfg(windows)]
-use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+use windows::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle, GetVolumeInformationByHandleW,
+};
+#[cfg(windows)]
+use windows::Win32::System::SystemServices::FILE_SUPPORTS_POSIX_UNLINK_RENAME;
 
 pub use crate::locked_file::*;
 #[cfg(feature = "tokio")]
@@ -43,6 +47,31 @@ mod path;
 mod read;
 mod space;
 pub mod which;
+
+/// Whether an atomic rename can replace a file on this volume while readers hold it open.
+#[cfg(windows)]
+pub fn supports_open_file_replacement(file: &impl AsRawHandle) -> bool {
+    let mut flags = 0;
+    // SAFETY: the borrowed handle stays open, and Windows writes the flags into a live u32.
+    #[expect(unsafe_code)]
+    let result = unsafe {
+        GetVolumeInformationByHandleW(
+            HANDLE(file.as_raw_handle()),
+            None,
+            None,
+            None,
+            Some(&raw mut flags),
+            None,
+        )
+    };
+    result.is_ok() && flags & FILE_SUPPORTS_POSIX_UNLINK_RENAME != 0
+}
+
+/// Open handles continue to identify the original file after an atomic rename.
+#[cfg(not(windows))]
+pub fn supports_open_file_replacement<T>(_file: &T) -> bool {
+    true
+}
 
 /// Return the number of hardlinks to a file.
 #[cfg(unix)]

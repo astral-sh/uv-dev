@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use pubgrub::Ranges;
 use tracing::{instrument, trace};
 
-use uv_client::{FlatIndexEntry, OwnedArchive, SimpleDetailMetadata, VersionFiles};
+use uv_client::{FlatIndexEntry, SimplePage};
 use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
@@ -48,7 +48,7 @@ impl VersionMap {
     /// PEP 592: <https://peps.python.org/pep-0592/#warehouse-pypi-implementation-notes>
     #[instrument(skip_all, fields(package_name))]
     pub(crate) fn from_simple_metadata(
-        simple_metadata: OwnedArchive<SimpleDetailMetadata>,
+        simple_metadata: SimplePage,
         package_name: &PackageName,
         index: IndexUrl,
         tags: Option<Tags>,
@@ -62,17 +62,16 @@ impl VersionMap {
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) -> Self {
         let mut local = false;
-        let mut entries = Vec::with_capacity(simple_metadata.iter().size_hint().0);
+        let mut entries = Vec::with_capacity(simple_metadata.num_versions());
         // Create stubs for each entry in simple metadata. The full conversion
         // from a `VersionFiles` to a PrioritizedDist for each version
         // isn't done until that specific version is requested.
-        for (datum_index, datum) in simple_metadata.iter().enumerate() {
+        for datum_index in 0..simple_metadata.num_versions() {
             // Index metadata alone does not provide an installable distribution.
-            if datum.files.wheels.is_empty() && datum.files.source_dists.is_empty() {
+            if !simple_metadata.has_installable(datum_index) {
                 continue;
             }
-            let version = rkyv::deserialize::<Version, rkyv::rancor::Error>(&datum.version)
-                .expect("archived version always deserializes");
+            let version = simple_metadata.version(datum_index);
 
             local |= version.is_local();
             debug_assert!(
@@ -144,10 +143,13 @@ impl VersionMap {
         }
     }
 
-    /// Return the [`DistFile`] for the given version, if any.
-    pub(crate) fn get(&self, version: &Version) -> Option<&PrioritizedDist> {
+    /// Return the [`PrioritizedDist`] for the given version, if any.
+    pub(crate) fn get(
+        &self,
+        version: &Version,
+    ) -> Result<Option<&PrioritizedDist>, uv_client::Error> {
         match self.inner {
-            VersionMapInner::Eager(ref eager) => eager.map.get(version),
+            VersionMapInner::Eager(ref eager) => Ok(eager.map.get(version)),
             VersionMapInner::Lazy(ref lazy) => lazy.get(version),
         }
     }
@@ -266,14 +268,12 @@ impl VersionMap {
         self.iter(range).filter(|(_, dist)| dist.is_included())
     }
 
-    /// Return the [`Hashes`] for the given version, if any.
-    pub(crate) fn hashes(&self, version: &Version) -> Option<&[HashDigest]> {
-        match self.inner {
-            VersionMapInner::Eager(ref eager) => {
-                eager.map.get(version).map(PrioritizedDist::hashes)
-            }
-            VersionMapInner::Lazy(ref lazy) => lazy.get(version).map(PrioritizedDist::hashes),
-        }
+    /// Return the hashes for the given version, if any.
+    pub(crate) fn hashes(
+        &self,
+        version: &Version,
+    ) -> Result<Option<&[HashDigest]>, uv_client::Error> {
+        Ok(self.get(version)?.map(PrioritizedDist::hashes))
     }
 
     /// Returns the total number of distinct versions in this map.
@@ -343,11 +343,46 @@ impl<'a> VersionMapDistHandle<'a> {
         }
     }
 
-    /// Returns a prioritized distribution from this handle.
-    pub(crate) fn prioritized_dist(&self) -> Option<&'a PrioritizedDist> {
+    /// Check an upload cutoff while formatting an already established conflict. Most Simple
+    /// releases have at most one sdist, so their summary exactly describes the retained files.
+    pub(crate) fn has_file_before(&self, cutoff: &Timestamp, allow_missing: bool) -> bool {
+        let cutoff = cutoff.as_millisecond();
+        let eligible = |dist: &PrioritizedDist| {
+            dist.files().any(|file| {
+                file.upload_time_utc_ms
+                    .map_or(allow_missing, |time| time < cutoff)
+            })
+        };
         match self.inner {
-            VersionMapDistHandleInner::Eager(dist) => Some(dist),
-            VersionMapDistHandleInner::Lazy { lazy, dist } => Some(lazy.get_lazy(dist)?),
+            VersionMapDistHandleInner::Eager(dist) => eligible(dist),
+            VersionMapDistHandleInner::Lazy { lazy, dist } => {
+                let Some(simple) = &dist.simple else {
+                    return dist.flat.as_ref().is_some_and(eligible);
+                };
+                let summary =
+                    lazy.simple_metadata
+                        .any_file_before(simple.datum_index, cutoff, allow_missing);
+                if dist.flat.is_none()
+                    && !lazy.simple_metadata.has_multiple_sdists(simple.datum_index)
+                {
+                    return summary;
+                }
+                // Merging file sources or selecting among several sdists can change the winner.
+                // If optional details are unreadable, retain the conflict and use known uploads.
+                match lazy.get_lazy(dist) {
+                    Ok(Some(prioritized)) => eligible(prioritized),
+                    Ok(None) => allow_missing,
+                    Err(_) => summary || dist.flat.as_ref().is_some_and(eligible),
+                }
+            }
+        }
+    }
+
+    /// Returns a prioritized distribution from this handle.
+    pub(crate) fn prioritized_dist(&self) -> Result<Option<&'a PrioritizedDist>, uv_client::Error> {
+        match self.inner {
+            VersionMapDistHandleInner::Eager(dist) => Ok(Some(dist)),
+            VersionMapDistHandleInner::Lazy { lazy, dist } => lazy.get_lazy(dist),
         }
     }
 }
@@ -363,7 +398,7 @@ enum VersionMapInner {
     Eager(VersionMapEager),
     /// Some distributions might be fully materialized (i.e., by initializing
     /// a `VersionMap` with a `FlatDistributions`), but some distributions
-    /// might still be in their "raw" `SimpleDetailMetadata` format. In this case, a
+    /// might still live in an archived release block. In this case, a
     /// `PrioritizedDist` isn't actually created in memory until the
     /// specific version has been requested.
     Lazy(VersionMapLazy),
@@ -472,12 +507,8 @@ impl VersionMapLazyIndex {
 
 /// A map that lazily materializes some prioritized distributions upon access.
 ///
-/// The idea here is that some packages have a lot of versions published, and
-/// needing to materialize a full `VersionMap` with all corresponding metadata
-/// for every version in memory is expensive. Since a `SimpleDetailMetadata` can be
-/// materialized with very little cost (via `rkyv` in the warm cached case),
-/// avoiding another conversion step into a fully filled out `VersionMap` can
-/// provide substantial savings in some cases.
+/// Hold the sorted version index in memory and load a release's files when its
+/// distribution is first requested. A release can be revisited across forks.
 #[derive(Debug)]
 struct VersionMapLazy {
     /// The normalized package name used to reconstruct cached wheel filenames.
@@ -488,7 +519,7 @@ struct VersionMapLazy {
     local: bool,
     /// The raw simple metadata from which `PrioritizedDist`s should
     /// be constructed.
-    simple_metadata: OwnedArchive<SimpleDetailMetadata>,
+    simple_metadata: SimplePage,
     /// When true, wheels aren't allowed.
     no_binary: bool,
     /// When true, source dists aren't allowed.
@@ -516,21 +547,16 @@ struct VersionMapLazy {
 impl VersionMapLazy {
     /// Returns the registry-provided metadata for the given version, if it exists.
     fn get_metadata(&self, version: &Version) -> Option<ResolutionMetadata> {
-        let archived = self
-            .map
-            .get(version)
-            .and_then(|entry| entry.dist.simple.as_ref())
-            .and_then(|simple| self.simple_metadata.datum(simple.datum_index))
-            .and_then(|datum| datum.metadata.as_deref())?;
-        Some(
-            rkyv::deserialize::<ResolutionMetadata, rkyv::rancor::Error>(archived)
-                .expect("archived metadata always deserializes"),
-        )
+        let simple = self.map.get(version)?.dist.simple.as_ref()?;
+        self.simple_metadata.metadata(simple.datum_index)
     }
 
     /// Returns the distribution for the given version, if it exists.
-    fn get(&self, version: &Version) -> Option<&PrioritizedDist> {
-        self.get_lazy(&self.map.get(version)?.dist)
+    fn get(&self, version: &Version) -> Result<Option<&PrioritizedDist>, uv_client::Error> {
+        let Some(entry) = self.map.get(version) else {
+            return Ok(None);
+        };
+        self.get_lazy(&entry.dist)
     }
 
     /// Returns an iterator over the versions with at least one file within the exclude-newer
@@ -552,28 +578,15 @@ impl VersionMapLazy {
     /// This mirrors the per-file cutoff handling in [`Self::get_simple`] without materializing the
     /// distribution, including the two cutoff modes' distinct handling of missing upload times.
     fn any_file_included(&self, simple: &SimplePrioritizedDist) -> bool {
-        if self.included_version_cutoff.is_none() && self.available_version_cutoff.is_none() {
-            return true;
+        if let Some(cutoff) = self.included_version_cutoff {
+            self.simple_metadata
+                .any_file_before(simple.datum_index, cutoff.as_millisecond(), false)
+        } else if let Some(cutoff) = self.available_version_cutoff {
+            self.simple_metadata
+                .any_file_before(simple.datum_index, cutoff.as_millisecond(), true)
+        } else {
+            true
         }
-        let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
-            return false;
-        };
-        let files = &datum.files;
-        files
-            .wheels
-            .iter()
-            .chain(files.source_dists.iter())
-            .any(|file| {
-                let upload_time = file.upload_time_utc_ms();
-                let excluded = if let Some(cutoff) = &self.included_version_cutoff {
-                    upload_time.is_none_or(|t| t >= cutoff.as_millisecond())
-                } else if let Some(cutoff) = &self.available_version_cutoff {
-                    upload_time.is_some_and(|t| t >= cutoff.as_millisecond())
-                } else {
-                    false
-                };
-                !excluded
-            })
     }
 
     /// Returns whether a version should be materialized during candidate selection.
@@ -588,18 +601,8 @@ impl VersionMapLazy {
         else {
             return true;
         };
-        let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
-            return false;
-        };
-        datum
-            .files
-            .wheels
-            .iter()
-            .chain(datum.files.source_dists.iter())
-            .any(|file| {
-                file.upload_time_utc_ms()
-                    .is_none_or(|upload_time| upload_time < cutoff.as_millisecond())
-            })
+        self.simple_metadata
+            .any_file_before(simple.datum_index, cutoff.as_millisecond(), true)
     }
 
     /// Given a reference to a possibly-initialized distribution that is in
@@ -607,12 +610,15 @@ impl VersionMapLazy {
     ///
     /// When both a flat and simple distribution are present internally, they
     /// are merged automatically.
-    fn get_lazy<'p>(&'p self, lazy_dist: &'p LazyPrioritizedDist) -> Option<&'p PrioritizedDist> {
+    fn get_lazy<'p>(
+        &'p self,
+        lazy_dist: &'p LazyPrioritizedDist,
+    ) -> Result<Option<&'p PrioritizedDist>, uv_client::Error> {
         match (&lazy_dist.flat, &lazy_dist.simple) {
             (Some(flat), Some(simple)) => self.get_simple(Some(flat), simple),
-            (Some(flat), None) => Some(flat),
+            (Some(flat), None) => Ok(Some(flat)),
             (None, Some(simple)) => self.get_simple(None, simple),
-            (None, None) => None,
+            (None, None) => Ok(None),
         }
     }
 
@@ -624,16 +630,12 @@ impl VersionMapLazy {
         &'p self,
         init: Option<&'p PrioritizedDist>,
         simple: &'p SimplePrioritizedDist,
-    ) -> Option<&'p PrioritizedDist> {
-        let get_or_init = || {
-            let files = rkyv::deserialize::<VersionFiles, rkyv::rancor::Error>(
-                &self
-                    .simple_metadata
-                    .datum(simple.datum_index)
-                    .expect("index to lazy dist is correct")
-                    .files,
-            )
-            .expect("archived version files always deserializes");
+    ) -> Result<Option<&'p PrioritizedDist>, uv_client::Error> {
+        if let Some(dist) = simple.dist.get() {
+            return Ok(dist.as_ref());
+        }
+        let files = self.simple_metadata.files(simple.datum_index)?;
+        let dist = simple.dist.get_or_init(|| {
             let mut priority_dist = init.cloned().unwrap_or_default();
             for (filename, file) in files.all_entries(&self.package_name) {
                 let filename = match filename {
@@ -747,8 +749,8 @@ impl VersionMapLazy {
             } else {
                 Some(priority_dist)
             }
-        };
-        simple.dist.get_or_init(get_or_init).as_ref()
+        });
+        Ok(dist.as_ref())
     }
 
     fn source_dist_compatibility(
@@ -888,16 +890,14 @@ impl VersionMapLazy {
 struct LazyPrioritizedDist {
     /// An eagerly constructed distribution from [`FlatDistributions`], if present.
     flat: Option<PrioritizedDist>,
-    /// A lazy index into [`SimpleDetailMetadata`], if present.
+    /// A release index into the [`SimplePage`], if present.
     simple: Option<SimplePrioritizedDist>,
 }
 
 /// Represents a lazily initialized `PrioritizedDist`.
 #[derive(Debug)]
 struct SimplePrioritizedDist {
-    /// An offset into `SimpleDetailMetadata` corresponding to a `SimpleMetadatum`.
-    /// This provides access to a `VersionFiles` that is used to construct a
-    /// `PrioritizedDist`.
+    /// Index of the release whose files are used to construct a [`PrioritizedDist`].
     datum_index: usize,
     /// A lazily initialized distribution.
     ///

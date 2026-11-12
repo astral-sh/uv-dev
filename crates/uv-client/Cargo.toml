@@ -85,6 +85,9 @@ url = { workspace = true }
 webpki-root-certs = { workspace = true }
 zerocopy = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 http-body-util = { workspace = true }

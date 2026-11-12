@@ -50,7 +50,6 @@ indicatif = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
 owo-colors = { workspace = true }
-rkyv = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
