@@ -730,6 +730,11 @@ impl EnvVars {
     #[attr_added_in("0.12.18")]
     pub const UV_INTERNAL__TEST_RUST_LOG: &'static str = "UV_INTERNAL__TEST_RUST_LOG";
 
+    /// Write managed Python diagnostics from test subprocesses to this directory.
+    #[attr_hidden]
+    #[attr_added_in("0.13.1")]
+    pub const UV_INTERNAL__TEST_LOG_DIR: &'static str = "UV_INTERNAL__TEST_LOG_DIR";
+
     /// Path to a directory on a filesystem that supports copy-on-write, e.g., btrfs or APFS.
     ///
     /// When populated, uv will run additional tests that require this functionality.
