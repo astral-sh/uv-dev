@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
 use fs_err as fs;
 use indoc::formatdoc;
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::{
@@ -159,13 +159,26 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
             }"#,
             "application/vnd.pypi.simple.v1+json",
         ))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="black-99.0.0-py3-none-any.whl" data-upload-time="2024-03-24T00:00:00Z">black-99.0.0-py3-none-any.whl</a>"#,
+            "text/html",
+        ))
         .expect(1)
         .mount(&server)
         .await;
 
+    let config_file = context.temp_dir.child("uv.toml");
     fs::write(
-        context.temp_dir.child("uv.toml"),
+        &config_file,
         formatdoc! {r#"
+            no-index = true
+
             [[index]]
             name = "ordinary"
             url = "{}/simple"
@@ -174,15 +187,48 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated")
-    .arg("--config-file")
-    .arg(context.temp_dir.child("uv.toml").as_os_str()), @"
+        .arg("--outdated")
+        .arg("--config-file")
+        .arg(config_file.as_os_str()), @"
     exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 [latest: 99.0.0]
-    - black
-    - blackd
     ");
+    if let Some(received_requests) = server.received_requests().await {
+        assert!(received_requests.is_empty());
+    } else {
+        bail!("mock server request recording is unavailable");
+    }
+
+    for config in [
+        formatdoc! {r#"
+            [[index]]
+            name = "ordinary"
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
+        format!("index-url = \"{}/simple\"\n", server.uri()),
+        formatdoc! {r#"
+            index-url = "{0}/unused"
+            extra-index-url = ["{0}/simple"]
+        "#, server.uri()},
+        formatdoc! {r#"
+            no-index = true
+            find-links = ["{}/flat"]
+        "#, server.uri()},
+    ] {
+        fs::write(&config_file, config)?;
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_list()
+                .arg("--outdated")
+                .arg("--config-file")
+                .arg(config_file.as_os_str()), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            black v24.2.0 [latest: 99.0.0]
+            - black
+            - blackd
+            ");
+        }
+    }
 
     Ok(())
 }
