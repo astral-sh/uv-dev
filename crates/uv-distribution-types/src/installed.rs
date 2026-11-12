@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use fs_err as fs;
 use thiserror::Error;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::{EggInfoFilename, ExpandedTags};
@@ -18,7 +18,8 @@ use uv_pypi_types::{DirectUrl, DirectUrlError, MetadataError, read_direct_url_js
 use uv_redacted::SafeUrl;
 
 use crate::{
-    BuildInfo, DistributionMetadata, InstalledMetadata, InstalledVersion, Name, VersionOrUrlRef,
+    BuildInfo, DistributionMetadata, InstalledMetadata, InstalledVersion, Name, RegistryBuiltWheel,
+    VersionOrUrlRef,
 };
 
 #[derive(Error, Debug)]
@@ -361,6 +362,36 @@ impl InstalledDist {
             InstalledDistKind::EggInfoDirectory(..) => None,
             InstalledDistKind::EggInfoFile(..) => None,
             InstalledDistKind::LegacyEditable(..) => None,
+        }
+    }
+
+    /// Returns `true` if a local wheel has changed since this registry
+    /// distribution was installed.
+    pub fn is_local_wheel_out_of_date(&self, wheel: &RegistryBuiltWheel) -> bool {
+        let InstalledDistKind::Registry(installed) = &self.kind else {
+            return false;
+        };
+        let Ok(url) = wheel.file.url.to_url() else {
+            debug!("Failed to read local wheel URL for: {}", wheel.filename);
+            return true;
+        };
+        // Local HTML indexes can contain links to remote wheels.
+        if url.scheme() != "file" {
+            return false;
+        }
+        let Ok(path) = url.to_file_path() else {
+            debug!("Failed to read local wheel path for: {}", wheel.filename);
+            return true;
+        };
+        match CacheInfo::from_file(&path) {
+            Ok(cache_info) => installed.cache_info.as_ref() != Some(&cache_info),
+            Err(err) => {
+                debug!(
+                    "Failed to read cached requirement for: {} ({err})",
+                    wheel.filename
+                );
+                true
+            }
         }
     }
 
