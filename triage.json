@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8862,
+        "title": "uv run does not use env-var in .env-file",
+        "url": "https://github.com/astral-sh/uv/issues/8862",
+        "state": "closed",
+        "reason": "A reporter comment in astral-sh/uv#8862 describes substitution of an underscore-containing variable defined earlier in the same .env file failing while other tools worked. This is relevant history, but the issue was closed in favor of astral-sh/uv#16926 about opt-in loading, without a parsing fix."
+      },
+      {
+        "kind": "issue",
+        "number": 170,
+        "title": "Inconsistent behavior when substituting variables with underscore in their names",
+        "url": "https://github.com/allan2/dotenvy/issues/170",
+        "state": "open",
+        "reason": "allan2/dotenvy#170 reproduces the exact underscore-substitution symptom: FOO_BAR=test followed by FOO_BAZ=$FOO_BAR yields _BAR. The dotenvy 0.15.7 source used by uv 0.13.6 confirms that bare substitution names accept alphanumeric characters but stop at underscores."
+      },
+      {
+        "kind": "issue",
+        "number": 93,
+        "title": "dotenvy silently fails to parse strings with dollar signs",
+        "url": "https://github.com/allan2/dotenvy/issues/93",
+        "state": "closed",
+        "reason": "allan2/dotenvy#93 demonstrates dollar-containing values changing during parsing. It was closed as intended variable-substitution behavior, with maintainer acknowledgment; a later comment requests documentation. This supports the dollar-sign compatibility concern, rather than establishing a fixed bug."
+      },
+      {
+        "kind": "issue",
+        "number": 11,
+        "title": "Unquoted values cannot contain spaces",
+        "url": "https://github.com/allan2/dotenvy/issues/11",
+        "state": "open",
+        "reason": "allan2/dotenvy#11 gives the same unquoted-space example, ABC=foo bar. The maintainer confirms the stricter parser behavior, recommends quoting or escaping whitespace, and identifies documentation of implementation differences as useful."
+      },
+      {
+        "kind": "issue",
+        "number": 19,
+        "title": "Document differences across dotenv implementations",
+        "url": "https://github.com/allan2/dotenvy/issues/19",
+        "state": "open",
+        "reason": "allan2/dotenvy#19 tracks upstream documentation of quoting, escaping, spaces, and substitution differences. It supports the requested compatibility documentation, but does not cover uv's own documentation or resolve the underscore correctness problem."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered dotenvy, unquoted values, dollar signs, A_PLAIN, underscore substitution, python-dotenv, and the exact 'Failed to parse environment file' diagnostic; conceptual searches covered env-file parsing, whitespace, interpolation, escaping, and documentation differences. Closed-issue and merged-PR searches looked for earlier fixes. Inspected candidate comments and reference chains, including astral-sh/uv#8862 to astral-sh/uv#16926 and astral-sh/uv#1384 to astral-sh/uv#8263. Ruled out astral-sh/uv#9465 (precedence), astral-sh/uv#16107 (reporter confirmed a VS Code extension caused the corruption), and astral-sh/uv#15806 with merged astral-sh/uv#15815 and open astral-sh/uv-dev#156 (spaces in file paths, not values). Verified the four reporter-cited upstream issues and the pinned parser source. Some exploratory searches hit rate limits; subsequent targeted searches succeeded. No uv parsing fix or canonical duplicate was found."
+  },
+  "type": "bug",
+  "type_reason": "The underscore-substitution error is confirmed in the dotenvy 0.15.7 source pinned by uv 0.13.6: valid underscore-containing keys are accepted, but bare substitution references stop at the underscore and can silently produce the wrong value. That is a correctness problem even though the reporter primarily requests documentation. Dollar substitution and stricter whitespace handling also need clear compatibility guidance. The upstream issues track dependency behavior, while astral-sh/uv#8862 was closed around opt-in loading rather than a parsing fix; none centrally tracks this uv report. No previously fixed regression was established.",
+  "summary": "astral-sh/uv#8862 contains an earlier substitution failure report. Upstream allan2/dotenvy#170, allan2/dotenvy#93, allan2/dotenvy#11, and allan2/dotenvy#19 substantiate the individual parsing and documentation concerns. No matching uv fix or canonical duplicate was found.",
+  "draft_response": "uv 0.13.6 uses dotenvy 0.15.7, whose parser confirms these differences. The underscore-substitution case is a correctness issue tracked in allan2/dotenvy#170: use `${A_PLAIN}` as a workaround for `$A_PLAIN`. Quote values containing spaces, and single-quote values when dollar signs should be literal; double quotes still allow substitution.\n\nThe current documentation names dotenvy but does not explain these compatibility differences. If you'd like to contribute a focused documentation PR, please add examples to the “Environment variable files” section of docs/concepts/configuration-files.md and reference the upstream issues. One distinction to document: uv emits a warning on a parse error and stops reading the rest of that file, whereas substitution can successfully parse and change a value without a warning."
+}
