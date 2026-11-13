@@ -36,6 +36,286 @@ fn command(context: &TestContext, python_versions: &[&str], server: &PackseServe
     command
 }
 
+/// A parent pins a different core release at each version. The newer core releases have identical, incompatible dependencies, so backtracking the parent repeatedly visits adjacent core versions whose prefetched metadata can share one dependency incompatibility.
+///
+/// ```text
+/// coalesce-prefetched-dependencies
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires leaf==1.0.0
+/// │   │   └── satisfied by leaf-1.0.0
+/// │   └── requires parent
+/// │       ├── satisfied by parent-2.0.0
+/// │       ├── satisfied by parent-3.0.0
+/// │       ├── satisfied by parent-3.0.1
+/// │       ├── satisfied by parent-3.0.2
+/// │       ├── satisfied by parent-3.0.3
+/// │       ├── satisfied by parent-3.0.4
+/// │       ├── satisfied by parent-3.0.5
+/// │       ├── satisfied by parent-3.0.6
+/// │       ├── satisfied by parent-3.0.7
+/// │       ├── satisfied by parent-3.0.8
+/// │       ├── satisfied by parent-3.0.9
+/// │       ├── satisfied by parent-3.0.10
+/// │       ├── satisfied by parent-3.0.11
+/// │       ├── satisfied by parent-3.0.12
+/// │       ├── satisfied by parent-3.0.13
+/// │       ├── satisfied by parent-3.0.14
+/// │       ├── satisfied by parent-3.0.15
+/// │       ├── satisfied by parent-3.0.16
+/// │       ├── satisfied by parent-3.0.17
+/// │       ├── satisfied by parent-3.0.18
+/// │       ├── satisfied by parent-3.0.19
+/// │       ├── satisfied by parent-3.0.20
+/// │       ├── satisfied by parent-3.0.21
+/// │       ├── satisfied by parent-3.0.22
+/// │       ├── satisfied by parent-3.0.23
+/// │       ├── satisfied by parent-3.0.24
+/// │       ├── satisfied by parent-3.0.25
+/// │       ├── satisfied by parent-3.0.26
+/// │       ├── satisfied by parent-3.0.27
+/// │       ├── satisfied by parent-3.0.28
+/// │       ├── satisfied by parent-3.0.29
+/// │       └── satisfied by parent-3.0.30
+/// ├── core
+/// │   ├── core-2.0.0
+/// │   │   └── requires leaf==1.0.0
+/// │   │       └── satisfied by leaf-1.0.0
+/// │   ├── core-3.0.0
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.1
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.2
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.3
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.4
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.5
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.6
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.7
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.8
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.9
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.10
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.11
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.12
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.13
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.14
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.15
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.16
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.17
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.18
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.19
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.20
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.21
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.22
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.23
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.24
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.25
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.26
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.27
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.28
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   ├── core-3.0.29
+/// │   │   └── requires leaf==2.0.0
+/// │   │       └── satisfied by leaf-2.0.0
+/// │   └── core-3.0.30
+/// │       └── requires leaf==2.0.0
+/// │           └── satisfied by leaf-2.0.0
+/// ├── leaf
+/// │   ├── leaf-1.0.0
+/// │   └── leaf-2.0.0
+/// └── parent
+///     ├── parent-2.0.0
+///     │   └── requires core==2.0.0
+///     │       └── satisfied by core-2.0.0
+///     ├── parent-3.0.0
+///     │   └── requires core==3.0.0
+///     │       └── satisfied by core-3.0.0
+///     ├── parent-3.0.1
+///     │   └── requires core==3.0.1
+///     │       └── satisfied by core-3.0.1
+///     ├── parent-3.0.2
+///     │   └── requires core==3.0.2
+///     │       └── satisfied by core-3.0.2
+///     ├── parent-3.0.3
+///     │   └── requires core==3.0.3
+///     │       └── satisfied by core-3.0.3
+///     ├── parent-3.0.4
+///     │   └── requires core==3.0.4
+///     │       └── satisfied by core-3.0.4
+///     ├── parent-3.0.5
+///     │   └── requires core==3.0.5
+///     │       └── satisfied by core-3.0.5
+///     ├── parent-3.0.6
+///     │   └── requires core==3.0.6
+///     │       └── satisfied by core-3.0.6
+///     ├── parent-3.0.7
+///     │   └── requires core==3.0.7
+///     │       └── satisfied by core-3.0.7
+///     ├── parent-3.0.8
+///     │   └── requires core==3.0.8
+///     │       └── satisfied by core-3.0.8
+///     ├── parent-3.0.9
+///     │   └── requires core==3.0.9
+///     │       └── satisfied by core-3.0.9
+///     ├── parent-3.0.10
+///     │   └── requires core==3.0.10
+///     │       └── satisfied by core-3.0.10
+///     ├── parent-3.0.11
+///     │   └── requires core==3.0.11
+///     │       └── satisfied by core-3.0.11
+///     ├── parent-3.0.12
+///     │   └── requires core==3.0.12
+///     │       └── satisfied by core-3.0.12
+///     ├── parent-3.0.13
+///     │   └── requires core==3.0.13
+///     │       └── satisfied by core-3.0.13
+///     ├── parent-3.0.14
+///     │   └── requires core==3.0.14
+///     │       └── satisfied by core-3.0.14
+///     ├── parent-3.0.15
+///     │   └── requires core==3.0.15
+///     │       └── satisfied by core-3.0.15
+///     ├── parent-3.0.16
+///     │   └── requires core==3.0.16
+///     │       └── satisfied by core-3.0.16
+///     ├── parent-3.0.17
+///     │   └── requires core==3.0.17
+///     │       └── satisfied by core-3.0.17
+///     ├── parent-3.0.18
+///     │   └── requires core==3.0.18
+///     │       └── satisfied by core-3.0.18
+///     ├── parent-3.0.19
+///     │   └── requires core==3.0.19
+///     │       └── satisfied by core-3.0.19
+///     ├── parent-3.0.20
+///     │   └── requires core==3.0.20
+///     │       └── satisfied by core-3.0.20
+///     ├── parent-3.0.21
+///     │   └── requires core==3.0.21
+///     │       └── satisfied by core-3.0.21
+///     ├── parent-3.0.22
+///     │   └── requires core==3.0.22
+///     │       └── satisfied by core-3.0.22
+///     ├── parent-3.0.23
+///     │   └── requires core==3.0.23
+///     │       └── satisfied by core-3.0.23
+///     ├── parent-3.0.24
+///     │   └── requires core==3.0.24
+///     │       └── satisfied by core-3.0.24
+///     ├── parent-3.0.25
+///     │   └── requires core==3.0.25
+///     │       └── satisfied by core-3.0.25
+///     ├── parent-3.0.26
+///     │   └── requires core==3.0.26
+///     │       └── satisfied by core-3.0.26
+///     ├── parent-3.0.27
+///     │   └── requires core==3.0.27
+///     │       └── satisfied by core-3.0.27
+///     ├── parent-3.0.28
+///     │   └── requires core==3.0.28
+///     │       └── satisfied by core-3.0.28
+///     ├── parent-3.0.29
+///     │   └── requires core==3.0.29
+///     │       └── satisfied by core-3.0.29
+///     └── parent-3.0.30
+///         └── requires core==3.0.30
+///             └── satisfied by core-3.0.30
+/// ```
+#[test]
+fn coalesce_prefetched_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let python_versions = &[];
+    let server = PackseServer::new("backtracking/coalesce-prefetched-dependencies.toml");
+
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("leaf==1.0.0\nparent")?;
+
+    let output = uv_snapshot!(context.filters(), command(&context, python_versions, &server)
+        , @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    # This file was autogenerated by uv via the following command:
+    #    uv pip compile requirements.in --cache-dir [CACHE_DIR]
+    core==2.0.0
+        # via parent
+    leaf==1.0.0
+        # via
+        #   -r requirements.in
+        #   core
+    parent==2.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "
+    );
+
+    output
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("core==2.0.0"))
+        .stdout(predicate::str::contains("leaf==1.0.0"))
+        .stdout(predicate::str::contains("parent==2.0.0"));
+
+    Ok(())
+}
+
 /// Reuse the lowest direct dependency when its Python marker contains the active interpreter.
 ///
 /// ```text
