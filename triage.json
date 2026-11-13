@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9711,
+        "title": "Tracking issue: package without source distribution gets an \"incomplete\" resolution",
+        "url": "https://github.com/astral-sh/uv/issues/9711",
+        "state": "open",
+        "reason": "Canonical tracking issue for universal resolution accepting a wheel-only release that covers some environments, then sync failing with the same missing-distribution error elsewhere. This report adds Windows CPython 3.13 GIL/free-threaded coverage, which the current environment markers cannot distinguish."
+      },
+      {
+        "kind": "issue",
+        "number": 9425,
+        "title": "`uv add onnxruntime` fails to fetch latest version of package compatible with my environment's Python",
+        "url": "https://github.com/astral-sh/uv/issues/9425",
+        "state": "open",
+        "reason": "Closely related Python compatibility case: universal resolution selects a wheel-only release that cannot install on the requested interpreter instead of backtracking. Maintainers recommend a python_version required environment there; that workaround cannot distinguish 3.13 from 3.13t in this report."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10046,
+        "title": "Backtrack to non-local versions when wheels are missing platform support",
+        "url": "https://github.com/astral-sh/uv/pull/10046",
+        "state": "merged",
+        "reason": "Partial fix referenced by astral-sh/uv#9711, merged on 2024-12-20. It only considers replacing local versions such as +cpu with their non-local base version when platform wheels are missing. It does not cover ordinary Pympler/pywin32 versions or free-threaded ABI coverage, so it does not establish a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered Pympler, pywin32, pywin32==312, 3.13t, cp313t, required-environments, and the exact missing-source-or-wheel error. Separate conceptual searches covered free-threaded/free-threading/free threading, GIL/no-GIL, markers, universal locking, incomplete resolution, wheel-only dependencies, ABI coverage, and backtracking. Inspected candidate bodies and comments and followed astral-sh/uv#9711 to closed unmerged astral-sh/uv#9928 and merged astral-sh/uv#10046. Ruled out astral-sh/uv#19508 as a mid-upload wheel snapshot problem; astral-sh/uv#14040 and merged astral-sh/uv#14041 as a Windows architecture-marker fix; astral-sh/uv#16434 as interpreter discovery; and astral-sh/uv#2429 as incorrect installation of incompatible ABI wheels. Also inspected astral-sh/uv#12721, astral-sh/uv#11855, and marker/support discussions. Some auxiliary REST searches were rate-limited. Checked repository marker/tag handling and public PyPI release metadata; did not execute the reproduction."
+  },
+  "type": "duplicate",
+  "type_reason": "The lock-to-sync correctness failure is the incomplete universal-resolution problem already tracked by open astral-sh/uv#9711. Public metadata confirms that Pympler 1.1 adds a Windows-only pywin32 dependency and pywin32 312 has no source distribution or 3.13t wheel; the checkout's marker model cannot express the GIL/free-threaded distinction. The more specific trigger can be centralized in that tracking issue. No evidence shows that a previous fix covered this case and regressed.",
+  "summary": "astral-sh/uv#9711 is the canonical discussion. astral-sh/uv#9425 covers a similar interpreter-specific wheel gap; merged astral-sh/uv#10046 fixed only a narrower local-version/platform case.",
+  "draft_response": "This is another instance of the incomplete universal-resolution problem tracked in astral-sh/uv#9711. Pympler 1.1 requires pywin32 on Windows, and pywin32 312 publishes neither a source distribution nor a Python 3.13t wheel. The current environment markers cannot distinguish GIL and free-threaded CPython, so required-environments cannot express that additional requirement. Please continue the discussion in astral-sh/uv#9711 with this reproduction. For now, your pympler==1.0.1 pin avoids that Windows pywin32 dependency."
+}
