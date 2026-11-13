@@ -34,6 +34,8 @@ jobs:
         with:
           enable-cache: auto
       - run: uv run --only-group check ruff check .
+      - name: "Test Python scripts"
+        run: python3 -m unittest discover -s scripts/tests
 
   ty:
     timeout-minutes: 10
