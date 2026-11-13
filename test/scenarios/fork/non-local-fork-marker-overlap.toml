@@ -1,0 +1,22 @@
+name = "fork-non-local-fork-marker-overlap"
+description = """
+Parents with overlapping markers require incompatible versions of `c` on Linux.
+"""
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = false
+
+[root]
+requires = ["a ; sys_platform != 'win32'", "b ; sys_platform != 'darwin'"]
+
+[packages.a.versions."1.0.0"]
+requires = ["c<2"]
+
+[packages.b.versions."1.0.0"]
+requires = ["c>=2"]
+
+[packages.c.versions."1.0.0"]
+[packages.c.versions."2.0.0"]
