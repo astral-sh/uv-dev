@@ -19,6 +19,14 @@ Locking selects Pympler 1.1 and pywin32 312. Sync selects CPython 3.13.12+freeth
 
 astral-sh/uv#9711 is the canonical discussion. astral-sh/uv#9425 covers a similar interpreter-specific wheel gap; merged astral-sh/uv#10046 fixed only a narrower local-version/platform case.
 
+## Impact and cross-project context
+
+The reporter clarifies that this arose while building a single development/CI lockfile for `packaging`, so it affects a real shared-lock workflow rather than only the minimal example. They personally consider it low priority; this is the reporter's assessment, not a maintainer priority decision.
+
+The reporter also supplied parallel Poetry and PDM reports and described a nab pull request as a partial workaround. These are investigation leads, not independently verified fixes or evidence that the tools have identical mechanisms. Their contents and the applicability of the nab approach to uv have not been reviewed in this update. No new uv reproduction steps or verified uv workaround were supplied.
+
+Source: reporter comment at https://github.com/astral-sh/uv/issues/23239#issuecomment-6861195226.
+
 ## Draft response
 
 This is another instance of the incomplete universal-resolution problem tracked in astral-sh/uv#9711. Pympler 1.1 requires pywin32 on Windows, and pywin32 312 publishes neither a source distribution nor a Python 3.13t wheel. The current environment markers cannot distinguish GIL and free-threaded CPython, so required-environments cannot express that additional requirement. Please continue the discussion in astral-sh/uv#9711 with this reproduction. For now, your pympler==1.0.1 pin avoids that Windows pywin32 dependency.
@@ -36,6 +44,10 @@ The historical local-version fix predates this report but never claimed to solve
 - astral-sh/uv#9711 — Issue, open: Tracking issue: package without source distribution gets an "incomplete" resolution. Canonical tracking issue for universal resolution accepting a wheel-only release that covers some environments, then sync failing with the same missing-distribution error elsewhere. This report adds Windows CPython 3.13 GIL/free-threaded coverage, which the current environment markers cannot distinguish.
 - astral-sh/uv#9425 — Issue, open: `uv add onnxruntime` fails to fetch latest version of package compatible with my environment's Python. Closely related Python compatibility case: universal resolution selects a wheel-only release that cannot install on the requested interpreter instead of backtracking. Maintainers recommend a python_version required environment there; that workaround cannot distinguish 3.13 from 3.13t in this report.
 - astral-sh/uv#10046 — Pull request, merged: Backtrack to non-local versions when wheels are missing platform support. Partial fix referenced by astral-sh/uv#9711, merged on 2024-12-20. It only considers replacing local versions such as +cpu with their non-local base version when platform wheels are missing. It does not cover ordinary Pympler/pywin32 versions or free-threaded ABI coverage, so it does not establish a regression.
+
+- python-poetry/poetry#11228 — Reporter-provided parallel Poetry issue for this use case; contents and relationship beyond the reporter's attribution have not been independently reviewed.
+- pdm-project/pdm#4006 — Reporter-provided parallel PDM issue for this use case; contents and relationship beyond the reporter's attribution have not been independently reviewed.
+- notatallshaw/nab#1576 — Reporter-provided pull request described as a partial workaround in nab. Its implementation, status, and applicability to uv have not been independently verified.
 
 ## Supporting evidence
 
@@ -90,4 +102,4 @@ Other inspected candidates were less suitable for centralizing this report:
 
 ## Handoff status
 
-The README and structured result agree on duplicate classification and astral-sh/uv#9711 as the canonical discussion. The proposed reply is for maintainer review only. No GitHub changes were made, no reproduction commands or builds were run, and no checkout files were modified.
+The README and existing structured result agree on duplicate classification and astral-sh/uv#9711 as the canonical discussion. The reporter-provided workflow, priority assessment, and cross-project leads above supplement the original triage; the structured artifacts were left unchanged. The proposed reply is for maintainer review only. No GitHub changes were made, no reproduction commands or builds were run, and no checkout files were modified.
