@@ -36,7 +36,7 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
     Prefix, PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion, Target,
@@ -5017,6 +5017,7 @@ pub struct PublishSettings {
     pub password: Option<String>,
     pub index: Option<String>,
     pub dry_run: bool,
+    pub check_credentials: bool,
     pub no_attestations: bool,
 
     // Both CLI and configuration.
@@ -5037,6 +5038,7 @@ impl fmt::Debug for PublishSettings {
             .field("password", &self.password.as_ref().map(|_| "****"))
             .field("index", &self.index)
             .field("dry_run", &self.dry_run)
+            .field("check_credentials", &self.check_credentials)
             .field("no_attestations", &self.no_attestations)
             .field("publish_url", &self.publish_url)
             .field("trusted_publishing", &self.trusted_publishing)
@@ -5049,7 +5051,11 @@ impl fmt::Debug for PublishSettings {
 
 impl PublishSettings {
     /// Resolve the [`PublishSettings`] from the CLI and filesystem configuration.
-    pub fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {
+    pub fn resolve(
+        args: PublishArgs,
+        filesystem: Option<FilesystemOptions>,
+        preview: Preview,
+    ) -> Self {
         let Options {
             publish, top_level, ..
         } = filesystem
@@ -5081,6 +5087,8 @@ impl PublishSettings {
             username,
             password,
             dry_run: args.dry_run,
+            check_credentials: preview.is_enabled(PreviewFeature::PublishCheckCreds)
+                && !args.unsafe_allow_credentials,
             no_attestations: args.no_attestations,
             publish_url: args
                 .publish_url

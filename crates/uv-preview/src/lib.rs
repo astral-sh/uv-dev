@@ -462,6 +462,10 @@ pub enum PreviewFeature {
     BuildDependencyHashes,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
+    /// Before uploading a wheel or source distribution, `uv publish` checks dependency and project
+    /// URLs in its metadata for credentials. Use `--unsafe-allow-credentials` to publish a
+    /// distribution that intentionally includes them.
+    PublishCheckCreds,
 }
 
 impl Display for PreviewFeature {

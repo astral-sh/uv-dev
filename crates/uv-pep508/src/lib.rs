@@ -32,6 +32,7 @@ use url::Url;
 
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_normalize::{ExtraName, PackageName};
+use uv_redacted::{SafeUrl, SafeUrlError};
 
 use crate::cursor::Cursor;
 pub(crate) use crate::marker::MarkerValue;
@@ -337,6 +338,19 @@ pub trait Pep508Url: Display + Debug + Sized {
 
     /// Returns a [`Display`] implementation that doesn't mask credentials.
     fn displayable_with_credentials(&self) -> impl Display;
+}
+
+/// Parse literal URLs without the environment expansion and path handling of [`VerbatimUrl`].
+impl Pep508Url for SafeUrl {
+    type Err = SafeUrlError;
+
+    fn parse_url(url: &str, _working_dir: Option<&Path>) -> Result<Self, Self::Err> {
+        Self::parse(url)
+    }
+
+    fn displayable_with_credentials(&self) -> impl Display {
+        self.displayable_with_credentials()
+    }
 }
 
 #[cfg(feature = "unsafe-url")]

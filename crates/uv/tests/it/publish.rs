@@ -1,5 +1,7 @@
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
+use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild};
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use fs_err::OpenOptions;
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
@@ -8,6 +10,7 @@ use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
+use uv_test::archive::write_tar_gz;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -1627,6 +1630,113 @@ async fn dry_run_does_not_upload() {
     Checking ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
+}
+
+/// A signed dependency URL can leak even when its marker excludes the current interpreter.
+#[tokio::test]
+async fn publish_check_creds() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
+    let server = MockServer::start().await;
+    let upload = format!("{}/upload", server.uri());
+    let metadata = indoc! {b"
+        Metadata-Version: 2.3
+        Name: example
+        Version: 1.0
+        Requires-Dist: dependency[extra] @ https://example.com/dependency.whl;download?%73iG=secret ; python_version < '2'
+    "};
+    let mut archive = ZipFileWriter::new(Vec::new());
+    archive
+        .write_entry_whole(
+            ZipEntryBuilder::new("example-1.0.dist-info/METADATA".into(), Compression::Stored),
+            metadata,
+        )
+        .await?;
+    let contents = archive.close().await?;
+    let wheel = context.temp_dir.child("example-1.0-py3-none-any.whl");
+    wheel.write_binary(&contents)?;
+
+    Mock::given(method("POST"))
+        .and(basic_auth("__token__", "dummy"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--preview-features", "publish-check-creds", "--token", "dummy", "--publish-url", &upload])
+        .arg(wheel.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    error: Failed to publish: example-1.0-py3-none-any.whl
+      cause: The `Requires-Dist` metadata field contains URL credentials. Remove the credentials or use `--unsafe-allow-credentials` to publish them
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--token", "dummy", "--publish-url", &upload])
+        .arg(wheel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    Uploading example-1.0-py3-none-any.whl ([SIZE]B)
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--preview-features", "publish-check-creds", "--unsafe-allow-credentials"])
+        .args(["--token", "dummy", "--publish-url", &upload])
+        .arg(wheel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing example-1.0-py3-none-any.whl ([SIZE]B)
+    Uploading example-1.0-py3-none-any.whl ([SIZE]B)
+    ");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("Requests are recorded");
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request
+            .body
+            .windows(contents.len())
+            .any(|bytes| bytes == contents)
+    }));
+    Ok(())
+}
+
+/// Both URLs remain in the archive when a project URL label is repeated.
+#[test]
+fn publish_check_creds_sdist_dry_run() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
+    let metadata = indoc! {"
+        Metadata-Version: 2.3
+        Name: example
+        Version: 1.0
+        Project-URL: Source, https://secret-token@example.com/repo
+        Project-URL: Source, https://example.com/repo
+    "};
+    let sdist = context.temp_dir.child("example-1.0.tar.gz");
+    write_tar_gz(
+        fs_err::File::create(sdist.path())?,
+        &[("example-1.0/PKG-INFO", metadata)],
+    )?;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--preview-features", "publish-check-creds", "--dry-run", "--token", "dummy"])
+        .arg(sdist.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checking 1 file against https://upload.pypi.org/legacy/
+    Checking example-1.0.tar.gz ([SIZE]B)
+    error: Failed to publish: example-1.0.tar.gz
+      cause: The `Project-URL` metadata field contains URL credentials. Remove the credentials or use `--unsafe-allow-credentials` to publish them
+    Found issues with 1 file
+    ");
+    Ok(())
 }
 
 /// Test that `--dry-run` checks all files and reports all errors instead of

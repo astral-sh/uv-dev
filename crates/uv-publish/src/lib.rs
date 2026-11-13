@@ -1,3 +1,4 @@
+mod credentials;
 mod trusted_publishing;
 
 use std::borrow::Cow;
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, io};
 
+use astral_mail_headers::Message;
 use fs_err::tokio::File;
 use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
@@ -103,6 +105,16 @@ pub enum PublishPrepareError {
     Metadata(#[from] uv_metadata::Error),
     #[error("Failed to read metadata")]
     Metadata23(#[from] MetadataError),
+    #[error(
+        "The `{0}` metadata field contains URL credentials. Remove the credentials or use \
+        `--unsafe-allow-credentials` to publish them"
+    )]
+    MetadataCredentials(&'static str),
+    #[error(
+        "Cannot check the `{0}` metadata field for URL credentials because it is invalid. \
+        Correct the field or use `--unsafe-allow-credentials` to skip this check"
+    )]
+    InvalidMetadataUrl(&'static str),
     #[error("Only files ending in `.tar.gz` are valid source distributions: {0}")]
     InvalidExtension(SourceDistFilename),
     #[error("No `PKG-INFO` file found")]
@@ -258,6 +270,7 @@ impl PreparedDistribution {
         &self,
         reporter: Arc<impl Reporter>,
         tar_backend: TarBackend,
+        check_credentials: bool,
     ) -> Result<(FormMetadata, Option<String>, u64), PublishError> {
         let size = fs_err::tokio::metadata(&self.file)
             .await
@@ -271,9 +284,14 @@ impl PreparedDistribution {
         reporter.on_validation_start(&self.filename, size)?;
 
         let metadata: Result<_, PublishPrepareError> = async {
-            let form_metadata =
-                FormMetadata::read_from_file(&self.file, &self.filename, reporter, tar_backend)
-                    .await?;
+            let form_metadata = FormMetadata::read_from_file(
+                &self.file,
+                &self.filename,
+                reporter,
+                tar_backend,
+                check_credentials,
+            )
+            .await?;
             let mut attestations = Vec::with_capacity(self.attestations.len());
             for attestation_path in &self.attestations {
                 let contents = fs_err::tokio::read_to_string(attestation_path).await?;
@@ -321,6 +339,7 @@ pub struct PublishSession<'a> {
     oidc_client: &'a BaseClient,
     retry_policy: ExponentialBackoff,
     tar_backend: TarBackend,
+    check_credentials: bool,
     check_url_client: Option<CheckUrlClient<'a>>,
     download_concurrency: Semaphore,
 }
@@ -621,10 +640,17 @@ impl<'a> PublishSession<'a> {
             oidc_client,
             retry_policy,
             tar_backend,
+            check_credentials: false,
             check_url_client: None,
             // Check URL requests are made one at a time against a single index.
             download_concurrency: Semaphore::new(1),
         }
+    }
+
+    /// Check distribution metadata URLs for credentials before uploading.
+    pub fn with_credential_check(mut self, check_credentials: bool) -> Self {
+        self.check_credentials = check_credentials;
+        self
     }
 
     /// Configure an interactive fallback for rejected credentials discovered by the middleware.
@@ -678,7 +704,9 @@ impl<'a> PublishSession<'a> {
         prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
     ) -> Result<(), PublishError> {
-        prepared.read_metadata(reporter, self.tar_backend).await?;
+        prepared
+            .read_metadata(reporter, self.tar_backend, self.check_credentials)
+            .await?;
         Ok(())
     }
 
@@ -693,7 +721,7 @@ impl<'a> PublishSession<'a> {
         reporter: Arc<impl Reporter>,
     ) -> Result<UploadOutcome, PublishError> {
         let (form_metadata, attestations, size) = prepared
-            .read_metadata(reporter.clone(), self.tar_backend)
+            .read_metadata(reporter.clone(), self.tar_backend, self.check_credentials)
             .await?;
         reporter.on_upload_ready(&prepared.filename, size)?;
 
@@ -1132,6 +1160,7 @@ async fn metadata(
     file: &Path,
     filename: &DistFilename,
     tar_backend: TarBackend,
+    check_credentials: bool,
 ) -> Result<Metadata23, PublishPrepareError> {
     let contents = match filename {
         DistFilename::SourceDistFilename(source_dist) => {
@@ -1148,13 +1177,24 @@ async fn metadata(
             return tokio::task::spawn_blocking(move || {
                 let reader = io::BufReader::new(fs_err::File::open(file)?);
                 let contents = read_archive_metadata(&wheel, reader)?;
-                Ok(Metadata23::parse(&contents)?)
+                parse_metadata(&contents, check_credentials)
             })
             .await
             .map_err(io::Error::from)?;
         }
     };
-    Ok(Metadata23::parse(&contents)?)
+    parse_metadata(&contents, check_credentials)
+}
+
+fn parse_metadata(
+    contents: &[u8],
+    check_credentials: bool,
+) -> Result<Metadata23, PublishPrepareError> {
+    let message = Message::parse(contents);
+    if check_credentials {
+        credentials::validate(&message)?;
+    }
+    Ok(Metadata23::from_message(message)?)
 }
 
 #[derive(Debug, Clone)]
@@ -1169,6 +1209,7 @@ impl FormMetadata {
         filename: &DistFilename,
         reporter: Arc<impl Reporter>,
         tar_backend: TarBackend,
+        check_credentials: bool,
     ) -> Result<Self, PublishPrepareError> {
         let [sha256_hash, blake2b_hash] = hash_file(
             file,
@@ -1181,7 +1222,7 @@ impl FormMetadata {
         )
         .await?;
 
-        let metadata = metadata(file, filename, tar_backend).await?;
+        let metadata = metadata(file, filename, tar_backend, check_credentials).await?;
 
         Ok(Self::from_metadata(
             metadata,
@@ -1967,7 +2008,7 @@ mod tests {
         let session = test_session(registry, &client);
         let prepared = preparation.pop().expect("Distribution should be found");
         let (form_metadata, attestations, _) = prepared
-            .read_metadata(Arc::new(DummyReporter), TarBackend::default())
+            .read_metadata(Arc::new(DummyReporter), TarBackend::default(), false)
             .await
             .expect("Failed to read upload metadata");
 
@@ -2095,7 +2136,7 @@ mod tests {
         let session = test_session(registry, &client);
         let prepared = preparation.pop().expect("Distribution should be found");
         let (form_metadata, attestations, _) = prepared
-            .read_metadata(Arc::new(DummyReporter), TarBackend::default())
+            .read_metadata(Arc::new(DummyReporter), TarBackend::default(), false)
             .await
             .expect("Failed to read upload metadata");
 

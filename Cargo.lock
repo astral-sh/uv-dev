@@ -7354,6 +7354,7 @@ version = "0.0.100"
 dependencies = [
  "ambient-id",
  "anstream",
+ "astral-mail-headers",
  "astral-reqwest-middleware",
  "astral-reqwest-retry",
  "astral-tokio-tar",
@@ -7385,6 +7386,7 @@ dependencies = [
  "uv-extract",
  "uv-fs",
  "uv-metadata",
+ "uv-pep508",
  "uv-preview",
  "uv-pypi-types",
  "uv-redacted",

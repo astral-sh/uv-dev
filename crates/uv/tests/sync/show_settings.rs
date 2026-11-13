@@ -442,6 +442,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         ),
         index: None,
         dry_run: false,
+        check_credentials: false,
         no_attestations: false,
         publish_url: SafeUrl {
             scheme: "https",
@@ -4048,6 +4049,7 @@ fn preview_features() {
     +            BuildLazyImports,
     +            BuildDependencyHashes,
     +            WheelVariants,
+    +            PublishCheckCreds,
     +        ],
          },
          python_preference: Managed,
