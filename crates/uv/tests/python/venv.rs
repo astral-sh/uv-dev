@@ -1687,6 +1687,73 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
     Ok(())
 }
 
+/// A linked scripts directory can redirect generated activation scripts outside the environment.
+#[test]
+fn create_venv_allow_existing_symlink_bin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_virtualenv_bin();
+    context.venv.create_dir_all()?;
+    let outside = context.temp_dir.child("outside");
+    outside.create_dir_all()?;
+    let scripts = uv_test::venv_bin_path(&context.venv);
+    uv_fs::create_symlink(&outside, &scripts)?;
+
+    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.12"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    assert_link_target(&scripts, dunce::simplified(outside.path()));
+    outside.child("activate").assert(predicate::path::is_file());
+    Ok(())
+}
+
+/// A linked `lib` can redirect the distutils patch that Python 3.9 needs at startup.
+#[test]
+#[cfg(all(unix, feature = "test-python-eol"))]
+fn create_venv_allow_existing_symlink_lib() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
+    context.venv.create_dir_all()?;
+    let outside = context.temp_dir.child("outside");
+    outside.create_dir_all()?;
+    symlink(&outside, context.venv.child("lib"))?;
+
+    uv_snapshot!(context.filters(), context.venv().args(["--allow-existing", "--python", "3.9"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    assert_link_target(context.venv.child("lib"), &outside);
+    outside
+        .child("python3.9/site-packages/_virtualenv.pth")
+        .assert("import _virtualenv");
+    Ok(())
+}
+
+/// A scripts directory that resolves inside the environment supports activation.
+#[test]
+fn create_venv_allow_existing_symlink_inside_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let target = context.venv.child("local-scripts");
+    target.create_dir_all()?;
+    let scripts = uv_test::venv_bin_path(&context.venv);
+    uv_fs::create_symlink(&target, &scripts)?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.12"])
+        .assert()
+        .success();
+    assert_link_target(&scripts, dunce::simplified(target.path()));
+    target.child("activate").assert(predicate::path::is_file());
+    Ok(())
+}
+
 #[test]
 fn non_empty_dir_exists_allow_existing() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
