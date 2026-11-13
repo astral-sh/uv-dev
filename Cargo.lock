@@ -6566,6 +6566,7 @@ dependencies = [
  "uv-pypi-types",
  "uv-redacted",
  "uv-small-str",
+ "uv-static",
  "uv-warnings",
 ]
 
