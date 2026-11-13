@@ -14,8 +14,8 @@ use uv_distribution_types::{
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
-use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{HashDigests, ParsedUrlError};
+use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind, UnquotableMarkerValue};
+use uv_pypi_types::HashDigests;
 /// The output of a successful resolution.
 ///
 /// Includes a complete resolution graph in which every node represents a pinned package and every
@@ -201,10 +201,9 @@ impl ResolverOutput {
         &self,
         index: &DistributionMetadataIndex,
         marker_env: &MarkerEnvironment,
-    ) -> Result<MarkerTree, Box<ParsedUrlError>> {
+    ) -> Result<MarkerTree, UnquotableMarkerValue> {
         use uv_pep508::{
-            CanonicalMarkerValueString, CanonicalMarkerValueVersion, MarkerExpression,
-            MarkerOperator, MarkerTree,
+            CanonicalMarkerValueString, CanonicalMarkerValueVersion, MarkerExpression, MarkerTree,
         };
 
         /// A subset of the possible marker values.
@@ -313,11 +312,7 @@ impl ResolverOutput {
                 }
                 MarkerParam::String(value_string) => {
                     let from_env = marker_env.get_string(value_string);
-                    MarkerExpression::String {
-                        key: value_string.into(),
-                        operator: MarkerOperator::Equal,
-                        value: from_env.into(),
-                    }
+                    MarkerExpression::from_environment_string(value_string.into(), from_env)?
                 }
             };
             conjunction = conjunction.and(MarkerTree::expression(expr));
