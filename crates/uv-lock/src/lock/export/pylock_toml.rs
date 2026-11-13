@@ -1,6 +1,7 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
+use std::ops::Deref;
 use std::path::{Path, PathBuf, absolute};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,8 +17,8 @@ use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    BuildOptions, DependencyGroups, DependencyGroupsWithDefaults, EditableMode,
+    ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -32,7 +33,9 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_normalize::{
+    DefaultExtras, DefaultGroups, ExtraName, GroupName, InvalidNameError, PackageName,
+};
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
 use uv_platform_tags::{TagCompatibility, TagPriority, Tags};
@@ -44,7 +47,10 @@ use uv_warnings::warn_user_once;
 
 use uv_resolver_types::ResolverOutput;
 
-use crate::lock::export::{ExportableRequirements, VirtualPackages};
+use crate::lock::export::{
+    ExportSelection, ExportableRequirement, ExportableRequirements, VirtualPackages,
+    find_root_package,
+};
 use crate::lock::{Source, WheelTagHint, is_wheel_unreachable};
 use crate::{Installable, LockError};
 
@@ -62,10 +68,33 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
     array
 }
 
+/// Format a selection list, keeping an explicitly empty list on one line.
+fn selection_array(names: &[impl ToString]) -> Array {
+    if names.is_empty() {
+        Array::new()
+    } else {
+        each_element_on_its_line_array(names.iter().map(ToString::to_string))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PylockTomlErrorKind {
     #[error("The target environment is not supported by the lockfile")]
     IncompatibleEnvironment,
+    #[error(transparent)]
+    InvalidName(#[from] InvalidNameError),
+    #[error("A multi-use pylock.toml requires exactly one project")]
+    MultiUseRequiresOneRoot,
+    #[error("A multi-use pylock.toml does not support declared conflicts")]
+    MultiUseConflicts,
+    #[error("A multi-use pylock.toml does not support workspace-root dependencies or groups")]
+    MultiUseWorkspaceRoot,
+    #[error(
+        "A multi-use pylock.toml requires a lockfile with dependency group metadata; run `uv lock` to update it"
+    )]
+    MultiUseMissingGroupMetadata,
+    #[error("A multi-use pylock.toml does not support dependency groups with a Python requirement")]
+    MultiUseGroupRequiresPython,
     #[error("Multiple active package entries found for `{0}`")]
     DuplicateActivePackage(PackageName),
     #[error(
@@ -262,15 +291,40 @@ pub struct PylockToml {
     environments: Option<Vec<MarkerTree>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_python: Option<RequiresPython>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub extras: Vec<ExtraName>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub dependency_groups: Vec<GroupName>,
+    #[serde(skip_serializing_if = "PylockSelection::is_absent", default)]
+    pub extras: PylockSelection<ExtraName>,
+    #[serde(skip_serializing_if = "PylockSelection::is_absent", default)]
+    pub dependency_groups: PylockSelection<GroupName>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub default_groups: Vec<GroupName>,
     pub packages: Vec<PylockTomlPackage>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     attestation_identities: Vec<PylockTomlAttestationIdentity>,
+}
+
+/// A list of selectable names that a pylock.toml may omit entirely.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct PylockSelection<T>(Option<Vec<T>>);
+
+impl<T> PylockSelection<T> {
+    fn is_absent(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl<T> Default for PylockSelection<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<T> Deref for PylockSelection<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or_default()
+    }
 }
 
 fn deserialize_lock_version<'de, D>(deserializer: D) -> Result<Version, D::Error>
@@ -473,15 +527,6 @@ impl<'lock> PylockToml {
 
         // Use the `requires-python` from the target lockfile.
         let requires_python = resolution.requires_python.clone();
-
-        // We don't support locking for multiple extras at time of writing.
-        let extras = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let dependency_groups = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let default_groups = vec![];
 
         // We don't support attestation identities at time of writing.
         let attestation_identities = vec![];
@@ -705,9 +750,9 @@ impl<'lock> PylockToml {
             created_by,
             environments: None,
             requires_python: Some(requires_python),
-            extras,
-            dependency_groups,
-            default_groups,
+            extras: PylockSelection::default(),
+            dependency_groups: PylockSelection::default(),
+            default_groups: Vec::new(),
             packages,
             attestation_identities,
         })
@@ -799,7 +844,7 @@ impl<'lock> PylockToml {
         install_options: &'lock InstallOptions,
     ) -> Result<Self, PylockTomlErrorKind> {
         // Extract the packages from the lock file.
-        let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
+        let ExportableRequirements(nodes) = ExportableRequirements::from_lock(
             target,
             prune,
             extras,
@@ -809,6 +854,111 @@ impl<'lock> PylockToml {
             VirtualPackages::Exclude,
         )?;
 
+        Self::from_nodes(target, output_dir, editable, nodes)
+    }
+
+    /// Export one project's dependencies with selectable extras and dependency groups.
+    ///
+    /// Optional dependencies are guarded by PEP 751 markers.
+    /// Empty extras and groups are included when recorded in the uv lockfile.
+    pub fn from_lock_with_selection_markers(
+        target: &impl Installable<'lock>,
+        output_dir: &Path,
+        prune: &[PackageName],
+        default_groups: &DependencyGroupsWithDefaults,
+        editable: Option<&EditableMode>,
+        install_options: &'lock InstallOptions,
+    ) -> Result<Self, PylockTomlErrorKind> {
+        let mut roots = target.roots();
+        let Some(root) = roots.next() else {
+            return Err(PylockTomlErrorKind::MultiUseRequiresOneRoot);
+        };
+        if roots.next().is_some() {
+            return Err(PylockTomlErrorKind::MultiUseRequiresOneRoot);
+        }
+        if !target.lock().conflicts().is_empty() {
+            return Err(PylockTomlErrorKind::MultiUseConflicts);
+        }
+        let groups = DependencyGroups::from_all_groups().with_defaults(DefaultGroups::default());
+        if target.group_root(&groups).is_some()
+            || !target.lock().requirements().is_empty()
+            || !target.lock().dependency_groups().is_empty()
+        {
+            return Err(PylockTomlErrorKind::MultiUseWorkspaceRoot);
+        }
+        let package = find_root_package(target.lock(), root)?;
+        let extras = package
+            .provides_extras()
+            .iter()
+            .chain(package.optional_dependencies().keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let dependency_groups = package
+            .dependency_groups()
+            .keys()
+            .chain(package.resolved_dependency_groups().keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !dependency_groups.is_empty() {
+            if target.lock().member_group_metadata().is_none() {
+                return Err(PylockTomlErrorKind::MultiUseMissingGroupMetadata);
+            }
+            if package
+                .group_requires_python
+                .values()
+                .any(|group| group.requires_python.is_some())
+            {
+                return Err(PylockTomlErrorKind::MultiUseGroupRequiresPython);
+            }
+        }
+
+        // Synthetic default groups stay separate from the groups selectable by name.
+        let synthetic_default = if default_groups
+            .group_names(dependency_groups.iter())
+            .next()
+            .is_some()
+        {
+            let mut name = String::from("uv-default");
+            while dependency_groups.iter().any(|group| group.as_str() == name) {
+                name.push_str("-default");
+            }
+            Some(name.parse::<GroupName>()?)
+        } else {
+            None
+        };
+
+        let selection =
+            ExtrasSpecification::from_all_extras().with_defaults(DefaultExtras::default());
+        let ExportableRequirements(nodes) = ExportableRequirements::from_lock_impl(
+            target,
+            prune,
+            &selection,
+            &groups,
+            false,
+            install_options,
+            VirtualPackages::Exclude,
+            ExportSelection::MultiUse {
+                default_groups,
+                synthetic_default: synthetic_default.as_ref(),
+            },
+        )?;
+        let mut lock = Self::from_nodes(target, output_dir, editable, nodes)?;
+        lock.extras = PylockSelection(Some(extras));
+        lock.dependency_groups = PylockSelection(Some(dependency_groups));
+        lock.default_groups = synthetic_default.into_iter().collect();
+        Ok(lock)
+    }
+
+    fn from_nodes(
+        target: &impl Installable<'lock>,
+        output_dir: &Path,
+        editable: Option<&EditableMode>,
+        mut nodes: Vec<ExportableRequirement<'lock>>,
+    ) -> Result<Self, PylockTomlErrorKind> {
         // Sort the nodes.
         nodes.sort_unstable_by_key(|node| &node.package.id);
 
@@ -820,15 +970,6 @@ impl<'lock> PylockToml {
 
         // Use the `requires-python` from the target lockfile.
         let requires_python = target.lock().requires_python.clone();
-
-        // We don't support locking for multiple extras at time of writing.
-        let extras = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let dependency_groups = vec![];
-
-        // We don't support locking for multiple dependency groups at time of writing.
-        let default_groups = vec![];
 
         // We don't support attestation identities at time of writing.
         let attestation_identities = vec![];
@@ -1080,9 +1221,9 @@ impl<'lock> PylockToml {
                 Some(target.lock().simplified_supported_environments())
             },
             requires_python: Some(requires_python),
-            extras,
-            dependency_groups,
-            default_groups,
+            extras: PylockSelection::default(),
+            dependency_groups: PylockSelection::default(),
+            default_groups: Vec::new(),
             packages,
             attestation_identities,
         })
@@ -1203,20 +1344,13 @@ impl<'lock> PylockToml {
         if let Some(ref requires_python) = self.requires_python {
             doc.insert("requires-python", value(requires_python.to_string()));
         }
-        if !self.extras.is_empty() {
-            doc.insert(
-                "extras",
-                value(each_element_on_its_line_array(
-                    self.extras.iter().map(ToString::to_string),
-                )),
-            );
+        if let Some(extras) = &self.extras.0 {
+            doc.insert("extras", value(selection_array(extras)));
         }
-        if !self.dependency_groups.is_empty() {
+        if let Some(dependency_groups) = &self.dependency_groups.0 {
             doc.insert(
                 "dependency-groups",
-                value(each_element_on_its_line_array(
-                    self.dependency_groups.iter().map(ToString::to_string),
-                )),
+                value(selection_array(dependency_groups)),
             );
         }
         if !self.default_groups.is_empty() {
