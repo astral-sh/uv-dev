@@ -1,0 +1,30 @@
+# This file is a translation of
+# https://github.com/huggingface/transformers/blob/0e4a1c3401421d3342938a183c7b021cdac6fd79/setup.py
+# to PEP 621 and `tool.uv` sources.
+
+[project]
+name = "transformers"
+version = "4.39.0.dev0"
+requires-python = ">=3.9.0"
+
+dependencies = [
+    "filelock",
+    "huggingface-hub>=0.19.3,<1.0",
+    "numpy>=1.17",
+    "packaging>=20.0",
+    "pyyaml>=5.1",
+    "regex!=2019.12.17",
+    "requests",
+    "tokenizers>=0.14,<0.19",
+    "safetensors>=0.4.1",
+    "tqdm>=4.27",
+]
+
+# This inference workload retains the upstream torch and vision extras.
+[project.optional-dependencies]
+torch = ["torch", "accelerate>=0.21.0"]
+vision = ["Pillow>=10.0.1,<=15.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
