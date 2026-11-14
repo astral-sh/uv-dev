@@ -1,0 +1,83 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 2500,
+        "title": "`uv pip list` does not read all system packages in `sys.path` and ignores `system-site-packages`",
+        "url": "https://github.com/astral-sh/uv/issues/2500",
+        "state": "open",
+        "reason": "Canonical discussion for discovery beyond purelib/platlib, including layered environments with heavy dependencies. Its August 2025 comments already propose opt-in, read-only support limited to uv pip inspection and additive installs. The proposed full sys.path discovery and version shadowing differ from konstin's preference for explicit paths and failure on mismatches."
+      },
+      {
+        "kind": "issue",
+        "number": 4466,
+        "title": "UV upgrades packages inherited with --system-site-packages",
+        "url": "https://github.com/astral-sh/uv/issues/4466",
+        "state": "open",
+        "reason": "Same install symptom: uv installs a newer environment-local package although an inherited version satisfies the request. Maintainers explicitly connect it to astral-sh/uv#2500; later comments describe read-only base environments and HPC-provided torch."
+      },
+      {
+        "kind": "issue",
+        "number": 15162,
+        "title": "Sharing torch between different projects",
+        "url": "https://github.com/astral-sh/uv/issues/15162",
+        "state": "open",
+        "reason": "Direct match for the PYTHONPATH trigger: pip accepts an existing shared torch, while uv pip install downloads another copy. Maintainers discuss ownership and incompatible versions and refer to astral-sh/uv#11670."
+      },
+      {
+        "kind": "issue",
+        "number": 12800,
+        "title": "Recommended way to install additional packages in existing unmanaged environment",
+        "url": "https://github.com/astral-sh/uv/issues/12800",
+        "state": "open",
+        "reason": "Requests additive installation over a Docker base environment without reinstalling torch. The reporter identifies --system-site-packages being ignored, and konstin explicitly identifies astral-sh/uv#2500 as the tracking issue."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9849,
+        "title": "Use `sys.path` for package discovery",
+        "url": "https://github.com/astral-sh/uv/pull/9849",
+        "state": "open",
+        "reason": "Open draft explicitly targeting astral-sh/uv#2500 and astral-sh/uv#4466 by replacing scheme-only discovery with sys.path. Read-only uninstall handling remains a TODO; comments discuss stale interpreter paths after environment creation and additional platform and sync complications."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11670,
+        "title": "Consider system site packages if activated",
+        "url": "https://github.com/astral-sh/uv/pull/11670",
+        "state": "closed",
+        "reason": "Closed without merge on June 23, 2026. Its described model closely matches ordered runtime discovery, read-only inherited distributions, satisfied requirements, and rejection of replacements that cannot win at runtime, but extends into sync, project, tool, and build environments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15121,
+        "title": "Include all site packages directories in ephemeral environment overlays",
+        "url": "https://github.com/astral-sh/uv/pull/15121",
+        "state": "merged",
+        "reason": "Merged August 8, 2025 for uv run --with overlay construction when a base interpreter has additional site directories. This is an adjacent prerequisite, not a general uv pip discovery fix, so it does not establish a regression in the new report."
+      },
+      {
+        "kind": "issue",
+        "number": 18510,
+        "title": "Interpreter cache pollution by system-site-packages venvs",
+        "url": "https://github.com/astral-sh/uv/issues/18510",
+        "state": "open",
+        "reason": "Adjacent cache correctness issue: recreating a venv without system-site-packages can retain inherited directories in uv run --with overlays. A maintainer identifies the inclusion setting as relevant to the cache key. It informs caching design but does not establish the cause of the reported discovery omission."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21960,
+        "title": "Retain base site-packages when creating virtual environments",
+        "url": "https://github.com/astral-sh/uv/pull/21960",
+        "state": "closed",
+        "reason": "Unmerged attempt to retain base site-package paths in interpreter metadata for newly created environments. Konstin's closing comment says caching must come first. This concerns metadata propagation rather than the proposed per-command uv pip discovery."
+      }
+    ],
+    "search_scope": "Decomposed inspection omissions, redundant additive installs, read-only ownership/uninstall, import precedence, and caching separately. Authenticated gh searches covered open and closed issues and attempted open, closed, and merged PR searches for sys.path, system-site-packages, PYTHONPATH/install/torch, pip list/system, inherited packages, layered environments, .pth/install, read-only packages, sys-path-discovery, and Cannot install/precedes; broadened beyond package and platform names. Inspected candidate bodies, comments, linked canonical discussions, and historical PRs. Direct PR searches returned no matches; linked PRs were inspected individually. Some later exact-warning and fix-oriented API searches hit GitHub's rate limit. Ruled out astral-sh/uv#3341 after comments identified in-environment .egg-info discovery, fixed by merged astral-sh/uv#3380; this is not inherited-path discovery. Also distinguished astral-sh/uv#22586 (runtime isolation in the Docker guide) and astral-sh/uv#17840 (project-interface imports). Astral-sh/uv#18062 shares the PyTorch Docker motivation but primarily requests uv sync support, excluded here. Source inspection confirmed scheme-based discovery; prototype behavior and benchmarks were not independently verified."
+  },
+  "type": "duplicate",
+  "type_reason": "The underlying inherited-package discovery and redundant-install behavior is already tracked by open astral-sh/uv#2500 and astral-sh/uv#4466. Astral-sh/uv#2500 also already discusses the proposed opt-in, read-only, uv pip-only first step. The new flag, prototype, and narrower implementation refine that request rather than require a separate discussion. No previously merged general uv pip fix or subsequent regression was established.",
+  "summary": "Duplicate of astral-sh/uv#2500, with the install symptom tracked by astral-sh/uv#4466. Prior discussions already cover the proposed limited scope; astral-sh/uv#9849 remains a draft and astral-sh/uv#11670 closed unmerged. Full-path discovery and mismatch behavior remain design questions.",
+  "draft_response": "Your proposed opt-in, read-only support for uv pip fits the discussion in astral-sh/uv#2500; astral-sh/uv#4466 tracks the redundant-install behavior, including HPC environments with preinstalled torch. Please add your proposal and prototype to astral-sh/uv#2500 so the design discussion stays together.\n\nThe earlier discussion supports exploring a limited first step, but konstin suggested explicit paths and failing on version mismatches. Full sys.path discovery and shadowing inherited versions still need agreement. Astral-sh/uv#9849 remains a draft, astral-sh/uv#11670 closed without merging, and astral-sh/uv#15121 only changed uv run --with overlays."
+}
