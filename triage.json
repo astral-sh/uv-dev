@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20783,
+        "title": "`uv upgrade` should allow upgrading dependencies in extras or groups",
+        "url": "https://github.com/astral-sh/uv/issues/20783",
+        "state": "open",
+        "reason": "Exact match: a package declared only in a dependency group fails with the same 'was not found in project.dependencies' error. Tracks group and extras support for the same command; the dev group is a specific instance."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20590,
+        "title": "Allow `uv upgrade` to update optional and group dependencies",
+        "url": "https://github.com/astral-sh/uv/pull/20590",
+        "state": "open",
+        "reason": "Linked from astral-sh/uv#20783 by a maintainer. Extends selection and requirement rewriting to optional dependencies and dependency groups, including include-group. It predates this report and remains unmerged, despite the issue comment saying 'Fixed by'."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18266,
+        "title": "Add support for `--upgrade-group`",
+        "url": "https://github.com/astral-sh/uv/pull/18266",
+        "state": "merged",
+        "reason": "Provides the existing alternative `uv lock --upgrade-group dev`, released in 0.11.4 before the reported 0.13.7. Upgrades direct group members in the lockfile within declared constraints; it does not add group support or constraint rewriting to `uv upgrade`."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv with authenticated gh across open and closed issues and open, closed, and merged PRs. Decomposed the report into group-only package rejection, unsupported --dev, and lockfile updates versus manifest constraint changes. Literal searches included uv upgrade, dependency-groups, project.dependencies, the exact not-found error, and unexpected argument --dev; conceptual searches used extras, groups, production dependencies, upgrade-package, and upgrade-group without ipython, platform, or version restrictions. Followed maintainer references to astral-sh/uv#20590 and inspected its comments and merge status; inspected merged astral-sh/uv#19738 and astral-sh/uv#18266 for historical scope and available functionality. General PR searches returned no hits; referenced PRs were inspected directly. Inspected astral-sh/uv#20782, which was centralized into astral-sh/uv#20783. Ruled out astral-sh/uv#20574 as the canonical match because it concerns indirect conflict constraints, and astral-sh/uv#19160 because it requests main-dependency selection for lock upgrades. Also inspected broader astral-sh/uv#6794 and the implemented lock-group request astral-sh/uv#13705. One additional lockfile/dev search was rate-limited. Checked current source, existing tests, documentation, and release notes."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#20783 already tracks the same command rejecting dependencies outside project.dependencies with the same error; the dev-group reproduction fits that discussion. Its linked implementation, astral-sh/uv#20590, predates this report and is still open with no merge date. Current source and tests confirm the restriction, so the 'Fixed by' comment does not establish a released fix or regression. Duplicate classification takes precedence over independently assessing the missing capability.",
+  "summary": "astral-sh/uv#20783 is the exact match, with support proposed in the still-open astral-sh/uv#20590. Merged astral-sh/uv#18266 provides an existing group-scoped lockfile upgrade command.",
+  "draft_response": "Group support for `uv upgrade` is tracked in astral-sh/uv#20783, with an open implementation in astral-sh/uv#20590. The current command only selects `project.dependencies` and edits constraints in `pyproject.toml`; it does not update `uv.lock`.\n\nFor the lockfile update you described, use `uv lock --upgrade-package ipython`. This works for dependencies in `dev` without `--dev`. To upgrade the whole group, use `uv lock --upgrade-group dev`. Both respect existing version constraints, so an exact pin still needs to be changed to permit a newer version."
+}
