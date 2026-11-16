@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 7127,
+        "title": "Skip metadata fetch for `--no-deps` and `pip sync`",
+        "url": "https://github.com/astral-sh/uv/pull/7127",
+        "state": "merged",
+        "reason": "Directly establishes the reported behavior: this change intentionally stopped fetching distribution metadata with --no-deps, explicitly accepting that extras could no longer be validated to avoid potentially downloading wheels twice. Its diff removes the invalid-extra warning from the no_deps_invalid_extra snapshot."
+      },
+      {
+        "kind": "issue",
+        "number": 2828,
+        "title": "(🎁) Fail and show an error when an invalid extra is requested",
+        "url": "https://github.com/astral-sh/uv/issues/2828",
+        "state": "open",
+        "reason": "Adjacent validation-policy discussion. Maintainer comments confirm that pip compile normally warns and keep this issue open to decide whether invalid extras should cause failure. It does not track restoring warnings while skipping dependency resolution, so it is not a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1812,
+        "title": "Wait for distribution metadata with `--no-deps`",
+        "url": "https://github.com/astral-sh/uv/pull/1812",
+        "state": "merged",
+        "reason": "Historical implementation of the requested diagnostic: its no_deps_invalid_extra test expected a warning. It fixed the panic reported in astral-sh/uv#1801; astral-sh/uv#7127 later explicitly removed the warning as a performance tradeoff. The current report does not reproduce that historical panic."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using literal --no-deps/extra combinations, the exact 'does not have an extra' diagnostic, 'invalid extras', pandas[exce], and version 0.13.8; conceptual searches covered unknown/nonexistent/missing extras, validation, warnings, diagnostics, and pip compile. Separate metadata-oriented and historical-fix searches used PR text, commit search, and issue timelines. Inspected candidate bodies and comments, relevant PR diffs, and the current resolver and integration tests. Direct PR text searches returned no matches; reference chains and commit search identified the historical PRs. Ruled out astral-sh/uv#1801 and astral-sh/uv#3184 as crash reports, astral-sh/uv#7211 as a warning caused by a transitive requirement, and astral-sh/uv#13963 as installed-environment validation. No existing discussion was found requesting this specific change."
+  },
+  "type": "enhancement",
+  "type_reason": "The requested capability is extra-name validation during direct-only compilation. astral-sh/uv#7127 explicitly chose to skip the metadata required for that check and changed the exact integration test to require no warning; the current source still implements that policy. The report establishes no incorrect dependency selection or failure of the top-level-only compilation contract. Restoring this check would revisit an explicit performance tradeoff. The earlier astral-sh/uv#1801 panic fixed by astral-sh/uv#1812 has not returned, and astral-sh/uv#2828 concerns errors rather than this missing validation mode.",
+  "summary": "astral-sh/uv#7127 intentionally removed this warning, superseding the behavior tested in astral-sh/uv#1812. astral-sh/uv#2828 discusses making invalid extras fatal. No duplicate tracking validation with --no-deps was found.",
+  "draft_response": "This behavior was introduced deliberately in astral-sh/uv#7127: with --no-deps, uv skips fetching distribution metadata, including the declared extras, to avoid additional downloads that can include entire wheels. The existing compile test explicitly expects no warning in this mode.\n\nValidating extras while keeping only top-level packages would require revisiting that tradeoff. For now, you can run a separate compile without --no-deps to obtain the warnings, while retaining --no-deps for your top-level-only output. astral-sh/uv#2828 separately discusses treating invalid extras as errors."
+}
