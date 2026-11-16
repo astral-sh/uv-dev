@@ -23,9 +23,11 @@ astral-sh/uv#9711 is the canonical discussion. astral-sh/uv#9425 covers a simila
 
 Maintainer konstin identifies PEP 780 (https://peps.python.org/pep-0780/) as the proposed solution: use the expression `"free_threaded::True" in sys_abi_info` in `required-environments` to express the free-threaded requirement. This gives investigation a concrete marker-based direction beyond the original observation that the inspected marker model cannot distinguish the two interpreter builds.
 
-The comment identifies a solution direction, not a shipped uv fix or a tested configuration for uv 0.13.8. It supplies no implementation pull request, supported uv version, or successful reproduction result. Investigate PEP 780 support in marker parsing, ABI coverage inference during universal resolution, and required-environment checks before treating the expression as an available workaround. PEP status and implementation availability were not independently checked in this update.
+rgommers confirms PEP 780 as the intended solution and reports that a substantial PEP revision had been posted about ten days earlier. As of the November 16, 2026 comment, rgommers expects submission for pronouncement soon unless concerns arise, citing the discussion at https://discuss.python.org/t/pep-780-abi-features-as-environment-markers/86013/56. This is an attributed expectation about the standards process, not confirmation that submission or acceptance has occurred.
 
-Source: konstin's November 16, 2026 comment on astral-sh/uv#23239, https://github.com/astral-sh/uv/issues/23239#issuecomment-6917384789.
+The discussion identifies a solution direction, not a shipped uv fix or a tested configuration for uv 0.13.8. Neither comment supplies an implementation pull request, supported uv version, or successful reproduction result. Investigate PEP 780 support in marker parsing, ABI coverage inference during universal resolution, and required-environment checks before treating the expression as an available workaround. Formal PEP status and implementation availability were not independently checked in this update.
+
+Sources: konstin's and rgommers' November 16, 2026 comments on astral-sh/uv#23239, https://github.com/astral-sh/uv/issues/23239#issuecomment-6917384789 and https://github.com/astral-sh/uv/issues/23239#issuecomment-6925586664.
 
 ## Impact and cross-project context
 
