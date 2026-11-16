@@ -572,80 +572,75 @@ fn parse_extra_expr(
     None
 }
 
-/// ```text
-/// marker_expr   = marker_var:l marker_op:o marker_var:r -> (o, l, r)
-///               | wsp* '(' marker:m wsp* ')' -> m
-/// ```
-fn parse_marker_expr<T: Pep508Url>(
-    cursor: &mut Cursor,
-    reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    cursor.eat_whitespace();
-    if let Some(start_pos) = cursor.eat_char('(') {
-        let marker = parse_marker_or(cursor, reporter)?;
-        cursor.next_expect_char(')', start_pos)?;
-        Ok(marker)
-    } else {
-        Ok(parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression))
+/// The expressions in a parenthesized group. Conjunctions bind more tightly than disjunctions.
+#[derive(Default)]
+struct MarkerGroup {
+    conjunction: SmallVec<[MarkerTree; 4]>,
+    disjunction: SmallVec<[MarkerTree; 4]>,
+}
+
+impl MarkerGroup {
+    fn finish_conjunction(&mut self) {
+        self.disjunction.extend(combine_marker_op(
+            std::mem::take(&mut self.conjunction),
+            MarkerTree::and,
+            MarkerTree::FALSE,
+        ));
+    }
+
+    fn finish(mut self) -> Option<MarkerTree> {
+        if self.disjunction.is_empty() {
+            return combine_marker_op(self.conjunction, MarkerTree::and, MarkerTree::FALSE);
+        }
+        self.finish_conjunction();
+        combine_marker_op(self.disjunction, MarkerTree::or, MarkerTree::TRUE)
     }
 }
 
-/// ```text
-/// marker_and    = marker_expr:l wsp* 'and' marker_expr:r -> ('and', l, r)
-///               | marker_expr:m -> m
-/// ```
-fn parse_marker_and<T: Pep508Url>(
+/// Parse marker expressions using an explicit stack for parenthesized groups.
+fn parse_marker<T: Pep508Url>(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    parse_marker_op(cursor, "and", MarkerTree::and, parse_marker_expr, reporter)
-}
-
-/// ```text
-/// marker_or     = marker_and:l wsp* 'or' marker_and:r -> ('or', l, r)
-///                   | marker_and:m -> m
-/// ```
-fn parse_marker_or<T: Pep508Url>(
-    cursor: &mut Cursor,
-    reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    parse_marker_op(
-        cursor,
-        "or",
-        MarkerTree::or,
-        |cursor, reporter| parse_marker_and(cursor, reporter),
-        reporter,
-    )
-}
-
-/// Parses both `marker_and` and `marker_or`
-#[expect(clippy::type_complexity)]
-fn parse_marker_op<T: Pep508Url, R: Reporter>(
-    cursor: &mut Cursor,
-    op: &str,
-    apply: fn(MarkerTree, MarkerTree) -> MarkerTree,
-    parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
-    reporter: &mut R,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let first = parse_inner(cursor, reporter)?;
-    cursor.eat_whitespace();
-    let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
-    if cursor.slice(start, len) != op {
-        return Ok(first);
-    }
-
-    let mut expressions = SmallVec::<[MarkerTree; 4]>::new();
-    expressions.extend(first);
+    let mut groups = Vec::new();
+    let mut group = MarkerGroup::default();
     loop {
-        cursor.take_while(|c| !c.is_whitespace() && c != '(');
-        expressions.extend(parse_inner(cursor, reporter)?);
         cursor.eat_whitespace();
-        let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
-        if cursor.slice(start, len) != op {
-            break;
+        if let Some(start) = cursor.eat_char('(') {
+            groups.push((start, std::mem::take(&mut group)));
+            continue;
+        }
+
+        let mut expression =
+            parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression);
+        loop {
+            group.conjunction.extend(expression);
+            cursor.eat_whitespace();
+            if matches!(cursor.peek_char(), Some('a' | 'o')) {
+                let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
+                if let operator @ ("and" | "or") = cursor.slice(start, len) {
+                    if operator == "or" {
+                        group.finish_conjunction();
+                    }
+                    *cursor = cursor.clone().at(start + len);
+                    break;
+                }
+            }
+            expression = group.finish();
+            let Some((start, parent)) = groups.pop() else {
+                return Ok(expression);
+            };
+            cursor.next_expect_char(')', start)?;
+            group = parent;
         }
     }
+}
 
+fn combine_marker_op(
+    mut expressions: SmallVec<[MarkerTree; 4]>,
+    apply: fn(MarkerTree, MarkerTree) -> MarkerTree,
+    absorbing: MarkerTree,
+) -> Option<MarkerTree> {
     // Combining adjacent pairs avoids constructing every prefix of a growing diagram.
     while expressions.len() > 1 {
         let length = expressions.len();
@@ -656,15 +651,13 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
                 expressions[index]
             };
             // All terms have been parsed, so constant results cannot hide errors or warnings.
-            if (expressions[output].is_true() && op == "or")
-                || (expressions[output].is_false() && op == "and")
-            {
-                return Ok(Some(expressions[output]));
+            if expressions[output] == absorbing {
+                return Some(expressions[output]);
             }
         }
         expressions.truncate(length.div_ceil(2));
     }
-    Ok(expressions.first().copied())
+    expressions.first().copied()
 }
 
 /// ```text
@@ -674,11 +667,9 @@ pub(crate) fn parse_markers_cursor<T: Pep508Url>(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let marker = parse_marker_or(cursor, reporter)?;
+    let marker = parse_marker(cursor, reporter)?;
     cursor.eat_whitespace();
     if let Some((pos, unexpected)) = cursor.next() {
-        // If we're here, both parse_marker_or and parse_marker_and returned because the next
-        // character was neither "and" nor "or"
         let input = cursor.to_string();
         return Err(Pep508Error {
             message: Pep508ErrorSource::String(format!(
