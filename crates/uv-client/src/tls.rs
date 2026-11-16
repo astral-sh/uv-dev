@@ -9,7 +9,8 @@ use rustls_native_certs::{CertificateResult, load_certs_from_paths};
 use rustls_pki_types::CertificateDer;
 use tracing::{debug, warn};
 use webpki::{Error as WebPkiError, anchor_from_trusted_cert};
-use x509_parser::prelude::{FromDer, X509Certificate};
+use x509_parser::certificate::{X509Certificate, X509CertificateParser};
+use x509_parser::nom::Parser;
 
 use uv_fs::Simplified;
 use uv_static::EnvVars;
@@ -43,7 +44,11 @@ struct DiagnosticCertificate(CertificateDer<'static>);
 
 impl DiagnosticCertificate {
     fn parse(&self) -> Option<X509Certificate<'_>> {
-        match X509Certificate::from_der(self.0.as_ref()) {
+        // Diagnostics need extension OIDs and critical flags, but never their values.
+        match X509CertificateParser::new()
+            .with_deep_parse_extensions(false)
+            .parse(self.0.as_ref())
+        {
             Ok((_, certificate)) => Some(certificate),
             Err(err) => {
                 debug!("Failed to parse certificate for improved validation message: {err:?}");
