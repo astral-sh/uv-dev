@@ -327,37 +327,20 @@ fn find_roots(
     }
     debug!("Source root: {}", src_root.user_display());
 
-    if namespace {
-        // `namespace = true` disables module structure checks.
-        let modules_relative = if let Some(module_name) = module_name {
-            match module_name {
-                ModuleName::Name(name) => {
-                    vec![name.split('.').collect::<PathBuf>()]
-                }
-                ModuleName::Names(names) => prune_redundant_modules_warn(names, show_warnings)
-                    .into_iter()
-                    .map(|name| name.split('.').collect::<PathBuf>())
-                    .collect(),
-            }
-        } else {
-            vec![PathBuf::from(
-                pyproject_toml.name().as_dist_info_name().to_string(),
-            )]
-        };
-        for module_relative in &modules_relative {
-            debug!("Namespace module path: {}", module_relative.user_display());
-        }
-        return Ok((src_root, modules_relative));
-    }
-
     let modules_relative = if let Some(module_name) = module_name {
         match module_name {
-            ModuleName::Name(name) => vec![module_path_from_module_name(&src_root, name)?],
+            ModuleName::Name(name) => {
+                vec![module_path_from_module_name(&src_root, name, namespace)?]
+            }
             ModuleName::Names(names) => prune_redundant_modules_warn(names, show_warnings)
                 .into_iter()
-                .map(|name| module_path_from_module_name(&src_root, &name))
+                .map(|name| module_path_from_module_name(&src_root, &name, namespace))
                 .collect::<Result<_, _>>()?,
         }
+    } else if namespace {
+        vec![PathBuf::from(
+            pyproject_toml.name().as_dist_info_name().to_string(),
+        )]
     } else {
         vec![find_module_path_from_package_name(
             &src_root,
@@ -403,7 +386,11 @@ fn find_module_path_from_package_name(
 }
 
 /// Determine the relative module path from an explicit module name.
-fn module_path_from_module_name(src_root: &Path, module_name: &str) -> Result<PathBuf, Error> {
+fn module_path_from_module_name(
+    src_root: &Path,
+    module_name: &str,
+    namespace: bool,
+) -> Result<PathBuf, Error> {
     // This name can be uppercase.
     let module_relative = module_name.split('.').collect::<PathBuf>();
 
@@ -435,6 +422,11 @@ fn module_path_from_module_name(src_root: &Path, module_name: &str) -> Result<Pa
     for segment in namespace_segments {
         Identifier::from_str(segment)
             .map_err(|err| Error::InvalidModuleName(module_name.to_string(), err))?;
+    }
+
+    // Namespace packages may have multiple root modules, so they do not require a specific layout.
+    if namespace {
+        return Ok(module_relative);
     }
 
     // Check that an `__init__.py[i]` exists for the module.
