@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -221,7 +222,20 @@ pub fn reserved_script_name(name: &str) -> Option<&str> {
     .then_some(normalized_name)
 }
 
-/// An unpacked wheel whose data directories cannot overwrite a reserved script.
+/// Metadata determined by the installer, even if a repacked wheel contains a copy.
+fn is_installer_metadata(name: &OsStr) -> bool {
+    [
+        "direct_url.json",
+        "INSTALLER",
+        "REQUESTED",
+        "uv_cache.json",
+        "uv_build.json",
+    ]
+    .iter()
+    .any(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
+/// An unpacked wheel whose data directories cannot overwrite installer metadata or a reserved script.
 pub(crate) struct ValidatedWheel<'wheel> {
     path: &'wheel Path,
 }
@@ -231,9 +245,17 @@ impl<'wheel> ValidatedWheel<'wheel> {
         layout: &Layout,
         wheel: &'wheel Path,
         dist_info_prefix: &str,
+        dist_name: &PackageName,
     ) -> Result<Self, Error> {
         let data_dir = wheel.join(format!("{dist_info_prefix}.data"));
+        if !data_dir.is_dir() {
+            return Ok(Self { path: wheel });
+        }
+        let headers = headers_directory(layout, dist_name);
         for (source, destination) in [
+            (data_dir.join("purelib"), &layout.scheme.purelib),
+            (data_dir.join("platlib"), &layout.scheme.platlib),
+            (data_dir.join("headers"), &headers),
             (data_dir.join("scripts"), &layout.scheme.scripts),
             (data_dir.join("data"), &layout.scheme.data),
         ] {
@@ -248,10 +270,9 @@ impl<'wheel> ValidatedWheel<'wheel> {
                 }
 
                 let relative = relative_to(entry.path(), &source)?;
-                validate_data_script_destination(
-                    &destination.join(relative),
-                    &layout.scheme.scripts,
-                )?;
+                let target = destination.join(relative);
+                validate_data_script_destination(&target, &layout.scheme.scripts)?;
+                validate_data_metadata_destination(&target, layout)?;
             }
         }
 
@@ -261,6 +282,44 @@ impl<'wheel> ValidatedWheel<'wheel> {
     pub(crate) fn as_path(&self) -> &Path {
         self.path
     }
+}
+
+/// Headers are installed under a package-specific directory in the include scheme.
+fn headers_directory(layout: &Layout, name: &PackageName) -> PathBuf {
+    layout.scheme.include.join(name.as_str())
+}
+
+/// Wheel data must not place installer-owned files into an installed distribution,
+/// including through a symlink to a library or its `.dist-info` directory.
+fn validate_data_metadata_destination(target: &Path, layout: &Layout) -> Result<(), Error> {
+    if !target.file_name().is_some_and(is_installer_metadata) {
+        return Ok(());
+    }
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    let in_dist_info = |dir: &Path| {
+        dir.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dist-info"))
+            && dir.parent().is_some_and(|root| {
+                [&layout.scheme.purelib, &layout.scheme.platlib]
+                    .iter()
+                    .any(|lib| uv_fs::is_same_file_allow_missing(root, lib) == Some(true))
+            })
+    };
+    if in_dist_info(parent)
+        || match fs::canonicalize(parent) {
+            Ok(dir) => in_dist_info(&dir),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        }
+    {
+        return Err(Error::InvalidWheel(format!(
+            "Wheel data cannot install metadata at `{}`",
+            target.simplified_display()
+        )));
+    }
+    Ok(())
 }
 
 fn validate_data_script_destination(target: &Path, scripts: &Path) -> Result<(), Error> {
@@ -501,7 +560,7 @@ pub(crate) enum LibKind {
 fn move_folder_recorded(
     src_dir: &Path,
     dest_dir: &Path,
-    scripts: &Path,
+    layout: &Layout,
     site_packages: &Path,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
@@ -524,7 +583,8 @@ fn move_folder_recorded(
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
         } else {
-            validate_data_script_destination(&target, scripts)?;
+            validate_data_script_destination(&target, &layout.scheme.scripts)?;
+            validate_data_metadata_destination(&target, layout)?;
             rename_or_copy.rename_or_copy(src, &target)?;
             let entry = record
                 .iter_mut()
@@ -579,6 +639,7 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
+    validate_data_metadata_destination(&script_absolute, layout)?;
     let script_relative =
         pathdiff::diff_paths(&script_absolute, site_packages).ok_or_else(|| {
             Error::Io(io::Error::other(format!(
@@ -788,13 +849,7 @@ pub(crate) fn install_data(
                     layout.scheme.data.user_display()
                 );
                 // Move the content of the folder to the root of the venv
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.data,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.data, layout, site_packages, record)?;
             }
             Some("scripts") => {
                 trace!(
@@ -840,19 +895,13 @@ pub(crate) fn install_data(
                 }
             }
             Some("headers") => {
-                let target_path = layout.scheme.include.join(dist_name.as_str());
+                let target_path = headers_directory(layout, dist_name);
                 trace!(
                     ?dist_name,
                     "Installing data/headers to `{}`",
                     target_path.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &target_path,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &target_path, layout, site_packages, record)?;
             }
             Some("purelib") => {
                 trace!(
@@ -860,13 +909,7 @@ pub(crate) fn install_data(
                     "Installing data/purelib to `{}`",
                     layout.scheme.purelib.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.purelib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.purelib, layout, site_packages, record)?;
             }
             Some("platlib") => {
                 trace!(
@@ -874,13 +917,7 @@ pub(crate) fn install_data(
                     "Installing data/platlib to `{}`",
                     layout.scheme.platlib.user_display()
                 );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.platlib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
+                move_folder_recorded(&path, &layout.scheme.platlib, layout, site_packages, record)?;
             }
             _ => {
                 return Err(Error::InvalidWheel(format!(
@@ -917,6 +954,31 @@ fn write_file_recorded(
         path: relative_path.portable_display().to_string(),
         hash: Some(encoded_hash),
         size: Some(content.as_ref().len() as u64),
+    });
+    Ok(())
+}
+
+/// Remove installer metadata shipped in a wheel before recording this installation.
+pub(crate) fn discard_wheel_installer_metadata(
+    site_packages: &Path,
+    dist_info_prefix: &str,
+    record: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let dist_info = PathBuf::from(format!("{dist_info_prefix}.dist-info"));
+    let mut discarded = false;
+    for entry in fs::read_dir(site_packages.join(&dist_info))? {
+        let entry = entry?;
+        if is_installer_metadata(&entry.file_name()) {
+            fs::remove_file(entry.path())?;
+            discarded = true;
+        }
+    }
+    if !discarded {
+        return Ok(());
+    }
+    record.retain(|entry| {
+        let path = uv_fs::normalize_path(Path::new(&entry.path));
+        !(path.parent() == Some(&dist_info) && path.file_name().is_some_and(is_installer_metadata))
     });
     Ok(())
 }
