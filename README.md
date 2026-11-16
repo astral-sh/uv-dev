@@ -19,6 +19,14 @@ Locking selects Pympler 1.1 and pywin32 312. Sync selects CPython 3.13.12+freeth
 
 astral-sh/uv#9711 is the canonical discussion. astral-sh/uv#9425 covers a similar interpreter-specific wheel gap; merged astral-sh/uv#10046 fixed only a narrower local-version/platform case.
 
+## Maintainer direction: PEP 780 ABI marker
+
+Maintainer konstin identifies PEP 780 (https://peps.python.org/pep-0780/) as the proposed solution: use the expression `"free_threaded::True" in sys_abi_info` in `required-environments` to express the free-threaded requirement. This gives investigation a concrete marker-based direction beyond the original observation that the inspected marker model cannot distinguish the two interpreter builds.
+
+The comment identifies a solution direction, not a shipped uv fix or a tested configuration for uv 0.13.8. It supplies no implementation pull request, supported uv version, or successful reproduction result. Investigate PEP 780 support in marker parsing, ABI coverage inference during universal resolution, and required-environment checks before treating the expression as an available workaround. PEP status and implementation availability were not independently checked in this update.
+
+Source: konstin's November 16, 2026 comment on astral-sh/uv#23239, https://github.com/astral-sh/uv/issues/23239#issuecomment-6917384789.
+
 ## Impact and cross-project context
 
 The reporter clarifies that this arose while building a single development/CI lockfile for `packaging`, so it affects a real shared-lock workflow rather than only the minimal example. They personally consider it low priority; this is the reporter's assessment, not a maintainer priority decision.
@@ -27,7 +35,9 @@ The reporter also supplied parallel Poetry and PDM reports and described a nab p
 
 Source: reporter comment at https://github.com/astral-sh/uv/issues/23239#issuecomment-6861195226.
 
-## Draft response
+## Prior triage draft response (historical)
+
+The following text is retained from the original triage and predates the maintainer's PEP 780 direction above. Its marker limitation describes the inspected implementation; it should not be read as a claim that no proposed specification defines an ABI marker. No new public response was drafted for this update.
 
 This is another instance of the incomplete universal-resolution problem tracked in astral-sh/uv#9711. Pympler 1.1 requires pywin32 on Windows, and pywin32 312 publishes neither a source distribution nor a Python 3.13t wheel. The current environment markers cannot distinguish GIL and free-threaded CPython, so required-environments cannot express that additional requirement. Please continue the discussion in astral-sh/uv#9711 with this reproduction. For now, your pympler==1.0.1 pin avoids that Windows pywin32 dependency.
 
@@ -69,7 +79,7 @@ These artifact facts support the reported installation failure. The reproduction
 - crates/uv-resolver/src/version_map.rs:851 distinguishes concrete tag compatibility checks from the universal path's Python requirement check.
 - crates/uv-platform-tags/src/tags.rs:177 records free-threading as a CPython ABI variant when generating concrete interpreter tags. Recognizing that ABI at installation time is separate from expressing it as a universal resolution marker.
 
-These are findings from the current checkout, consistent with the report; they are not an executed reproduction of uv 0.13.8.
+These are findings from the checkout inspected during the original triage, consistent with the report; they are not an executed reproduction of uv 0.13.8. The maintainer subsequently identified PEP 780 as a way to express the missing ABI distinction; the original source inspection does not establish whether that proposal is implemented in later uv versions.
 
 ### Maintainer discussion and fix history
 
@@ -102,4 +112,4 @@ Other inspected candidates were less suitable for centralizing this report:
 
 ## Handoff status
 
-The README and existing structured result agree on duplicate classification and astral-sh/uv#9711 as the canonical discussion. The reporter-provided workflow, priority assessment, and cross-project leads above supplement the original triage; the structured artifacts were left unchanged. The proposed reply is for maintainer review only. No GitHub changes were made, no reproduction commands or builds were run, and no checkout files were modified.
+The README and existing structured result agree on duplicate classification and astral-sh/uv#9711 as the canonical discussion. The reporter-provided workflow, priority assessment, cross-project leads, and maintainer-proposed PEP 780 direction above supplement the original triage; the structured artifacts were left unchanged. The retained draft response is historical and predates the PEP 780 comment. No new public response was drafted or posted. No GitHub changes were made, no reproduction commands or builds were run, and no checkout files were modified.
