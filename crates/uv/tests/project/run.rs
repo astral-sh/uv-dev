@@ -5112,6 +5112,119 @@ fn run_with_env_file() -> Result<()> {
     Ok(())
 }
 
+/// Dollar signs in literal values can silently discard a suffix during substitution.
+/// See astral-sh/uv#23226.
+#[test]
+fn run_with_env_file_unset_substitution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("test.py").write_str(indoc! { "
+        import os
+        print(os.environ.get('DOLLAR'))
+        "
+    })?;
+
+    context.temp_dir.child(".env").write_str(indoc! { "
+        DOLLAR=prefix$MISSING
+        "
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--offline")
+        .arg("--env-file").arg(".env")
+        .arg("test.py")
+        .env_remove("DOLLAR")
+        .env_remove("MISSING"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    prefix
+    ");
+
+    Ok(())
+}
+
+/// Unbraced substitution truncates names at underscores and can select the wrong variable.
+/// See astral-sh/uv#23226.
+#[test]
+fn run_with_env_file_underscore_substitution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("test.py").write_str(indoc! { "
+        import os
+        print(os.environ.get('BARE'))
+        print(os.environ.get('BRACED'))
+        "
+    })?;
+
+    context.temp_dir.child(".env").write_str(indoc! { "
+        A=short
+        A_PLAIN=whole
+        BARE=$A_PLAIN
+        BRACED=${A_PLAIN}
+        "
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--offline")
+        .arg("--env-file").arg(".env")
+        .arg("test.py")
+        .env_remove("A")
+        .env_remove("A_PLAIN")
+        .env_remove("BARE")
+        .env_remove("BRACED"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    short_PLAIN
+    whole
+    ");
+
+    Ok(())
+}
+
+/// An unquoted space causes the assignment and remaining lines to be skipped, while the command
+/// still succeeds. See astral-sh/uv#23226.
+#[test]
+fn run_with_env_file_unquoted_spaces() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("test.py").write_str(indoc! { "
+        import os
+        print(os.environ.get('BEFORE'))
+        print(os.environ.get('SPACES'))
+        print(os.environ.get('AFTER'))
+        "
+    })?;
+
+    context.temp_dir.child(".env").write_str(indoc! { "
+        BEFORE=loaded
+        SPACES=foo bar
+        AFTER=skipped
+        "
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--offline")
+        .arg("--env-file").arg(".env")
+        .arg("test.py")
+        .env_remove("BEFORE")
+        .env_remove("SPACES")
+        .env_remove("AFTER"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    loaded
+    None
+    None
+
+    ----- stderr -----
+    warning: Failed to parse environment file `.env` at position 4: foo bar
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn run_with_multiple_env_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
