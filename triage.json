@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18958,
+        "title": "Sync latest Python releases",
+        "url": "https://github.com/astral-sh/uv/pull/18958",
+        "state": "merged",
+        "reason": "The review explicitly discusses excluding prerelease Pyodide builds because prerelease build tags are unsupported. The current Pyodide metadata generator cites this discussion and skips prereleases, directly explaining why the 315 preview builds are absent from managed downloads. This is an intentional limitation, not a previous fix for Python 3.15."
+      },
+      {
+        "kind": "issue",
+        "number": 16023,
+        "title": "A few issues with pyodide + uv python",
+        "url": "https://github.com/astral-sh/uv/issues/16023",
+        "state": "open",
+        "reason": "Tracks Pyodide versions being hidden without --all-platforms and installation failing with a listed pyodide-prefixed identifier while its cpython-prefixed equivalent works; a maintainer confirms the latter is a bug. These could affect interpreter selection, but concern existing releases rather than missing Python 3.15 previews, so the sparse report does not establish a duplicate."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using Pyodide, Python 3.15, 315, venv, virtual environment, Emscripten, PyEmscripten, preview, prerelease, xbuildenv, and download-availability terminology. No error or exact command was supplied. Separated environment-creation and interpreter-selection symptoms from catalog/prerelease-policy searches, and inspected candidate comments and referenced pull requests. Search endpoints returned no matching pull requests; referenced pull requests were inspected directly, including astral-sh/uv#18958 and its review thread. Ruled out astral-sh/uv#21199 (Windows package installation after successful venv creation), astral-sh/uv#19911 (wheel resolution), and astral-sh/uv#22439 and astral-sh/uv#17240 (CPython catalog release timing). Historical astral-sh/uv#12729 and astral-sh/uv#12731 concern initial Pyodide support, not preview downloads. Checked current source/catalog and upstream 315 prerelease assets."
+  },
+  "type": "enhancement",
+  "type_reason": "The supported-download generator deliberately skips Pyodide prereleases, and the checked-in Emscripten catalog has Python versions through 3.14.2 but no 3.15 entry. Making the available Pyodide 315 previews installable through managed downloads extends that capability. No command or error establishes a separate correctness bug with an already installed runtime, and no same-request tracker or previously fixed regression was identified.",
+  "summary": "astral-sh/uv#18958 documents the deliberate exclusion of Pyodide prereleases. astral-sh/uv#16023 tracks separate listing and installation-name problems. No existing tracker specifically requesting Python 3.15 Pyodide previews was found.",
+  "draft_response": "uv currently skips Pyodide prereleases when generating its managed-Python catalog, as discussed in astral-sh/uv#18958. That excludes the available 315.0.0a1/a2 builds; supporting these previews would require extending managed-download support. Please share your exact command, uv version, platform, and full error output, and clarify whether uv is downloading Pyodide or using a runtime you installed separately."
+}
