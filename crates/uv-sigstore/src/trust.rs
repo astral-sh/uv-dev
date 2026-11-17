@@ -1,78 +1,44 @@
-//! Authenticate Sigstore's `trusted_root.json` target using the production TUF repository.
-use std::path::Path;
+//! Public log keys for checking the evidence that uv is about to upload.
+//!
+//! We trust HTTPS here rather than verifying TUF metadata. A compromised metadata host can
+//! substitute or replay keys: uv might reject a good receipt or accept a bad one. These keys
+//! never select a service URL, receive an OIDC token, or decide what uv signs. PyPI verifies
+//! the attestation against its own trust roots, so fooling this check cannot authorize a
+//! different publisher or make PyPI accept a forged signature.
+//!
+//! This is a signing-time check. Do not use these keys as the basis for trusting a download.
 
 use base64::{Engine as _, prelude::BASE64_STANDARD};
-use futures::TryStreamExt as _;
 use jiff::Timestamp;
-use reqwest::StatusCode;
-use reqwest_middleware::ClientWithMiddleware;
 use rustls_pki_types::SubjectPublicKeyInfoDer;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-use tough::{
-    IntoVec, RepositoryLoader, TargetName, Transport, TransportError, TransportErrorKind,
-    TransportStream,
-};
-use uv_redacted::{SafeUrl, SafeUrlError};
 
-/// Bootstrap for verifying metadata updates:
-/// <https://github.com/sigstore/root-signing/blob/a180c17821f8316a70d834d4d9eec0b4ecb1922c/metadata/root_history/16.root.json>.
-const ROOT: &[u8] = include_bytes!("root.json");
-const REPOSITORY: &str = "https://tuf-repo-cdn.sigstore.dev/";
-const TARGET: &str = "trusted_root.json";
+use crate::REKOR_ORIGIN;
 
-#[derive(Debug, Error)]
-pub enum TrustError {
-    #[error("Failed to authenticate Sigstore trust metadata")]
-    Repository(#[source] Box<tough::error::Error>),
-    #[error("Sigstore trust repository is missing trusted_root.json")]
-    Missing,
-    #[error("Invalid Sigstore trust repository URL")]
-    Url(#[from] SafeUrlError),
-    #[error("Failed to write cached trusted_root.json")]
-    Cache(#[from] std::io::Error),
-    #[error("Invalid trusted_root.json")]
-    Json(#[from] serde_json::Error),
-    #[error("No valid log key for {0} in trusted_root.json")]
-    Key(String),
-}
-
-impl From<tough::error::Error> for TrustError {
-    fn from(error: tough::error::Error) -> Self {
-        Self::Repository(Box::new(error))
-    }
-}
-
-/// Signing keys from an authenticated Sigstore trust root. Reuse across a publish session.
-#[derive(Debug)]
+/// The subset of Sigstore's trust document needed when signing.
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TrustedRoot {
-    pub(super) rekor: SubjectPublicKeyInfoDer<'static>,
-    ctlogs: Vec<Log>,
-}
-
-#[derive(Deserialize)]
-struct Document {
     #[serde(rename = "mediaType")]
-    _media_type: MediaType,
+    media_type: MediaType,
     tlogs: Vec<Log>,
     ctlogs: Vec<Log>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 enum MediaType {
     #[serde(rename = "application/vnd.dev.sigstore.trustedroot+json;version=0.1")]
     TrustedRoot,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Log {
     base_url: String,
     public_key: Key,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Key {
     raw_bytes: String,
@@ -81,7 +47,7 @@ struct Key {
     valid_for: Validity,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Validity {
     start: Timestamp,
     end: Option<Timestamp>,
@@ -89,131 +55,43 @@ struct Validity {
 
 impl Validity {
     fn contains(&self, time: Timestamp) -> bool {
-        time >= self.start && self.end.is_none_or(|end| time <= end)
+        self.start <= time && self.end.is_none_or(|end| time <= end)
     }
 }
 
-impl Log {
-    fn key_at(&self, time: Timestamp) -> Option<SubjectPublicKeyInfoDer<'static>> {
-        let key = &self.public_key;
-        if key.algorithm != "PKIX_ECDSA_P256_SHA_256" || !key.valid_for.contains(time) {
+impl Key {
+    fn current(&self, now: Timestamp) -> Option<SubjectPublicKeyInfoDer<'static>> {
+        if self.algorithm != "PKIX_ECDSA_P256_SHA_256" || !self.valid_for.contains(now) {
             return None;
         }
-        Some(BASE64_STANDARD.decode(&key.raw_bytes).ok()?.into())
+        Some(BASE64_STANDARD.decode(&self.raw_bytes).ok()?.into())
     }
 }
 
 impl TrustedRoot {
-    /// Refresh signed metadata and authenticate the target before parsing it.
-    ///
-    /// An optional, existing cache directory retains TUF metadata for rollback protection.
-    /// Callers sharing that directory must hold an exclusive lock for the duration of the fetch.
-    pub async fn fetch(
-        client: &ClientWithMiddleware,
-        cache: Option<&Path>,
-    ) -> Result<Self, TrustError> {
-        let base = SafeUrl::parse(REPOSITORY)?;
-        let loader = RepositoryLoader::new(
-            &ROOT,
-            base.clone().into_unsafe_url(),
-            base.join("targets/")?.into_unsafe_url(),
-        )
-        .transport(Http(client.clone()));
-        let loader = match cache {
-            Some(dir) => loader.datastore(dir),
-            None => loader,
-        };
-        let repository = loader.load().await?;
-        let target = TargetName::new(TARGET)?;
-        let info = repository
-            .targets()
-            .signed
-            .targets
-            .get(&target)
-            .ok_or(TrustError::Missing)?;
-        let cached = cache.map(|dir| dir.join(TARGET));
-        if let Some(path) = &cached
-            && let Ok(bytes) = fs_err::tokio::read(path).await
-            && bytes.len() as u64 == info.length
-            && Sha256::digest(&bytes).as_slice() == &info.hashes.sha256[..]
-        {
-            return Self::parse(&bytes, Timestamp::now());
-        }
-        let bytes = repository
-            .read_target(&target)
-            .await?
-            .ok_or(TrustError::Missing)?
-            .into_vec()
-            .await?;
-        let root = Self::parse(&bytes, Timestamp::now())?;
-        if let Some(path) = cached {
-            // An interrupted write is rejected by the length/hash check on the next load.
-            fs_err::tokio::write(path, bytes).await?;
-        }
-        Ok(root)
-    }
+    /// Fetch over HTTPS without credentials. The returned document supplies keys, not endpoints.
+    pub const URL: &str =
+        "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json";
 
-    pub(super) fn parse(bytes: &[u8], now: Timestamp) -> Result<Self, TrustError> {
-        let document: Document = serde_json::from_slice(bytes)?;
-        let rekor = document
-            .tlogs
+    pub(super) fn rekor_key(&self) -> Option<SubjectPublicKeyInfoDer<'static>> {
+        let now = Timestamp::now();
+        self.tlogs
             .iter()
-            .filter(|log| log.base_url == super::REKOR_ORIGIN)
-            .find_map(|log| log.key_at(now))
-            .ok_or_else(|| TrustError::Key(super::REKOR_ORIGIN.to_string()))?;
-        Ok(Self {
-            rekor,
-            // A retired log may verify old attestations, but must not vouch for a new signature.
-            ctlogs: document
-                .ctlogs
-                .into_iter()
-                .filter(|log| log.public_key.valid_for.contains(now))
-                .collect(),
-        })
+            .filter(|log| log.base_url == REKOR_ORIGIN)
+            .find_map(|log| log.public_key.current(now))
     }
 
     pub(super) fn ct_key(
         &self,
         id: &[u8; 32],
-        time: Timestamp,
+        signed_at: Timestamp,
     ) -> Option<SubjectPublicKeyInfoDer<'static>> {
+        let now = Timestamp::now();
         self.ctlogs
             .iter()
-            .filter_map(|log| log.key_at(time))
+            // A retired key may verify old releases, but must not vouch for a new signature.
+            .filter(|log| log.public_key.valid_for.contains(signed_at))
+            .filter_map(|log| log.public_key.current(now))
             .find(|key| Sha256::digest(key.as_ref()).as_slice() == id)
-    }
-}
-
-/// Send TUF's bounded streaming reads through uv's configured retries, proxy and TLS settings.
-#[derive(Debug, Clone)]
-struct Http(ClientWithMiddleware);
-
-#[tough::async_trait]
-impl Transport for Http {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "tough's Transport trait requires url::Url"
-    )]
-    async fn fetch(&self, url: url::Url) -> Result<TransportStream, TransportError> {
-        let kind = TransportErrorKind::Other;
-        let response = self
-            .0
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|err| TransportError::new_with_cause(kind, url.as_str(), err))?;
-        // A missing next version of root.json ends TUF's root rotation loop.
-        if response.status() == StatusCode::NOT_FOUND {
-            return Err(TransportError::new(
-                TransportErrorKind::FileNotFound,
-                url.as_str(),
-            ));
-        }
-        let response = response
-            .error_for_status()
-            .map_err(|err| TransportError::new_with_cause(kind, url.as_str(), err))?;
-        Ok(Box::pin(response.bytes_stream().map_err(move |err| {
-            TransportError::new_with_cause(kind, url.as_str(), err)
-        })))
     }
 }
