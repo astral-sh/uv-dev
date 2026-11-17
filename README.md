@@ -6,19 +6,69 @@ Classification: bug
 
 ## Summary
 
-The reporter requests a targeted Cargo.lock refresh for uv 0.13.9 and main to replace Rust dependencies covered by published security advisories. They report scanner findings in distributed binaries and argue that some zstd decompression advisories affect .tar.zst extraction. The checkout confirms every listed locked version and the use of async-compression's ZstdDecoder for .tar.zst extraction. It does not establish the advisory-specific preconditions or exploitability in uv.
+The reporter requests a targeted Cargo.lock refresh for uv 0.13.9 and main to replace Rust dependencies covered by published security advisories. A targeted cargo-audit 0.23.0 scan reproduces advisory findings for zstd, both zstd-safe version lines, and ctutils in both the checkout and the public uv 0.13.9 release lockfile. Both scans exit with status 1. The reported icu_normalizer version is present, but its cited advisory could not be independently validated. These observations establish dependency advisory findings, not exploitability in uv or scanner results for every distributed binary.
 
 No duplicate was found within the completed searches. The closest items are the separate RSA/reqsign request, an earlier ICU-tree scanner report, and an older zstd update that was closed without merging. Further search queries encountered an API rate limit.
 
 ## Draft response
 
-The checkout confirms the locked versions you listed. Please send a targeted Cargo.lock update covering both zstd/zstd-safe version lines, ICU and ctutils, with an advisory check of the resulting dependency graph. This can be reviewed separately from astral-sh/uv#23279. The .tar.zst extraction path does use ZstdDecoder, but the cited zstd-safe advisories require specific context or buffer usage; that alone does not establish that uv is affected. Please include evidence for those preconditions if you have it. Inclusion in the next release will depend on review and validation.
+An independent cargo-audit scan confirms zstd, zstd-safe and ctutils findings in both the current lockfile and uv 0.13.9's release lockfile. A targeted refresh can be assessed separately from astral-sh/uv#23279. The ICU advisory needs a verifiable advisory record or scanner report, and the complete lockfile-only resolution still needs validation. The .tar.zst extraction path uses ZstdDecoder, but the cited decompression advisories require particular context or buffer usage; the scans do not establish those preconditions in uv. Release timing remains a maintainer decision.
 
 ## Classification
 
-Cargo.lock confirms the reported dependency versions, and the inspected RustSec records establish memory-safety defects in those zstd-safe versions and constant-time correctness defects in ctutils 0.4.2. This is corrective dependency maintenance, even though exploitability in uv remains unverified. The related reports concern different advisories or an older, unmerged update; no same-problem tracker or previously fixed regression was established.
+Classification: bug, concerning corrective dependency maintenance. Actual cargo-audit runs confirm advisory findings for the locked zstd, zstd-safe and ctutils versions. The RustSec records describe memory-exposure and memory-safety defects in the zstd crates and constant-time correctness defects in ctutils 0.4.2. Exploitability in uv remains unverified, and the ICU advisory remains unvalidated. The related reports concern different advisories or an older, unmerged update; no same-problem tracker or previously fixed regression was established.
 
 The issue requests correction of dependencies with source-backed defects rather than new functionality. Treating it as a bug does not assert that every scanner finding is reachable in uv. In particular, the reporter's claim that all uv binaries are affected and the proposed lockfile-only resolution have not been independently demonstrated. There is no evidence that a previously completed fix has regressed.
+
+## Reproduction
+
+Outcome: **reproducible for the dependency advisory findings**, with limits described below.
+
+### Environment and inputs
+
+- Linux x86_64 (`Linux 7.0.0-1014-aws`); Python 3.12.3 was used to copy files, fetch public records, and parse TOML/JSON. No Python project configuration is involved.
+- Checkout commit: `1266c354d3758051aac2c01db279ab6ed7f17b9a`; `crates/uv/Cargo.toml` declares uv 0.13.9.
+- Installed executable on PATH: `/opt/hostedtoolcache/uv/0.13.7/x86_64/uv`, reporting `uv 0.13.7 (x86_64-unknown-linux-gnu)`. It was used only for version identification; no claim is made that it represents a uv 0.13.9 binary.
+- Scanner: official cargo-audit 0.23.0 prebuilt `x86_64-unknown-linux-musl` executable, downloaded from the public rustsec/rustsec release. No uv or Rust package was built.
+- RustSec database commit: `233155b4025b854c68a4b199c0e32d7fd53291a2` (2026-11-17), containing 1,527 advisories.
+- Inputs: an unchanged temporary copy of the checkout's Cargo.lock and the public `0.13.9` tag's Cargo.lock fetched from `https://raw.githubusercontent.com/astral-sh/uv/0.13.9/Cargo.lock`.
+- All downloaded files, scanner outputs, and cache locations are under `/tmp/uv-23280-pnfh988p`.
+
+### Commands and observed results
+
+With the downloaded scanner, cloned advisory database, and two lockfiles in that directory, the explicit audit invocations were:
+
+```sh
+repro=/tmp/uv-23280-pnfh988p
+CARGO_HOME="$repro/cargo-home" XDG_CACHE_HOME="$repro/cache" \
+  "$repro/cargo-audit" audit --no-fetch --no-yanked \
+  --db "$repro/advisory-db" --file "$repro/Cargo.lock" --json \
+  > "$repro/checkout-audit.json"
+
+CARGO_HOME="$repro/cargo-home-release" XDG_CACHE_HOME="$repro/cache-release" \
+  "$repro/cargo-audit" audit --no-fetch --no-yanked \
+  --db "$repro/advisory-db" --file "$repro/uv-0.13.9-Cargo.lock" --json \
+  > "$repro/release-audit.json"
+```
+
+Both commands exited **1**, each reporting 12 vulnerability entries across the complete lockfile, plus informational warnings. The relevant entries were identical:
+
+| Locked dependency | Observed scanner finding | Patched range reported by scanner |
+| --- | --- | --- |
+| zstd 0.13.3 and 0.14.0 | RUSTSEC-2026-0391 | `^0.13.4` or `>=0.14.3` |
+| zstd-safe 7.2.4 and 8.0.0 | RUSTSEC-2026-0398 and RUSTSEC-2026-0403; informational `unsound` warnings include RUSTSEC-2026-0400 and the other reported IDs through RUSTSEC-2026-0406 | `^7.4.0` or `>=8.2.0` |
+| ctutils 0.4.2 | RUSTSEC-2026-0385 | `>=0.4.4` |
+| icu_normalizer 2.1.1 | No finding in this RustSec database | Not independently established |
+
+The remaining vulnerability entries concern other crates and are outside this issue's requested refresh. The lockfile SHA256 values are `44e089f82bc4f6eb3da7a8642da941ff39986047bc959d0146e63fa369afb3fa` (checkout) and `dab86594a946ebcfa50f8d90b417f0e73679a82e73d0dcfd746184fba7dd278d` (release).
+
+### Scope, missing evidence, and existing tests
+
+The report supplies no scanner name, scanner command/output, binary artifact hashes, failing uv invocation, malicious archive, or runtime failure. A Cargo.lock audit meaningfully reproduces the dependency-maintenance concern, but it does not prove that every distributed uv binary includes affected code or that extracting an archive reaches an advisory's preconditions. No exploit was reproduced. The full targeted Cargo resolution was not attempted, so a lockfile-only fix is not yet demonstrated.
+
+GHSA-3jjw-63vg-v3hh was absent from the cloned RustSec database. Public lookups at `https://api.osv.dev/v1/vulns/GHSA-3jjw-63vg-v3hh` and `https://github.com/advisories/GHSA-3jjw-63vg-v3hh` both returned HTTP 404. A verifiable advisory record or the reporter's exact scanner output is needed to evaluate the ICU claim; absence from this database does not establish that icu_normalizer is safe.
+
+Searches of `crates/uv/tests/` and `crates/uv-client/tests/it/` found no regression test for these Rust advisory findings or the described zstd memory-exposure preconditions. The setup and assertions of `crates/uv/tests/sync/sync.rs::sync_deprecated_zstd_wheel` were read: it installs an ordinary wheel with `uv sync --frozen` and asserts zero requests for its obsolete `.whl.tar.zst` alternative, so it does not exercise zstd decompression. `crates/uv/tests/it/network.rs::python_install_http_500` checks retry failure before downloading a `.tar.zst` body; it also does not exercise these advisory conditions. These tests were not run because they do not validate Cargo.lock advisory status. No tests or source files were added or modified.
 
 ## Related
 
@@ -45,26 +95,27 @@ The issue requests correction of dependencies with source-backed defects rather 
 | icu_normalizer | 2.1.1 | 2.3.0 |
 | ctutils | 0.4.2 | 0.4.4 |
 
-The requested releases are taken from the report. The inspected RustSec records independently confirm the zstd-safe and ctutils patched ranges; the other requested release numbers remain to be validated.
+The table records the report's requested releases. The RustSec records and actual scans independently confirm the zstd, zstd-safe and ctutils patched ranges. The ICU advisory and requested fixed release remain to be validated; compatibility of the complete proposed resolution was not tested.
 
 - Cargo.lock also contains async-compression 0.4.50 and compression-codecs 0.4.45. The latter depends on zstd 0.14.0 and zstd-safe 8.0.0. zstd 0.13.3 depends on zstd-safe 7.2.4.
 - Cargo.toml requests zstd 0.13.3 with default features disabled and async-compression 0.4.12 with gzip, tokio and zstd enabled. A compatible 0.13.x direct zstd update is permitted by that requirement. All transitive requirements and the complete resolution still need validation.
-- Cargo.lock shows idna_adapter 1.2.1 depending on icu_normalizer and digest 0.11.3 depending on ctutils. Cargo.lock does not contain the transitive version requirements. The report's assertion that the locked idna_adapter requires icu_normalizer ^2.2 is not established by the lockfile and should be checked against the actual package manifest.
+- Published crate archives were downloaded from static.crates.io and verified against their Cargo.lock SHA256 checksums before reading their manifests. idna_adapter 1.2.1 actually requires icu_normalizer `2` and icu_properties `2`, with default features disabled, rather than the report's claimed `^2.2`. digest 0.11.3 permits ctutils `0.4` (optional). zstd 0.13.3 permits zstd-safe `7.1.0`, while zstd 0.14.0 permits zstd-safe `8.0.0`; compression-codecs 0.4.45 permits zstd-safe `8`. These individual requirements allow compatible patched versions, but they do not establish a complete workspace resolution.
 - crates/uv-extract/src/stream.rs:936 defines untar_zst; line 942 constructs async_compression::tokio::bufread::ZstdDecoder and passes it to untar_in.
 - crates/uv-python-managed/src/downloads.rs imports zstd::stream::read::Decoder. crates/uv-python-managed/build.rs imports zstd::stream::write::Encoder.
-- crates/uv/Cargo.toml declares version 0.13.9. The separate release tag's lockfile was not inspected.
+- crates/uv/Cargo.toml declares version 0.13.9. The separate public 0.13.9 tag's lockfile was downloaded and audited; it contains the same reported versions.
 
 ### Advisory findings and reachability limits
 
-The public RustSec advisory files were read through the GitHub contents API:
+The following public RustSec advisory files were read; their version findings were also checked by cargo-audit against the cloned database:
 
+- https://github.com/RustSec/advisory-db/blob/main/crates/zstd/RUSTSEC-2026-0391.md describes cross-stream data leakage when borrowed contexts are reused after an abandoned stream. The patched ranges are ^0.13.4 and >=0.14.3. Both locked zstd versions produce this finding. Whether uv reuses contexts this way was not established.
 - https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0400.md describes a dictionary use-after-free when one context mixes an unfinished stream with one-shot operations without a reset. The patched ranges are ^7.4.0 and >=8.2.0. A streaming decoder call by itself does not prove these conditions.
 - https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0403.md describes uninitialized output after a corrupt legacy frame, with a growable Vec destination and buffer positions committed on error. It explicitly excludes zstd::stream::read::Decoder, zstd::decode_all and the bulk API. The patched ranges are ^7.4.0 and >=8.2.0. The async-compression buffer/error path for the locked release was not fully traced.
 - https://github.com/RustSec/advisory-db/blob/main/crates/ctutils/RUSTSEC-2026-0385.md describes branches in supposedly constant-time mask generation and u128 comparisons. It identifies >=0.4.4 as patched. Which affected operations uv invokes on secrets was not established.
 
-Retrieving GHSA-3jjw-63vg-v3hh from the global advisories API returned HTTP 403 (resource inaccessible to this integration); no independent conclusion about that advisory's mechanism is made. A lookup for an icu_normalizer directory in RustSec/advisory-db returned HTTP 404. Other zstd advisories in the reported range were not individually validated.
+The global advisories API lookup for GHSA-3jjw-63vg-v3hh returned HTTP 403, and public GitHub/OSV lookups returned HTTP 404. The cloned RustSec database contains no corresponding advisory or icu_normalizer entry. No independent conclusion about that advisory's mechanism is made. cargo-audit matched all reported zstd-safe IDs in RUSTSEC-2026-0396 through RUSTSEC-2026-0406, but their individual runtime preconditions were not all traced.
 
-An upstream default-branch compression-codecs decoder source was also inspected. It uses a raw streaming zstd decoder, but it was not pinned to the locked release and is insufficient to establish uv's exposure.
+The checksum-verified compression-codecs 0.4.45 archive's `src/zstd/decoder.rs` constructs a raw streaming zstd decoder and uses its streaming run/flush/finish methods. This supports the presence of a streaming decompression path, but does not establish the mixed one-shot/streaming context requirement of RUSTSEC-2026-0400 or the error-buffer exposure requirement of RUSTSEC-2026-0403. The complete async-compression buffer/error path was not traced.
 
 ### Prior discussions and timing
 
@@ -84,4 +135,4 @@ The general dependency dashboard, astral-sh/uv#2658, was a discovery source for 
 
 Review a narrowly scoped lockfile update that covers both zstd/zstd-safe lines and validates ICU and ctutils compatibility. Follow the repository guidance to use precise Cargo updates rather than refreshing unrelated dependencies. Check the resulting advisory status and enabled feature graph, then run relevant compilation and extraction checks. Assess the zstd context, legacy-frame and output-buffer preconditions before characterizing impact or release urgency.
 
-This handoff does not contain a dependency patch or a reproduced exploit. No builds or tests were needed for the read-only investigation. Only this temporary issue-context README was authored; no checkout files or GitHub objects were changed.
+Two actual cargo-audit scans reproduced the dependency findings; no exploit, build, integration-test run, or dependency update was performed. Reproduction files and scanner caches were confined to the temporary directory. Only the issue-context README was revised outside that directory; checkout files and GitHub objects were not changed.

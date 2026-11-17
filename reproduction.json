@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64, ran cargo-audit 0.23.0 with `audit --no-fetch --no-yanked --db <temporary-advisory-db> --file <temporary-lockfile> --json` against temporary copies of the checkout and uv 0.13.9 release lockfiles. Both exited 1, flagging zstd 0.13.3/0.14.0, zstd-safe 7.2.4/8.0.0, and ctutils 0.4.2 for the reported advisories. The ICU advisory could not be independently validated: public GitHub and OSV lookups returned 404. These scans reproduce dependency findings; runtime exploitability, impact on every binary, and a complete lockfile-only fix remain unverified. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, and limitations. Checkout files and GitHub were unchanged."
+}
