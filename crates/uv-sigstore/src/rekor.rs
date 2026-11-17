@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
+use ct_merkle::{InclusionProof as MerkleProof, RootHash};
 use hex::FromHex as _;
 use itertools::Itertools as _;
 use reqwest::{StatusCode, header::LOCATION};
@@ -215,9 +216,18 @@ pub(super) async fn record(
         .map(<[u8; 32]>::from_hex)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| RekorError::Hex("inclusion proof hash", err))?;
-    if !included(&body, proof.log_index, proof.tree_size, &path, root) {
+    // Rekor sizes are protobuf int64s. Bound this before ct-merkle doubles the leaf count
+    // to index its internal nodes.
+    if i64::try_from(proof.tree_size).is_err() {
         return Err(RekorError::InclusionProof);
     }
+    RootHash::<Sha256>::new(root.into(), proof.tree_size)
+        .verify_inclusion(
+            &body,
+            proof.log_index,
+            &MerkleProof::from_digests(path.iter().map(Into::into)),
+        )
+        .map_err(|_| RekorError::InclusionProof)?;
     let encoded_root = BASE64_STANDARD.encode(root);
     let mut lines = proof.checkpoint.lines();
     if lines.next().is_none_or(str::is_empty)
@@ -312,64 +322,4 @@ fn check_body(
         return Err(RekorError::SignatureMismatch);
     }
     Ok(())
-}
-
-/// Verify a CT Merkle inclusion path (RFC 9162 section 2.1.3.2).
-fn included(body: &[u8], mut index: u64, size: u64, path: &[[u8; 32]], root: [u8; 32]) -> bool {
-    if index >= size {
-        return false;
-    }
-    let mut last = size - 1;
-    let mut hash = Sha256::new()
-        .chain_update([0])
-        .chain_update(body)
-        .finalize();
-    for sibling in path {
-        if last == 0 {
-            return false;
-        }
-        let node = Sha256::new().chain_update([1]);
-        hash = if !index.is_multiple_of(2) || index == last {
-            // The incomplete right edge skips levels with no sibling in the proof.
-            // Ascend to the first ancestor whose left sibling supplied this hash.
-            while index != 0 && index.is_multiple_of(2) {
-                index >>= 1;
-                last >>= 1;
-            }
-            node.chain_update(sibling).chain_update(hash).finalize()
-        } else {
-            node.chain_update(hash).chain_update(sibling).finalize()
-        };
-        index >>= 1;
-        last >>= 1;
-    }
-    last == 0 && hash.as_slice() == root
-}
-
-#[cfg(test)]
-mod tests {
-    use sha2::{Digest as _, Sha256};
-
-    use super::included;
-
-    #[test]
-    fn verify_unbalanced_inclusion_proof() {
-        // In a three-leaf tree the rightmost leaf is a direct child of the root.
-        let first = Sha256::digest(b"\x00a");
-        let second = Sha256::digest(b"\x00b");
-        let third = Sha256::digest(b"\x00c");
-        let parent = |left: &[u8], right: &[u8]| {
-            Sha256::new()
-                .chain_update([1])
-                .chain_update(left)
-                .chain_update(right)
-                .finalize()
-        };
-        let left = parent(&first, &second);
-        let root = parent(&left, &third).into();
-        assert!(included(b"c", 2, 3, &[left.into()], root));
-        assert!(included(b"b", 1, 3, &[first.into(), third.into()], root));
-        assert!(!included(b"a", 2, 3, &[left.into()], root));
-        assert!(!included(b"b", 1, 3, &[first.into()], root));
-    }
 }

@@ -25,7 +25,7 @@ pub use sct::TimestampError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
-pub use trust::{TrustError, TrustedRoot};
+pub use trust::TrustedRoot;
 use uv_macros::DeserializeUntagged;
 use x509_parser::{error::X509Error, nom, parse_x509_certificate};
 
@@ -77,8 +77,8 @@ impl ServiceError {
 /// Failure to sign a statement or obtain its verification material.
 #[derive(Debug, Error)]
 pub enum SigningError {
-    #[error(transparent)]
-    Trust(#[from] TrustError),
+    #[error("No current Rekor v1 signing key in trusted_root.json")]
+    MissingRekorKey,
     #[error("Failed to verify Fulcio certificate transparency")]
     CertificateTimestamp(#[from] TimestampError),
     #[error("Invalid Sigstore identity token: expected three JWT segments")]
@@ -136,30 +136,21 @@ pub struct SignedStatement {
     pub transparency_entry: Value,
 }
 
-/// Sign a serialized in-toto statement using a CI identity token for the `sigstore` audience.
-///
-/// The signer checks that a trusted CT log witnessed a certificate for its ephemeral key and that
-/// Rekor recorded the signed statement. Consumers still verify the Fulcio chain and identity.
-pub async fn sign_statement(
-    client: &ClientWithMiddleware,
-    token: &str,
-    statement: &str,
-) -> Result<SignedStatement, SigningError> {
-    TrustedRoot::fetch(client, None)
-        .await?
-        .sign_statement(client, token, statement)
-        .await
-}
-
 impl TrustedRoot {
-    /// Sign with the trust metadata already fetched for this publish session.
+    /// Sign an in-toto statement using a CI token for the `sigstore` audience.
+    ///
+    /// The signer checks the certificate timestamp and Rekor receipt. Consumers verify the
+    /// Fulcio chain and the signing identity against their own policy.
     pub async fn sign_statement(
         &self,
         client: &ClientWithMiddleware,
         token: &str,
         statement: &str,
     ) -> Result<SignedStatement, SigningError> {
-        sign_with_services(client, FULCIO, REKOR, self, token, statement).await
+        check_identity_token(token)?;
+        let key =
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
+        sign_with_services(client, FULCIO, REKOR, self, &key, token, statement).await
     }
 }
 
@@ -168,12 +159,12 @@ async fn sign_with_services(
     fulcio: &str,
     rekor: &str,
     trust: &TrustedRoot,
+    key: &KeyPair,
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
-    check_identity_token(token)?;
-    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
-    let certificates = request_certificate(client, fulcio, token, &key).await?;
+    let log_key = trust.rekor_key().ok_or(SigningError::MissingRekorKey)?;
+    let certificates = request_certificate(client, fulcio, token, key).await?;
     let [pem, issuer, ..] = certificates.as_slice() else {
         return Err(TimestampError::Issuer.into());
     };
@@ -208,13 +199,7 @@ async fn sign_with_services(
     })
     .to_string();
     let (integrated_time, entry) = rekor::record(
-        client,
-        rekor,
-        &trust.rekor,
-        &envelope,
-        statement,
-        &signature,
-        pem,
+        client, rekor, &log_key, &envelope, statement, &signature, pem,
     )
     .await?;
     // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
@@ -329,66 +314,52 @@ async fn request_certificate(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::{Arc, OnceLock, mpsc};
+    use std::sync::{Arc, OnceLock};
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
-    use rcgen::{
-        CertificateParams, CertificateSigningRequestParams, CertifiedIssuer, CustomExtension,
-        KeyPair, KeyUsagePurpose, PublicKeyData as _, SigningKey as _,
-    };
+    use rcgen::{CertificateSigningRequestParams, KeyPair, PublicKeyData as _, SigningKey as _};
     use reqwest::Client;
     use reqwest_middleware::{ClientBuilder, RequestBuilder};
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha256};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
-    use x509_cert::der::{Encode as _, asn1::OctetString};
     use x509_parser::{asn1_rs::BitString, parse_x509_certificate, verify::verify_signature};
 
     use super::{ServiceError, sign_with_services};
 
-    /// Act as Fulcio's CT log, signing the precertificate before Fulcio embeds the SCT list.
-    fn timestamp_extension(
-        ct_key: &KeyPair,
-        issuer_spki: &[u8],
-        precertificate: &[u8],
-    ) -> Result<CustomExtension, Box<dyn Error>> {
-        let timestamp = 1_700_000_000_000;
-        let message = super::sct::signature_input(timestamp, issuer_spki, precertificate, &[])
-            .ok_or("oversized precertificate")?;
-        let signature = ct_key.sign(&message)?;
-        let mut sct = vec![0]; // v1
-        sct.extend(Sha256::digest(ct_key.subject_public_key_info()));
-        sct.extend(timestamp.to_be_bytes());
-        sct.extend([0, 0, 4, 3]); // Empty extensions, SHA-256, ECDSA.
-        sct.extend(u16::try_from(signature.len())?.to_be_bytes());
-        sct.extend(signature);
-
-        // The extension is a DER octet string containing a TLS list of length-prefixed SCTs.
-        let len = u16::try_from(sct.len())?;
-        let mut list = (len + 2).to_be_bytes().to_vec();
-        list.extend(len.to_be_bytes());
-        list.extend(sct);
-        let extension = OctetString::new(list)?.to_der()?;
-        Ok(CustomExtension::from_oid_content(
-            &[1, 3, 6, 1, 4, 1, 11129, 2, 4, 2],
-            extension,
-        ))
-    }
+    // Public test vector: P-256 scalars 1 (self-issued certificate) and 2 (CT log).
+    // The embedded SCT was signed independently of uv, over the certificate without that extension.
+    const CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----
+MIIBrTCCAVOgAwIBAgIBATAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDAR0ZXN0MB4X
+DTIwMDEwMTAwMDAwMFoXDTMwMDEwMTAwMDAwMFowDzENMAsGA1UEAwwEdGVzdDBZ
+MBMGByqGSM49AgEGCCqGSM49AwEHA0IABGsX0fLhLEJH+Lzm5WOkQPJ3A32BLesz
+oPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfWjgZ8wgZww
+DAYDVR0TAQH/BAIwADCBiwYKKwYBBAHWeQIEAgR9BHsAeQB3ANwM5jPbzJE9r6+k
+uJrETYzmg/38P2DIvfISE7nytTS6AAABi8/laAAAAAQDAEgwRgIhAMG7vppaMeXl
+9xHFE2kwt1x8gzVD9WRB8/kvoBuBKk6uAiEA14nsmTWzbphg06sm8pXwHBpxmRxe
+42fI5UnFaNspHwgwCgYIKoZIzj0EAwIDSAAwRQIgOB1zifoRKGKnBCzEbo9677Bo
+yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
+5A==
+-----END CERTIFICATE-----
+";
+    const KEY: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAGhRANCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/jQuL+Gn+bjufrSnwPnhYrzjNX\
+         azFezsu2QGg3v1H1";
+    const CT_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI/EdmmXgHd1UQ\
+         247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==";
 
     #[tokio::test]
     async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
         let server = MockServer::start().await;
-        let issuer =
-            CertifiedIssuer::self_signed(CertificateParams::default(), KeyPair::generate()?)?;
+        let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
         let log_key = KeyPair::generate()?;
-        let ct_key = KeyPair::generate()?;
         let log_id = Sha256::digest(log_key.subject_public_key_info());
-        let log = |url: &str, key: &KeyPair| {
+        let log = |url: &str, raw_bytes: &str| {
             json!({
                 "baseUrl": url, "publicKey": {
-                    "rawBytes": BASE64_STANDARD.encode(key.subject_public_key_info()),
+                    "rawBytes": raw_bytes,
                     "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                     "validFor": {"start": "2000-01-01T00:00:00Z"}
                 }
@@ -396,11 +367,10 @@ mod tests {
         };
         let trust = json!({
             "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
-            "ctlogs": [log("https://ct.example", &ct_key)],
-            "tlogs": [log(super::REKOR_ORIGIN, &log_key)],
+            "ctlogs": [log("https://ct.example", CT_KEY)],
+            "tlogs": [log(super::REKOR_ORIGIN, &BASE64_STANDARD.encode(log_key.subject_public_key_info()))],
         });
-        let trust =
-            super::TrustedRoot::parse(&serde_json::to_vec(&trust)?, jiff::Timestamp::now())?;
+        let trust = serde_json::from_value(trust)?;
         let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
         let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
         let token = format!("header.{claims}.signature");
@@ -417,26 +387,13 @@ mod tests {
                             .expect("Certificate signing request"),
                     )
                     .expect("Base64 CSR");
-                let mut csr = CertificateSigningRequestParams::from_pem(
+                CertificateSigningRequestParams::from_pem(
                     std::str::from_utf8(&csr).expect("PEM CSR"),
                 )
-                .expect("Valid CSR");
-                csr.params.serial_number = Some(1u64.into());
-                csr.params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-                let precert = csr.signed_by(&issuer).expect("Issue precertificate");
-                let (_, leaf) =
-                    parse_x509_certificate(precert.der()).expect("Parse precertificate");
-                let sct = timestamp_extension(
-                    &ct_key,
-                    &issuer.key().subject_public_key_info(),
-                    leaf.tbs_certificate.as_ref(),
-                )
-                .expect("Issue test SCT");
-                csr.params.custom_extensions.push(sct);
-                let cert = csr.signed_by(&issuer).expect("Issue final certificate");
+                .expect("Valid signed CSR");
                 ResponseTemplate::new(200).set_body_json(json!({
                     "signedCertificateEmbeddedSct": {
-                        "chain": {"certificates": [cert.pem(), issuer.pem()]}
+                        "chain": {"certificates": [CERTIFICATE, CERTIFICATE]}
                     }
                 }))
             })
@@ -454,7 +411,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let (sender, receipt) = mpsc::channel();
+        let receipt = stored_entry.clone();
         Mock::given(method("POST"))
             .and(header("x-test-client", "signer"))
             .and(path("/api/v1/log/entries"))
@@ -509,9 +466,6 @@ mod tests {
                         "hashes": [hex::encode(sibling)], "checkpoint": checkpoint,
                     }
                 });
-                sender
-                    .send((body, root, timestamp, checkpoint))
-                    .expect("Receipt receiver");
                 stored_entry
                     .set(json!({"abcd": entry}))
                     .expect("single insertion");
@@ -533,23 +487,25 @@ mod tests {
             &format!("{}/api/v2/signingCert", server.uri()),
             &format!("{}/api/v1/log/entries", server.uri()),
             &trust,
+            &key,
             &token,
             &statement,
         )
         .await?;
 
         // Use the values signed by the mock log to check even the generated fields exactly.
-        let (body, root, timestamp, checkpoint) = receipt.try_recv()?;
+        let entry = &receipt.get().expect("recorded entry")["abcd"];
+        let proof = &entry["verification"]["inclusionProof"];
         assert_eq!(
             signed.transparency_entry,
             json!({
-                "canonicalizedBody": BASE64_STANDARD.encode(body),
-                "inclusionPromise": {"signedEntryTimestamp": BASE64_STANDARD.encode(timestamp)},
+                "canonicalizedBody": entry["body"],
+                "inclusionPromise": {"signedEntryTimestamp": entry["verification"]["signedEntryTimestamp"]},
                 "inclusionProof": {
-                    "checkpoint": {"envelope": checkpoint},
+                    "checkpoint": {"envelope": proof["checkpoint"]},
                     "hashes": ["q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="],
                     "logIndex": "0",
-                    "rootHash": BASE64_STANDARD.encode(root),
+                    "rootHash": BASE64_STANDARD.encode(hex::decode(proof["rootHash"].as_str().expect("hex root"))?),
                     "treeSize": "2",
                 },
                 "integratedTime": "1700000000",
