@@ -21,11 +21,11 @@ hex = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
 rcgen = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true }
 reqwest-middleware = { workspace = true, features = ["json"] }
 ring = { workspace = true }
 rustls-pki-types = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
@@ -35,7 +35,7 @@ x509-parser = { workspace = true }
 http = { workspace = true }
 insta = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser"] }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true }
 wiremock = { workspace = true }
 
 [lints]
