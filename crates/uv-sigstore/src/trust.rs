@@ -14,7 +14,7 @@ use rustls_pki_types::SubjectPublicKeyInfoDer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::REKOR_ORIGIN;
+use crate::{REKOR_ORIGIN, SigningError};
 
 /// The subset of Sigstore's trust document needed when signing.
 #[derive(Debug, Deserialize, Serialize)]
@@ -60,11 +60,12 @@ impl Validity {
 }
 
 impl Key {
-    fn current(&self, now: Timestamp) -> Option<SubjectPublicKeyInfoDer<'static>> {
-        if self.algorithm != "PKIX_ECDSA_P256_SHA_256" || !self.valid_for.contains(now) {
-            return None;
-        }
-        Some(BASE64_STANDARD.decode(&self.raw_bytes).ok()?.into())
+    fn is_current(&self, now: Timestamp) -> bool {
+        self.algorithm == "PKIX_ECDSA_P256_SHA_256" && self.valid_for.contains(now)
+    }
+
+    fn decode(&self) -> Result<SubjectPublicKeyInfoDer<'static>, base64::DecodeError> {
+        BASE64_STANDARD.decode(&self.raw_bytes).map(Into::into)
     }
 }
 
@@ -73,12 +74,19 @@ impl TrustedRoot {
     pub const URL: &str =
         "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json";
 
-    pub(super) fn rekor_key(&self) -> Option<SubjectPublicKeyInfoDer<'static>> {
+    pub(super) fn rekor_key(&self) -> Result<SubjectPublicKeyInfoDer<'static>, SigningError> {
         let now = Timestamp::now();
-        self.tlogs
-            .iter()
-            .filter(|log| log.base_url == REKOR_ORIGIN)
-            .find_map(|log| log.public_key.current(now))
+        let mut error = SigningError::MissingRekorKey;
+        for log in &self.tlogs {
+            if log.base_url == REKOR_ORIGIN && log.public_key.is_current(now) {
+                // A malformed candidate shouldn't mask another current key during rotation.
+                match log.public_key.decode() {
+                    Ok(key) => return Ok(key),
+                    Err(err) => error = SigningError::RekorKeyEncoding(err),
+                }
+            }
+        }
+        Err(error)
     }
 
     pub(super) fn ct_key(
@@ -91,7 +99,46 @@ impl TrustedRoot {
             .iter()
             // A retired key may verify old releases, but must not vouch for a new signature.
             .filter(|log| log.public_key.valid_for.contains(signed_at))
-            .filter_map(|log| log.public_key.current(now))
+            .filter(|log| log.public_key.is_current(now))
+            .filter_map(|log| log.public_key.decode().ok())
             .find(|key| Sha256::digest(key.as_ref()).as_slice() == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{REKOR_ORIGIN, SigningError, TrustedRoot};
+
+    #[test]
+    fn malformed_key_falls_back_during_rotation() -> Result<(), serde_json::Error> {
+        let mut trust: TrustedRoot = serde_json::from_value(json!({
+            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+            "tlogs": [], "ctlogs": [],
+        }))?;
+        assert!(matches!(
+            trust.rekor_key(),
+            Err(SigningError::MissingRekorKey)
+        ));
+
+        let mut candidate = json!({
+            "baseUrl": REKOR_ORIGIN,
+            "publicKey": {"rawBytes": "!", "keyDetails": "PKIX_ECDSA_P256_SHA_256",
+                "validFor": {"start": "2000-01-01T00:00:00Z"}},
+        });
+        trust.tlogs.push(serde_json::from_value(candidate.clone())?);
+        assert!(matches!(
+            trust.rekor_key(),
+            Err(SigningError::RekorKeyEncoding(_))
+        ));
+
+        candidate["publicKey"]["rawBytes"] = json!("AQ==");
+        trust.tlogs.push(serde_json::from_value(candidate)?);
+        assert_eq!(
+            trust.rekor_key().expect("second key decodes").as_ref(),
+            &[1]
+        );
+        Ok(())
     }
 }
