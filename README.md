@@ -9,7 +9,8 @@ Classification: bug (resolution diagnostic)
 Reproduced the reported pandas failure and its marker-only explanation using the
 installed uv 0.13.7 on Linux x86_64 with CPython 3.12.3 and host glibc 2.39. The
 report names uv 0.13.8 and leaves the Python version and platform unspecified;
-uv 0.13.8 was not separately executed.
+the original reproduction did not separately execute uv 0.13.8. The fix
+validation below builds the checkout, which reports uv 0.13.8.
 
 With `pandas>=3.1.1`, disabled builds, a configured minimum glibc version of 2.20,
 and resolution limited to Linux x86_64, `uv lock` exits 1 and says pandas 3.1.1
@@ -22,6 +23,10 @@ Rejecting wheels that cannot satisfy the configured libc baseline is expected.
 The reproduced issue is the incomplete explanation, rather than evidence of an
 incorrect unsatisfiable result. The request to also show the available wheels'
 minimum glibc requirement is an additional diagnostic improvement.
+
+A focused fix is now present in the checkout: Linux wheel-coverage errors retain
+and display the configured libc baseline. The parent regression and directly
+related integration coverage pass; see **Fix** below.
 
 ## Classification
 
@@ -110,39 +115,39 @@ The manylinux wheel advertises a glibc baseline newer than 2.20; the musllinux
 wheel does not provide glibc coverage. No attempt was made to find the lowest
 baseline that resolves the entire dependency tree.
 
-Existing integration coverage was read, including setup and assertions:
+The parent regression from astral-sh/uv-dev#3130 updates
+`minimum_libc_no_compatible_version` in
+`crates/uv/tests/lock/minimum_libc.rs` to use a local
+`py3-none-manylinux_2_28_x86_64` wheel, the report's `environments` setting,
+disabled builds, and glibc 2.20. It originally snapshots the same incomplete
+diagnostic. It also verifies that concrete-target compilation for manylinux 2.28
+succeeds and that raising only the baseline to 2.28 permits locking.
 
-- `crates/uv/tests/lock/minimum_libc.rs`,
-  `minimum_libc_no_compatible_version`: creates CPython 3.12 manylinux 2.34 and
-  musllinux 1.2 wheels, requires Linux x86_64 with glibc 2.31, and snapshots a
-  failed lock that mentions only the Linux/x86_64 marker. It also verifies that
-  concrete-target compilation for manylinux 2.34 succeeds.
-- In the same module, `minimum_libc_allows_sdist_fallback`: first locks a package
-  with a usable source distribution and a too-new manylinux 2.34 wheel, then
-  runs `uv lock --offline --no-build --upgrade` and snapshots the same marker-only
-  missing-wheel explanation at a glibc 2.31 baseline.
+Other directly relevant existing tests in that module include
+`minimum_libc_allows_sdist_fallback` (usable sdist followed by disabled builds),
+`minimum_libc_direct_url` (independent direct-wheel URL validation with glibc and
+musl requirements), and `minimum_libc_switch_families` (both libc families).
+Their original failure snapshots likewise omit the baseline. The follow-up fix
+updates these snapshots; execution and round-trip validation are recorded below.
+The tests use the module's existing `test-python` and `test-universal` gates.
 
-These tests cover the general omission with synthetic packages and
-`required-environments`; the live pandas reproduction above uses the report's
-`environments` setting. The existing Rust tests were inspected, not executed.
-No tests or source files were changed.
-
-Reproduction artifacts are retained at `/tmp/uv-23272-hrbnc68g`: the failing fixture and
-stderr are in `pandas/`, the successful control and lockfile are in
-`pandas-glibc-2-28/`, and the public release wheel filenames are in
-`pandas-3.1.1-files.json`. All reproduction files and caches are temporary.
+The original live pandas reproduction stored its fixtures and public wheel
+filenames under `/tmp/uv-23272-hrbnc68g`. The self-contained commands above do not
+depend on those artifacts. Fix-validation logs are at `/tmp/uv-libc-baseline.log`,
+`/tmp/uv-libc-red.log`, `/tmp/uv-libc-fixed.log`, and
+`/tmp/uv-libc-platform-control.log`.
 
 ## Draft response
 
-Reproduced on uv 0.13.7 with Python 3.12.3: the glibc 2.20 configuration produces
-exactly the reported Linux/x86_64-only explanation. Raising the configured
-baseline to 2.28 lets pandas 3.1.1 lock successfully. Rejecting incompatible
-wheels is expected with builds disabled, but the error omits the libc constraint
-that explains their rejection. Existing minimum-libc integration snapshots show
-the same diagnostic omission.
+Reproduced the omitted libc constraint with the reported pandas configuration.
+The fix includes the configured glibc and/or musl baseline in Linux wheel
+compatibility errors, including failures for direct wheel URLs. The parent
+regression now requires the glibc 2.20 explanation, and the related minimum-libc
+integration tests pass without changing wheel selection or lockfile behavior.
 
 ## Related
 
+- astral-sh/uv-dev#3130 — Parent regression pull request. Supplies the retained local-wheel regression in `crates/uv/tests/lock/minimum_libc.rs`; this fix updates its expected error while retaining both successful controls.
 - astral-sh/uv#21651 — Add minimum libc versions for universal resolution (pull request, merged). Introduced minimum-libc-version for universal resolution on September 18, 2026. Its tests already emit the reported marker-only missing-wheel explanation when the configured glibc baseline is unsatisfied. Establishes the feature's origin and intended compatibility rules; it did not fix the diagnostic.
 - astral-sh/uv#10581 — Hint user towards `--python-platform linux` targeting glibc 2.17 (issue, open). The linked maintainer discussion explicitly proposes explaining a glibc version mismatch. It concerns the implicit glibc 2.17 baseline of a concrete --python-platform target; this report concerns an explicit minimum-libc-version constraint omitted from a universal-resolution marker diagnostic. Related messaging work, but not the same failure path.
 - astral-sh/uv#18169 — Wheel availability hint does not include musllinux tag in alpine image (issue, open). Another confirmed gap in communicating libc compatibility: a maintainer explains that Alpine requires musllinux and questions the missing hint. It concerns install-time musl-versus-glibc platform hints, whereas this report concerns a configured glibc version during uv lock. Its linked proposed fix, astral-sh/uv#18341, was closed without merging.
@@ -158,11 +163,14 @@ the same diagnostic omission.
 - `crates/uv-resolver/src/prioritized_distribution.rs`, `implied_libc_markers`,
   computes artifact coverage with `minimum_libc_version.platform_coverage(tag)`.
   `crates/uv-resolver/src/resolver/mod.rs`, `fork_version_registry`, reports
-  unsuccessful coverage using `IncompatibleWheel::MissingPlatform(marker)`.
-- `IncompatibleWheel::MissingPlatform` stores a `MarkerTree`, and its formatter
-  in `prioritized_distribution.rs` prints a known platform or marker without a
-  libc-specific explanation. This source path is consistent with the observed
-  diagnostic; no instrumented trace was used to establish a deeper root cause.
+  unsuccessful coverage using `IncompatibleWheel::MissingPlatform`. The direct
+  wheel URL path in the same module constructs that diagnostic independently.
+- Before the fix, `MissingPlatform` stored only a `MarkerTree` and its formatter
+  printed only the known platform or marker, although artifact coverage had
+  already applied `minimum-libc-version`. Both producers now retain the optional
+  baseline, which the formatter includes for Linux coverage failures. The
+  pre-fix output, focused failing snapshot, and passing corrected snapshots
+  confirm this diagnostic-context omission.
 - Prior related-issue research records that merged astral-sh/uv#21651 introduced
   the feature and the same marker-only snapshots on September 18, 2026. A
   review reply confirms that older manylinux baselines satisfy newer configured
@@ -193,19 +201,70 @@ astral-sh/uv#18341 proposed a musllinux platform hint for astral-sh/uv#18169.
 Closed, unmerged astral-sh/uv#21671 proposed a different libc configuration
 design. None establishes a regression of a previously corrected message.
 
+## Fix
+
+Outcome: **fixed** in the checkout; no commit or GitHub changes were made.
+
+The confirmed cause is the loss of diagnostic context between libc-aware
+artifact coverage and `IncompatibleWheel::MissingPlatform`: both registry
+resolution and direct wheel URL resolution constructed the incompatibility with
+only its PEP 508 marker. Markers cannot represent libc versions, so the rendered
+error could not explain the configured baseline.
+
+The fix passes `Option<MinimumLibcVersion>` through both producers and appends,
+for example, `at the configured libc baseline (glibc 2.20)` to Linux coverage
+errors. `MinimumLibcVersion` implements display for glibc, musl, or both families.
+Unset or empty libc requirements and markers disjoint from Linux retain their
+existing diagnostic wording. Artifact eligibility, resolver choices, serialized
+configuration, and lockfile formats are unchanged. Reporting the minimum libc
+version advertised by every available wheel remains outside this focused fix.
+
+The parent regression remains in `crates/uv/tests/lock/minimum_libc.rs` and now
+requires the baseline in its failure snapshot. Its concrete-target compile and
+raised-baseline success checks remain intact. Existing direct-URL, dual-libc,
+and disabled-sdist snapshots were corrected for demonstrated instances of the
+same omission. No new tests or unrelated fixtures were added. Neighboring
+`crates/uv/tests/pip_compile/pip_compile.rs` required-environment fixtures were
+also inspected; they configure no libc baseline and their marker-only errors do
+not contradict this change. Lockfile write/validation paths already persist and
+compare libc configuration, so they need no production changes.
+
+Validation used debug-profile end-to-end tests:
+
+- Before production changes, `cargo test -p uv --test lock minimum_libc::`
+  passed all 9 tests, including the parent snapshot of the undesirable output.
+- After changing only the parent expectation,
+  `cargo test -p uv --test lock minimum_libc::minimum_libc_no_compatible_version -- --exact`
+  failed precisely because stderr lacked the configured glibc 2.20 baseline.
+- After the fix, `cargo test -p uv --test lock minimum_libc::` passed all 9
+  tests. This includes registry and direct-URL failures, glibc/musl requirements,
+  source-distribution fallback, lockfile invalidation and re-read checks, frozen
+  export/sync round trips, retained wheel hashes, and concrete-target compile.
+- `cargo test -p uv --test lock lock::lock_required_environment_macos_release -- --exact`
+  passed as a non-libc platform-diagnostic control.
+- `RUSTUP_TOOLCHAIN=stable cargo fmt --all` and its `-- --check` invocation
+  succeeded, as did `git diff --check`. The pinned Rust toolchain lacks rustfmt,
+  so formatting used the already-installed stable formatter.
+
+Only three affected production files and the original parent integration-test
+file are modified. No dependency, manifest, lockfile, workflow, or unrelated
+repository file was changed.
+
 ## Search scope and validation
 
 The retained related-issue context came from prior read-only GitHub research
 covering open and closed issues and open, closed, and merged pull requests for
 minimum-libc-version, compatible wheels, no-build, glibc, and diagnostic wording.
 It included candidate bodies, comments, linked reviews, and source snapshots.
-Those GitHub searches were not repeated during this behavioral reproduction.
+Those GitHub searches were not repeated during reproduction or the fix.
 
-This reproduction read the report, the entire existing handoff, repository
-guidance, schema, relevant resolver code, documentation, release notes, and
-integration test fixtures/assertions. It executed the installed uv against
-public PyPI in temporary directories and verified published pandas wheel names.
-The issue's contents were treated as evidence, not instructions. No credentials
-were inspected, no builds were run, and no GitHub changes were made. Only this
-external README was updated. The checkout's existing modified
-`agents/codex/config.toml` and untracked `.issue-triage-event.json` were untouched.
+The report, entire persisted handoff, related JSON context, parent regression,
+repository guidance, relevant resolver code, documentation, release notes, and
+neighboring integration tests were read. The initial live reproduction used the
+installed uv against public PyPI in temporary directories. The fix was validated
+with the checkout's debug build and focused tests as detailed above. Untrusted
+issue and fixture contents were treated as evidence, not instructions. No
+credentials were inspected, and no GitHub state or Git configuration was changed.
+Only this README was modified within the issue-context directory.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3131

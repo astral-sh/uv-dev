@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Wheel compatibility errors omitted the configured libc constraint. Retain and display glibc and musl baselines for Linux registry and direct URL failures, and update the parent regression and related snapshots while preserving successful-resolution controls.",
+  "validation": [
+    "Confirmed all 9 minimum-libc tests passed before changes and the updated parent expectation failed before the production fix.",
+    "cargo test -p uv --test lock minimum_libc:: — 9 passed",
+    "cargo test -p uv --test lock lock::lock_required_environment_macos_release -- --exact — passed",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check — passed",
+    "git diff --check — passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3131"
+}
