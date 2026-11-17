@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23279,
+        "title": "Move to an rsa >= 0.10 (RUSTSEC-2023-0071) once reqsign supports it",
+        "url": "https://github.com/astral-sh/uv/issues/23279",
+        "state": "open",
+        "reason": "Companion report about vulnerable Rust dependencies flagged in uv binaries. It tracks rsa through reqsign and an upstream API migration, whereas this issue requests updates to different crates within their existing version lines; it is not the same remediation."
+      },
+      {
+        "kind": "issue",
+        "number": 22936,
+        "title": "Please update 'quinn-proto',  'zerovec-derive', 'zerovec'",
+        "url": "https://github.com/astral-sh/uv/issues/22936",
+        "state": "closed",
+        "reason": "Earlier binary-scanner dependency report involving the ICU dependency tree. Maintainers established that those specific findings affected uncompiled code or parsing of embedded ICU data and chose periodic updates. That conclusion does not establish reachability or safety for the different normalizer, zstd and ctutils advisories reported here."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22182,
+        "title": "Update Rust crate zstd to 0.14.0",
+        "url": "https://github.com/astral-sh/uv/pull/22182",
+        "state": "closed",
+        "reason": "Prior zstd update found through the dependency dashboard. Closed without merging on 2026-10-05; it changed Cargo.toml and Cargo.lock to zstd 0.14.0, itself one of the versions flagged by this report. It predates the inspected October 16 zstd-safe advisories and does not supply the requested patched versions."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed and merged PRs using authenticated gh. Separate literal searches covered zstd-safe/zstd, icu_normalizer, ctutils, RUSTSEC-2026-0391/0400/0403/0385 and GHSA-3jjw-63vg-v3hh. Conceptual searches covered decompression vulnerabilities, Unicode security, constant-time operations, RustSec, and Cargo.lock/lockfile security advisories. PR searches included zstd, ICU, ctutils, RustSec, security and Cargo dependency updates; supplemented empty PR search results by inspecting 700 recent PR titles across all states (2026-10-09 through 2026-11-17). Read candidate bodies and comments, followed the dependency dashboard to astral-sh/uv#22182 and the RSA lead to apache/reqsign#941. No existing tracker for the same advisory set was found. Ruled out merged astral-sh/uv#22693 as a security fix: it addresses gzip header validation and zstd no-progress errors. Also inspected astral-sh/uv#18287 and astral-sh/uv#20542, which concern different JWT/quick-xml advisories. Later follow-up searches were rate-limited, so coverage is not exhaustive."
+  },
+  "type": "bug",
+  "type_reason": "Cargo.lock confirms the reported dependency versions, and the inspected RustSec records establish memory-safety defects in those zstd-safe versions and constant-time correctness defects in ctutils 0.4.2. This is corrective dependency maintenance, even though exploitability in uv remains unverified. The related reports concern different advisories or an older, unmerged update; no same-problem tracker or previously fixed regression was established.",
+  "summary": "No duplicate found. astral-sh/uv#23279 tracks the separate RSA/reqsign update; astral-sh/uv#22936 provides ICU/scanner reachability context; closed, unmerged astral-sh/uv#22182 does not provide the requested zstd fixes.",
+  "draft_response": "The checkout confirms the locked versions you listed. Please send a targeted Cargo.lock update covering both zstd/zstd-safe version lines, ICU and ctutils, with an advisory check of the resulting dependency graph. This can be reviewed separately from astral-sh/uv#23279. The .tar.zst extraction path does use ZstdDecoder, but the cited zstd-safe advisories require specific context or buffer usage; that alone does not establish that uv is affected. Please include evidence for those preconditions if you have it. Inclusion in the next release will depend on review and validation."
+}
