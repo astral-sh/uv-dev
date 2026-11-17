@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15060,
+        "title": "`platform_machine` environment marker not handled correctly",
+        "url": "https://github.com/astral-sh/uv/issues/15060",
+        "state": "open",
+        "reason": "A maintainer explicitly describes retaining extra lockfile wheels as an acceptable, incomplete pruning optimization. Its main correctness report concerns missing Windows wheels and interpreter bitness; its surplus-wheel examples concern architectures, not Python implementations."
+      },
+      {
+        "kind": "issue",
+        "number": 9473,
+        "title": "Is there a way to specify that you don't care about pypy when creating a lockfile?",
+        "url": "https://github.com/astral-sh/uv/issues/9473",
+        "state": "closed",
+        "reason": "Maintainers recommended implementation_name in tool.uv.environments to exclude PyPy, and the reporter confirmed it resolved a PyPy-only dependency conflict. This establishes the resolution capability, but does not track pruning PyPy wheel entries."
+      },
+      {
+        "kind": "issue",
+        "number": 6512,
+        "title": "Restricting universal lock by OS still downloads wheels from all OSes",
+        "url": "https://github.com/astral-sh/uv/issues/6512",
+        "state": "closed",
+        "reason": "Historical enhancement for surplus uv.lock wheel entries despite restricted environments. Maintainers distinguished wheel-list pruning from installation and linked the platform-pruning implementation. Its scope was operating systems, not implementation_name."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6961,
+        "title": "Prune unreachable wheels from lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/6961",
+        "state": "merged",
+        "reason": "Merged September 4, 2024; introduced pruning of wheels that mismatch platform-specific markers. It explains the existing platform filtering, but does not establish that filtering by Python implementation was implemented and later regressed."
+      },
+      {
+        "kind": "issue",
+        "number": 10571,
+        "title": "Filter out x86 wheels when `platform_machine == 'arm64'` is specified",
+        "url": "https://github.com/astral-sh/uv/issues/10571",
+        "state": "closed",
+        "reason": "Labeled enhancement, this requested extending wheel pruning from operating systems to architectures. It is a close precedent for extending the pruning dimensions again, but addresses a different wheel-tag component."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10584,
+        "title": "Filter wheels from lockfile based on architecture",
+        "url": "https://github.com/astral-sh/uv/pull/10584",
+        "state": "merged",
+        "reason": "Merged January 14, 2025; implemented astral-sh/uv#10571 by extending post-resolution wheel filtering to architectures. It does not filter CPython versus PyPy, so it is adjacent history rather than a fix for this report."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests with authenticated gh. Literal searches covered implementation_name, pp311, PyPy wheels/lockfile/environments, and platform_python_implementation; conceptual searches covered environment markers, surplus wheels, filtering, pruning, and unreachable artifacts, without incidental NumPy versions or platforms. Inspected candidate bodies and comments and followed closure/reference chains to historical pruning PRs. No exact duplicate or prior implementation-pruning fix was found. Ruled out astral-sh/uv#18428 and astral-sh/uv#18445 because their fixed failure requires conflicts and concerns platform-marker propagation; astral-sh/uv#11463 concerns metadata downloads before pruning, and astral-sh/uv#14004 concerns custom wheel-name/libc constraints."
+  },
+  "type": "enhancement",
+  "type_reason": "The demonstrated behavior is surplus artifact entries, with no evidence that an excluded environment is resolved or an incompatible wheel is installed. Documentation defines environments as a resolution constraint, and maintainers explicitly regard conservative retention of extra wheels as acceptable. Source confirms that uv.lock pruning checks Requires-Python and platform/architecture tags but does not compare implementation markers. Adding that pruning dimension is an improvement analogous to astral-sh/uv#10571, not an established resolution correctness failure. No exact duplicate or historical implementation-pruning fix was found, so a regression is not established.",
+  "summary": "No exact duplicate found. astral-sh/uv#9473 confirms PyPy can be excluded from resolution; astral-sh/uv#15060 explains conservative wheel retention. astral-sh/uv#6512, astral-sh/uv#6961, astral-sh/uv#10571, and astral-sh/uv#10584 document earlier platform and architecture pruning enhancements.",
+  "draft_response": "Your `implementation_name == 'cpython'` constraint is valid for limiting dependency resolution. The lockfile wheel list is pruned separately: that code currently checks Python versions, operating systems, and architectures, but does not filter by Python implementation. That explains why PyPy wheels can remain in `uv.lock`; their presence does not mean uv will install them into CPython.\n\nAs discussed in astral-sh/uv#15060, retaining extra wheels is currently considered a pruning optimization gap. We can track implementation-aware wheel pruning here as an enhancement. The next step is to extend that filtering and cover your CPython-only configuration with a focused test."
+}
