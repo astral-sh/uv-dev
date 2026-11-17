@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18451,
+        "title": "Enforce available distributions for supported environments",
+        "url": "https://github.com/astral-sh/uv/pull/18451",
+        "state": "merged",
+        "reason": "Directly establishes the reported behavior: combines environments and required-environments for artifact-coverage checks, including a test rejecting unconditional pywin32 under Linux-only environments. Released in uv 0.10.11, before the reported 0.13.8."
+      },
+      {
+        "kind": "issue",
+        "number": 17067,
+        "title": "Lockfile with package that has no distributions with environments",
+        "url": "https://github.com/astral-sh/uv/issues/17067",
+        "state": "closed",
+        "reason": "Explains the correctness rationale: environments previously allowed wheel-only packages to produce lockfile entries without usable distributions. Closed by astral-sh/uv#18451; the new report asks whether the resulting rejection is expected."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17118,
+        "title": "Avoid allowing package-versions with no wheels in supported environments",
+        "url": "https://github.com/astral-sh/uv/pull/17118",
+        "state": "closed",
+        "reason": "Precursor discussion explicitly considers treating environments like required-environments for wheel availability. Superseded by astral-sh/uv#18451 without merging."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6961,
+        "title": "Prune unreachable wheels from lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/6961",
+        "state": "merged",
+        "reason": "Explains the secondary artifact-filtering concern: wheels incompatible with applicable platform markers are removed. This differs from required-environments, which adds availability requirements without narrowing supported resolution platforms."
+      }
+    ],
+    "search_scope": "Separated explicit-environment wheel failures, overlapping settings semantics/documentation, and lockfile artifact pruning. Searched open and closed astral-sh/uv issues using environments, required-environments, tool.uv.environments, pywin32, compatible wheels, split, expected, difference, documentation, no source distribution, and wheel/filter/platform combinations, including package-independent queries. Searched open, closed, and merged PRs using the settings identifiers and supported-environment/wheel terminology; direct PR searches returned no hits, so followed issue and comment references to historical implementations and fixes. Checked current source, existing integration coverage, and release notes. Inspected but ruled out astral-sh/uv#11664 (Windows marker casing), astral-sh/uv#18527 and astral-sh/uv#18536 (fixed abi3 Python-version coverage regression), astral-sh/uv#17382 (unsupported-platform marker documentation), astral-sh/uv#11463 (metadata downloads and HTTP 403), and astral-sh/uv#18428 (filtering with conflicting dependency groups). Followed astral-sh/uv#6512 to wheel-pruning work."
+  },
+  "type": "question",
+  "type_reason": "The reproduction matches intentional behavior introduced by astral-sh/uv#18451 in uv 0.10.11 and retained in current source and an existing pywin32 integration test. Explicit environments also require artifact coverage for applicable wheel-only dependencies; environments additionally narrows resolution scope, whereas required-environments alone does not. No incorrect resolution or regression is established. The report asks for clarification of this overlap; the historical fixes address acceptance of unusable distributions or separate pruning behavior, rather than an equivalent clarification request.",
+  "summary": "astral-sh/uv#18451 and astral-sh/uv#17067 establish that the rejection is intentional since uv 0.10.11; astral-sh/uv#17118 records the design discussion. astral-sh/uv#6961 explains the separate wheel-pruning behavior.",
+  "draft_response": "Yes, this is expected. Since uv 0.10.11, astral-sh/uv#18451 checks wheel availability for explicitly listed `environments` as well as `required-environments` when a package has no source distribution. The settings overlap here: `environments` also restricts the resolution scope and filters unreachable wheels, while `required-environments` adds availability requirements without excluding other platforms.\n\nYour unconditional `pywin32` dependency is therefore unsatisfiable for the configured macOS and Linux environments. Declare it as `\"pywin32>=312; sys_platform == 'win32'\"` to keep those environments while requiring the package only on Windows. If both lists contain the same markers, you can omit `required-environments`. The documentation could state this overlap more explicitly."
+}
