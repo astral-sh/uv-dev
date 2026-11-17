@@ -6,7 +6,6 @@
 //! was used, even after it expires.
 
 mod rekor;
-mod sct;
 mod trust;
 
 use base64::Engine as _;
@@ -21,7 +20,6 @@ pub use rekor::RekorError;
 use reqwest::{Response, StatusCode};
 use reqwest_middleware::ClientWithMiddleware;
 use rustls_pki_types::{CertificateDer, pem::PemObject as _};
-pub use sct::TimestampError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -79,8 +77,6 @@ impl ServiceError {
 pub enum SigningError {
     #[error("No current Rekor v1 signing key in trusted_root.json")]
     MissingRekorKey,
-    #[error("Failed to verify Fulcio certificate transparency")]
-    CertificateTimestamp(#[from] TimestampError),
     #[error("Invalid Sigstore identity token: expected three JWT segments")]
     TokenFormat,
     #[error("Invalid base64url payload in Sigstore identity token")]
@@ -101,6 +97,8 @@ pub enum SigningError {
     FulcioStatus(ServiceError),
     #[error("Failed to decode the Fulcio certificate response")]
     FulcioResponse(#[source] reqwest::Error),
+    #[error("Fulcio returned an empty certificate chain")]
+    EmptyCertificateChain,
     #[error("Invalid Fulcio signing certificate PEM")]
     CertificatePem(#[from] rustls_pki_types::pem::Error),
     #[error("Invalid Fulcio signing certificate")]
@@ -139,18 +137,15 @@ pub struct SignedStatement {
 impl TrustedRoot {
     /// Sign an in-toto statement using a CI token for the `sigstore` audience.
     ///
-    /// The signer checks the certificate timestamp and Rekor receipt. Consumers verify the
-    /// Fulcio chain and the signing identity against their own policy.
+    /// The signer checks the certificate's public key and the Rekor receipt. Consumers verify
+    /// the Fulcio chain, certificate timestamp, and signing identity against their own policy.
     pub async fn sign_statement(
         &self,
         client: &ClientWithMiddleware,
         token: &str,
         statement: &str,
     ) -> Result<SignedStatement, SigningError> {
-        check_identity_token(token)?;
-        let key =
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
-        sign_with_services(client, FULCIO, REKOR, self, &key, token, statement).await
+        sign_with_services(client, FULCIO, REKOR, self, token, statement).await
     }
 }
 
@@ -159,15 +154,13 @@ async fn sign_with_services(
     fulcio: &str,
     rekor: &str,
     trust: &TrustedRoot,
-    key: &KeyPair,
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
+    check_identity_token(token)?;
     let log_key = trust.rekor_key().ok_or(SigningError::MissingRekorKey)?;
-    let certificates = request_certificate(client, fulcio, token, key).await?;
-    let [pem, issuer, ..] = certificates.as_slice() else {
-        return Err(TimestampError::Issuer.into());
-    };
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
+    let pem = request_certificate(client, fulcio, token, &key).await?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
     let (remaining, cert) = parse_x509_certificate(&der)?;
     if !remaining.is_empty() {
@@ -176,12 +169,6 @@ async fn sign_with_services(
     if cert.public_key().raw != key.subject_public_key_info() {
         return Err(SigningError::KeyMismatch);
     }
-
-    sct::verify(
-        trust,
-        &cert,
-        &CertificateDer::from_pem_slice(issuer.as_bytes())?,
-    )?;
 
     // DSSE signs the payload type and the exact payload bytes, each prefixed with its byte length.
     let pae = format!(
@@ -199,7 +186,7 @@ async fn sign_with_services(
     })
     .to_string();
     let (integrated_time, entry) = rekor::record(
-        client, rekor, &log_key, &envelope, statement, &signature, pem,
+        client, rekor, &log_key, &envelope, statement, &signature, &pem,
     )
     .await?;
     // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
@@ -269,7 +256,7 @@ async fn request_certificate(
     url: &str,
     token: &str,
     key: &KeyPair,
-) -> Result<Vec<String>, SigningError> {
+) -> Result<String, SigningError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct CertificateResponse {
@@ -308,7 +295,13 @@ async fn request_certificate(
         .json()
         .await
         .map_err(SigningError::FulcioResponse)?;
-    Ok(response.signed_certificate_embedded_sct.chain.certificates)
+    response
+        .signed_certificate_embedded_sct
+        .chain
+        .certificates
+        .into_iter()
+        .next()
+        .ok_or(SigningError::EmptyCertificateChain)
 }
 
 #[cfg(test)]
@@ -318,7 +311,10 @@ mod tests {
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
-    use rcgen::{CertificateSigningRequestParams, KeyPair, PublicKeyData as _, SigningKey as _};
+    use rcgen::{
+        CertificateParams, CertificateSigningRequestParams, Issuer, KeyPair, PublicKeyData as _,
+        SigningKey as _,
+    };
     use reqwest::Client;
     use reqwest_middleware::{ClientBuilder, RequestBuilder};
     use serde_json::{Value, json};
@@ -329,46 +325,22 @@ mod tests {
 
     use super::{ServiceError, sign_with_services};
 
-    // Public test vector: P-256 scalars 1 (self-issued certificate) and 2 (CT log).
-    // The embedded SCT was signed independently of uv, over the certificate without that extension.
-    const CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----
-MIIBrTCCAVOgAwIBAgIBATAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDAR0ZXN0MB4X
-DTIwMDEwMTAwMDAwMFoXDTMwMDEwMTAwMDAwMFowDzENMAsGA1UEAwwEdGVzdDBZ
-MBMGByqGSM49AgEGCCqGSM49AwEHA0IABGsX0fLhLEJH+Lzm5WOkQPJ3A32BLesz
-oPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfWjgZ8wgZww
-DAYDVR0TAQH/BAIwADCBiwYKKwYBBAHWeQIEAgR9BHsAeQB3ANwM5jPbzJE9r6+k
-uJrETYzmg/38P2DIvfISE7nytTS6AAABi8/laAAAAAQDAEgwRgIhAMG7vppaMeXl
-9xHFE2kwt1x8gzVD9WRB8/kvoBuBKk6uAiEA14nsmTWzbphg06sm8pXwHBpxmRxe
-42fI5UnFaNspHwgwCgYIKoZIzj0EAwIDSAAwRQIgOB1zifoRKGKnBCzEbo9677Bo
-yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
-5A==
------END CERTIFICATE-----
-";
-    const KEY: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAGhRANCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/jQuL+Gn+bjufrSnwPnhYrzjNX\
-         azFezsu2QGg3v1H1";
-    const CT_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI/EdmmXgHd1UQ\
-         247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==";
-
     #[tokio::test]
     async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
         let server = MockServer::start().await;
-        let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
+        let issuer = Issuer::new(CertificateParams::default(), KeyPair::generate()?);
         let log_key = KeyPair::generate()?;
         let log_id = Sha256::digest(log_key.subject_public_key_info());
-        let log = |url: &str, raw_bytes: &str| {
-            json!({
-                "baseUrl": url, "publicKey": {
-                    "rawBytes": raw_bytes,
+        let trust = json!({
+            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+            "tlogs": [{
+                "baseUrl": super::REKOR_ORIGIN,
+                "publicKey": {
+                    "rawBytes": BASE64_STANDARD.encode(log_key.subject_public_key_info()),
                     "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                     "validFor": {"start": "2000-01-01T00:00:00Z"}
                 }
-            })
-        };
-        let trust = json!({
-            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
-            "ctlogs": [log("https://ct.example", CT_KEY)],
-            "tlogs": [log(super::REKOR_ORIGIN, &BASE64_STANDARD.encode(log_key.subject_public_key_info()))],
+            }],
         });
         let trust = serde_json::from_value(trust)?;
         let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
@@ -387,13 +359,14 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
                             .expect("Certificate signing request"),
                     )
                     .expect("Base64 CSR");
-                CertificateSigningRequestParams::from_pem(
+                let csr = CertificateSigningRequestParams::from_pem(
                     std::str::from_utf8(&csr).expect("PEM CSR"),
                 )
                 .expect("Valid signed CSR");
+                let cert = csr.signed_by(&issuer).expect("Issue the test certificate");
                 ResponseTemplate::new(200).set_body_json(json!({
                     "signedCertificateEmbeddedSct": {
-                        "chain": {"certificates": [CERTIFICATE, CERTIFICATE]}
+                        "chain": {"certificates": [cert.pem()]}
                     }
                 }))
             })
@@ -487,7 +460,6 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
             &format!("{}/api/v2/signingCert", server.uri()),
             &format!("{}/api/v1/log/entries", server.uri()),
             &trust,
-            &key,
             &token,
             &statement,
         )
