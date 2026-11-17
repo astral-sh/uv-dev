@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 2658,
+        "title": "Dependency Dashboard",
+        "url": "https://github.com/astral-sh/uv/issues/2658",
+        "state": "open",
+        "reason": "Explicitly lists the webpki-root-certs 1.0.12 update under Pending Status Checks. That version includes the C1/C3 removals introduced in 1.0.11, so this open tracker already covers the requested lockfile bump; no corresponding update PR was found."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22760,
+        "title": "Bump webpki-root-certs to 1.0.10",
+        "url": "https://github.com/astral-sh/uv/pull/22760",
+        "state": "merged",
+        "reason": "Merged October 20, 2026, changing only Cargo.lock to remove emSign ECC Root CA - G3. C1/C3 were removed upstream in 1.0.11 on October 23, so this earlier fix does not cover the additional roots and has not regressed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22777,
+        "title": "Update rustls-webpki after the eMudhra incident",
+        "url": "https://github.com/astral-sh/uv/pull/22777",
+        "state": "merged",
+        "reason": "Updates rustls-webpki to 0.103.16 to reject chains containing compromised intermediate public keys. The checkout already includes that version; this mitigation is distinct from removing C1/C3 from the bundled root list."
+      },
+      {
+        "kind": "issue",
+        "number": 22789,
+        "title": "Rebuild 0.13.4 Docker images to pick up patched ca-certificates (eMudhra CA compromise)",
+        "url": "https://github.com/astral-sh/uv/issues/22789",
+        "state": "closed",
+        "reason": "Same CA incident, but concerns Docker base-image system ca-certificates used by tools such as curl, Git and Python, rather than uv's bundled webpki-root-certs. A maintainer reports it fixed in uv 0.13.5; that does not establish C1/C3 removal from uv's bundle."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed and merged PRs with authenticated gh. Literal searches covered eMudhra, emSign, C1/C3, 2083709, webpki-root-certs, and versions 1.0.11/1.0.12. Conceptual searches covered root certificates, trust stores, certificate removal, distrust and compromised certificates; fix-oriented searches covered webpki and bundled-root updates. Inspected the reporter's leads, candidate discussions, relevant release notes and upstream removal PR rustls/webpki-roots#136. Because search omitted known PRs, also inspected 400 recent PR records spanning October 19–November 16 and the Renovate branch's PR history. No dedicated C1/C3 update PR was found. Ruled out astral-sh/uv#22767 as an Alpine system-CA update and astral-sh/uv#23081 as a macOS CI trust-store change; neither updates uv's bundled roots."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#2658 explicitly tracks the same webpki-root-certs lockfile update, targeting 1.0.12, which satisfies the requested minimum and includes the C1/C3 removals. The dependency-bump request can be centralized there, so duplicate takes precedence. The October 20 G3 fix in astral-sh/uv#22760 predates the October 23 C1/C3 removal upstream; this is an additional distrust update, not a regression of that fix.",
+  "summary": "astral-sh/uv#2658 already tracks the required 1.0.12 dependency bump, while Cargo.lock remains at 1.0.10. astral-sh/uv#22760 removed G3 only; astral-sh/uv#22777 and astral-sh/uv#22789 address intermediate-key rejection and Docker system certificates, respectively.",
+  "draft_response": "The lockfile still pins webpki-root-certs 1.0.10. Upstream 1.0.11 removes C1 and C3, and the 1.0.12 update already listed under “Pending Status Checks” in astral-sh/uv#2658 includes those removals. Let's track the dependency bump there. The earlier astral-sh/uv#22760 update removed G3 only."
+}
