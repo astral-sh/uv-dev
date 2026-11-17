@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use rustls_pki_types::SubjectPublicKeyInfoDer;
 use serde::{Deserialize, Serialize};
 
-use crate::{REKOR_ORIGIN, SigningError};
+use crate::SigningError;
 
 /// The subset of Sigstore's trust document needed when signing.
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,15 +72,18 @@ impl TrustedRoot {
     pub const URL: &str =
         "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json";
 
-    pub(super) fn rekor_key(&self) -> Result<SubjectPublicKeyInfoDer<'static>, SigningError> {
+    pub(super) fn rekor_key(
+        &self,
+        origin: &'static str,
+    ) -> Result<SubjectPublicKeyInfoDer<'static>, SigningError> {
         let now = Timestamp::now();
-        let mut error = SigningError::MissingRekorKey;
+        let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
-            if log.base_url == REKOR_ORIGIN && log.public_key.is_current(now) {
+            if log.base_url == origin && log.public_key.is_current(now) {
                 // A malformed candidate shouldn't mask another current key during rotation.
                 match log.public_key.decode() {
                     Ok(key) => return Ok(key),
-                    Err(err) => error = SigningError::RekorKeyEncoding(err),
+                    Err(source) => error = SigningError::RekorKeyEncoding { origin, source },
                 }
             }
         }
@@ -92,34 +95,34 @@ impl TrustedRoot {
 mod tests {
     use serde_json::json;
 
-    use super::{REKOR_ORIGIN, SigningError, TrustedRoot};
+    use super::TrustedRoot;
 
     #[test]
     fn malformed_key_falls_back_during_rotation() -> Result<(), serde_json::Error> {
+        let origin = "https://rekor.example";
         let mut trust: TrustedRoot = serde_json::from_value(json!({
             "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
             "tlogs": [],
         }))?;
-        assert!(matches!(
-            trust.rekor_key(),
-            Err(SigningError::MissingRekorKey)
-        ));
+        let error = trust.rekor_key(origin).expect_err("no decodable key");
+        insta::assert_snapshot!(error, @"No current Rekor v1 signing key for https://rekor.example in trusted_root.json");
 
         let mut candidate = json!({
-            "baseUrl": REKOR_ORIGIN,
+            "baseUrl": origin,
             "publicKey": {"rawBytes": "!", "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                 "validFor": {"start": "2000-01-01T00:00:00Z"}},
         });
         trust.tlogs.push(serde_json::from_value(candidate.clone())?);
-        assert!(matches!(
-            trust.rekor_key(),
-            Err(SigningError::RekorKeyEncoding(_))
-        ));
+        let error = trust.rekor_key(origin).expect_err("no decodable key");
+        insta::assert_snapshot!(error, @"Invalid base64 in the Rekor v1 signing key for https://rekor.example in trusted_root.json");
 
         candidate["publicKey"]["rawBytes"] = json!("AQ==");
         trust.tlogs.push(serde_json::from_value(candidate)?);
         assert_eq!(
-            trust.rekor_key().expect("second key decodes").as_ref(),
+            trust
+                .rekor_key(origin)
+                .expect("second key decodes")
+                .as_ref(),
             &[1]
         );
         Ok(())

@@ -86,10 +86,14 @@ impl ServiceError {
 /// Failure to sign a statement or obtain its verification material.
 #[derive(Debug, Error)]
 pub enum SigningError {
-    #[error("No current Rekor v1 signing key for {REKOR_ORIGIN} in trusted_root.json")]
-    MissingRekorKey,
-    #[error("Invalid base64 in the Rekor v1 signing key for {REKOR_ORIGIN} in trusted_root.json")]
-    RekorKeyEncoding(#[source] base64::DecodeError),
+    #[error("No current Rekor v1 signing key for {origin} in trusted_root.json")]
+    MissingRekorKey { origin: &'static str },
+    #[error("Invalid base64 in the Rekor v1 signing key for {origin} in trusted_root.json")]
+    RekorKeyEncoding {
+        origin: &'static str,
+        #[source]
+        source: base64::DecodeError,
+    },
     #[error("Invalid Sigstore identity token: expected three JWT segments")]
     TokenFormat,
     #[error("Invalid base64url payload in Sigstore identity token")]
@@ -171,7 +175,7 @@ async fn sign_with_services(
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
     check_identity_token(token)?;
-    let log_key = trust.rekor_key()?;
+    let log_key = trust.rekor_key(REKOR_ORIGIN)?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
     let pem = request_certificate(client, fulcio, token, &key).await?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
