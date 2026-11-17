@@ -12,9 +12,13 @@ The checkout confirms rsa 0.9.10 through reqsign 0.20.7, including reqsign-core 
 
 Repository member woodruffw assesses exploitation through uv as unlikely, citing the distinction between decryption oracles and uv’s RSA signing paths, apparent signature blinding, and limited opportunity for an attacker to repeatedly trigger the operation. This is a qualified maintainer assessment, not an independently verified finding that uv is unaffected.
 
-## Draft response
+The maintainer’s disposition is to receive the upgrade transitively when available, with no separate uv-side action considered actionable for this indirect dependency. woodruffw recommends reporting the scanner finding to a paid scanner vendor as a false positive; this recommendation reflects their exploitability assessment rather than new independent verification.
 
-Your dependency report matches the current lockfile: reqsign still brings in rsa 0.9.10, and RustSec lists >=0.10.0 as patched. apache/reqsign#941 is still open with failing checks. This issue can track adopting a compatible reqsign release; the next step is an upstream release, followed by a uv dependency update that removes rsa 0.9.x from the lockfile. The dependency finding alone does not establish whether the timing attack is reachable through uv's signing operations.
+## Maintainer disposition
+
+woodruffw considers this indirect-dependency report not otherwise actionable on uv’s side and expects uv to receive the version bump transitively when available. They recommend that users of a paid security scanner report the finding to its vendor as a false positive. This is maintainer guidance on handling the report, not evidence that the dependency has already been upgraded or an independently confirmed non-applicability determination. No release date, issue-closure decision, or commitment to a special uv-side fix is stated.
+
+Source: woodruffw, repository member, November 17, 2026; comment 6957093275 on astral-sh/uv#23279. https://github.com/astral-sh/uv/issues/23279#issuecomment-6957093275
 
 ## Classification
 
@@ -52,4 +56,4 @@ astral-sh/uv#22906 was inspected and ruled out as the same request: its reqsign-
 
 ## Next step
 
-Track the upstream requirement migration and a compatible published reqsign release, then evaluate a focused uv dependency update and verify that the resolved lockfile no longer contains rsa 0.9.x. If further exploitability investigation is needed, check the maintainer’s stated assumptions about the RSA signing and blinding paths and whether an attacker can repeatedly trigger observable private-key operations. Keep that assessment separate from the dependency inventory. No uv release date or definitive exploitability determination is established here; the maintainer’s current assessment is that exploitation through uv is unlikely.
+Follow the maintainer’s disposition: await the transitive upgrade through a compatible reqsign release rather than treating this report as requiring a separate uv-side fix. When that update becomes available, verify that the resolved lockfile no longer contains rsa 0.9.x. For users of a paid scanner, the maintainer recommends reporting the finding to the vendor as a false positive, citing the signing-path assessment above. If further exploitability investigation is needed, check the maintainer’s stated assumptions about the RSA signing and blinding paths and whether an attacker can repeatedly trigger observable private-key operations. Keep that assessment separate from the dependency inventory. No uv release date or definitive exploitability determination is established here; the maintainer’s current assessment is that exploitation through uv is unlikely.
