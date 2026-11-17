@@ -353,6 +353,7 @@ toml_edit = { version = "0.25.8", default-features = false, features = [
 ] }
 toml_parser = { version = "1.1.0", default-features = false, features = ["alloc", "simd"] }
 toml_writer = { version = "1.1.0", default-features = false, features = ["alloc"] }
+tough = { version = "0.24.0", default-features = false }
 tracing = { version = "0.1.40", default-features = false, features = ["attributes", "std"] }
 tracing-durations-export = { version = "0.3.0", default-features = false, features = ["plot"] }
 tracing-subscriber = { version = "0.3.18", default-features = false, features = [
@@ -394,6 +395,7 @@ windows = { version = "0.61.0", default-features = false, features = [
 windows-registry = { version = "0.5.0", default-features = false, features = ["std"] }
 windows-version = { version = "0.100.0", default-features = false }
 wiremock = { version = "0.6.4", default-features = false }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std"] }
 x509-parser = { version = "0.18.0", default-features = false }
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 zeroize = { version = "1.8.1", default-features = false, features = ["alloc"] }

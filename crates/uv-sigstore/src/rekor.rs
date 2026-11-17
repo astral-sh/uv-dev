@@ -19,18 +19,6 @@ use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 
 use crate::ServiceError;
 
-/// The trust anchor for the production Rekor v1 log.
-///
-/// Pinning the public key lets the signer authenticate timestamps and checkpoints
-/// independently of the HTTP response. A log key rotation requires updating this key in uv.
-///
-/// <https://github.com/sigstore/root-signing/blob/fa6dc24dbae14f94135d19716d2f03df8b1431d7/targets/rekor.pub>
-const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr
-kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==
------END PUBLIC KEY-----
-";
-
 /// An error submitting a DSSE envelope to Rekor or authenticating its receipt.
 #[derive(Debug, Error)]
 pub enum RekorError {
@@ -48,8 +36,6 @@ pub enum RekorError {
     Hex(&'static str, #[source] hex::FromHexError),
     #[error("Invalid base64 {0} in Rekor response")]
     Base64(&'static str, #[source] base64::DecodeError),
-    #[error("Invalid trusted Rekor public key")]
-    KeyPem(#[source] rustls_pki_types::pem::Error),
     #[error("Invalid trusted Rekor public key")]
     KeyDer(#[source] DerError<X509Error>),
     #[error("Unexpected Rekor log ID")]
@@ -100,10 +86,6 @@ struct InclusionProof {
     checkpoint: String,
 }
 
-pub(super) fn public_key() -> Result<SubjectPublicKeyInfoDer<'static>, RekorError> {
-    SubjectPublicKeyInfoDer::from_pem_slice(PUBLIC_KEY.as_bytes()).map_err(RekorError::KeyPem)
-}
-
 impl LogEntry {
     fn verify_signatures(
         &self,
@@ -117,10 +99,7 @@ impl LogEntry {
         }
         let (_, spki) =
             SubjectPublicKeyInfo::from_der(log_key.as_ref()).map_err(RekorError::KeyDer)?;
-        let key = UnparsedPublicKey::new(
-            &ECDSA_P256_SHA256_ASN1,
-            spki.subject_public_key.data.as_ref(),
-        );
+        let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &*spki.subject_public_key.data);
 
         // Rekor signs these four fields as canonical JSON (RFC 8785). The signed index is
         // global, while the inclusion proof's index is relative to its log shard.
