@@ -58,9 +58,8 @@ impl Validity {
 }
 
 impl Key {
-    /// Whether uv supports this key's algorithm and the key is valid at the given time.
-    fn is_usable_at(&self, time: Timestamp) -> bool {
-        self.algorithm == "PKIX_ECDSA_P256_SHA_256" && self.valid_for.contains(time)
+    fn has_supported_algorithm(&self) -> bool {
+        self.algorithm == "PKIX_ECDSA_P256_SHA_256"
     }
 
     fn decode(&self) -> Result<SubjectPublicKeyInfoDer<'static>, base64::DecodeError> {
@@ -83,7 +82,10 @@ impl TrustedRoot {
         let now = Timestamp::now();
         let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
-            if log.base_url == origin && log.public_key.is_usable_at(now) {
+            if log.base_url == origin
+                && log.public_key.has_supported_algorithm()
+                && log.public_key.valid_for.contains(now)
+            {
                 // A malformed candidate shouldn't mask another current key during rotation.
                 match log.public_key.decode() {
                     Ok(key) => return Ok(key),
