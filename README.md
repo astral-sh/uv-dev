@@ -10,6 +10,8 @@ The reporter requests adopting a reqsign release that supports rsa >=0.10 to cle
 
 The checkout confirms rsa 0.9.10 through reqsign 0.20.7, including reqsign-core 3.3.2, reqsign-google 3.2.0, and reqsign-azure-storage 3.3.0. RustSec lists >=0.10.0 as patched. The upstream requirement upgrade, apache/reqsign#941, remains open with failing checks. Its diff changes the shared rsa requirement from 0.9.2 to 0.10.0 without implementation changes.
 
+Repository member woodruffw assesses exploitation through uv as unlikely, citing the distinction between decryption oracles and uv’s RSA signing paths, apparent signature blinding, and limited opportunity for an attacker to repeatedly trigger the operation. This is a qualified maintainer assessment, not an independently verified finding that uv is unaffected.
+
 ## Draft response
 
 Your dependency report matches the current lockfile: reqsign still brings in rsa 0.9.10, and RustSec lists >=0.10.0 as patched. apache/reqsign#941 is still open with failing checks. This issue can track adopting a compatible reqsign release; the next step is an upstream release, followed by a uv dependency update that removes rsa 0.9.x from the lockfile. The dependency finding alone does not establish whether the timing attack is reachable through uv's signing operations.
@@ -17,6 +19,14 @@ Your dependency report matches the current lockfile: reqsign still brings in rsa
 ## Classification
 
 This requests a dependency upgrade once upstream supports it, so enhancement fits. The affected dependency's presence and advisory are confirmed, but the inspected evidence does not establish a uv correctness defect or a reachable timing attack through uv. This classification does not treat the advisory as harmless. No equivalent uv tracker was found, and the historical JWT advisory and earlier reqsign updates concern different problems. There is no evidence of a previously fixed RSA problem returning.
+
+## Maintainer assessment of exploitability
+
+In astral-sh/uv#23279, repository member woodruffw states that they do not think the issue is exploitable through uv. They explain that Marvin-style attacks generally target decryption with PKCS#1 v1.5 padding as an oracle, whereas uv’s relevant paths sign with RSA keys and, to their understanding, use blinded signatures. They also identify a separate constraint: an attacker needs to repeatedly drive the oracular signing or decryption operation, for which they believe uv offers limited opportunity.
+
+The comment is tentative, including the observation about blinding. The signing implementation and attacker-controlled repetition have not been independently verified in this investigation. Record this as the maintainer’s preliminary risk assessment rather than a confirmed non-applicability determination. It does not change the confirmed dependency inventory or the request to adopt a compatible reqsign release.
+
+Source: woodruffw, repository member, November 17, 2026; comment 6957056349 on astral-sh/uv#23279. https://github.com/astral-sh/uv/issues/23279#issuecomment-6957056349
 
 ## Related
 
@@ -42,4 +52,4 @@ astral-sh/uv#22906 was inspected and ruled out as the same request: its reqsign-
 
 ## Next step
 
-Track the upstream requirement migration and a compatible published reqsign release, then evaluate a focused uv dependency update and verify that the resolved lockfile no longer contains rsa 0.9.x. Assess any claim about reachable timing attacks separately from the dependency inventory. No uv release date or exploitability conclusion is established here.
+Track the upstream requirement migration and a compatible published reqsign release, then evaluate a focused uv dependency update and verify that the resolved lockfile no longer contains rsa 0.9.x. If further exploitability investigation is needed, check the maintainer’s stated assumptions about the RSA signing and blinding paths and whether an attacker can repeatedly trigger observable private-key operations. Keep that assessment separate from the dependency inventory. No uv release date or definitive exploitability determination is established here; the maintainer’s current assessment is that exploitation through uv is unlikely.
