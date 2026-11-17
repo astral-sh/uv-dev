@@ -179,7 +179,7 @@ async fn sign_with_services(
     let log_key = trust.rekor_key()?;
     let certificates = request_certificate(client, fulcio, token, key).await?;
     let [pem, issuer, ..] = certificates.as_slice() else {
-        return Err(TimestampError::Issuer.into());
+        return Err(TimestampError::MissingIssuer.into());
     };
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
     let (remaining, cert) = parse_x509_certificate(&der)?;
@@ -194,11 +194,7 @@ async fn sign_with_services(
         });
     }
 
-    sct::verify(
-        trust,
-        &cert,
-        &CertificateDer::from_pem_slice(issuer.as_bytes())?,
-    )?;
+    sct::verify(trust, &cert, issuer)?;
 
     // DSSE signs the payload type and the exact payload bytes, each prefixed with its byte length.
     let pae = format!(
