@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 941,
+        "title": "build(deps): update rsa requirement from 0.9.2 to 0.10.0",
+        "url": "https://github.com/apache/reqsign/pull/941",
+        "state": "open",
+        "reason": "apache/reqsign#941 is the exact upstream RSA requirement upgrade. Its diff changes rsa 0.9.2 to 0.10.0; it remains unmerged with failing checks. The specific API failure explanation comes from the reporter and was not independently confirmed. This does not itself update uv."
+      },
+      {
+        "kind": "issue",
+        "number": 18287,
+        "title": "jsonwebtoken Rust crate (9.3.1) in Cargo.lock is affected by CVE-2026-25537",
+        "url": "https://github.com/astral-sh/uv/issues/18287",
+        "state": "closed",
+        "reason": "astral-sh/uv#18287 also concerns scanners flagging a cryptographic dependency through reqsign-google pending an upstream upgrade. It concerns a different advisory; the maintainer's encoding-versus-decoding explanation for JWT does not establish the impact of the RSA timing advisory."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22925,
+        "title": "Update Rust crate reqsign to v0.20.7",
+        "url": "https://github.com/astral-sh/uv/pull/22925",
+        "state": "merged",
+        "reason": "astral-sh/uv#22925 installed the reqsign release and component versions now locked in the checkout. Merged October 26, 2026, it predates the reported RSA release and does not upgrade rsa to 0.10. Its linked issue, astral-sh/uv#22906, addressed a distinct PPC32 dependency problem."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open/closed issues and open/closed/merged PRs with authenticated gh. Literal searches covered RUSTSEC-2023-0071, CVE-2023-49092, GHSA-c38w-74pg-36hr, rsa, reqsign, and reqsign-core. Conceptual searches covered Marvin, timing side channels, vulnerable/security dependencies, scanners/binaries, cloud endpoint signing, and security labels; fix searches included closed/merged rsa 0.10 and reqsign updates. Indexed PR searches returned no matches; referenced historical PRs were inspected directly. Followed astral-sh/uv#18287 to astral-sh/uv#17935 and astral-sh/uv#18672, which concern the earlier JWT upgrade. Ruled out astral-sh/uv#22906 as the same request because it addressed PPC32/mea, and astral-sh/uv#22273 because it concerns Google identity fallback. astral-sh/uv#2658 lists dependencies without tracking this upgrade. Inspected apache/reqsign#941, its comments, diff, and check statuses, plus the local lockfile and RustSec advisory."
+  },
+  "type": "enhancement",
+  "type_reason": "Requests adopting a compatible upstream dependency release to remove a confirmed advisory from uv's dependency graph. The affected dependency is present, but the inspected evidence does not establish incorrect uv behavior or a reachable timing attack through uv. No existing uv tracker covers this request, and the earlier JWT and PPC32 updates address different problems; no RSA regression was established.",
+  "summary": "No existing uv tracker for this RSA upgrade was found. apache/reqsign#941 is the upstream dependency change; astral-sh/uv#18287 concerns a different advisory, and astral-sh/uv#22925 is the earlier reqsign update.",
+  "draft_response": "Your dependency report matches the current lockfile: reqsign still brings in rsa 0.9.10, and RustSec lists >=0.10.0 as patched. apache/reqsign#941 is still open with failing checks. This issue can track adopting a compatible reqsign release; the next step is an upstream release, followed by a uv dependency update that removes rsa 0.9.x from the lockfile. The dependency finding alone does not establish whether the timing attack is reachable through uv's signing operations."
+}
