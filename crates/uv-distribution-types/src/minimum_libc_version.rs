@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
 
 use uv_platform_tags::{LibcVersion, PlatformTag};
@@ -56,5 +58,16 @@ impl MinimumLibcVersion {
             self.glibc.is_none_or(|version| glibc <= version),
             self.musl.is_none(),
         ]
+    }
+}
+
+impl Display for MinimumLibcVersion {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match (self.glibc, self.musl) {
+            (Some(glibc), Some(musl)) => write!(formatter, "glibc {glibc}, musl {musl}"),
+            (Some(glibc), None) => write!(formatter, "glibc {glibc}"),
+            (None, Some(musl)) => write!(formatter, "musl {musl}"),
+            (None, None) => Ok(()),
+        }
     }
 }
