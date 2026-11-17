@@ -16,6 +16,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::SigningError;
 
+const PKIX_ECDSA_P256_SHA_256: &str = "PKIX_ECDSA_P256_SHA_256";
+
 /// The subset of Sigstore's trust document needed when signing.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TrustedRoot {
@@ -60,10 +62,6 @@ impl Validity {
 }
 
 impl Key {
-    fn has_supported_algorithm(&self) -> bool {
-        self.algorithm == "PKIX_ECDSA_P256_SHA_256"
-    }
-
     fn decode(&self) -> Result<SubjectPublicKeyInfoDer<'static>, base64::DecodeError> {
         BASE64_STANDARD.decode(&self.raw_bytes).map(Into::into)
     }
@@ -85,7 +83,7 @@ impl TrustedRoot {
         let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
             if log.base_url == origin
-                && log.public_key.has_supported_algorithm()
+                && log.public_key.algorithm == PKIX_ECDSA_P256_SHA_256
                 && log.public_key.valid_for.contains(now)
             {
                 // A malformed candidate shouldn't mask another current key during rotation.
@@ -106,7 +104,7 @@ impl TrustedRoot {
         let now = Timestamp::now();
         self.ctlogs
             .iter()
-            .filter(|log| log.public_key.has_supported_algorithm())
+            .filter(|log| log.public_key.algorithm == PKIX_ECDSA_P256_SHA_256)
             // A retired key may verify old releases, but must not vouch for a new signature.
             .filter(|log| log.public_key.valid_for.contains(signed_at))
             .filter(|log| log.public_key.valid_for.contains(now))
