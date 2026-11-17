@@ -69,7 +69,7 @@ impl ServiceError {
         let detail = if message.is_empty() {
             String::new()
         } else if let Some(token) = bearer_token {
-            // Fulcio may echo request details when rejecting a credential.
+            // The response body is untrusted. Redact exact matches of the bearer token before display.
             format!(": {}", message.replace(token, "[REDACTED]"))
         } else {
             format!(": {message}")
