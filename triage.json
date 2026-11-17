@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6349,
+        "title": "Request for `uv.lock` to support different index urls across different developer machines and CI environments",
+        "url": "https://github.com/astral-sh/uv/issues/6349",
+        "state": "open",
+        "reason": "Canonical discussion of portable lockfiles across proxies with different artifact layouts. Comments explicitly cover Nexus/Artifactory path differences; a maintainer describes resolving locked filenames through the proxy and checking hashes, while obtaining canonical URLs separately when locking. This already tracks the underlying request."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20790,
+        "title": "Support proxy indexes through reversible artifact URLs",
+        "url": "https://github.com/astral-sh/uv/pull/20790",
+        "state": "merged",
+        "reason": "Introduced the current prefix-only implementation, merged November 17, 2026. The GAR report demonstrates fabricated upstream URLs when paths differ, and a maintainer explicitly defers filename lookup to a follow-up. Its description and the checkout confirm that upstream URLs are not validated; this PR did not implement the requested fallback."
+      },
+      {
+        "kind": "issue",
+        "number": 22231,
+        "title": "Allow index override when using uv sync --frozen",
+        "url": "https://github.com/astral-sh/uv/issues/22231",
+        "state": "open",
+        "reason": "Closely overlaps the install-only capability: install unchanged locked versions and hashes from a GitLab registry whose artifact paths differ from PyPI. It proposes index overrides and upstream fallback, whereas this report requests an opt-in per-proxy mode and separately asks about locking."
+      }
+    ],
+    "search_scope": "Decomposed the report into changed artifact paths/fabricated upstream URLs, opt-in filename-and-hash lookup during locked installs, and canonical URL discovery during locking. Used authenticated gh searches across open/closed issues and open/closed/merged PRs for proxy-index, artifact-base-url, proxy-for, filename-based, Artifactory, Google Artifact Registry, artifact paths, mirror paths, portable lockfiles, different URL schemes, canonical URLs, index overrides, filename/hash lookup, and closed 404/lock fixes. PR search returned no indexed matches; supplemented it with recently updated PR listings and direct inspection of referenced PRs and comments. Followed astral-sh/uv#20790 to astral-sh/uv#6349 and inspected astral-sh/uv#22231. Ruled out astral-sh/uv#23116 as a filename-lookup implementation: it addresses speculative prefetch and candidate error handling. Also inspected astral-sh/uv#11782 (closed, unmerged prefix-based predecessor), astral-sh/uv#22794 (metadata request preparation), astral-sh/uv#19625 (ordinary frozen URL semantics), and astral-sh/uv#8262 and astral-sh/uv#15741 (index selection/configuration). None establishes a fix or regression of path-independent lookup."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#6349 already tracks the same underlying capability, including Artifactory/Nexus path differences and a maintainer's explicit filename-and-hash lookup design. astral-sh/uv#22231 independently covers the install-only case. Duplicate takes precedence despite the source-confirmed risk of writing invalid upstream URLs. astral-sh/uv#20790 deliberately deferred this capability rather than fixing it, so this is not a regression or a duplicate merely of an implementing PR.",
+  "summary": "astral-sh/uv#6349 is the canonical discussion; astral-sh/uv#22231 closely overlaps locked installs through a registry with different paths. Merged astral-sh/uv#20790 supplies the current prefix mapping and explicitly defers filename lookup.",
+  "draft_response": "The filename-and-hash lookup you propose is already discussed in astral-sh/uv#6349, including registries with different artifact layouts. Let's keep that discussion together there.\n\nastral-sh/uv#20790 merged with prefix-only routing and deferred filename lookup. The implementation does not validate the derived upstream URLs, so a lock can work through the proxy while failing against upstream. Matching hashes do not make the paths interchangeable.\n\nPlease continue in astral-sh/uv#6349 with whether your environment can reach the upstream Simple API when creating or updating a lock. That matters for obtaining canonical URLs: looking up files in Artifactory during installation alone does not solve the locking side. The merged implementation has no opt-in filename lookup mode."
+}
