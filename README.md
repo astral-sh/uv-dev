@@ -10,15 +10,21 @@ The reporter requests a targeted Cargo.lock refresh for uv 0.13.9 and main to re
 
 No duplicate was found within the completed searches. The closest items are the separate RSA/reqsign request, an earlier ICU-tree scanner report, and an older zstd update that was closed without merging. Further search queries encountered an API rate limit.
 
-## Draft response
+Maintainer woodruffw has clarified that patches depend on evidence that the advisory conditions are reachable within uv. Maintainers already review RustSec advisories and regard findings for unreachable code as scanner false positives. The outstanding investigation is therefore runtime reachability; the reproduced lockfile findings alone do not satisfy that requirement.
 
-An independent cargo-audit scan confirms zstd, zstd-safe and ctutils findings in both the current lockfile and uv 0.13.9's release lockfile. A targeted refresh can be assessed separately from astral-sh/uv#23279. The ICU advisory needs a verifiable advisory record or scanner report, and the complete lockfile-only resolution still needs validation. The .tar.zst extraction path uses ZstdDecoder, but the cited decompression advisories require particular context or buffer usage; the scans do not establish those preconditions in uv. Release timing remains a maintainer decision.
+## Maintainer position
+
+In the November 17, 2026 comment at 18:29:53 UTC on astral-sh/uv#23280 (comment ID 6957176660), woodruffw, identified as a repository member in the supplied discussion, compared this report to astral-sh/uv#23279. They stated that reachable vulnerabilities can be patched, asked for evidence of reachability, and directed reports of unreachable vulnerabilities to the scanner vendor. They also explained that maintainers already see and triage all RustSec advisories, so additional reports should establish confidence that the affected code is reachable.
+
+This establishes the maintainer's criterion for action. The comment supplies no additional call-path analysis, reproduction, patch, or release commitment, and does not independently demonstrate that each finding in this report is unreachable. The existing scans confirm advisory matches for dependencies; they do not resolve the reachability question. The cited ICU advisory still needs a verifiable advisory record or exact scanner output, and a complete lockfile-only resolution remains unvalidated.
 
 ## Classification
 
 Classification: bug, concerning corrective dependency maintenance. Actual cargo-audit runs confirm advisory findings for the locked zstd, zstd-safe and ctutils versions. The RustSec records describe memory-exposure and memory-safety defects in the zstd crates and constant-time correctness defects in ctutils 0.4.2. Exploitability in uv remains unverified, and the ICU advisory remains unvalidated. The related reports concern different advisories or an older, unmerged update; no same-problem tracker or previously fixed regression was established.
 
 The issue requests correction of dependencies with source-backed defects rather than new functionality. Treating it as a bug does not assert that every scanner finding is reachable in uv. In particular, the reporter's claim that all uv binaries are affected and the proposed lockfile-only resolution have not been independently demonstrated. There is no evidence that a previously completed fix has regressed.
+
+The bug classification records the existing triage assessment of corrective dependency maintenance; it is not a maintainer confirmation that uv is vulnerable. The maintainer's stated requirement for reachability evidence remains unmet by the available findings.
 
 ## Reproduction
 
@@ -133,6 +139,8 @@ The general dependency dashboard, astral-sh/uv#2658, was a discovery source for 
 
 ## Suggested maintainer follow-up
 
-Review a narrowly scoped lockfile update that covers both zstd/zstd-safe lines and validates ICU and ctutils compatibility. Follow the repository guidance to use precise Cargo updates rather than refreshing unrelated dependencies. Check the resulting advisory status and enabled feature graph, then run relevant compilation and extraction checks. Assess the zstd context, legacy-frame and output-buffer preconditions before characterizing impact or release urgency.
+Prioritize determining whether the advisory preconditions are reachable in uv, as requested by the maintainer. Trace the enabled feature graph and the locked zstd/async-compression context, legacy-frame and output-buffer paths; identify whether affected ctutils operations process secrets. A reachable call path or focused runtime reproduction would advance the issue. A verifiable ICU advisory record or the reporter's exact scanner output is needed before evaluating that claim. Repeating a Cargo.lock audit does not supply the missing reachability evidence.
+
+If a finding is demonstrated to be unreachable, the maintainer's direction is to report the false positive to the scanner vendor. If reachability is established, assess a narrowly scoped update covering the affected zstd/zstd-safe version lines and other validated findings. Follow repository guidance to use precise Cargo updates, validate compatibility and advisory status, and run relevant compilation and extraction checks. No patch or next-release inclusion has been committed to in the discussion.
 
 Two actual cargo-audit scans reproduced the dependency findings; no exploit, build, integration-test run, or dependency update was performed. Reproduction files and scanner caches were confined to the temporary directory. Only the issue-context README was revised outside that directory; checkout files and GitHub objects were not changed.
