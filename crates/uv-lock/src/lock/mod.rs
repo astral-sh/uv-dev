@@ -2972,6 +2972,40 @@ impl Lock {
         &self.packages
     }
 
+    /// Returns `true` when adding omitted metadata is the only change to a lockfile.
+    ///
+    /// Existing dependency edges or declared extras and groups distinguish omitted declarations
+    /// from the empty metadata of a stable lockfile with no dependencies.
+    pub fn only_adds_package_metadata(&self, previous: &Self) -> bool {
+        previous.omits_package_metadata()
+            && previous.packages.iter().any(|package| {
+                !package.dependencies.is_empty()
+                    || !package.optional_dependencies.is_empty()
+                    || !package.dependency_groups.is_empty()
+            })
+            && self != previous
+            && self.clone().without_package_metadata() == *previous
+    }
+
+    /// Returns `true` if all package metadata that can be omitted is absent.
+    fn omits_package_metadata(&self) -> bool {
+        let mut packages = self
+            .packages
+            .iter()
+            .filter(|package| match &package.id.source {
+                Source::Direct(..) | Source::Git(..) => false,
+                Source::Registry(..)
+                | Source::Path(..)
+                | Source::Directory(..)
+                | Source::Editable(..)
+                | Source::Virtual(..) => true,
+            });
+        let Some(package) = packages.next() else {
+            return false;
+        };
+        !package.has_metadata() && packages.all(|package| !package.has_metadata())
+    }
+
     /// Resolve package and dependency-group upgrade selections against this lockfile.
     pub fn upgrade_packages(&self, upgrade: &Upgrade) -> FxHashSet<PackageName> {
         if upgrade.is_all() {
