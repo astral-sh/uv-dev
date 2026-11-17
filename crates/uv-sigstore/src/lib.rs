@@ -329,7 +329,7 @@ async fn request_certificate(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::mpsc;
+    use std::sync::{Arc, OnceLock, mpsc};
 
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -443,6 +443,17 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        // Model a retried POST: the entry exists, but its receipt must be fetched by ID.
+        let stored_entry = Arc::new(OnceLock::<Value>::new());
+        let saved_entry = stored_entry.clone();
+        Mock::given(method("GET"))
+            .and(path("/api/v1/log/entries/abcd"))
+            .respond_with(move |_: &Request| {
+                ResponseTemplate::new(200).set_body_json(saved_entry.get().expect("entry recorded"))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
         let (sender, receipt) = mpsc::channel();
         Mock::given(method("POST"))
             .and(header("x-test-client", "signer"))
@@ -501,7 +512,10 @@ mod tests {
                 sender
                     .send((body, root, timestamp, checkpoint))
                     .expect("Receipt receiver");
-                ResponseTemplate::new(201).set_body_json(json!({"test-entry": entry}))
+                stored_entry
+                    .set(json!({"abcd": entry}))
+                    .expect("single insertion");
+                ResponseTemplate::new(409).insert_header("Location", "/api/v1/log/entries/abcd")
             })
             .expect(1)
             .mount(&server)

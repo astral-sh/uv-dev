@@ -6,6 +6,7 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use hex::FromHex as _;
 use itertools::Itertools as _;
+use reqwest::{StatusCode, header::LOCATION};
 use reqwest_middleware::ClientWithMiddleware;
 use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
 use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
@@ -24,6 +25,12 @@ use crate::ServiceError;
 pub enum RekorError {
     #[error("Failed to submit entry to Rekor")]
     Request(#[source] reqwest_middleware::Error),
+    #[error("Failed to retrieve existing Rekor entry {id}")]
+    Lookup {
+        id: String,
+        #[source]
+        source: reqwest_middleware::Error,
+    },
     #[error(transparent)]
     Status(ServiceError),
     #[error("Invalid Rekor response")]
@@ -150,7 +157,7 @@ pub(super) async fn record(
     signature: &str,
     pem: &str,
 ) -> Result<(i64, Value), RekorError> {
-    let response = client
+    let mut response = client
         .post(url)
         .json(&json!({
             "apiVersion": "0.0.1",
@@ -163,6 +170,25 @@ pub(super) async fn record(
         .send()
         .await
         .map_err(RekorError::Request)?;
+    // A retry can race a successful insertion whose response was lost. Use only the entry ID
+    // from Location so the lookup stays on our configured Rekor endpoint.
+    if response.status() == StatusCode::CONFLICT
+        && let Some(id) = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|location| location.to_str().ok())
+            .and_then(|location| location.rsplit('/').next())
+            .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        response = client
+            .get(format!("{url}/{id}"))
+            .send()
+            .await
+            .map_err(|source| RekorError::Lookup {
+                id: id.to_owned(),
+                source,
+            })?;
+    }
     if !response.status().is_success() {
         return Err(RekorError::Status(
             ServiceError::from_response("Rekor", response, None).await,
