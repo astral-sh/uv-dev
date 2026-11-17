@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with CPython 3.12.3 and installed uv 0.13.7, ran `uv init --vcs none --no-workspace --python 3.12 .`, `uv add --no-sync pywin32`, added the report’s three `tool.uv.environments` markers without `required-environments`, then ran `uv lock`. It exited 1 with the reported macOS ARM64 error: pywin32 312 has no compatible wheels. Making pywin32 conditional on `sys_platform == 'win32'` made locking succeed. This matches intentional enforcement introduced by astral-sh/uv#18451 in uv 0.10.11 and existing coverage in `crates/uv/tests/lock/lock.rs`, test `lock_supported_environment_wheel_only_package_requires_compatible_wheels`, which expects Linux-only environments to reject unconditional pywin32. The behavior is reproducible; it does not establish a resolver defect. The reported uv 0.13.8 binary was not tested. Updated `$RUNNER_TEMP/issue-context/README.md`; no checkout files or GitHub state were changed."
+}
