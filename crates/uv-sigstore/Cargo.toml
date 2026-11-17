@@ -14,8 +14,11 @@ doctest = false
 
 [dependencies]
 uv-macros = { workspace = true }
+uv-redacted = { workspace = true }
 
 base64 = { workspace = true }
+fs-err = { workspace = true }
+futures = { workspace = true }
 hex = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
@@ -28,6 +31,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+tough = { workspace = true }
+url = { workspace = true }
+x509-cert = { workspace = true }
 x509-parser = { workspace = true }
 
 [dev-dependencies]
