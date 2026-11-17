@@ -1,11 +1,14 @@
 //! Verify the embedded RFC 6962 timestamp before using a certificate issued by Fulcio.
 use jiff::Timestamp;
 use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
+use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use x509_cert::der::{Decode, Encode, asn1::ObjectIdentifier};
 use x509_parser::extensions::{CtVersion, ParsedExtension};
 use x509_parser::{
+    error::X509Error,
+    nom,
     oid_registry::OID_CT_LIST_SCT,
     parse_x509_certificate,
     prelude::{FromDer as _, SubjectPublicKeyInfo, X509Certificate},
@@ -19,8 +22,14 @@ const SCT_LIST: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.111
 pub enum TimestampError {
     #[error("Invalid precertificate encoding")]
     Encoding(#[from] x509_cert::der::Error),
-    #[error("Missing or invalid Fulcio issuer certificate")]
-    Issuer,
+    #[error("Missing Fulcio issuer certificate")]
+    MissingIssuer,
+    #[error("Invalid Fulcio issuer certificate PEM")]
+    IssuerPem(#[source] rustls_pki_types::pem::Error),
+    #[error("Invalid Fulcio issuer certificate")]
+    IssuerDer(#[source] nom::Err<X509Error>),
+    #[error("Unexpected trailing data after the Fulcio issuer certificate ({0} bytes)")]
+    TrailingIssuerData(usize),
     #[error("Missing or malformed signed certificate timestamp")]
     Missing,
     #[error("No certificate timestamp was signed by a trusted CT log")]
@@ -52,11 +61,14 @@ pub(super) fn signature_input(
 pub(super) fn verify(
     root: &TrustedRoot,
     cert: &X509Certificate<'_>,
-    issuer: &[u8],
+    issuer_pem: &str,
 ) -> Result<(), TimestampError> {
-    let Ok(([], issuer)) = parse_x509_certificate(issuer) else {
-        return Err(TimestampError::Issuer);
-    };
+    let der =
+        CertificateDer::from_pem_slice(issuer_pem.as_bytes()).map_err(TimestampError::IssuerPem)?;
+    let (remaining, issuer) = parse_x509_certificate(&der).map_err(TimestampError::IssuerDer)?;
+    if !remaining.is_empty() {
+        return Err(TimestampError::TrailingIssuerData(remaining.len()));
+    }
     let extension = cert
         .get_extension_unique(&OID_CT_LIST_SCT)
         .ok()
