@@ -54,7 +54,17 @@ impl ServiceError {
     ) -> Self {
         let status = response.status();
         let source = response.error_for_status_ref().err();
-        let body = response.text().await.unwrap_or_default();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(err) => {
+                return Self {
+                    service,
+                    status,
+                    detail: String::new(),
+                    source: Some(err),
+                };
+            }
+        };
         let message = body.trim();
         let detail = if message.is_empty() {
             String::new()
@@ -78,6 +88,8 @@ impl ServiceError {
 pub enum SigningError {
     #[error("No current Rekor v1 signing key for {REKOR_ORIGIN} in trusted_root.json")]
     MissingRekorKey,
+    #[error("Invalid base64 in the Rekor v1 signing key for {REKOR_ORIGIN} in trusted_root.json")]
+    RekorKeyEncoding(#[source] base64::DecodeError),
     #[error("Invalid Sigstore identity token: expected three JWT segments")]
     TokenFormat,
     #[error("Invalid base64url payload in Sigstore identity token")]
@@ -159,7 +171,7 @@ async fn sign_with_services(
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
     check_identity_token(token)?;
-    let log_key = trust.rekor_key().ok_or(SigningError::MissingRekorKey)?;
+    let log_key = trust.rekor_key()?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
     let pem = request_certificate(client, fulcio, token, &key).await?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
@@ -509,6 +521,27 @@ mod tests {
             &BitString::new(0, &signature),
             pae.as_bytes(),
         )?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unreadable_error_body_keeps_status_and_cause() -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("Content-Encoding", "gzip")
+                    .set_body_bytes(b"not gzip".as_slice()),
+            )
+            .mount(&server)
+            .await;
+        let response = Client::new().get(server.uri()).send().await?;
+        let error = ServiceError::from_response("Rekor", response, None).await;
+        insta::assert_snapshot!(error, @"Rekor returned HTTP 503 Service Unavailable");
+        let cause = error
+            .source()
+            .and_then(|err| err.downcast_ref::<reqwest::Error>());
+        assert!(cause.is_some_and(reqwest::Error::is_decode));
         Ok(())
     }
 
