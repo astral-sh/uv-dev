@@ -56,11 +56,11 @@ pub enum RekorError {
     CheckpointSignature(u64),
     #[error("Rekor tree size {0} exceeds the maximum signed 64-bit integer")]
     TreeTooLarge(u64),
-    #[error("Invalid Rekor inclusion proof for leaf {index} in tree of size {size}: {reason}")]
+    #[error("Invalid Rekor inclusion proof for leaf {index} in tree of size {size}")]
     InclusionProof {
         index: u64,
         size: u64,
-        // ct-merkle 0.3 implements Display but not Error, so we cannot use #[source].
+        #[source]
         reason: InclusionVerifError,
     },
     #[error("Missing Rekor checkpoint origin")]
