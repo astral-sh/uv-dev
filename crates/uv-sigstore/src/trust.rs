@@ -58,8 +58,9 @@ impl Validity {
 }
 
 impl Key {
-    fn is_current(&self, now: Timestamp) -> bool {
-        self.algorithm == "PKIX_ECDSA_P256_SHA_256" && self.valid_for.contains(now)
+    /// Whether uv supports this key's algorithm and the key is valid at the given time.
+    fn is_usable_at(&self, time: Timestamp) -> bool {
+        self.algorithm == "PKIX_ECDSA_P256_SHA_256" && self.valid_for.contains(time)
     }
 
     fn decode(&self) -> Result<SubjectPublicKeyInfoDer<'static>, base64::DecodeError> {
@@ -68,7 +69,10 @@ impl Key {
 }
 
 impl TrustedRoot {
-    /// Fetch over HTTPS without credentials. The returned document supplies keys, not endpoints.
+    /// URL of the Sigstore trust document. Fetch it without sending the OIDC token.
+    ///
+    /// The document lists public keys for verifying log signatures. Its URLs identify which log
+    /// a key belongs to; they do not determine where uv sends requests.
     pub const URL: &str =
         "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json";
 
@@ -79,7 +83,7 @@ impl TrustedRoot {
         let now = Timestamp::now();
         let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
-            if log.base_url == origin && log.public_key.is_current(now) {
+            if log.base_url == origin && log.public_key.is_usable_at(now) {
                 // A malformed candidate shouldn't mask another current key during rotation.
                 match log.public_key.decode() {
                     Ok(key) => return Ok(key),
