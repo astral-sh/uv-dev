@@ -198,7 +198,7 @@ impl IncompatibleDist {
                     None => format!("has {self}"),
                 },
                 IncompatibleWheel::RequiresPython(..) => format!("requires {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("has {self}"),
+                IncompatibleWheel::MissingPlatform(..) => format!("has {self}"),
             },
             Self::Source(incompatibility) => match incompatibility {
                 IncompatibleSource::NoBuild => format!("has {self}"),
@@ -227,7 +227,7 @@ impl IncompatibleDist {
                     None => format!("have {self}"),
                 },
                 IncompatibleWheel::RequiresPython(..) => format!("require {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("have {self}"),
+                IncompatibleWheel::MissingPlatform(..) => format!("have {self}"),
             },
             Self::Source(incompatibility) => match incompatibility {
                 IncompatibleSource::NoBuild => format!("have {self}"),
@@ -320,14 +320,29 @@ impl Display for IncompatibleDist {
                 IncompatibleWheel::RequiresPython(python, _) => {
                     write!(f, "Python {python}")
                 }
-                IncompatibleWheel::MissingPlatform(marker) => {
+                IncompatibleWheel::MissingPlatform(marker, minimum_libc_version) => {
                     if let Some(platform) = KnownPlatform::from_marker(*marker) {
-                        write!(f, "no {platform}-compatible wheels")
+                        write!(f, "no {platform}-compatible wheels")?;
                     } else if let Some(marker) = marker.try_to_string() {
-                        write!(f, "no `{marker}`-compatible wheels")
+                        write!(f, "no `{marker}`-compatible wheels")?;
                     } else {
-                        write!(f, "no compatible wheels")
+                        write!(f, "no compatible wheels")?;
                     }
+                    // Libc baselines constrain Linux coverage, not other required platforms.
+                    if let Some(minimum_libc_version) = minimum_libc_version
+                        && *minimum_libc_version != MinimumLibcVersion::default()
+                        && !marker.is_disjoint(MarkerTree::expression(MarkerExpression::String {
+                            key: MarkerValueString::SysPlatform,
+                            operator: MarkerOperator::Equal,
+                            value: arcstr::literal!("linux"),
+                        }))
+                    {
+                        write!(
+                            f,
+                            " at the configured libc baseline ({minimum_libc_version})"
+                        )?;
+                    }
+                    Ok(())
                 }
             },
             Self::Source(incompatibility) => match incompatibility {
@@ -386,8 +401,8 @@ pub enum IncompatibleWheel {
     Yanked(Yanked),
     /// The use of binary wheels is disabled.
     NoBinary,
-    /// Wheels are not available for the current platform.
-    MissingPlatform(MarkerTree),
+    /// Wheels do not cover the required platform at the configured libc baseline.
+    MissingPlatform(MarkerTree, Option<MinimumLibcVersion>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -947,7 +962,7 @@ impl IncompatibleWheel {
                         timestamp_other < timestamp_self
                     }
                 },
-                Self::MissingPlatform(_)
+                Self::MissingPlatform(..)
                 | Self::NoBinary
                 | Self::RequiresPython(_, _)
                 | Self::Tag(_)
@@ -956,7 +971,7 @@ impl IncompatibleWheel {
             Self::Tag(tag_self) => match other {
                 Self::ExcludeNewer(_) => false,
                 Self::Tag(tag_other) => tag_self > tag_other,
-                Self::MissingPlatform(_)
+                Self::MissingPlatform(..)
                 | Self::NoBinary
                 | Self::RequiresPython(_, _)
                 | Self::Yanked(_) => true,
@@ -965,13 +980,13 @@ impl IncompatibleWheel {
                 Self::ExcludeNewer(_) | Self::Tag(_) => false,
                 // Version specifiers cannot be reasonably compared
                 Self::RequiresPython(_, _) => false,
-                Self::MissingPlatform(_) | Self::NoBinary | Self::Yanked(_) => true,
+                Self::MissingPlatform(..) | Self::NoBinary | Self::Yanked(_) => true,
             },
             Self::Yanked(_) => match other {
                 Self::ExcludeNewer(_) | Self::Tag(_) | Self::RequiresPython(_, _) => false,
                 // Yanks with a reason are more helpful for errors
                 Self::Yanked(yanked_other) => matches!(yanked_other, Yanked::Reason(_)),
-                Self::MissingPlatform(_) | Self::NoBinary => true,
+                Self::MissingPlatform(..) | Self::NoBinary => true,
             },
             Self::NoBinary => match other {
                 Self::ExcludeNewer(_)
@@ -979,9 +994,9 @@ impl IncompatibleWheel {
                 | Self::RequiresPython(_, _)
                 | Self::Yanked(_) => false,
                 Self::NoBinary => false,
-                Self::MissingPlatform(_) => true,
+                Self::MissingPlatform(..) => true,
             },
-            Self::MissingPlatform(_) => false,
+            Self::MissingPlatform(..) => false,
         }
     }
 }

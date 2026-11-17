@@ -1286,7 +1286,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             return Ok(Some(ResolverVersion::Unavailable(
                                 version.clone(),
                                 UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                    IncompatibleWheel::MissingPlatform(environment_marker),
+                                    IncompatibleWheel::MissingPlatform(
+                                        environment_marker,
+                                        self.options.minimum_libc_version,
+                                    ),
                                 )),
                             )));
                         }
@@ -1689,7 +1692,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         return Ok(Some(ResolverVersion::Unavailable(
                             candidate.version().clone(),
                             UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                IncompatibleWheel::MissingPlatform(marker),
+                                IncompatibleWheel::MissingPlatform(
+                                    marker,
+                                    self.options.minimum_libc_version,
+                                ),
                             )),
                         )));
                     };
