@@ -60,6 +60,7 @@ pub enum RekorError {
     InclusionProof {
         index: u64,
         size: u64,
+        // ct-merkle 0.3 implements Display but not Error, so we cannot use #[source].
         reason: InclusionVerifError,
     },
     #[error("Missing Rekor checkpoint origin")]
