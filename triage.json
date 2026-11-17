@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21651,
+        "title": "Add minimum libc versions for universal resolution",
+        "url": "https://github.com/astral-sh/uv/pull/21651",
+        "state": "merged",
+        "reason": "Introduced minimum-libc-version for universal resolution on September 18, 2026. Its tests already emit the reported marker-only missing-wheel explanation when the configured glibc baseline is unsatisfied. Establishes the feature's origin and intended compatibility rules; it did not fix the diagnostic."
+      },
+      {
+        "kind": "issue",
+        "number": 10581,
+        "title": "Hint user towards `--python-platform linux` targeting glibc 2.17",
+        "url": "https://github.com/astral-sh/uv/issues/10581",
+        "state": "open",
+        "reason": "The linked maintainer discussion explicitly proposes explaining a glibc version mismatch. It concerns the implicit glibc 2.17 baseline of a concrete --python-platform target; this report concerns an explicit minimum-libc-version constraint omitted from a universal-resolution marker diagnostic. Related messaging work, but not the same failure path."
+      },
+      {
+        "kind": "issue",
+        "number": 18169,
+        "title": "Wheel availability hint does not include musllinux tag in alpine image",
+        "url": "https://github.com/astral-sh/uv/issues/18169",
+        "state": "open",
+        "reason": "Another confirmed gap in communicating libc compatibility: a maintainer explains that Alpine requires musllinux and questions the missing hint. It concerns install-time musl-versus-glibc platform hints, whereas this report concerns a configured glibc version during uv lock. Its linked proposed fix, astral-sh/uv#18341, was closed without merging."
+      },
+      {
+        "kind": "issue",
+        "number": 12597,
+        "title": "Markers for Glibc/manylinux version",
+        "url": "https://github.com/astral-sh/uv/issues/12597",
+        "state": "open",
+        "reason": "Tracks glibc-aware backtracking in project resolution and led to astral-sh/uv#21651. The original request was to select compatible package versions on older glibc systems; this report already uses that capability and identifies an incomplete explanation when no version satisfies it."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal queries covered minimum-libc-version, compatible wheels, no-build, glibc, and error message. Separate conceptual queries covered libc/manylinux diagnostics, misleading wheel availability, supported minimum glibc versions, and area:error-messages; package names, versions, and architecture were removed. Fix-oriented searches covered closed reports and merged PRs; supplemented PR searches with repository PR listings and issue timelines. Inspected candidate bodies, comments, linked review discussions, and source/tests. Ruled out astral-sh/uv#10581 and astral-sh/uv#18169 as duplicates because they concern different concrete-platform/install-time hints. Also ruled out astral-sh/uv#22913 and astral-sh/uv#22942 (excluding musl), astral-sh/uv#23037 and astral-sh/uv#23038 (tolerating unsupported environments), and historical fixes astral-sh/uv#10739 and astral-sh/uv#15484 (sync hints and installed-wheel validation). No exact duplicate or prior fix for this diagnostic was found."
+  },
+  "type": "bug",
+  "type_reason": "The user-facing explanation omits a constraint that actually determines wheel compatibility, misleadingly attributing rejection to OS/architecture alone. Source confirms that libc-aware coverage is reduced to MissingPlatform(MarkerTree), whose formatter only prints the marker; existing integration snapshots demonstrate the omission. This is a diagnostic correctness bug, even though reporting the available wheels' minimum libc requirements is an additional improvement. The introducing PR already contained this output, so the evidence does not establish a regression. No existing tracker found covers the same universal-resolution diagnostic closely enough to centralize discussion.",
+  "summary": "astral-sh/uv#21651 introduced the setting and already snapshots the incomplete diagnostic. astral-sh/uv#10581 and astral-sh/uv#18169 concern adjacent libc messaging gaps; astral-sh/uv#12597 tracks the underlying resolution capability. No exact duplicate or diagnostic fix was found.",
+  "draft_response": "You're right: the error omits the configured glibc requirement. With `no-build = true`, rejecting wheels that require a newer glibc is expected, but describing that only as a Linux/x86_64 mismatch is misleading. The tests added in astral-sh/uv#21651 already show this omission. The next step is to carry the configured libc baseline into the resolution diagnostic and update those snapshots; showing the available wheels' libc requirements would make the mismatch clearer."
+}
