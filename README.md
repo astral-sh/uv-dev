@@ -10,13 +10,18 @@ The reporter requests a targeted Cargo.lock refresh for uv 0.13.9 and main to re
 
 No duplicate was found within the completed searches. The closest items are the separate RSA/reqsign request, an earlier ICU-tree scanner report, and an older zstd update that was closed without merging. Further search queries encountered an API rate limit.
 
-Maintainer woodruffw has clarified that patches depend on evidence that the advisory conditions are reachable within uv. Maintainers already review RustSec advisories and regard findings for unreachable code as scanner false positives. The outstanding investigation is therefore runtime reachability; the reproduced lockfile findings alone do not satisfy that requirement.
+Maintainer woodruffw has clarified that patches depend on evidence that the advisory conditions are reachable within uv. Their check indicates that RUSTSEC-2026-0400 and RUSTSEC-2026-0403 appear unreachable: uv uses streaming contexts without the one-shot decoding/stream reuse required by the former, and leaves zstd-sys/legacy disabled, excluding the legacy-frame prerequisite of the latter. Maintainers already review RustSec advisories and regard findings for unreachable code as scanner false positives. The reproduced lockfile findings alone do not establish uv exposure; the remaining advisory claims still need reachability evidence.
 
 ## Maintainer position
 
 In the November 17, 2026 comment at 18:29:53 UTC on astral-sh/uv#23280 (comment ID 6957176660), woodruffw, identified as a repository member in the supplied discussion, compared this report to astral-sh/uv#23279. They stated that reachable vulnerabilities can be patched, asked for evidence of reachability, and directed reports of unreachable vulnerabilities to the scanner vendor. They also explained that maintainers already see and triage all RustSec advisories, so additional reports should establish confidence that the affected code is reachable.
 
-This establishes the maintainer's criterion for action. The comment supplies no additional call-path analysis, reproduction, patch, or release commitment, and does not independently demonstrate that each finding in this report is unreachable. The existing scans confirm advisory matches for dependencies; they do not resolve the reachability question. The cited ICU advisory still needs a verifiable advisory record or exact scanner output, and a complete lockfile-only resolution remains unvalidated.
+The maintainer's reachability check, recorded on astral-sh/uv#23280 on November 17, 2026 at 18:31:56 UTC (comment ID 6957225783), identifies two specific missing prerequisites:
+
+- RUSTSEC-2026-0400 requires one-shot decoding/stream reuse; woodruffw states that uv only uses streaming contexts.
+- RUSTSEC-2026-0403 requires a legacy zstd frame; woodruffw states that uv leaves zstd-sys/legacy disabled.
+
+These are attributed maintainer findings, not a new independent runtime or feature-graph verification in this handoff. They address the two decompression advisories singled out by the reporter and explain why using ZstdDecoder alone does not establish exposure. The maintainer described them as appearing unreachable; this assessment does not cover every other zstd advisory, ctutils, or the cited ICU advisory. The existing scans remain valid evidence of dependency advisory matches, without establishing an exploitable uv path. The ICU claim still needs a verifiable advisory record or exact scanner output, and a complete lockfile-only resolution remains unvalidated. No patch or release commitment was made.
 
 ## Classification
 
@@ -24,7 +29,7 @@ Classification: bug, concerning corrective dependency maintenance. Actual cargo-
 
 The issue requests correction of dependencies with source-backed defects rather than new functionality. Treating it as a bug does not assert that every scanner finding is reachable in uv. In particular, the reporter's claim that all uv binaries are affected and the proposed lockfile-only resolution have not been independently demonstrated. There is no evidence that a previously completed fix has regressed.
 
-The bug classification records the existing triage assessment of corrective dependency maintenance; it is not a maintainer confirmation that uv is vulnerable. The maintainer's stated requirement for reachability evidence remains unmet by the available findings.
+The bug classification records the existing triage assessment of corrective dependency maintenance; it is not a maintainer confirmation that uv is vulnerable. The maintainer has identified reasons that RUSTSEC-2026-0400 and RUSTSEC-2026-0403 appear unreachable, and no reachable vulnerability in uv has been established for the remaining findings.
 
 ## Reproduction
 
@@ -115,8 +120,8 @@ The table records the report's requested releases. The RustSec records and actua
 The following public RustSec advisory files were read; their version findings were also checked by cargo-audit against the cloned database:
 
 - https://github.com/RustSec/advisory-db/blob/main/crates/zstd/RUSTSEC-2026-0391.md describes cross-stream data leakage when borrowed contexts are reused after an abandoned stream. The patched ranges are ^0.13.4 and >=0.14.3. Both locked zstd versions produce this finding. Whether uv reuses contexts this way was not established.
-- https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0400.md describes a dictionary use-after-free when one context mixes an unfinished stream with one-shot operations without a reset. The patched ranges are ^7.4.0 and >=8.2.0. A streaming decoder call by itself does not prove these conditions.
-- https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0403.md describes uninitialized output after a corrupt legacy frame, with a growable Vec destination and buffer positions committed on error. It explicitly excludes zstd::stream::read::Decoder, zstd::decode_all and the bulk API. The patched ranges are ^7.4.0 and >=8.2.0. The async-compression buffer/error path for the locked release was not fully traced.
+- https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0400.md describes a dictionary use-after-free when one context mixes an unfinished stream with one-shot operations without a reset. The patched ranges are ^7.4.0 and >=8.2.0. A streaming decoder call by itself does not prove these conditions. Maintainer woodruffw reports that uv only uses streaming contexts and concludes that the required one-shot decoding/stream reuse appears unreachable.
+- https://github.com/RustSec/advisory-db/blob/main/crates/zstd-safe/RUSTSEC-2026-0403.md describes uninitialized output after a corrupt legacy frame, with a growable Vec destination and buffer positions committed on error. It explicitly excludes zstd::stream::read::Decoder, zstd::decode_all and the bulk API. The patched ranges are ^7.4.0 and >=8.2.0. Maintainer woodruffw reports that zstd-sys/legacy is disabled in uv, excluding the required legacy-frame support. The async-compression buffer/error path for the locked release was not fully traced independently; the maintainer's exclusion relies on the separate legacy-feature prerequisite.
 - https://github.com/RustSec/advisory-db/blob/main/crates/ctutils/RUSTSEC-2026-0385.md describes branches in supposedly constant-time mask generation and u128 comparisons. It identifies >=0.4.4 as patched. Which affected operations uv invokes on secrets was not established.
 
 The global advisories API lookup for GHSA-3jjw-63vg-v3hh returned HTTP 403, and public GitHub/OSV lookups returned HTTP 404. The cloned RustSec database contains no corresponding advisory or icu_normalizer entry. No independent conclusion about that advisory's mechanism is made. cargo-audit matched all reported zstd-safe IDs in RUSTSEC-2026-0396 through RUSTSEC-2026-0406, but their individual runtime preconditions were not all traced.
@@ -139,7 +144,7 @@ The general dependency dashboard, astral-sh/uv#2658, was a discovery source for 
 
 ## Suggested maintainer follow-up
 
-Prioritize determining whether the advisory preconditions are reachable in uv, as requested by the maintainer. Trace the enabled feature graph and the locked zstd/async-compression context, legacy-frame and output-buffer paths; identify whether affected ctutils operations process secrets. A reachable call path or focused runtime reproduction would advance the issue. A verifiable ICU advisory record or the reporter's exact scanner output is needed before evaluating that claim. Repeating a Cargo.lock audit does not supply the missing reachability evidence.
+Focus further reachability investigation on the findings not addressed by the maintainer's check, including RUSTSEC-2026-0391, the other zstd-safe advisories, and whether affected ctutils operations process secrets. RUSTSEC-2026-0400 and RUSTSEC-2026-0403 already have specific maintainer explanations for apparent non-reachability; revisiting those claims would require evidence of mixed one-shot/streaming context use or an affected build with zstd-sys/legacy enabled, respectively. A reachable call path or focused runtime reproduction would advance the issue. A verifiable ICU advisory record or the reporter's exact scanner output is needed before evaluating that claim. Repeating a Cargo.lock audit does not supply the missing reachability evidence.
 
 If a finding is demonstrated to be unreachable, the maintainer's direction is to report the false positive to the scanner vendor. If reachability is established, assess a narrowly scoped update covering the affected zstd/zstd-safe version lines and other validated findings. Follow repository guidance to use precise Cargo updates, validate compatibility and advisory status, and run relevant compilation and extraction checks. No patch or next-release inclusion has been committed to in the discussion.
 
