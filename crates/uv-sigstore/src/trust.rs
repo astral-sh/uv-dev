@@ -58,6 +58,10 @@ impl Validity {
 }
 
 impl Key {
+    fn has_supported_algorithm(&self) -> bool {
+        self.algorithm == "PKIX_ECDSA_P256_SHA_256"
+    }
+
     fn decode(&self) -> Result<SubjectPublicKeyInfoDer<'static>, base64::DecodeError> {
         BASE64_STANDARD.decode(&self.raw_bytes).map(Into::into)
     }
@@ -79,7 +83,7 @@ impl TrustedRoot {
         let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
             if log.base_url == origin
-                && log.public_key.algorithm == "PKIX_ECDSA_P256_SHA_256"
+                && log.public_key.has_supported_algorithm()
                 && log.public_key.valid_for.contains(now)
             {
                 // A malformed candidate shouldn't mask another current key during rotation.
