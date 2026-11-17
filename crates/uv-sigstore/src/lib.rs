@@ -22,6 +22,7 @@ use reqwest_middleware::ClientWithMiddleware;
 use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 pub use trust::TrustedRoot;
 use uv_macros::DeserializeUntagged;
@@ -75,7 +76,7 @@ impl ServiceError {
 /// Failure to sign a statement or obtain its verification material.
 #[derive(Debug, Error)]
 pub enum SigningError {
-    #[error("No current Rekor v1 signing key in trusted_root.json")]
+    #[error("No current Rekor v1 signing key for {REKOR_ORIGIN} in trusted_root.json")]
     MissingRekorKey,
     #[error("Invalid Sigstore identity token: expected three JWT segments")]
     TokenFormat,
@@ -103,10 +104,10 @@ pub enum SigningError {
     CertificatePem(#[from] rustls_pki_types::pem::Error),
     #[error("Invalid Fulcio signing certificate")]
     CertificateDer(#[from] nom::Err<X509Error>),
-    #[error("Trailing bytes in the Fulcio signing certificate")]
-    TrailingCertificateData,
-    #[error("Fulcio returned a certificate for a different key")]
-    KeyMismatch,
+    #[error("Unexpected trailing data after the Fulcio signing certificate ({0} bytes)")]
+    TrailingCertificateData(usize),
+    #[error("Fulcio returned a different public key: expected SHA-256 {expected}, got {actual}")]
+    KeyMismatch { expected: String, actual: String },
     #[error(
         "Rekor integration time {integrated_time} is outside the Fulcio certificate's validity \
          interval [{not_before}, {not_after}] (Unix seconds)"
@@ -164,10 +165,14 @@ async fn sign_with_services(
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
     let (remaining, cert) = parse_x509_certificate(&der)?;
     if !remaining.is_empty() {
-        return Err(SigningError::TrailingCertificateData);
+        return Err(SigningError::TrailingCertificateData(remaining.len()));
     }
-    if cert.public_key().raw != key.subject_public_key_info() {
-        return Err(SigningError::KeyMismatch);
+    let expected_key = key.subject_public_key_info();
+    if cert.public_key().raw != expected_key {
+        return Err(SigningError::KeyMismatch {
+            expected: hex::encode(Sha256::digest(expected_key)),
+            actual: hex::encode(Sha256::digest(cert.public_key().raw)),
+        });
     }
 
     // DSSE signs the payload type and the exact payload bytes, each prefixed with its byte length.
