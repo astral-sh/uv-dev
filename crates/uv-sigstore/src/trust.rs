@@ -12,6 +12,7 @@ use base64::{Engine as _, prelude::BASE64_STANDARD};
 use jiff::Timestamp;
 use rustls_pki_types::SubjectPublicKeyInfoDer;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::REKOR_ORIGIN;
 
@@ -21,6 +22,7 @@ pub struct TrustedRoot {
     #[serde(rename = "mediaType")]
     media_type: MediaType,
     tlogs: Vec<Log>,
+    ctlogs: Vec<Log>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -77,5 +79,19 @@ impl TrustedRoot {
             .iter()
             .filter(|log| log.base_url == REKOR_ORIGIN)
             .find_map(|log| log.public_key.current(now))
+    }
+
+    pub(super) fn ct_key(
+        &self,
+        id: &[u8; 32],
+        signed_at: Timestamp,
+    ) -> Option<SubjectPublicKeyInfoDer<'static>> {
+        let now = Timestamp::now();
+        self.ctlogs
+            .iter()
+            // A retired key may verify old releases, but must not vouch for a new signature.
+            .filter(|log| log.public_key.valid_for.contains(signed_at))
+            .filter_map(|log| log.public_key.current(now))
+            .find(|key| Sha256::digest(key.as_ref()).as_slice() == id)
     }
 }
