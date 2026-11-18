@@ -1218,11 +1218,7 @@ where
     F: AsyncFnMut(SafeUrl) -> Result<T, E>,
     E: RetriableError + From<SystemTimeError>,
 {
-    let mut retry_state = RetryState::start(
-        retry_policy,
-        // The last URL will trigger backoff if it fails.
-        urls.last().expect("urls must not be empty").clone(),
-    );
+    let mut retry_state = RetryState::start(retry_policy);
 
     'retry: loop {
         for (i, url) in urls.iter().enumerate() {
@@ -1237,9 +1233,8 @@ where
                         );
                         continue;
                     }
-                    // All URLs exhausted; apply the retry policy.
                     if let Some(backoff) = retry_state.should_retry(&err, err.retries()) {
-                        retry_state.sleep_backoff(backoff).await;
+                        RetryState::sleep_backoff(url, backoff).await;
                         continue 'retry;
                     }
                     return if retry_state.total_retries() > 0 {

@@ -84,17 +84,15 @@ pub struct RetryState {
     retry_policy: ExponentialBackoff,
     start_time: SystemTime,
     total_retries: u32,
-    url: SafeUrl,
 }
 
 impl RetryState {
     /// Initialize the [`RetryState`] and record the start time for the retry policy.
-    pub fn start(retry_policy: ExponentialBackoff, url: impl Into<SafeUrl>) -> Self {
+    pub fn start(retry_policy: ExponentialBackoff) -> Self {
         Self {
             retry_policy,
             start_time: SystemTime::now(),
             total_retries: 0,
-            url: url.into(),
         }
     }
 
@@ -192,10 +190,9 @@ impl RetryState {
     }
 
     /// Wait before retrying the request.
-    pub async fn sleep_backoff(&self, duration: Duration) {
+    pub async fn sleep_backoff(url: &SafeUrl, duration: Duration) {
         debug!(
-            "Transient failure while handling response from `{}`; retrying after {:.1}s...",
-            self.url,
+            "Transient failure while handling response from `{url}`; retrying after {:.1}s...",
             duration.as_secs_f32(),
         );
         // TODO(konsti): Should we show a spinner plus a message in the CLI while
