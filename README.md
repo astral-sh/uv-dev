@@ -6,17 +6,37 @@ Classification: bug
 
 ## Summary
 
-On uv 0.13.9 (released November 17, 2026), `uv lock --upgrade-package` fails to fetch an HTTPS package index from a distroless image. The error names the index URL, then reports `tunnel error: failed to create underlying connection` and a DNS lookup failure without identifying the proxy. The reporter also did not see proxy selection in verbose output. They report that using the proxy's fully qualified hostname works and that the glibc build installed with pip does not exhibit the same failure.
+The reporter ran `uv lock --upgrade-package lxml` against a private HTTPS package index in a Debian 13 (trixie) distroless environment with uv 0.13.9 (`x86_64-unknown-linux-musl`) and Python 3.14.9. The error named the index URL, then reported a tunnel connection failure and DNS lookup error without naming the proxy, even with verbose output. The reporter expects the diagnostic to identify the proxy when the proxy connection fails. They report that using the proxy's fully qualified hostname works and that the glibc build installed with pip did not hit the same lookup failure on their setup.
 
 The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None tracks the missing proxy endpoint in this diagnostic.
 
-## Draft response
-
-The DNS failure in this error chain comes from connecting to the proxy, before uv can ask it to open a tunnel to the index. The error only names the index URL, so it points you at the wrong host. The diagnostic should identify the proxy host separately. For now, use the fully qualified proxy hostname as you found. For the HTTPS index in your example, check the effective `HTTPS_PROXY` or `ALL_PROXY` setting if you're configuring the proxy through the environment; `HTTP_PROXY` alone doesn't apply to HTTPS destinations.
-
 ## Classification
 
-This is a diagnostic bug: the error correctly reports that the fetch failed but shows only the request URL next to a DNS cause from the proxy connection. The failure stage is established by the source and does not depend on confirming why the short hostname failed on this container. There is no evidence that this diagnostic was previously fixed or that another item tracks it. The report does not establish a general inability for musl to resolve single-label hostnames.
+This is a diagnostic bug: the fetch error shows only the request URL next to a DNS failure that occurred while connecting to the proxy. The missing endpoint is reproducible on both libc builds when the configured proxy cannot be resolved. Whether and why the short proxy hostname fails in the reported distroless environment is a separate question.
+
+## Reproduction
+
+**Outcome: reproducible (missing proxy endpoint).** Tested on Ubuntu 24.04.5 x86-64 with CPython 3.14.10, using uv 0.13.7 (glibc) from `PATH` and the official uv 0.13.9 musl and glibc binaries. A temporary project depended only on `lxml`; a loopback HTTPS simple index served a synthetic `lxml` wheel. A direct run first produced a lockfile. Each subsequent run used a fresh cache and an isolated environment. From the fixture project directory, set `REPRO` to the temporary directory, `INDEX_PORT` to the fixture server's port, and `PYTHON` to the interpreter's absolute path:
+
+```sh
+env -i PATH="$PATH" HOME="$REPRO/home" TMPDIR="$REPRO" \
+  UV_CACHE_DIR="$REPRO/cache-proxy" UV_HTTP_RETRIES=0 \
+  HTTPS_PROXY=http://uv-triage-no-such-proxy.invalid:3128 \
+  uv --no-config lock --upgrade-package lxml -v \
+  --index-url "https://127.0.0.1:$INDEX_PORT/simple/" \
+  --allow-insecure-host 127.0.0.1 --python "$PYTHON" --no-python-downloads
+```
+
+- The direct run exited 0, and the localhost index received the package request. With only `HTTP_PROXY` set to the same unresolvable proxy, uv 0.13.9 musl also connected directly and exited 0. For this HTTPS destination the failing run used `HTTPS_PROXY`, not `HTTP_PROXY` alone.
+- With `HTTPS_PROXY` set, all three binaries exited 2, and the index received no requests. The error named `https://127.0.0.1:$INDEX_PORT/simple/lxml/` and reported `tunnel error: failed to create underlying connection`, followed by `dns error` and `error resolving DNS`, without naming the proxy. The OS lookup message was `Name does not resolve` on musl and `Name or service not known` on glibc.
+- Neither `-v` nor `-vv` exposed the proxy endpoint on the tested musl build. Setting `RUST_LOG=reqwest::connect=debug` in the credential-free fixture did show proxy selection separately; the final error still omitted the endpoint.
+- The fixture intentionally used an unresolvable name. It did not reproduce the reporter's single-label versus fully qualified hostname comparison or determine why the short name failed in their container. To investigate that distinction, obtain the effective redacted HTTPS proxy configuration (`HTTPS_PROXY`, `ALL_PROXY`, or `https-proxy`), the image tag or digest, and the container's DNS search configuration.
+
+**Existing tests:** `crates/uv/tests/it/network.rs` has `proxy_https_proxy_in_uv_toml`, which starts a working CONNECT tunnel and asserts a successful install, and `proxy_url_without_host`, which checks a configuration error for a malformed proxy URL. `crates/uv-client/tests/it/proxy.rs` has `http_proxy` and `no_proxy`, which assert successful routing and bypass with mock servers. These tests do not cover the diagnostic for a syntactically valid proxy hostname that fails DNS resolution.
+
+## Draft response
+
+We reproduced the missing proxy endpoint: the DNS failure occurs while connecting to the proxy, before a tunnel is established, but the error only names the index. A clearer diagnostic should name the proxy separately. Using the fully qualified proxy hostname is a workaround if it resolves in your container. For an HTTPS index, check the effective HTTPS proxy configuration; `HTTP_PROXY` alone did not affect the HTTPS request in our test.
 
 ## Related
 

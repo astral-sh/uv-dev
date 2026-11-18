@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04.5 x86-64 with Python 3.14.10, I ran `uv lock --upgrade-package lxml -v` against a working loopback HTTPS index with `HTTPS_PROXY=http://uv-triage-no-such-proxy.invalid:3128` and a fresh cache. uv 0.13.9 musl exited 2 and reported a tunnel connection failure and `Name does not resolve`, naming the index URL but not the proxy. `-vv` also omitted the proxy. The uv 0.13.9 and 0.13.7 glibc builds showed the same diagnostic omission. The command succeeded without a proxy and with only `HTTP_PROXY` set. This reproduces the missing proxy diagnostic, not the reporter's container-specific short-hostname lookup failure. The issue-context README records the fixture, controls, and related test coverage."
+}
