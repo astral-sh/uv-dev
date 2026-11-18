@@ -125,7 +125,7 @@ impl Requirement {
             &mut self.source
             && url.force_relative() != force_relative
         {
-            *url = url.clone().with_force_relative(force_relative);
+            url.set_force_relative(force_relative);
         }
     }
 
