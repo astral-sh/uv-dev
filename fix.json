@@ -1,0 +1,9 @@
+{
+  "outcome": "fixed",
+  "summary": "When a proxy hostname failed DNS resolution, uv named only the package index. The HTTP client now reports the hostname it actually tried to resolve alongside the index URL and the original DNS error. The updated regression tests verify this for HTTPS tunnels and plain HTTP forwarding.",
+  "validation": [
+    "Passed all 11 focused debug-profile proxy tests across uv and uv-client, including both updated regressions and successful routing and bypass checks.",
+    "Passed `RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check` and `git diff --check`."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3136"
+}
