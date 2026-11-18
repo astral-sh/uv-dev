@@ -628,6 +628,7 @@ fn minimum_libc_backtracks_and_invalidates_lock() -> Result<()> {
     Ok(())
 }
 
+/// Wheels for the requested platform can still require a newer libc than the deployment floor.
 #[test]
 fn minimum_libc_no_compatible_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -640,12 +641,7 @@ fn minimum_libc_no_compatible_version() -> Result<()> {
             "",
         )])
         .collect();
-    for tag in [
-        "cp312-cp312-manylinux_2_34_x86_64",
-        "cp312-cp312-musllinux_1_2_x86_64",
-    ] {
-        wheel(&context, "demo", "2.0.0", tag)?;
-    }
+    wheel(&context, "demo", "2.0.0", "py3-none-manylinux_2_28_x86_64")?;
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -657,27 +653,42 @@ fn minimum_libc_no_compatible_version() -> Result<()> {
         [tool.uv]
         no-index = true
         find-links = ["links"]
-        required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-        minimum-libc-version = { glibc = "2.31" }
+        no-build = true
+        preview-features = ["minimum-libc-version"]
+        environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+        minimum-libc-version = { glibc = "2.20" }
     "#})?;
 
+    // The diagnostic misleadingly blames the platform without explaining the glibc constraint:
+    // astral-sh/uv#23272.
     uv_snapshot!(filters, context.lock().arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    warning: Setting `minimum-libc-version` is experimental and may change without warning. Pass `--preview-features minimum-libc-version` to disable this warning.
-    error: No solution found when resolving dependencies
+    error: No solution found when resolving dependencies for split (markers: platform_machine == 'x86_64' and sys_platform == 'linux')
       cause: Because demo==2.0.0 has no `platform_machine == 'x86_64' and sys_platform == 'linux'`-compatible wheels and only demo==2.0.0 is available, we can conclude that all versions of demo cannot be used.
              And because your project depends on demo, we can conclude that your project's requirements are unsatisfiable.
     ");
     assert!(!context.temp_dir.child("uv.lock").exists());
     // A concrete target uses its platform tags instead of the universal libc baseline.
-    uv_snapshot!(context.filters(), context.pip_compile().args(["pyproject.toml", "--python-platform", "x86_64-manylinux_2_34", "--offline", "--no-header", "--no-annotate"]), @"
+    uv_snapshot!(context.filters(), context.pip_compile().args(["pyproject.toml", "--python-platform", "x86_64-manylinux_2_28", "--offline", "--no-header", "--no-annotate"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     demo==2.0.0
 
     ----- stderr -----
     Resolved 1 package in [TIME]
+    ");
+
+    // Raising only the glibc baseline makes the same Linux x86_64 wheel usable.
+    pyproject_toml.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("glibc = \"2.20\"", "glibc = \"2.28\""),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
     Ok(())
 }
