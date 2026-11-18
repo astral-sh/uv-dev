@@ -1053,8 +1053,7 @@ async fn proxy_schemeless_url_in_uv_toml() {
     );
 }
 
-/// When DNS resolution fails while opening an HTTPS tunnel, the error names only the index,
-/// not the failing proxy host (astral-sh/uv#23284).
+/// Report the proxy hostname when DNS resolution fails while opening an HTTPS tunnel.
 /// An overlong DNS label makes glibc reject the proxy host without a DNS lookup.
 #[cfg(all(feature = "test-python", target_os = "linux", target_env = "gnu"))]
 #[test]
@@ -1069,12 +1068,13 @@ fn proxy_https_tunnel_dns_error() -> Result<()> {
         dependencies = ["iniconfig"]
     "#})?;
 
-    let proxy_url = format!("http://{}.invalid.", "a".repeat(64));
+    let proxy_host = format!("{}.invalid.", "a".repeat(64));
+    let context = context.with_filter((regex::escape(&proxy_host), "[PROXY_HOST]"));
     uv_snapshot!(context.filters(), context
         .lock()
         .arg("--default-index")
         .arg("https://127.0.0.1:0/simple")
-        .env(EnvVars::HTTPS_PROXY, proxy_url)
+        .env(EnvVars::HTTPS_PROXY, format!("http://{proxy_host}"))
         .env(EnvVars::ALL_PROXY, "")
         .env(EnvVars::NO_PROXY, "")
         .env_remove("REQUEST_METHOD")
@@ -1088,14 +1088,14 @@ fn proxy_https_tunnel_dns_error() -> Result<()> {
       cause: tunnel error: failed to create underlying connection
       cause: dns error
       cause: error resolving DNS
+      cause: failed to resolve host `[PROXY_HOST]`
       cause: failed to lookup address information: Name or service not known
     ");
 
     Ok(())
 }
 
-/// HTTP forwarding does not use a tunnel, so the diagnostic gives no indication that DNS
-/// resolution failed for the proxy rather than the index (astral-sh/uv#23284).
+/// Report the proxy hostname for an HTTP forwarding failure, which does not use a tunnel.
 /// An overlong DNS label makes glibc reject the proxy host without a DNS lookup.
 #[cfg(all(feature = "test-python", target_os = "linux", target_env = "gnu"))]
 #[test]
@@ -1110,12 +1110,13 @@ fn proxy_http_forward_dns_error() -> Result<()> {
         dependencies = ["iniconfig"]
     "#})?;
 
-    let proxy_url = format!("http://{}.invalid.", "a".repeat(64));
+    let proxy_host = format!("{}.invalid.", "a".repeat(64));
+    let context = context.with_filter((regex::escape(&proxy_host), "[PROXY_HOST]"));
     uv_snapshot!(context.filters(), context
         .lock()
         .arg("--default-index")
         .arg("http://127.0.0.1:0/simple")
-        .env(EnvVars::HTTP_PROXY, proxy_url)
+        .env(EnvVars::HTTP_PROXY, format!("http://{proxy_host}"))
         .env(EnvVars::ALL_PROXY, "")
         .env(EnvVars::NO_PROXY, "")
         .env_remove("REQUEST_METHOD")
@@ -1128,6 +1129,7 @@ fn proxy_http_forward_dns_error() -> Result<()> {
       cause: client error (Connect)
       cause: dns error
       cause: error resolving DNS
+      cause: failed to resolve host `[PROXY_HOST]`
       cause: failed to lookup address information: Name or service not known
     ");
 
