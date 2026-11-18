@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 8444,
+        "title": "Always attach URL to network errors",
+        "url": "https://github.com/astral-sh/uv/pull/8444",
+        "state": "merged",
+        "reason": "Attaches the request URL to network errors, prompted by missing request context in astral-sh/uv#8144. It explains why the index URL appears but does not identify the proxy endpoint."
+      },
+      {
+        "kind": "issue",
+        "number": 16360,
+        "title": "`Operation timed out` when trying to `uv python install` or `uv add` on work computer",
+        "url": "https://github.com/astral-sh/uv/issues/16360",
+        "state": "closed",
+        "reason": "Includes an HTTPS CONNECT failure during package operations, but reports “tunnel error: unsuccessful” rather than a DNS failure before reaching the proxy. A maintainer pointed to TLS changes in uv 0.11.0 as a possible fix, and the reporter confirmed their setup worked."
+      },
+      {
+        "kind": "issue",
+        "number": 16741,
+        "title": "`uv sync` with a private repo does not work in docker with uv >= 0.98",
+        "url": "https://github.com/astral-sh/uv/issues/16741",
+        "state": "open",
+        "reason": "Reports DNS failures fetching from a private repository with a Docker/musl build while pip-installed uv works. It shows no proxy-tunnel failure and does not request that diagnostics identify the proxy."
+      },
+      {
+        "kind": "issue",
+        "number": 8450,
+        "title": "`uv pip install` private pypi repo doesn't work when used in docker by default",
+        "url": "https://github.com/astral-sh/uv/issues/8450",
+        "state": "closed",
+        "reason": "Reports the same “Name does not resolve” fragment for private-index access from Docker, without the proxy-tunnel cause. A maintainer closed it after the Docker musl update in astral-sh/uv#16584."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16584,
+        "title": "Docker builds target rust toolchain with bundled musl v1.2.5",
+        "url": "https://github.com/astral-sh/uv/pull/16584",
+        "state": "merged",
+        "reason": "Moved Docker builds to bundled musl 1.2.5 to address astral-sh/uv#8450 in November 2025. It predates uv 0.13.9 and changed the build toolchain, not proxy error reporting."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed-unmerged, and merged pull requests with authenticated GitHub CLI queries. Checked exact tunnel and DNS errors, proxy environment variables, and uv lock, then searched separately for proxy selection, verbose logging, endpoint diagnostics, and short-hostname resolution in Docker/musl. Checked the reported release and prior network-error, DNS, and proxy fixes; followed references and maintainer comments on the closest reports. Ruled out astral-sh/uv#6563 (proxy reached; downstream HTTP 404), astral-sh/uv#21781 (host missing from a malformed proxy URL, not DNS failure for a configured host), and astral-sh/uv#20790 (package-index artifact routing, not HTTP transport proxies)."
+  },
+  "type": "bug",
+  "type_reason": "The source confirms that the DNS error occurs while connecting to the proxy, before sending CONNECT. The diagnostic names only the index URL, misleading users about which host failed to resolve. That is an existing correctness problem regardless of why the short hostname failed on this build. No prior fix or duplicate tracks this diagnostic.",
+  "summary": "Prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None tracks the missing proxy endpoint in the reported error.",
+  "draft_response": "The DNS failure in this error chain comes from connecting to the proxy, before uv can ask it to open a tunnel to the index. The error only names the index URL, so it points you at the wrong host. The diagnostic should identify the proxy host separately. For now, use the fully qualified proxy hostname as you found. For the HTTPS index in your example, check the effective `HTTPS_PROXY` or `ALL_PROXY` setting if you're configuring the proxy through the environment; `HTTP_PROXY` alone doesn't apply to HTTPS destinations."
+}
