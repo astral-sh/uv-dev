@@ -1,20 +1,23 @@
 use std::env;
 use std::fmt::{Debug, Write};
+use std::net::ToSocketAddrs;
 use std::num::ParseIntError;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTimeError};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use http::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, REFERER, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Certificate, Client, ClientBuilder, NoProxy, Proxy, Request, Response, multipart};
 use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::Jitter;
 use reqwest_retry::policies::ExponentialBackoff;
 use thiserror::Error;
+use tokio::task::{AbortHandle, spawn_blocking};
 use tracing::{debug, warn};
 use url::ParseError;
 
@@ -69,6 +72,31 @@ pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
 /// bound detects a dead connection promptly even with the longer timeout used for uploads.
 fn ping_ack_timeout(read_timeout: Duration) -> Duration {
     (read_timeout / 3).clamp(Duration::from_secs(10), Duration::from_secs(20))
+}
+
+struct SystemDnsResolver;
+
+impl Resolve for SystemDnsResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let lookup = spawn_blocking(move || {
+                let hostname = name.as_str();
+                (hostname, 0)
+                    .to_socket_addrs()
+                    .with_context(|| format!("failed to resolve host `{hostname}`"))
+            });
+            let _abort = AbortDnsLookup(lookup.abort_handle());
+            Ok(Box::new(lookup.await??) as Addrs)
+        })
+    }
+}
+
+struct AbortDnsLookup(AbortHandle);
+
+impl Drop for AbortDnsLookup {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 #[derive(Debug, Error)]
@@ -630,6 +658,7 @@ impl<'a> BaseClientBuilder<'a> {
             .pool_max_idle_per_host(20)
             .read_timeout(read_timeout)
             .connect_timeout(connect_timeout)
+            .dns_resolver(SystemDnsResolver)
             .redirect(redirect_policy.reqwest_policy());
 
         let client_builder = if self.preview.is_enabled(PreviewFeature::Http2KeepAlive) {
