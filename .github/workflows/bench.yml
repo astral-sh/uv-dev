@@ -59,7 +59,7 @@ jobs:
         run: |
           # cargo-codspeed resolves metadata before passing --locked to Cargo.
           cargo metadata --locked --format-version 1 > /dev/null
-          uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch --bench uv_pep508 --bench uv_settings
+          uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch --bench uv_pep508 --bench uv_settings --bench resolve_conflicting_extras
 
       - name: "Create artifact archive"
         shell: bash
@@ -118,7 +118,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@f842b9a3ffe213dbb81768fd7f7eeb4dfcf1c369 # v5.4.2
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
@@ -194,7 +195,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@f842b9a3ffe213dbb81768fd7f7eeb4dfcf1c369 # v5.4.2
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: simulation
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
