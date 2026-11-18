@@ -1310,7 +1310,7 @@ mod tests {
 
         assert_eq!(downloaded, urls[0]);
         assert!(logs_contain(
-            "Transient failure for request to `https://mirror.example/archive`"
+            "Transient failure for `https://mirror.example/archive`"
         ));
         Ok(())
     }

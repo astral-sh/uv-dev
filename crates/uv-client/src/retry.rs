@@ -189,10 +189,10 @@ impl RetryState {
         }
     }
 
-    /// Wait before retrying the request.
+    /// Log the failed URL and wait before retrying.
     pub async fn sleep_backoff(url: &SafeUrl, duration: Duration) {
         debug!(
-            "Transient failure for request to `{url}`; retrying after {:.1}s...",
+            "Transient failure for `{url}`; retrying after {:.1}s...",
             duration.as_secs_f32(),
         );
         // TODO(konsti): Should we show a spinner plus a message in the CLI while
