@@ -12,6 +12,7 @@ use crate::ExitStatus;
 ///
 /// These values intentionally do not mutate uv's process environment and cannot mutate
 /// the current uv process' settings.
+/// Malformed assignment contents are omitted from warnings because values can contain secrets.
 pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, String)>> {
     let mut environment = Vec::new();
 
@@ -29,9 +30,9 @@ pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, Stri
                     env_file_path.simplified_display()
                 );
             }
-            Err(dotenvy::Error::LineParse(content, position)) => {
+            Err(dotenvy::Error::LineParse(_, position)) => {
                 warn_user!(
-                    "Failed to parse environment file `{}` at position {position}: {content}",
+                    "Failed to parse environment file `{}` at position {position}",
                     env_file_path.simplified_display(),
                 );
                 continue;
@@ -60,9 +61,9 @@ pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, Stri
                         env_file_path.simplified_display()
                     );
                 }
-                Err(dotenvy::Error::LineParse(content, position)) => {
+                Err(dotenvy::Error::LineParse(_, position)) => {
                     warn_user!(
-                        "Failed to parse environment file `{}` at position {position}: {content}",
+                        "Failed to parse environment file `{}` at position {position}",
                         env_file_path.simplified_display(),
                     );
                     parsed = false;
