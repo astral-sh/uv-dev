@@ -36,7 +36,7 @@ use uv_client::{
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
-use uv_distribution_types::{IndexCapabilities, IndexUrl};
+use uv_distribution_types::{File as RegistryFile, IndexCapabilities, IndexUrl};
 use uv_extract::hash::Hasher;
 use uv_fs::{ProgressReader, Simplified};
 use uv_metadata::read_archive_metadata;
@@ -689,7 +689,7 @@ impl<'a> PublishSession<'a> {
     /// Implements a custom retry and redirect flow since streaming requests cannot be cloned.
     pub async fn upload(
         &mut self,
-        prepared: PreparedDistribution,
+        prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
     ) -> Result<UploadOutcome, PublishError> {
         let (form_metadata, attestations, size) = prepared
@@ -705,7 +705,7 @@ impl<'a> PublishSession<'a> {
         loop {
             let (request, idx) = self
                 .build_upload_request(
-                    &prepared,
+                    prepared,
                     &form_metadata,
                     attestations.as_deref(),
                     &current_registry,
@@ -834,7 +834,7 @@ impl<'a> PublishSession<'a> {
                 Err(err) => {
                     match &err {
                         PublishSendError::Status(..) | PublishSendError::StatusNoBody(..) => {
-                            if self.check_existing(&prepared, reporter.clone()).await? {
+                            if self.check_existing(prepared, reporter.clone()).await? {
                                 // A concurrent upload succeeded, so the right file now exists.
                                 return Ok(UploadOutcome::AlreadyExists);
                             }
@@ -866,6 +866,18 @@ impl<'a> PublishSession<'a> {
         prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
     ) -> Result<bool, PublishError> {
+        Ok(self
+            .find_published_file(prepared, reporter)
+            .await?
+            .is_some())
+    }
+
+    /// Find the registry entry for a distribution whose hash matches the local file.
+    async fn find_published_file(
+        &self,
+        prepared: &PreparedDistribution,
+        reporter: Arc<impl Reporter>,
+    ) -> Result<Option<RegistryFile>, PublishError> {
         let file = &prepared.file;
         let filename = &prepared.filename;
         let Some(CheckUrlClient {
@@ -875,7 +887,7 @@ impl<'a> PublishSession<'a> {
             cache,
         }) = &self.check_url_client
         else {
-            return Ok(false);
+            return Ok(None);
         };
 
         // Avoid using the PyPI 10min default cache.
@@ -905,7 +917,7 @@ impl<'a> PublishSession<'a> {
                         warn!(
                             "Package not found in the registry; skipping upload check for `{filename}`"
                         );
-                        Ok(false)
+                        Ok(None)
                     }
                     _ => Err(PublishError::CheckUrlIndex(err)),
                 };
@@ -916,22 +928,22 @@ impl<'a> PublishSession<'a> {
         };
         let simple_metadata = OwnedArchive::deserialize(simple_metadata);
         let Some(metadatum) = simple_metadata
-            .iter()
+            .into_iter()
             .find(|metadatum| &metadatum.version == filename.version())
         else {
-            return Ok(false);
+            return Ok(None);
         };
 
         let archived_files = match filename {
-            DistFilename::SourceDistFilename(_) => &metadatum.files.source_dists,
-            DistFilename::WheelFilename(_) => &metadatum.files.wheels,
+            DistFilename::SourceDistFilename(_) => metadatum.files.source_dists,
+            DistFilename::WheelFilename(_) => metadatum.files.wheels,
         };
-        let archived_file = archived_files.iter().find(|file| {
+        let archived_file = archived_files.into_iter().find(|file| {
             DistFilename::try_from_filename(file.filename(), filename.name())
                 .is_some_and(|candidate| &candidate == filename)
         });
         let Some(archived_file) = archived_file else {
-            return Ok(false);
+            return Ok(None);
         };
 
         // TODO(konsti): Do we have a preference for a hash here?
@@ -953,7 +965,7 @@ impl<'a> PublishSession<'a> {
                     "Found `{filename}` in the registry with matching hash {}",
                     remote_hash.digest()
                 );
-                Ok(true)
+                Ok(Some(RegistryFile::from(archived_file)))
             } else {
                 Err(PublishError::HashMismatch {
                     filename: Box::new(filename.clone()),
@@ -1613,7 +1625,7 @@ mod tests {
             SafeUrl::parse(&format!("{}/final", mock_server.uri())).expect("Valid registry URL");
         let mut session = test_session(registry, &client);
         let prepared = preparation.pop().expect("Distribution should be found");
-        let result = session.upload(prepared, Arc::new(DummyReporter)).await;
+        let result = session.upload(&prepared, Arc::new(DummyReporter)).await;
         let outcome = match &result {
             Ok(UploadOutcome::Uploaded | UploadOutcome::AlreadyExists) => PublishOutcome::Success,
             Err(_) => PublishOutcome::Failed,
@@ -2307,7 +2319,7 @@ mod tests {
 
         assert_matches!(
             session
-                .upload(prepared, Arc::new(DummyReporter))
+                .upload(&prepared, Arc::new(DummyReporter))
                 .await
                 .expect("Prompted credentials should authenticate the upload"),
             UploadOutcome::Uploaded
@@ -2330,7 +2342,7 @@ mod tests {
         .expect("One distribution");
 
         let err = session
-            .upload(prepared, Arc::new(DummyReporter))
+            .upload(&prepared, Arc::new(DummyReporter))
             .await
             .expect_err("Prompted credentials should be rejected");
         assert_matches!(err, PublishError::PublishSend(_, _, err)
@@ -2390,7 +2402,7 @@ mod tests {
         .expect("One distribution");
 
         let err = session
-            .upload(prepared, Arc::new(DummyReporter))
+            .upload(&prepared, Arc::new(DummyReporter))
             .await
             .expect_err("Explicit username should be rejected");
         assert_matches!(err, PublishError::PublishSend(_, _, err)
