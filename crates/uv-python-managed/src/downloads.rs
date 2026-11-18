@@ -453,8 +453,8 @@ impl ManagedPythonDownload {
     /// Download and extract a Python distribution, retrying on failure.
     ///
     /// For CPython without a user-configured mirror, the default Astral mirror is tried first.
-    /// Each attempt tries all URLs in sequence without backoff between them; backoff is only
-    /// applied after all URLs have been exhausted.
+    /// On eligible failures, try the canonical GitHub URL immediately. Retries start again at the
+    /// first URL after backoff.
     #[instrument(skip_all, fields(download = % self.key()))]
     pub async fn fetch_with_retry(
         &self,

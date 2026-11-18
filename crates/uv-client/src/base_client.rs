@@ -1205,9 +1205,8 @@ fn retry_policy(retries: u32, no_retry_delay: bool) -> ExponentialBackoff {
 
 /// Try a fallible async operation against each URL in order, with exponential backoff.
 ///
-/// URLs are tried in sequence without any backoff between them. Backoff is only applied after all
-/// URLs have been exhausted. On the next retry attempt the full URL list is tried again from the
-/// beginning.
+/// If the error allows a fallback, try the next URL immediately. Otherwise, or if this is the last
+/// URL, a retryable error restarts the list after backoff.
 pub async fn fetch_with_url_fallback<T, E, F>(
     urls: &[SafeUrl],
     retry_policy: ExponentialBackoff,
@@ -1263,8 +1262,58 @@ mod tests {
 
     use anyhow::{Context, Result};
     use reqwest::{Client, Method};
+    use tracing_test::traced_test;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A response body can fail on the first URL and trigger backoff before trying the fallback.
+    #[tokio::test]
+    #[traced_test]
+    async fn backoff_logs_the_attempted_url() -> Result<()> {
+        #[derive(Debug, thiserror::Error)]
+        enum DownloadError {
+            #[error("response body interrupted")]
+            Body(#[source] std::io::Error),
+            #[error(transparent)]
+            SystemTime(#[from] SystemTimeError),
+        }
+
+        impl RetriableError for DownloadError {
+            fn should_try_next_url(&self) -> bool {
+                false
+            }
+
+            fn retries(&self) -> u32 {
+                0
+            }
+
+            fn into_retried(self, _retries: u32, _duration: Duration) -> Self {
+                self
+            }
+        }
+
+        let urls = [
+            SafeUrl::parse("https://mirror.example/archive")?,
+            SafeUrl::parse("https://fallback.example/archive")?,
+        ];
+        let mut first_attempt = true;
+        let downloaded =
+            fetch_with_url_fallback(&urls, retry_policy(1, true), "archive", async |url| {
+                if std::mem::take(&mut first_attempt) {
+                    return Err(DownloadError::Body(
+                        std::io::ErrorKind::ConnectionReset.into(),
+                    ));
+                }
+                Ok(url)
+            })
+            .await?;
+
+        assert_eq!(downloaded, urls[0]);
+        assert!(logs_contain(
+            "Transient failure for request to `https://mirror.example/archive`"
+        ));
+        Ok(())
+    }
 
     #[test]
     fn ping_ack_timeout_scales_with_read_timeout() {
