@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64, I created a temporary environment with `uv --no-config venv --python 3.13.16 .venv` and ran `uv --no-config pip install --dry-run --python .venv/bin/python --default-index https://pypi.org/simple 'aprict<=0.1.0'`. The reported uv 0.12.22, installed uv 0.13.7, and uv 0.13.9 all exited 1 with the same diagnostic: it cited yanking for 0.0.24.dev1 and 0.0.34.dev8, but cited Python >=3.14 only for the remaining versions. PyPI metadata shows that every published file in the requested range, including both yanked releases, requires Python >=3.14. Testing each yanked release as an exact pin on uv 0.13.7 also failed, this time explicitly citing the Python requirement. Rejecting the install is correct; the range diagnostic omits the Python restriction for the yanked releases. I updated the issue-context README without changing the checkout or GitHub."
+}

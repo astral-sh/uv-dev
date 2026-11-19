@@ -6,17 +6,30 @@ Classification: bug
 
 ## Summary
 
-On Python 3.13.16 with uv 0.12.22, `uv pip install 'aprict<=0.1.0'` correctly fails to resolve, but explains the exclusions in two groups: two development releases were yanked, and the rest of the range requires Python 3.14 or later. Both yanked releases also declare `Requires-Python: >=3.14`. The separate yank clauses split the ranges, make the explanation longer, and suggest that obtaining the yanked files could get around the Python requirement. The reporter wants the diagnostic to mention yanking only when the release would otherwise be usable; they are not asking to change yank eligibility.
+On CPython 3.13.16, `uv pip install 'aprict<=0.1.0'` correctly fails to resolve. The diagnostic separates two yanked development releases from the versions that require Python 3.14 or later, even though both yanked releases declare the same Python requirement. The reporter wants the diagnostic to mention yanking only when the release would otherwise be usable, without changing yank eligibility.
 
-The closest historical work addressed repeated yank clauses or redundant version lists. It does not cover a Python requirement that is missing from the trace for yanked releases.
+## Reproduction
 
-## Draft response
+**Outcome: reproducible.** The report used uv 0.12.22 and CPython 3.13.16 on Arch Linux x86_64. On Linux x86_64 (kernel 7.0.0-1017-azure), the installed uv 0.13.7 and PyPI-distributed uv 0.12.22 and 0.13.9 produced identical diagnostics with CPython 3.13.16. The runs used public PyPI, no project or uv configuration, and a temporary environment and cache. `--dry-run` avoids installing `aprict`.
 
-The resolver is right to reject `aprict<=0.1.0` on Python 3.13, but the error gives the wrong impression. Both yanked releases also declare `Requires-Python: >=3.14`, so downloading either one won’t make it compatible with Python 3.13. The same message reproduces on uv 0.13.9. If you can change interpreters, use Python 3.14 or newer to satisfy the package’s Python requirement. The diagnostic should make that shared requirement clear without changing how uv handles yanked releases.
+From a fresh temporary directory:
+
+```sh
+export UV_CACHE_DIR="$PWD/cache" UV_PYTHON_INSTALL_DIR="$PWD/python"
+uv --no-config venv --python 3.13.16 .venv
+uv --no-config pip install --dry-run --python .venv/bin/python \
+  --default-index https://pypi.org/simple 'aprict<=0.1.0'
+```
+
+All three uv versions exited 1. The diagnostic said `0.0.24.dev1` and `0.0.34.dev8` were unusable because they were yanked. It cited `Python>=3.14` only for the remaining versions, splitting them into three ranges. PyPI metadata listed `Requires-Python: >=3.14` on all 78 published files at or below `0.1.0`, including the wheel and source archive of each yanked release. As controls, replacing the range with `aprict==0.0.24.dev1` and, separately, `aprict==0.0.34.dev8` on uv 0.13.7 also exited 1; each exact pin reported the Python incompatibility directly.
+
+In `crates/uv/tests/pip/pip_install_scenarios.rs`, `package_only_yanked_in_range` snapshots rejection when only a yanked version is in range, and `python_greater_than_current` snapshots rejection when an exact pin requires a newer Python. Neither fixture combines both reasons on the same release. No test covering that interaction was found in the inspected integration tests.
+
+In the checkout, `crates/uv-resolver/src/version_map.rs` marks disallowed yanked distributions as incompatible, and `crates/uv-resolver/src/resolver/mod.rs` returns from the incompatible-candidate branch before `check_requires_python`. This is consistent with the difference between the range and exact-pin diagnostics; it does not establish that candidate selection needs to change.
 
 ## Classification
 
-This is a diagnostic correctness bug, not a request for new install behavior. The resolution fails correctly; the message omits an independently sufficient reason for excluding the yanked releases and implies a workaround that does not satisfy their metadata. No existing item found tracks that same interaction. The historical simplifications were merged in 2024, before both affected uv releases, and did not address this interaction; there is no evidence that a previously fixed bug returned.
+This is a diagnostic bug, not an incorrect resolution result. The range message omits a Python requirement that independently rules out the yanked releases, which can give the impression that obtaining either file would work around the failure. The related diagnostic simplifications address repeated reasons or redundant version lists, not this interaction. No duplicate or regression was established.
 
 ## Related
 
@@ -25,12 +38,6 @@ This is a diagnostic correctness bug, not a request for new install behavior. Th
 - astral-sh/uv#6154 (merged) — Adds error-tree reduction for versions unavailable for the same reason. It can combine reasons already recorded by the resolver, but does not surface a `Requires-Python` check skipped for a yanked distribution.
 - astral-sh/uv#4075 (closed) — A nearby verbosity report: the diagnostic already said that all `rooster-blue` versions required newer Python, then listed those versions redundantly. Here, the all-versions conclusion is absent because the yanked releases are reported separately.
 - astral-sh/uv#9885 (merged) — Fixes astral-sh/uv#4075 by dropping redundant availability enumeration when the version ranges match. It does not add a Python incompatibility to the diagnostic for a candidate that was rejected as yanked.
-
-## Supporting evidence
-
-- A dry-run `uv pip install 'aprict<=0.1.0'` against PyPI in a CPython 3.13.18 virtual environment reproduced the separate yank and Python clauses with uv 0.12.22 and uv 0.13.9. Both exited with status 1. GitHub records those releases on October 2, 2026, and November 17, 2026, respectively.
-- PyPI release metadata shows `Requires-Python: >=3.14` on every published file at or below `0.1.0`, including the wheel and source archive for each yanked release (`0.0.24.dev1` and `0.0.34.dev8`).
-- In the reported release and this checkout, `crates/uv-resolver/src/version_map.rs` marks registry wheels and source distributions as incompatible when the yank is not allowed. In `crates/uv-resolver/src/resolver/mod.rs`, an incompatible candidate returns before `check_requires_python` is called. That ordering explains why the Python requirement is absent from the yank clauses. The reproduction establishes the diagnostic problem; it does not establish that changing candidate selection is the right fix.
 
 ## Search scope
 
