@@ -8,7 +8,7 @@ Classification: bug
 
 The reporter ran `uv lock --upgrade-package lxml` against a private HTTPS package index in a Debian 13 (trixie) distroless environment with uv 0.13.9 (`x86_64-unknown-linux-musl`) and Python 3.14.9. The error named the index URL, then reported a tunnel connection failure and DNS lookup error without naming the proxy, even with verbose output. The reporter expects the diagnostic to identify the proxy when the proxy connection fails. They report that using the proxy's fully qualified hostname works and that the glibc build installed with pip did not hit the same lookup failure on their setup.
 
-The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None of that earlier work tracks the missing proxy endpoint. Two follow-up patches now take different approaches to the diagnostic.
+The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None of that earlier work tracks the missing proxy endpoint. The upstream reqwest proposal attaches the actual proxy endpoint at connection time; two uv-side patches take different approaches.
 
 ## Classification
 
@@ -42,6 +42,12 @@ The two parent snapshots passed before modification and then failed solely becau
 
 Focused debug-profile validation: `cargo test --locked -p uv -p uv-client --test it --no-default-features --features uv/test-python,uv/test-pypi -- network::proxy_ proxy::` passed all nine CLI and two client tests. `cargo fmt --all -- --check` (stable toolchain) and `git diff --check` passed.
 
+### Upstream reqwest proposal
+
+seanmonstar/reqwest#3144 is open and unmerged. It wraps failures to establish the connection to the selected HTTP proxy, both before HTTPS CONNECT and during plain HTTP forwarding. The error displays the proxy endpoint without URL userinfo and preserves the underlying cause. The proposed `Error::proxy_url()` identifies the proxy separately from `Error::url()`, which still identifies the request destination. This uses the endpoint the connector actually selected rather than reconstructing it from proxy settings. The patch includes a test for DNS failure before CONNECT and a check that no proxy endpoint is attached when the proxy was reached but rejected CONNECT with an authentication challenge.
+
+uv currently pins reqwest 0.13.5. When a reqwest version containing the change is available, rerun both uv DNS regressions to verify that the CLI shows the selected proxy and preserves the request URL and DNS cause. The upstream proposal does not change ordinary verbose logging or DNS resolution, and the focused uv validation above does not cover it.
+
 ### Alternative proposal
 
 astral-sh/uv#23292 is open against `main`. It recognizes tunnel and SOCKS errors by their source-chain messages, reconstructs the proxy URL for the diagnostic, and proposes redacted proxy URLs, debug logging of proxy configuration, and a hint to check proxy settings and reachability. The debug lines describe configuration, not necessarily the proxy selected for a particular request.
@@ -54,6 +60,7 @@ We reproduced the missing proxy hostname and updated the diagnostic to show the 
 
 ## Related
 
+- seanmonstar/reqwest#3144 (open) proposes reporting the selected HTTP proxy endpoint from the connector itself, with a typed accessor separate from the request URL.
 - astral-sh/uv#23292 (open) proposes proxy-specific tunnel and SOCKS diagnostics, configuration logging, and a reachability hint in response to this issue.
 - astral-sh/uv-dev#3136 (open draft) attaches the actual lookup hostname to DNS errors and has focused coverage for HTTPS CONNECT and plain HTTP forwarding.
 - astral-sh/uv-dev#3135 adds the parent regression tests for DNS failures in HTTPS CONNECT setup and HTTP forwarding.
