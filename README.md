@@ -1,40 +1,45 @@
-# --default creates python*.exe to .local/bin instead of UV_TOOL_BIN_DIR
+# "uv install" creates python*.exe shims to .local/bin regardless of UV_PYTHON_BIN_DIR or UV_TOOL_BIN_DIR
 
 Issue: astral-sh/uv#23300
 
-Classification: duplicate
+Original classification: duplicate of astral-sh/uv#13977. The edited report needs reproduction before reclassification.
 
 ## Summary
 
 On Windows 11 x86_64 with uv 0.13.1–0.13.9 and Python 3.11.14, the reporter runs
 `uv python install 3.11 --default` after configuring uv and its managed Python installations on
 `D:`. The uv executable and the Python installation go to their configured directories, but
-`python.exe`, `python3.exe`, and `python3.11.exe` go to `~/.local/bin` instead of `D:\uv\bin`.
-The title mentions `UV_TOOL_BIN_DIR`; the PowerShell snippet sets `UV_INSTALL_DIR` and
-`UV_PYTHON_INSTALL_DIR`, but shows neither `UV_TOOL_BIN_DIR` nor `UV_PYTHON_BIN_DIR`.
+the reporter sees `python.exe`, `python3.exe`, and `python3.11.exe` in `~/.local/bin` instead
+of `D:\uv\bin`. The original PowerShell snippet omitted `UV_PYTHON_BIN_DIR`; the edited snippet
+sets it to `D:\uv\bin` before running the command. The reporter also sees `python3.11.exe`
+in the same location without `--default`. The title mentions `UV_TOOL_BIN_DIR`, but neither
+snippet sets it, and it does not control Python shim placement.
 
 astral-sh/uv#13977 answers the same launcher-directory question. astral-sh/uv#15954 documents
 the separate settings, and astral-sh/uv#11230 applies them to a broader Windows D: drive setup.
 
-## Draft response
+## Reproduction status
 
-`uv python install --default` uses `UV_PYTHON_BIN_DIR` for the Python launchers.
-`UV_INSTALL_DIR` controls where the standalone installer puts `uv` and `uvx`,
-`UV_PYTHON_INSTALL_DIR` controls where the interpreters are stored, and `UV_TOOL_BIN_DIR` is
-for commands installed by `uv tool install`.
+A maintainer asked whether the shim in `~/.local/bin` was left over from an install before
+`UV_PYTHON_BIN_DIR` was set. The discussion does not establish whether a run with the override
+created a new shim there, whether the old shim was already present, or whether a shim was also
+created in `D:\uv\bin`. The leftover-shim explanation is unconfirmed.
 
-In the same PowerShell session, set `$env:UV_PYTHON_BIN_DIR = "D:\uv\bin"`, check that
-`uv python dir --bin` prints that directory, then rerun `uv python install 3.11 --default`.
-The same launcher-directory question was answered in astral-sh/uv#13977.
+On an affected Windows setup, set `$env:UV_PYTHON_BIN_DIR = "D:\uv\bin"` and record the output
+of `uv python dir --bin` in the same PowerShell session. Compare the contents of `D:\uv\bin`
+and `$HOME\.local\bin` before and after `uv python install 3.11 --default`, ideally in a clean
+Windows test environment with no pre-existing Python shims. Record the install output and which
+files are newly created. Seeing an old shim remain in the default directory does not establish
+that the install ignored the override.
 
 ## Classification
 
-Duplicate of astral-sh/uv#13977. Both reports use `UV_INSTALL_DIR` to relocate uv and then
-expect `uv python install --default` to put the Python launchers in the same directory instead
-of `~/.local/bin`. The prior report used Linux symlinks rather than Windows `.exe` launchers,
-but both use the same directory selection. Neither `UV_INSTALL_DIR` nor `UV_TOOL_BIN_DIR`
-overrides the Python launcher directory. The reported setup does not show `UV_PYTHON_BIN_DIR`
-being ignored, so it does not establish a regression in uv 0.13.1–0.13.9.
+The original report matched astral-sh/uv#13977: setting `UV_INSTALL_DIR` moves uv itself, not
+its Python launchers. The prior report used Linux symlinks rather than Windows `.exe` launchers,
+but both use the same directory selection. A fresh shim created in `~/.local/bin` despite a
+valid `UV_PYTHON_BIN_DIR` would be a distinct correctness issue, not answered by the earlier
+thread. The edited report raises that possibility but does not yet establish a bug or regression
+in uv 0.13.1–0.13.9.
 
 ## Related
 
