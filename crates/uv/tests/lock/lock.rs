@@ -31316,14 +31316,13 @@ fn lock_unsupported_version() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `uv.lock`, which uses an unsupported schema version (v2, but only v1 is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
-      cause: Dependency `iniconfig` has missing `source` field but has more than one matching package
+      cause: Dependency `iniconfig` has no matching package entry
     ");
 
     Ok(())
 }
 
-/// A name-only dependency reports multiple matches even though its package entry is absent
-/// (astral-sh/uv#23295).
+/// A name-only dependency with no package entry is missing, not ambiguous (astral-sh/uv#23295).
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_missing_package_without_source() -> Result<()> {
@@ -31355,14 +31354,13 @@ fn lock_check_missing_package_without_source() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `uv.lock`
-      cause: Dependency `demo-util` has missing `source` field but has more than one matching package
+      cause: Dependency `demo-util` has no matching package entry
     ");
 
     Ok(())
 }
 
-/// With an explicit registry source but no version, the diagnostic still reports multiple matches
-/// for an absent package (astral-sh/uv#23295).
+/// An explicit registry source without a version still reports an absent package as missing.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_missing_package_without_version() -> Result<()> {
@@ -31394,7 +31392,7 @@ fn lock_check_missing_package_without_version() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `uv.lock`
-      cause: Dependency `demo-util` has missing `version` field but has more than one matching package
+      cause: Dependency `demo-util` has no matching package entry
     ");
 
     Ok(())
