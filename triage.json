@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11701,
+        "title": "Failed to parse uv.lock file",
+        "url": "https://github.com/astral-sh/uv/issues/11701",
+        "state": "closed",
+        "reason": "The same missing-source error appeared, but the attached lockfile contains two numpy package entries and a name-only reference. That reference was genuinely ambiguous; the new report has zero matching entries."
+      },
+      {
+        "kind": "issue",
+        "number": 18788,
+        "title": "`uv lock --locked` does not detect transitive dependencies that are no longer depended on by anything",
+        "url": "https://github.com/astral-sh/uv/issues/18788",
+        "state": "open",
+        "reason": "This also concerns a post-merge lockfile inconsistency, but the graph problem is the inverse: an unreferenced package remains and the check passes. Here a reference remains without a package, and the check fails with the wrong explanation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23251,
+        "title": "Explain why a lockfile needs to be updated with `--locked`",
+        "url": "https://github.com/astral-sh/uv/pull/23251",
+        "state": "merged",
+        "reason": "Improves diagnostics for stale lockfiles that parse successfully, not for errors during parsing. It merged on November 17, 2026, after uv 0.13.9 was published that day."
+      }
+    ],
+    "search_scope": "Used authenticated GitHub CLI searches across open and closed issues and open, closed, and merged pull requests. Searched for the exact parse and multiple-match errors, the missing source field, uv lock --check, demo-util, and 0.13.9; then searched for dangling references, missing or ambiguous package entries, and invalid lockfiles after merges. Checked recent and merged diagnostic fixes and followed candidate discussion and closure links. Ruled out astral-sh/uv#11384 and its fix astral-sh/uv#11400 because they concern optional versions for dynamic packages, and astral-sh/uv#11185 and astral-sh/uv#16348 because they request merge resolution or replacement of invalid lockfiles rather than a corrected diagnostic."
+  },
+  "type": "bug",
+  "type_reason": "The uv 0.13.9 parser uses a lookup that excludes both absent names and names with multiple package entries. When a dependency omits its source, a miss in either case produces the multiple-match error. Rejecting the lockfile is correct; reporting multiple matches when there are zero is not. No existing tracker or prior fix for this distinction was found.",
+  "summary": "No duplicate or prior fix was found. The closest reports concern genuine ambiguity or an unreferenced package left after a merge, and the recent lock-check diagnostic fix applies only after parsing succeeds.",
+  "draft_response": "Thanks for the reproducer. `uv lock --check` should still reject this lockfile, but it should say that `demo-util` has no corresponding package entry, not that there are multiple matches. A focused PR that distinguishes those cases and adds a regression test using your example would be welcome. To repair the merge now, start from an intact lockfile from the base branch and run `uv lock` with the merged project metadata."
+}
