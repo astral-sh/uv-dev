@@ -56,6 +56,8 @@ astral-sh/uv#11782 is historical design context, not a shipped fix: it closed un
 
 ## Maintainer next step
 
-Centralize the Artifactory case in astral-sh/uv#6349 and retain the distinction between installation-time filename lookup and upstream URL discovery during lock creation. The useful missing deployment detail is whether the upstream Simple API is reachable while creating or updating locks. No branch implementing this mode or delivery schedule was established.
+On November 19, 2026, maintainer zsol confirmed in astral-sh/uv#23275 that `main` did not yet support path-independent artifact lookup and said they planned to start work on the follow-up soon (https://github.com/astral-sh/uv/issues/23275#issuecomment-7013826872). The comment does not identify an implementation branch or release target, or say whether the follow-up will also handle upstream URL discovery during lock creation.
+
+Centralize the Artifactory case in astral-sh/uv#6349 and retain the distinction between installation-time filename lookup and upstream URL discovery during lock creation. The useful missing deployment detail is whether the upstream Simple API is reachable while creating or updating locks.
 
 Only the temporary issue-context README and supporting temporary handoff files were written. No checkout files or GitHub state were changed. No builds or runtime reproduction were performed.
