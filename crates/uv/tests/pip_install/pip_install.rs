@@ -7292,6 +7292,58 @@ fn requires_python_source_dist_installed_incompatible_registry() {
     );
 }
 
+/// The diagnostic cites yanking for both the release with an sdist and the wheel-only
+/// release, hiding that neither supports the current Python (astral-sh/uv#23293).
+#[test]
+fn requires_python_yanked_registry() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+
+    let index = context.temp_dir.child("simple");
+    let package = index.child("example");
+    package.create_dir_all()?;
+    package.child("index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <a href="example-0.0.1.dev1.tar.gz" data-requires-python=">=3.14" data-yanked="Incorrect version">
+          example-0.0.1.dev1.tar.gz
+        </a>
+        <a href="example-0.0.1.dev1-py3-none-any.whl" data-requires-python=">=3.14" data-yanked="Incorrect version">
+          example-0.0.1.dev1-py3-none-any.whl
+        </a>
+        <a href="example-0.0.2.dev1-py3-none-any.whl" data-requires-python=">=3.14" data-yanked="Accidental release">
+          example-0.0.2.dev1-py3-none-any.whl
+        </a>
+        <a href="example-0.1.0-py3-none-any.whl" data-requires-python=">=3.14">
+          example-0.1.0-py3-none-any.whl
+        </a>
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--dry-run")
+        .arg("--default-index")
+        .arg("./simple")
+        .arg("example<=0.1.0"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because example==0.0.1.dev1 was yanked (reason: Incorrect version) and only the following versions of example are available:
+                 example==0.0.1.dev1
+                 example>=0.0.2.dev1
+             we can conclude that example<0.0.2.dev1 cannot be used.
+             And because example==0.0.2.dev1 was yanked (reason: Accidental release) and only the following versions of example are available:
+                 example<=0.0.2.dev1
+                 example>=0.1.0
+             we can conclude that example<0.1.0 cannot be used. (1)
+
+             Because the current Python version (3.13.[X]) does not satisfy Python>=3.14 and example==0.1.0 depends on Python>=3.14, we can conclude that example==0.1.0 cannot be used.
+             And because only example<=0.1.0 is available, we can conclude that example>=0.1.0 cannot be used.
+             And because we know from (1) that example<0.1.0 cannot be used, we can conclude that all versions of example cannot be used.
+             And because you require example, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
 /// Install with `--no-build-isolation`, to disable isolation during PEP 517 builds.
 #[test]
 fn no_build_isolation() -> Result<()> {
