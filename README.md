@@ -16,6 +16,12 @@ astral-sh/uv#2658 already tracks the required 1.0.12 dependency bump, while Carg
 The open dashboard's specific webpki-root-certs update is listed under “Pending Status Checks”;
 it is not a merged fix, and no corresponding update pull request was found.
 
+On November 19, 2026, a uv maintainer said the C1/C3 removal should go through a normal
+dependency bump. Their assessment was that the intermediates associated with these roots
+were not known to have weak keys, unlike G3B/G3C, and they asked for any evidence to the
+contrary. The upstream removal concerns the two root certificates; it does not establish
+that their intermediates have the same weak-key problem as G3B/G3C.
+
 ## Draft response
 
 The lockfile still pins webpki-root-certs 1.0.10. Upstream 1.0.11 removes C1 and C3, and the 1.0.12 update already listed under “Pending Status Checks” in astral-sh/uv#2658 includes those removals. Let's track the dependency bump there. The earlier astral-sh/uv#22760 update removed G3 only.
@@ -35,14 +41,14 @@ intermediate-key rejection mitigation.
 - astral-sh/uv#2658 — Dependency Dashboard (open issue). Explicitly lists the webpki-root-certs 1.0.12 update under Pending Status Checks. That version includes the C1/C3 removals introduced in 1.0.11, so this open tracker already covers the requested lockfile bump; no corresponding update PR was found.
 - astral-sh/uv#22760 — Bump webpki-root-certs to 1.0.10 (merged pull request). Merged October 20, 2026, changing only Cargo.lock to remove emSign ECC Root CA - G3. C1/C3 were removed upstream in 1.0.11 on October 23, so this earlier fix does not cover the additional roots and has not regressed.
 - astral-sh/uv#22777 — Update rustls-webpki after the eMudhra incident (merged pull request). Updates rustls-webpki to 0.103.16 to reject chains containing compromised intermediate public keys. The checkout already includes that version; this mitigation is distinct from removing C1/C3 from the bundled root list.
-- astral-sh/uv#22789 — Rebuild 0.13.4 Docker images to pick up patched ca-certificates (eMudhra CA compromise) (closed issue). Same CA incident, but concerns Docker base-image system ca-certificates used by tools such as curl, Git and Python, rather than uv's bundled webpki-root-certs. A maintainer reports it fixed in uv 0.13.5; that does not establish C1/C3 removal from uv's bundle.
+- astral-sh/uv#22789 — Rebuild 0.13.4 Docker images to pick up patched ca-certificates (eMudhra CA compromise) (closed issue). Same CA incident, but concerns Docker base-image system ca-certificates used by tools such as curl, Git and Python, rather than uv's bundled webpki-root-certs. The reporter confirmed their Docker issue was fixed in uv 0.13.5.
 
 ## Supporting evidence
 
-- Cargo.lock:8472 pins webpki-root-certs to 1.0.10. Cargo.toml:366 allows version 1,
+- Cargo.lock:8475 pins webpki-root-certs to 1.0.10. Cargo.toml:366 allows version 1,
   so 1.0.12 fits the declared dependency requirement.
 - crates/uv-client/src/tls.rs:209 loads webpki_root_certs::TLS_SERVER_ROOT_CERTS.
-  crates/uv-client/src/base_client.rs:650–655 selects these roots when neither custom
+  crates/uv-client/src/base_client.rs:655–660 selects these roots when neither custom
   certificates nor system certificates are selected.
   docs/concepts/authentication/certificates.md:20 documents bundled Mozilla roots as the default.
 - Upstream release 1.0.10, published October 19, removes G3 only:
@@ -60,8 +66,6 @@ intermediate-key rejection mitigation.
 - Cargo.lock:4298 already pins rustls-webpki to 0.103.16, the intermediate-key mitigation
   from astral-sh/uv#22777. CHANGELOG.md records that mitigation in uv 0.13.5 and the
   earlier bundled-root update in uv 0.13.4.
-- The closing maintainer comment on astral-sh/uv#22789 says uv 0.13.5 fixes the Docker
-  system-certificate issue. It addresses a different certificate source.
 
 ## Search scope and excluded candidates
 
@@ -73,7 +77,8 @@ the same branch target 1.0.9 or earlier and do not satisfy this request.
 
 ## Maintainer next step
 
-Advance the existing webpki-root-certs 1.0.12 dashboard entry or prepare the same focused lockfile
-update with `cargo update -p webpki-root-certs --precise 1.0.12`, followed by normal dependency-update
-validation. Keep bundled roots, operating-system trust stores, and managed Python certificate
-bundles distinct when describing the scope of the update.
+Use the normal dependency update tracked in astral-sh/uv#2658. A manual equivalent would be
+`cargo update -p webpki-root-certs --precise 1.0.12`, followed by normal dependency-update
+validation. Revisit the priority if evidence of weak or compromised keys tied to C1/C3 emerges.
+Keep bundled roots, operating-system trust stores, and managed Python certificate bundles
+distinct when describing the scope of the update.
