@@ -1456,21 +1456,39 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             CandidateDist::Compatible(dist) => dist,
             CandidateDist::Incompatible {
                 incompatible_dist: incompatibility,
-                prioritized_dist: _,
+                prioritized_dist,
             } => {
+                let incompatibility = if matches!(
+                    incompatibility,
+                    IncompatibleDist::Source(IncompatibleSource::Yanked(_))
+                        | IncompatibleDist::Wheel(IncompatibleWheel::Yanked(_))
+                ) && env.marker_environment().is_some()
+                    && version_maps.len() == 1
+                    && let Some(requires_python) = prioritized_dist.shared_requires_python()
+                    && let Some(python_incompatibility) = Self::check_requires_python(
+                        requires_python,
+                        python_requirement,
+                        matches!(incompatibility, IncompatibleDist::Wheel(_)),
+                    ) {
+                    python_incompatibility
+                } else {
+                    incompatibility.clone()
+                };
                 // If the version is incompatible because no distributions are compatible, exit early.
                 return Ok(Some(ResolverVersion::Unavailable(
                     candidate.version().clone(),
-                    // TODO(charlie): We can avoid this clone; the candidate is dropped here and
-                    // owns the incompatibility.
-                    UnavailableVersion::IncompatibleDist(incompatibility.clone()),
+                    UnavailableVersion::IncompatibleDist(incompatibility),
                 )));
             }
         };
 
         // Check whether the version is incompatible due to its Python requirement.
-        if let Some((requires_python, incompatibility)) =
-            Self::check_requires_python(dist, python_requirement)
+        if let Some(requires_python) = dist.requires_python()
+            && let Some(incompatibility) = Self::check_requires_python(
+                requires_python,
+                python_requirement,
+                matches!(dist, CompatibleDist::CompatibleWheel { .. }),
+            )
         {
             if matches!(self.options.fork_strategy, ForkStrategy::RequiresPython) {
                 if env.marker_environment().is_none() {
@@ -1924,35 +1942,30 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Check if the distribution is incompatible with the Python requirement, and if so, return
     /// the incompatibility.
-    fn check_requires_python<'dist>(
-        dist: &'dist CompatibleDist,
+    fn check_requires_python(
+        requires_python: &VersionSpecifiers,
         python_requirement: &PythonRequirement,
-    ) -> Option<(&'dist VersionSpecifiers, IncompatibleDist)> {
-        let requires_python = dist.requires_python()?;
+        is_wheel: bool,
+    ) -> Option<IncompatibleDist> {
         if python_requirement.target().is_contained_by(requires_python) {
-            None
-        } else {
-            let incompatibility = if matches!(dist, CompatibleDist::CompatibleWheel { .. }) {
-                IncompatibleDist::Wheel(IncompatibleWheel::RequiresPython(
-                    requires_python.clone(),
-                    if python_requirement.installed() == python_requirement.target() {
-                        PythonRequirementKind::Installed
-                    } else {
-                        PythonRequirementKind::Target
-                    },
-                ))
-            } else {
-                IncompatibleDist::Source(IncompatibleSource::RequiresPython(
-                    requires_python.clone(),
-                    if python_requirement.installed() == python_requirement.target() {
-                        PythonRequirementKind::Installed
-                    } else {
-                        PythonRequirementKind::Target
-                    },
-                ))
-            };
-            Some((requires_python, incompatibility))
+            return None;
         }
+        let kind = if python_requirement.installed() == python_requirement.target() {
+            PythonRequirementKind::Installed
+        } else {
+            PythonRequirementKind::Target
+        };
+        Some(if is_wheel {
+            IncompatibleDist::Wheel(IncompatibleWheel::RequiresPython(
+                requires_python.clone(),
+                kind,
+            ))
+        } else {
+            IncompatibleDist::Source(IncompatibleSource::RequiresPython(
+                requires_python.clone(),
+                kind,
+            ))
+        })
     }
 
     /// Given a candidate package and version, return its dependencies.
