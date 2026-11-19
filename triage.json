@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19081,
+        "title": "Do not invalidate downstream locks for local path dependency-group changes",
+        "url": "https://github.com/astral-sh/uv/issues/19081",
+        "state": "open",
+        "reason": "Reports the same downstream freshness failure after a metadata-only edit to a local path dependency, but for development dependency groups. Package extras are different: a consumer can request them directly or transitively, so validation must account for which extras the graph requests."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21163,
+        "title": "Reimplement `package.metadata`-less lockfiles",
+        "url": "https://github.com/astral-sh/uv/pull/21163",
+        "state": "merged",
+        "reason": "Introduces the preview validation path that can omit local package declarations and check resolved dependency edges instead. An offline reproduction on uv 0.13.9 confirmed that a lockfile generated with this preview passes after the unrequested-extra edit. The pull request does not change default validation."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged pull requests for the freshness error, uv lock --check, requires-dist, provides-extras, and literal path and extra wording. Searched separately for unused, transitively activated, and newly requested extras, base requirements, downstream lock invalidation, dependency groups, and metadata-free validation. Supplemented rate-limited pull request searches with repository PR listings, changelogs, and linked records. Ruled out astral-sh/uv#22046 and its fix astral-sh/uv#22055, which concern rechecking an unchanged preview lock with conflicting groups; astral-sh/uv#20672 and astral-sh/uv#23203, which concern URL lookahead for an extra that is requested; and astral-sh/uv-dev#116, which concerns missed revalidation of mutable transitive sources."
+  },
+  "type": "enhancement",
+  "type_reason": "The default check detects a real change in the declaration metadata stored in the lockfile, even though the resolved graph is unchanged. Ignoring declarations for unrequested extras by default would change the freshness policy, not fix an established regression. The closest open issue covers dependency groups, and the merged preview work does not change the default.",
+  "summary": "astral-sh/uv#19081 tracks analogous downstream lockfile churn for dependency groups, not extras. The preview from astral-sh/uv#21163 avoids the reported metadata-only invalidation; this was verified offline on uv 0.13.9.",
+  "draft_response": "The default `uv lock --check` compares the local library's recorded requirement declarations, including unrequested extras, not just the resolved packages. That's why this edit needs a lockfile refresh even though `pytest` isn't locked. I verified on uv 0.13.9 that the check passes after the same edit when the lockfile is generated and checked with `--preview-features lock-without-metadata`. If you can use a preview feature, regenerate the consumer lockfile with `uv lock --preview-features lock-without-metadata` and pass the same flag to `uv lock --check` in CI. For default validation, the requested change is to ignore only extras no dependency in the graph requests, while still checking base requirements and extras requested directly or transitively."
+}
