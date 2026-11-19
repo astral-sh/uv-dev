@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "`uv lock --check` now reports that a dependency has no matching package entry when its name is absent from the lockfile, rather than reporting multiple matches. Lockfile parsing distinguishes missing names from genuinely ambiguous ones without changing which lockfiles it accepts. Both parent regression tests now assert the corrected diagnostic: one for a name-only reference and one for a registry reference without a version.",
+  "validation": [
+    "Five debug-profile lock integration tests passed, including both parent regressions, the unsupported-schema snapshot, and the canonical and noncanonical lockfile round trips.",
+    "Seven focused uv-lock tests passed, covering unique names, genuine ambiguity, and dynamic versions.",
+    "An offline lock-and-check round trip passed with two platform-specific versions of a local dependency. Removing the disambiguating fields from one reference still produced the multiple-match error and exit code 2.",
+    "Rust formatting and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3143"
+}

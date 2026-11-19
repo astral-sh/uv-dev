@@ -6,15 +6,15 @@ Classification: bug
 
 ## Summary
 
-`uv lock --check` rejects a lockfile with a name-only dependency on `demo-util` and no `[[package]]` entry for that name, but says there are multiple matches rather than none. The reporter encountered this after a merge on uv 0.13.9. The same diagnostic was reproduced on the runner's installed uv 0.13.7 using a minimal schema-v1 lockfile, with no merge or network access required.
+`uv lock --check` correctly rejects a lockfile with a dependency on `demo-util` and no `[[package]]` entry for that name, but the affected parser says there are multiple matches rather than none. The reporter encountered this after a merge on uv 0.13.9. The diagnostic was reproduced on the runner's installed uv 0.13.7 and the unpatched uv 0.13.9 checkout using a minimal schema-v1 lockfile, with no merge or network access required. The fix distinguishes missing package entries from genuine ambiguity.
 
 ## Draft response
 
-Thanks for the reproducer. We reproduced the diagnostic on Linux as well. `uv lock --check` should still reject this lockfile, but it should say `demo-util` has no corresponding package entry. A focused parser change and regression test could distinguish zero matches from genuine ambiguity. To repair the merged lockfile, start from an intact lockfile from the base branch and run `uv lock` with the merged project metadata.
+Thanks for the reproducer. We reproduced the diagnostic on Linux as well. The fix still rejects this lockfile but reports that `demo-util` has no matching package entry. To repair the merged lockfile, start from an intact lockfile from the base branch and run `uv lock` with the merged project metadata.
 
 ## Classification
 
-This is a confirmed diagnostic bug, not a request to accept or automatically repair invalid lockfiles. The reproduction establishes the incorrect diagnostic, not how the original merge lost the package entry. Prior triage did not find a duplicate or a fix for this distinction.
+This is a confirmed diagnostic bug, not a request to accept or automatically repair invalid lockfiles. The reproduction establishes the incorrect diagnostic, not how the original merge lost the package entry. Prior triage did not find a duplicate or an earlier fix for this distinction.
 
 ## Reproduction
 
@@ -59,20 +59,36 @@ error: Failed to parse `uv.lock`
 
 As a control, adding `version = "1.0"` and `source = { registry = "https://pypi.org/simple" }` to the dependency reference while still omitting its package entry also exits 2. It gives the accurate cause: ``For package `demo==1.0 @ virtual+.`, found dependency `demo-util==1.0` with no locked package``. Both lockfiles should be rejected; the name-only case should identify the missing package just as the explicit-reference case does.
 
-**Existing test coverage (inspected, not run):** `lock_unsupported_version` in `crates/uv/tests/lock/lock.rs:31242` snapshots the same misleading inner cause for an absent `iniconfig` package, but uses `--frozen` with unsupported schema v2. `missing_dependency_source_version_ambiguous` in `crates/uv-lock/src/lock/mod.rs:11451` snapshots the multiple-match message for a name-only reference with two actual `a` entries in schema v1.
+The unpatched debug build also reproduced the multiple-match error when the reference included a registry source but no version: it reported a missing `version` field with multiple matches despite the same absent package entry. The nearby `lock_unsupported_version` integration test covered the original missing-source symptom for an absent `iniconfig` package under `--frozen` with unsupported schema v2.
+
+## Fix
+
+**Outcome: fixed.** The lockfile reader now distinguishes names with zero, one, or multiple package entries. When source or required version inference fails because the name is absent, it reports `Dependency ... has no matching package entry`. Genuine ambiguity retains the multiple-match diagnostic; dynamic source-tree versions and fully specified dependency IDs retain their existing handling. No serializer changes are needed.
+
+Both parent regressions in `crates/uv/tests/lock/lock.rs` passed before the fix while reporting false ambiguity. After their snapshots were updated, both failed on the misleading message. The related `lock_unsupported_version` snapshot failed for the same reason; its unsupported-schema error remains unchanged. The sync and export integration fixtures were checked for the same assumption; their parse-error tests exercise other validation and share this parser.
+
+**Focused validation:**
+
+- Five debug-profile integration tests passed: `lock_check_missing_package_without_source`, `lock_check_missing_package_without_version`, `lock_unsupported_version`, `lock_preserves_noncanonical_lock`, and `lock_regenerates_marker_specific_local_extra`.
+- Seven focused `uv-lock` dependency lookup tests passed, covering unique names, genuine ambiguity, and dynamic versions.
+- A fresh `uv lock --offline` followed by `uv lock --check --offline` passed with two platform-specific local versions of the same dependency. Removing the source and version from one dependency edge while retaining both package entries still produced the multiple-match error and exit 2.
+- Rust formatting and `git diff --check` passed.
 
 ## Related
 
 - astral-sh/uv#11701 (closed issue): Same missing-`source` message from the lockfile parser, but the attached lockfile has two `numpy` package entries and a name-only reference. A maintainer reproduced the parse failure with the existing lockfile, could not reproduce it from scratch, and closed the issue without a fix. This is true ambiguity, not a missing package entry.
 - astral-sh/uv#18788 (open issue): The same check mode and a post-merge lockfile inconsistency, but the graph problem is the inverse: an unreferenced transitive package remains and the check succeeds. Here a reference remains without a package, and the check already fails.
 - astral-sh/uv#23251 (merged pull request): Improves `--locked`/`--check` diagnostics when a parsed lockfile is stale and needs updating. It does not address the parse-time diagnostic reproduced here.
+- astral-sh/uv-dev#3142 (parent regression pull request): Covers the name-only reference and the reference with a registry source but no version. Both tests now assert the missing-package diagnostic.
 
 ## Supporting evidence
 
-In the checkout, `Lock::try_from` in `crates/uv-lock/src/lock/mod.rs:6888` builds a lookup containing only names with exactly one package entry. Names with multiple entries are removed; names with no entries never enter the lookup. `PackageIdForDependency::unwire` at `crates/uv-lock/src/lock/mod.rs:8041` emits `MissingDependencySource` on a lookup miss for a dependency without `source`, without distinguishing these cases. A dependency with an explicit source and version reaches the later check for dependency IDs without a locked package at `crates/uv-lock/src/lock/mod.rs:2791`, consistent with the control output.
+Before the fix, `Lock::try_from` in `crates/uv-lock/src/lock/mod.rs` removed ambiguous names from the package lookup, so an absent name produced the same lookup miss. `PackageIdForDependency::unwire` treated either miss as ambiguity when it could not infer the source or required version. Both the canonical and general TOML readers use this conversion, and regular dependencies, optional dependencies, and dependency groups share the same edge reader. A fully specified reference can still reach the later check for dependency IDs without a locked package, as in the control run. The writer already elides the source and version only when the package name is unique.
 
 ## Search scope
 
 Searched open and closed issues and open, closed, and merged pull requests with authenticated GitHub CLI searches. Literal searches used the parse error, `more than one matching package`, the missing `source` wording, `uv lock --check`, `demo-util`, and `0.13.9`. Conceptual searches covered missing and dangling package entries, ambiguous or unrecognized lockfile dependencies, and invalid lockfiles after merges. Fix-oriented checks covered parser and lock diagnostics, recent and merged pull requests, and candidate discussion and closure chains. No matching fix or duplicate surfaced.
 
 The earlier report astral-sh/uv#11384 and its fix, astral-sh/uv#11400, concern optional versions for dynamic packages with conflicting extras, not zero package entries. The requests in astral-sh/uv#11185 and astral-sh/uv#16348 concern automatic merge resolution or explicit replacement of invalid lockfiles, and astral-sh/uv#5633 requests merge guidance; none tracks the incorrect diagnostic. The similar title of astral-sh/uv#19196 refers to merging configuration for dependency cooldowns, not to a missing lockfile graph node.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3143
