@@ -23,6 +23,8 @@ For the lockfile update you described, use `uv lock --upgrade-package ipython`. 
 
 ## Classification
 
+Maintainer zsol confirmed on astral-sh/uv#23248 that this is a known gap in `uv upgrade` and that astral-sh/uv#20783 is the tracking issue. The reporter has already been directed there.
+
 Open astral-sh/uv#20783 already tracks the same command rejecting dependencies outside project.dependencies with the same error; the dev-group reproduction fits that discussion. Its linked implementation, astral-sh/uv#20590, predates this report and is still open with no merge date. Current source and tests confirm the restriction, so the 'Fixed by' comment does not establish a released fix or regression. Duplicate classification takes precedence over independently assessing the missing capability.
 
 The matching issue was opened on July 28, 2026, before this November 15 report. The implementation PR was opened on July 21 and has no merge date. A maintainer's July 28 comment on astral-sh/uv#20783 says “Fixed by” astral-sh/uv#20590, but the PR is still open and the checkout retains the rejection. Do not describe the fix as released or recommend a uv version as containing it.
