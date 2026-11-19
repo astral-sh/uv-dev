@@ -6,11 +6,11 @@ Classification: question
 
 ## Summary
 
-The issue contains only the title “Karim.” The event and the live GitHub issue both have an empty body, and the live issue has no comments. There is no reported behavior, command, error, version, triggering condition, or feature request. No related issues or pull requests were found.
+The issue event contains only the title “Karim” and an empty body. The initial triage also found an empty body and no comments on GitHub. The report describes no uv behavior, question, or feature request.
 
 ## Draft response
 
-Could you update the issue with what you need help with? If uv behaved unexpectedly, please include your uv version, the command you ran, what you expected, and what happened instead.
+Could you update the issue with what you need help with? If uv behaved unexpectedly, please include the exact command, what you expected, what happened instead (including any error output), your uv and Python versions, your operating system, and any relevant configuration or minimal example. Please redact any sensitive information.
 
 ## Classification
 
@@ -19,6 +19,12 @@ Use `question` pending clarification. The title alone does not establish a bug, 
 ## Related
 
 No related issues or pull requests were found.
+
+## Reproduction
+
+**Outcome: `needs_more_information`.** The event provides no command, configuration, platform, uv or Python version, or expected and actual behavior. With no symptom or question to investigate, there is no meaningful reproduction or existing test to match. No reproduction command or test was run.
+
+Ask the reporter to describe what they need help with. For unexpected behavior, request the exact command, expected and actual results, uv and Python versions, operating system, and any configuration or input needed to trigger it.
 
 ## Search scope
 

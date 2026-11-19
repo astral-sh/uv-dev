@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The issue event for astral-sh/uv#23291 contains only the title “Karim” and an empty body. There is no reported behavior or question to investigate, so no reproduction was attempted. Ask the reporter what they need help with. If uv behaved unexpectedly, request the exact command, expected and actual results, uv and Python versions, operating system, and any relevant configuration or minimal input."
+}
