@@ -10,6 +10,10 @@ A consumer with an independent `uv.lock` depends on a sibling library through `t
 
 astral-sh/uv#19081 tracks the analogous behavior for dependency groups, not extras. astral-sh/uv#21163 provides a preview mode that avoids the reported metadata-only invalidation.
 
+## Preview workaround
+
+A maintainer asked the reporter to try `UV_PREVIEW_FEATURES=lock-without-metadata`. Set it when regenerating the consumer lockfile with `uv lock` and when running `uv lock --check` in CI. This is the environment-variable equivalent of the flag verified in the offline reproduction below. The reporter has not yet confirmed whether it works in their setup.
+
 ## Draft response
 
 The default `uv lock --check` compares the local library's recorded requirement declarations, including unrequested extras, not just the resolved packages. That's why this edit needs a lockfile refresh even though `pytest` isn't locked. I verified on uv 0.13.9 that the check passes after the same edit when the lockfile is generated and checked with `--preview-features lock-without-metadata`. If you can use a preview feature, regenerate the consumer lockfile with `uv lock --preview-features lock-without-metadata` and pass the same flag to `uv lock --check` in CI. For default validation, the requested change is to ignore only extras no dependency in the graph requests, while still checking base requirements and extras requested directly or transitively.
