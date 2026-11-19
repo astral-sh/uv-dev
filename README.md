@@ -22,6 +22,8 @@ The requested capability is extra-name validation during direct-only compilation
 
 The initial issue label is bug; enhancement is the recommended classification. This recommendation rests on the command's direct-only dependency semantics and the explicit choice to omit this additional check, rather than merely on the existence of a limitation. The report requests checking distribution metadata in a mode designed to avoid fetching it; it does not establish incorrect top-level pins or missing dependencies that this mode promises to resolve.
 
+In the issue discussion, maintainer Charlie Marsh pointed to astral-sh/uv#7127 and recalled that the warning was intentionally omitted to avoid fetching metadata for the listed dependencies. The PR and integration snapshot corroborate that rationale. The comment explains the original decision and leaves open whether to revisit it.
+
 Earlier versions did validate these extras. This is not evidence of a new regression in uv 0.13.8: the later removal was deliberate, and the historical crash itself is absent from this report. No specific release introducing an unintended regression has been established.
 
 ## Related
