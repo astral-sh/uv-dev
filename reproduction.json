@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04 x86_64 with the installed uv 0.13.7 and CPython 3.12.3, I created a temporary project declaring `demo-util` and a schema-v1 `uv.lock` containing only the root `demo` package, with `dependencies = [{ name = \"demo-util\" }]`. `uv lock --check --offline --verbose` exited 2 and reported: Dependency `demo-util` has missing `source` field but has more than one matching package. There were zero matching entries. As a control, specifying the dependency's source and version without adding a package entry also exited 2, but correctly reported that there was no locked package. Rejecting the lockfile is expected; the multiple-match diagnostic is the reproduced bug. The reporter's macOS/uv 0.13.9 environment was not retested. The issue-context README was updated."
+}
