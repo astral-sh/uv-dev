@@ -40,6 +40,12 @@ pub enum Error {
     RequirementsInstall(&'static str, #[source] AnyErrorBuild),
     #[error("Failed to create temporary virtualenv")]
     Virtualenv(#[from] uv_virtualenv::Error),
+    #[error("The built wheel has an invalid filename")]
+    InvalidBuiltWheelFilename(#[from] uv_distribution_filename::WheelFilenameError),
+    #[error("The project declares name `{0}`, but the wheel declares name `{1}`, which indicates a malformed wheel. If this is intentional, set `{env_var}`.", env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
+    ProjectNameMismatch(PackageName, PackageName),
+    #[error("The project declares version {0}, but the wheel declares version {1}, which indicates a malformed wheel. If this is intentional, set `{env_var}`.", env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
+    ProjectVersionMismatch(Version, Version),
     // Build backend errors
     #[error("Failed to run `{0}`")]
     CommandFailed(PathBuf, #[source] io::Error),
@@ -58,6 +64,29 @@ pub enum Error {
 }
 
 impl IsBuildBackendError for Error {
+    fn is_metadata_inconsistent(&self) -> bool {
+        match self {
+            Self::ProjectNameMismatch(..) | Self::ProjectVersionMismatch(..) => true,
+            Self::Io(_)
+            | Self::Lowering(_)
+            | Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::RequirementsResolve(..)
+            | Self::RequirementsInstall(..)
+            | Self::Virtualenv(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::CommandFailed(..)
+            | Self::BuildBackend(_)
+            | Self::MissingHeader(_)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(..) => false,
+        }
+    }
+
     fn is_user_failure(&self) -> bool {
         match self {
             Self::InvalidSourceDist(_)
@@ -71,7 +100,10 @@ impl IsBuildBackendError for Error {
             | Self::BuildScriptPath(_)
             | Self::CyclicBuildDependency(_)
             | Self::UnmatchedRuntime(..)
-            | Self::Lowering(_) => true,
+            | Self::Lowering(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::ProjectNameMismatch(..)
+            | Self::ProjectVersionMismatch(..) => true,
             Self::RequirementsResolve(_, error) | Self::RequirementsInstall(_, error) => {
                 error.is_user_failure()
             }
@@ -96,7 +128,10 @@ impl IsBuildBackendError for Error {
             Self::CommandFailed(_, _)
             | Self::BuildBackend(_)
             | Self::MissingHeader(_)
-            | Self::BuildScriptPath(_) => true,
+            | Self::BuildScriptPath(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::ProjectNameMismatch(..)
+            | Self::ProjectVersionMismatch(..) => true,
         }
     }
 }
