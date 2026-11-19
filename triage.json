@@ -1,0 +1,10 @@
+{
+  "related": {
+    "items": [],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the title term and issue number. Ruled out astral-sh/uv#17711 and astral-sh/uv#8253, where the term appeared in comments on unrelated topics, and astral-sh/uv#6367, where it appeared in a filesystem path. Its merged fix, astral-sh/uv#6368, addresses a uv add option not mentioned in the new issue. Searches for missing descriptions, missing reproductions, and merged issue-template changes yielded no related work. No symptom or version was available for a targeted fix search."
+  },
+  "type": "question",
+  "type_reason": "The issue needs clarification before it can be classified more specifically. The title alone does not establish incorrect behavior, identify a feature request, or describe a problem that matches existing work.",
+  "summary": "astral-sh/uv#23291 contains only the title “Karim,” with no description or comments. No related issues or pull requests were found.",
+  "draft_response": "Could you update the issue with what you need help with? If uv behaved unexpectedly, please include your uv version, the command you ran, what you expected, and what happened instead."
+}
