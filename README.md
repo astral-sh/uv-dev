@@ -8,7 +8,7 @@ Classification: bug
 
 The reporter ran `uv lock --upgrade-package lxml` against a private HTTPS package index in a Debian 13 (trixie) distroless environment with uv 0.13.9 (`x86_64-unknown-linux-musl`) and Python 3.14.9. The error named the index URL, then reported a tunnel connection failure and DNS lookup error without naming the proxy, even with verbose output. The reporter expects the diagnostic to identify the proxy when the proxy connection fails. They report that using the proxy's fully qualified hostname works and that the glibc build installed with pip did not hit the same lookup failure on their setup.
 
-The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None tracks the missing proxy endpoint in this diagnostic.
+The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None of that earlier work tracks the missing proxy endpoint. Two follow-up patches now take different approaches to the diagnostic.
 
 ## Classification
 
@@ -36,11 +36,17 @@ env -i PATH="$PATH" HOME="$REPRO/home" TMPDIR="$REPRO" \
 
 ## Fix
 
-**Outcome: fixed.** Both connection paths pass the proxy hostname to the DNS resolver. The default resolver returns the OS lookup error without that hostname, so uv could show the index URL but not say which host failed DNS resolution. The shared client now attaches the attempted hostname at the lookup boundary. It still uses the system resolver, keeps the original OS error and the request URL in the error chain, and does not change proxy selection. Only the hostname is included, not the proxy URL or its userinfo. This fixes the diagnostic, not the container's short-hostname lookup behavior.
+**Verified in the draft patch, not merged.** Both connection paths pass the proxy hostname to the DNS resolver. The default resolver returns the OS lookup error without that hostname, so uv could show the index URL but not say which host failed DNS resolution. The patch attaches the attempted hostname at the lookup boundary. It still uses the system resolver, keeps the original OS error and the request URL in the error chain, and does not change proxy selection. Only the hostname is included, not the proxy URL or its userinfo. This fixes the diagnostic, not the container's short-hostname lookup behavior.
 
 The two parent snapshots passed before modification and then failed solely because the new hostname line was absent. With the fix, both pass and distinguish the proxy host from the index URL. Neighboring proxy configuration and routing tests also pass, including a successful CONNECT tunnel, HTTP forwarding, and proxy bypass. The `compile_missing_python_download_error_warning` snapshots in `crates/uv/tests/pip_compile/pip_compile.rs` cover a proxy that is reached but rejects CONNECT, not a DNS lookup failure; no changes were needed there.
 
 Focused debug-profile validation: `cargo test --locked -p uv -p uv-client --test it --no-default-features --features uv/test-python,uv/test-pypi -- network::proxy_ proxy::` passed all nine CLI and two client tests. `cargo fmt --all -- --check` (stable toolchain) and `git diff --check` passed.
+
+### Alternative proposal
+
+astral-sh/uv#23292 is open against `main`. It recognizes tunnel and SOCKS errors by their source-chain messages, reconstructs the proxy URL for the diagnostic, and proposes redacted proxy URLs, debug logging of proxy configuration, and a hint to check proxy settings and reachability. The debug lines describe configuration, not necessarily the proxy selected for a particular request.
+
+The proposed matcher falls back to `HTTP_PROXY` for HTTPS destinations, unlike reqwest's environment matcher and the `HTTP_PROXY`-only control above. Before relying on the reconstructed URL, verify that it identifies the endpoint actually selected, including when a destination bypasses the proxy. Also run the plain HTTP forwarding regression: its DNS error has no tunnel or SOCKS marker for the proposed classifier. The focused validation above applies only to the draft DNS-boundary patch, not to this alternative.
 
 ## Draft response
 
@@ -48,6 +54,8 @@ We reproduced the missing proxy hostname and updated the diagnostic to show the 
 
 ## Related
 
+- astral-sh/uv#23292 (open) proposes proxy-specific tunnel and SOCKS diagnostics, configuration logging, and a reachability hint in response to this issue.
+- astral-sh/uv-dev#3136 (open draft) attaches the actual lookup hostname to DNS errors and has focused coverage for HTTPS CONNECT and plain HTTP forwarding.
 - astral-sh/uv-dev#3135 adds the parent regression tests for DNS failures in HTTPS CONNECT setup and HTTP forwarding.
 - astral-sh/uv#8444 (merged) attaches request URLs to network errors, prompted by missing request context in astral-sh/uv#8144. It explains the index URL in the diagnostic but adds no context about the proxy endpoint.
 - astral-sh/uv#16360 (closed) includes HTTPS proxy errors during package operations, including `tunnel error: unsuccessful`. That is a different CONNECT failure, not a DNS failure before reaching the proxy. A maintainer pointed to TLS changes in uv 0.11.0 as a possible fix, and the reporter confirmed their setup worked.
@@ -64,5 +72,3 @@ We reproduced the missing proxy hostname and updated the diagnostic to show the 
 ## Search scope
 
 Searched open and closed issues and open, closed-unmerged, and merged pull requests with authenticated GitHub CLI queries. Checked exact tunnel and DNS errors, proxy environment variables, and `uv lock`, then searched separately for proxy selection, verbose logging, endpoint diagnostics, and short-hostname resolution in Docker/musl. Checked the reported release and prior network-error, DNS, and proxy fixes; followed references and maintainer comments on the closest reports. Ruled out astral-sh/uv#6563 (proxy reached; downstream HTTP 404), astral-sh/uv#21781 (host missing from a malformed proxy URL, not DNS failure for a configured host), and astral-sh/uv#20790 (package-index artifact routing, not HTTP transport proxies).
-
-Pull request: https://github.com/astral-sh/uv-dev/pull/3136
