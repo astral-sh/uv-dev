@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13977,
+        "title": "Changing the symlink location of `uv python install --default`",
+        "url": "https://github.com/astral-sh/uv/issues/13977",
+        "state": "closed",
+        "reason": "The same command put Python launchers in `~/.local/bin` even though `UV_INSTALL_DIR` pointed elsewhere. A maintainer identified `UV_PYTHON_BIN_DIR`, and the reporter confirmed that answered the question. The earlier report used Linux symlinks, but Windows launchers use the same directory selection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15954,
+        "title": "Add a \"storage\" reference document",
+        "url": "https://github.com/astral-sh/uv/pull/15954",
+        "state": "merged",
+        "reason": "Superseded the storage documentation PR referenced in the answer to astral-sh/uv#13977. It documents separate settings for uv, managed Python launchers, and tool executables; it did not change runtime behavior."
+      },
+      {
+        "kind": "issue",
+        "number": 11230,
+        "title": "Not enough space on my Windows system, what should I do to move the UV content to the D drive?",
+        "url": "https://github.com/astral-sh/uv/issues/11230",
+        "state": "open",
+        "reason": "The Windows D: drive discussion explicitly distinguishes `UV_PYTHON_BIN_DIR` from `UV_INSTALL_DIR` and `UV_TOOL_BIN_DIR`. It covers relocating all uv storage rather than the specific behavior of `--default`."
+      }
+    ],
+    "search_scope": "Used `gh` to search open and closed issues and open, closed, and merged PRs for `--default`, `python3.11.exe`, `.local/bin`, and the directory variables. Broadened the search to shims, symlink locations, launchers, and executable directories without platform or version terms. Separately checked configuration and fallback reports, followed the documentation PR chain from astral-sh/uv#13977, and compared fixes from the reported 0.13 series. In astral-sh/uv#14342, the reporter already set `UV_PYTHON_BIN_DIR`, and a maintainer suggested checking the running process's environment. astral-sh/uv#13979 requests a new CLI flag. astral-sh/uv#22547 fixes broken links with relative interpreter installation paths, and astral-sh/uv#14261 makes default preview launchers upgradeable. None of these alternatives matches the reported launcher placement."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#13977 answers the same question: why `uv python install --default` puts launchers in `~/.local/bin` instead of the directory configured for uv itself. The source uses `UV_PYTHON_BIN_DIR`, not `UV_INSTALL_DIR` or `UV_TOOL_BIN_DIR`, to select the launcher directory. The PowerShell snippet does not set `UV_PYTHON_BIN_DIR`, so it does not establish a regression in uv 0.13.1–0.13.9.",
+  "summary": "astral-sh/uv#13977 is the canonical answer for choosing the Python launcher directory. astral-sh/uv#15954 documents the separate settings, and astral-sh/uv#11230 applies them to a broader Windows D: drive setup.",
+  "draft_response": "`uv python install --default` uses `UV_PYTHON_BIN_DIR` for the Python launchers. `UV_INSTALL_DIR` controls where the standalone installer puts `uv` and `uvx`, `UV_PYTHON_INSTALL_DIR` controls where the interpreters are stored, and `UV_TOOL_BIN_DIR` is for commands installed by `uv tool install`.\n\nIn the same PowerShell session, set `$env:UV_PYTHON_BIN_DIR = \"D:\\uv\\bin\"`, check that `uv python dir --bin` prints that directory, then rerun `uv python install 3.11 --default`. The same launcher-directory question was answered in astral-sh/uv#13977."
+}
