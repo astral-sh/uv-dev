@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3877,
+        "title": "Identical yanked errors don't simplify",
+        "url": "https://github.com/astral-sh/uv/issues/3877",
+        "state": "closed",
+        "reason": "The closest yank-specific report: the diagnostic repeated the same yank reason for consecutive sentry releases. A maintainer closed it as a special case of astral-sh/uv#1901. It did not report yanking hiding a shared Python requirement."
+      },
+      {
+        "kind": "issue",
+        "number": 1901,
+        "title": "Incompatibilities for unusable distributions are not combined",
+        "url": "https://github.com/astral-sh/uv/issues/1901",
+        "state": "closed",
+        "reason": "The canonical discussion for combining repeated incompatibilities for unusable distributions. Its example repeated the same missing Python ABI wheel reason; it did not track which reason to show when the same files have multiple independent blockers."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6154,
+        "title": "Collapse unavailable packages in resolver errors",
+        "url": "https://github.com/astral-sh/uv/pull/6154",
+        "state": "merged",
+        "reason": "Adds error-tree reduction for versions unavailable for the same reason. It combines causes already recorded by the resolver but does not recover a Requires-Python check skipped for a yanked distribution."
+      },
+      {
+        "kind": "issue",
+        "number": 4075,
+        "title": "Avoid redundant enumeration of all package versions during solve failure",
+        "url": "https://github.com/astral-sh/uv/issues/4075",
+        "state": "closed",
+        "reason": "The diagnostic already said every rooster-blue version required newer Python and then listed the versions redundantly. In the new report, that all-versions conclusion is missing because the yanked releases are reported separately."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9885,
+        "title": "Fix redundant enumeration of all package versions in some resolver errors",
+        "url": "https://github.com/astral-sh/uv/pull/9885",
+        "state": "merged",
+        "reason": "Fixes astral-sh/uv#4075 by dropping redundant availability enumeration when the ranges match. It does not add the Python incompatibility to a candidate already rejected as yanked."
+      }
+    ],
+    "search_scope": "Searched open and closed issues with authenticated gh using aprict, the exact development versions, and error fragments such as “was yanked” and “does not satisfy.” Searched separately for hidden Python incompatibilities and for verbose version enumeration using Requires-Python, unavailable distributions, redundant clauses, and the area:error-messages label. PR keyword search did not surface known fixes, so the search also screened all open PRs and the 1,000 most recent PRs across open, closed, and merged states, back through uv 0.12.22, and followed older issue comments to merged fixes. Ruled out astral-sh/uv#622 because its yank and Python ABI clauses applied to different ranges; astral-sh/uv#6160 because it removes tautological clauses; astral-sh/uv#9886 and astral-sh/uv#9957 because they simplify Python clauses already present; astral-sh/uv#8280 because it tracks verbose listing rather than a missing reason; and astral-sh/uv#21430 and astral-sh/uv#21435 because they concern lockfile artifact selection."
+  },
+  "type": "bug",
+  "type_reason": "Rejecting the install is correct, but the diagnostic misleadingly excludes the two yanked releases from the shared Python requirement. PyPI confirms both releases require Python 3.14 or newer, and the same message reproduced on uv 0.12.22 and 0.13.9 with CPython 3.13.18. The reported release returns an incompatible candidate before checking Requires-Python. The older fixes address different diagnostic cases, so there is no evidence of a duplicate or a regression.",
+  "summary": "The closest prior work combines repeated yank clauses or removes redundant version lists. None tracks this case, where yanking obscures a Python requirement shared by every release in the requested range.",
+  "draft_response": "The resolver is right to reject `aprict<=0.1.0` on Python 3.13, but the error gives the wrong impression. Both yanked releases also declare `Requires-Python: >=3.14`, so downloading either one won’t make it compatible with Python 3.13. The same message reproduces on uv 0.13.9. If you can change interpreters, use Python 3.14 or newer to satisfy the package’s Python requirement. The diagnostic should make that shared requirement clear without changing how uv handles yanked releases."
+}
