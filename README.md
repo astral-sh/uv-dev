@@ -10,6 +10,8 @@ The reporter ran `uv lock --upgrade-package lxml` against a private HTTPS packag
 
 The closest prior work covers request-URL diagnostics, a different HTTPS CONNECT failure, and Docker/musl DNS failures for private repositories. None of that earlier work tracks the missing proxy endpoint. The upstream reqwest proposal attaches the actual proxy endpoint at connection time; two uv-side patches take different approaches.
 
+The reporter also wants uv's own verbose output to indicate that a proxy is in effect before the connection attempt, independently of any failure diagnostic.
+
 ## Classification
 
 This is a diagnostic bug: the fetch error shows only the request URL next to a DNS failure that occurred while connecting to the proxy. The missing endpoint is reproducible on both libc builds when the configured proxy cannot be resolved. Whether and why the short proxy hostname fails in the reported distroless environment is a separate question.
@@ -53,6 +55,12 @@ uv currently pins reqwest 0.13.5. When a reqwest version containing the change i
 astral-sh/uv#23292 is open against `main`. It recognizes tunnel and SOCKS errors by their source-chain messages, reconstructs the proxy URL for the diagnostic, and proposes redacted proxy URLs, debug logging of proxy configuration, and a hint to check proxy settings and reachability. The debug lines describe configuration, not necessarily the proxy selected for a particular request.
 
 The proposed matcher falls back to `HTTP_PROXY` for HTTPS destinations, unlike reqwest's environment matcher and the `HTTP_PROXY`-only control above. Before relying on the reconstructed URL, verify that it identifies the endpoint actually selected, including when a destination bypasses the proxy. Also run the plain HTTP forwarding regression: its DNS error has no tunnel or SOCKS marker for the proposed classifier. The focused validation above applies only to the draft DNS-boundary patch, not to this alternative.
+
+### Verbose proxy logging
+
+Keep this separate from the error fix: seanmonstar/reqwest#3144 adds proxy context to failures, not an early message in uv's usual verbose output. The fixture's `RUST_LOG=reqwest::connect=debug` setting is a debugging workaround, not the requested uv output. astral-sh/uv#23292 proposes logging proxy configuration, which does not necessarily tell users whether a request will use a proxy.
+
+For a logging change, check ordinary verbose output without a `RUST_LOG` override. A successful proxied request should show that the proxy was selected before connecting, without exposing proxy userinfo. A request bypassed by `NO_PROXY` should not be reported as proxied.
 
 ## Draft response
 
