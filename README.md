@@ -112,6 +112,8 @@ Using the installed uv executable, python-dotenv 1.0.1 was installed with `uv --
 
 The reporter did not specify a python-dotenv version; the comparison establishes these examples for 1.0.1, not universal compatibility across dotenv implementations or versions.
 
+As a workaround for projects using python-dotenv syntax, the reporter uses `uv run dotenv -f .env run -- <command>` with the python-dotenv CLI available in the project environment. This lets python-dotenv load the file in place of `uv run --env-file`. The reproduction compared the Python API; it did not test this CLI invocation.
+
 ### Existing test coverage and implementation
 
 The relevant existing tests were read, including their fixtures and snapshots:
@@ -149,9 +151,11 @@ A dependency patch belongs in dotenvy and would require a dependency/lockfile ch
 
 ## Documentation and maintainer next step
 
+On November 19, 2026, uv maintainer woodruffw said in astral-sh/uv#23226 that uv is likely to move away from dotenvy. This signals a likely direction; the comment does not confirm a replacement parser, a release target, or how the replacement would handle these cases.
+
 `docs/concepts/configuration-files.md`, under “Environment variable files,” names dotenvy, gives a quoted-space example, and documents file selection and precedence. It does not explicitly explain these substitution and whitespace differences.
 
-A focused documentation update can explain quoting or escaping spaces, single quotes for literal dollar signs, `${A_PLAIN}` for names containing underscores, and the distinction between silent substitutions and parse warnings that stop loading a file while allowing the child command to run. Keep the underscore concern linked to its upstream tracker. The comparison should not claim that python-dotenv expands bare `$A_PLAIN` correctly: the tested version leaves it literal.
+For releases that use dotenvy, a focused documentation update can explain quoting or escaping spaces, single quotes for literal dollar signs, `${A_PLAIN}` for names containing underscores, and the distinction between silent substitutions and parse warnings that stop loading a file while allowing the child command to run. Keep the underscore concern linked to its upstream tracker. The comparison should not claim that python-dotenv expands bare `$A_PLAIN` correctly: the tested version leaves it literal.
 
 ## Related
 
