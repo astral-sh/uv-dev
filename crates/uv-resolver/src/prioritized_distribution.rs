@@ -47,6 +47,8 @@ pub(crate) struct RegistryVariantsJson {
 struct PrioritizedDistInner {
     /// The highest-priority source distribution. Between compatible source distributions this priority is arbitrary.
     source: Option<(RegistrySourceDist, SourceDistCompatibility)>,
+    /// Whether source distributions disagree on their `Requires-Python` metadata.
+    source_requires_python_conflict: bool,
     /// The highest-priority wheel index. When present, it is
     /// guaranteed to be a valid index into `wheels`.
     best_wheel_index: Option<usize>,
@@ -68,6 +70,7 @@ impl Default for PrioritizedDistInner {
     fn default() -> Self {
         Self {
             source: None,
+            source_requires_python_conflict: false,
             best_wheel_index: None,
             wheels: Vec::new(),
             variants_json: Vec::new(),
@@ -558,7 +561,9 @@ impl PrioritizedDist {
             self.0.hashes.extend(hashes);
         }
         // Track the highest-priority source.
-        if let Some((.., existing_compatibility)) = &self.0.source {
+        if let Some((existing_source, existing_compatibility)) = &self.0.source {
+            self.0.source_requires_python_conflict |=
+                existing_source.file.requires_python != dist.file.requires_python;
             if compatibility.is_more_compatible(existing_compatibility) {
                 self.0.source = Some((dist, compatibility));
             }
@@ -735,6 +740,18 @@ impl PrioritizedDist {
                     .as_ref()
                     .map(|(source_dist, _)| source_dist.file.as_ref()),
             )
+    }
+
+    /// Return the `Requires-Python` specifier if all distributions declare the same one.
+    pub(crate) fn shared_requires_python(&self) -> Option<&VersionSpecifiers> {
+        if self.0.source_requires_python_conflict {
+            return None;
+        }
+        let mut files = self.files();
+        let requires_python = files.next()?.requires_python.as_deref()?;
+        files
+            .all(|file| file.requires_python.as_deref() == Some(requires_python))
+            .then_some(requires_python)
     }
 
     /// Returns an iterator over all Python tags for the distribution.
