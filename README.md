@@ -23,13 +23,22 @@ uv --no-config pip install --dry-run --python .venv/bin/python \
 
 All three uv versions exited 1. The diagnostic said `0.0.24.dev1` and `0.0.34.dev8` were unusable because they were yanked. It cited `Python>=3.14` only for the remaining versions, splitting them into three ranges. PyPI metadata listed `Requires-Python: >=3.14` on all 78 published files at or below `0.1.0`, including the wheel and source archive of each yanked release. As controls, replacing the range with `aprict==0.0.24.dev1` and, separately, `aprict==0.0.34.dev8` on uv 0.13.7 also exited 1; each exact pin reported the Python incompatibility directly.
 
-In `crates/uv/tests/pip/pip_install_scenarios.rs`, `package_only_yanked_in_range` snapshots rejection when only a yanked version is in range, and `python_greater_than_current` snapshots rejection when an exact pin requires a newer Python. Neither fixture combines both reasons on the same release. No test covering that interaction was found in the inspected integration tests.
+In `crates/uv/tests/pip/pip_install_scenarios.rs`, `package_only_yanked_in_range` snapshots rejection when only a yanked version is in range, and `python_greater_than_current` snapshots rejection when an exact pin requires a newer Python. Neither fixture combines both reasons on the same release. The parent regression from astral-sh/uv-dev#3140 covers that interaction with a local Simple HTML index: a yanked release with a wheel and source archive, a yanked wheel-only release, and an unyanked release all require Python 3.14 or newer.
 
-In the checkout, `crates/uv-resolver/src/version_map.rs` marks disallowed yanked distributions as incompatible, and `crates/uv-resolver/src/resolver/mod.rs` returns from the incompatible-candidate branch before `check_requires_python`. This is consistent with the difference between the range and exact-pin diagnostics; it does not establish that candidate selection needs to change.
+Before the fix, `crates/uv-resolver/src/version_map.rs` marked disallowed yanked distributions as incompatible. The incompatible-candidate branch in `crates/uv-resolver/src/resolver/mod.rs` returned the yank reason before reaching the Python requirement check. Exact pins permit yanks, so they reached the ordinary Python check and exposed the shared requirement.
 
 ## Classification
 
 This is a diagnostic bug, not an incorrect resolution result. The range message omits a Python requirement that independently rules out the yanked releases, which can give the impression that obtaining either file would work around the failure. The related diagnostic simplifications address repeated reasons or redundant version lists, not this interaction. No duplicate or regression was established.
+
+## Fix
+
+**Outcome: fixed.** For single-index resolution targeting a concrete environment, the resolver checks whether all artifacts of a candidate rejected as yanked declare the same `Requires-Python`. If that requirement rules out the target Python, the resolver records the Python incompatibility instead. This lets the existing diagnostic combine the yanked and unyanked versions under their shared requirement. When the metadata is missing, differs between artifacts, or does not rule out the target, the resolver retains the yank reason. Candidate selection and yank eligibility are unchanged.
+
+- The parent `pip_install::requires_python_yanked_registry` test passed with its original snapshot. Updating the snapshot to expect one shared Python incompatibility made it fail on the original yank clauses before the production change. The updated test passes after the fix.
+- Seven focused `pip` and `pip_compile` integration tests passed, covering ordinary Python rejection, rejection of unpinned yanks, selection of an unyanked version, and warnings for allowed exact pins. No neighboring snapshot needed a change.
+- The debug build rejected `aprict<=0.1.0` on CPython 3.13.18 with one Python incompatibility for the entire requested range. A fresh PyPI lookup and an offline run using its cache produced identical diagnostics. A local release with disagreeing source-archive metadata still reported yanking.
+- A `pip compile` to `pip sync --dry-run` round trip for `attrs==21.1.0` retained the exact pin and warned about yanking in both commands. Formatting and diff checks passed.
 
 ## Related
 
@@ -44,3 +53,5 @@ This is a diagnostic bug, not an incorrect resolution result. The range message 
 Searched open and closed issues using `aprict`, the two development versions, and the fragments `was yanked`, `does not satisfy`, and `cannot be used`. Searched separately for the underlying Python-compatibility omission and the verbose version enumeration using `Requires-Python`, unavailable distributions, incompatible versions, redundant clauses, and the `area:error-messages` label. Authenticated PR search did not surface known PRs, so the check also screened the titles and relevant descriptions of all open PRs and the 1,000 most recent PRs across open, closed, and merged states, back through the reported release. Older fixes were checked through issue comments and cross-references.
 
 The output in astral-sh/uv#622 mentions both yanking and Python ABI, but for different version ranges, and the report is about releases appearing unavailable when no wheel matches. The fix in astral-sh/uv#6160 removes tautological dependency clauses, and the discussion in astral-sh/uv#9886 led to astral-sh/uv#9957 simplifying Python clauses already present in the trace. Neither recovers a missing incompatibility reason. The report in astral-sh/uv#8280 concerns verbose listing in a longer dependency trace, not missing Python metadata on yanked candidates. The work in astral-sh/uv#21430 and astral-sh/uv#21435 concerns which artifacts are retained in a lockfile, not the reason shown for a failed `pip install`.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/3141

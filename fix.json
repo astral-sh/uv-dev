@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "The `uv pip install` diagnostic cited yanking for releases that also required a newer Python, hiding the requirement shared by the entire range. For single-index resolution targeting a specific environment, uv now reports the shared Python incompatibility when it rules out every artifact of a yanked release, without changing yank eligibility. The updated regression verifies that releases with source archives and wheel-only releases appear in the same Python incompatibility message.",
+  "validation": [
+    "Verified that the parent regression passed with the original diagnostic, failed after updating the expected output, and passed after the fix.",
+    "Passed seven focused `pip` and `pip_compile` integration tests covering Python incompatibility and yank handling.",
+    "Verified that the debug build produced the same corrected `aprict<=0.1.0` diagnostic online and from the offline cache, and retained the yank reason when artifact metadata differed.",
+    "Verified that a `pip compile` to `pip sync --dry-run` round trip preserved the exact pin and yank warnings for `attrs==21.1.0`.",
+    "Passed `cargo +stable fmt --all -- --check` and `git diff --check`."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3141"
+}
