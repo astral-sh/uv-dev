@@ -48,6 +48,7 @@ use self::source::{TySource, WorkspaceLookup};
 
 mod source;
 mod ty;
+mod workspace_lock;
 
 static TY: LazyLock<PackageName> = LazyLock::new(|| "ty".parse().expect("valid package name"));
 
@@ -473,6 +474,11 @@ pub async fn check(
             script_dir: &target_dir,
             workspace_cache,
             config_discovery,
+            lock_check: if frozen.is_some() {
+                LockCheck::Disabled
+            } else {
+                lock_check
+            },
             resolve_settings: resolve_workspace_settings,
         });
         let source =
