@@ -8,6 +8,7 @@ use uv_configuration::{
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution_types::ExtraBuildRequires;
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
@@ -53,6 +54,9 @@ pub async fn sync_from_lock(
     preview: Preview,
     malware_context: MalwareCheckContext<'_>,
 ) -> Result<Changelog, EnvironmentError> {
+    let extra_build_requires =
+        lower_build_dependencies(target, &settings, cache, workspace_cache, client_builder).await?;
+
     // Extract the project settings.
     let InstallerSettingsRef {
         index_locations,
@@ -63,7 +67,7 @@ pub async fn sync_from_lock(
         config_settings_package,
         build_isolation,
         build_hash_checking,
-        extra_build_dependencies,
+        extra_build_dependencies: _,
         extra_build_variables,
         exclude_newer,
         link_mode,
@@ -72,74 +76,6 @@ pub async fn sync_from_lock(
         build_options,
         sources,
     } = settings;
-
-    // Lower the extra build dependencies with source resolution.
-    let extra_build_requires = match &target {
-        InstallTarget::Workspace { workspace, .. }
-        | InstallTarget::Project { workspace, .. }
-        | InstallTarget::Projects { workspace, .. }
-        | InstallTarget::NonProjectWorkspace { workspace, .. } => {
-            LoweredExtraBuildDependencies::from_workspace(
-                extra_build_dependencies.clone(),
-                workspace,
-                index_locations,
-                &sources,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
-        }
-        InstallTarget::Lockfile {
-            root,
-            project_name,
-            lock,
-            ..
-        } => {
-            let member = project_name.and_then(|name| {
-                lock.workspace_member_paths()
-                    .find_map(|(member, path)| (member == name).then(|| root.join(path)))
-            });
-            if let Some(member) = member.filter(|path| {
-                !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
-            }) {
-                let workspace = Workspace::discover(
-                    &member,
-                    &DiscoveryOptions {
-                        members: MemberDiscovery::Existing,
-                        stop_discovery_at: Some(root.to_path_buf()),
-                    },
-                    cache,
-                    workspace_cache,
-                )
-                .await?;
-                LoweredExtraBuildDependencies::from_workspace(
-                    extra_build_dependencies.clone(),
-                    &workspace,
-                    index_locations,
-                    &sources,
-                    cache,
-                    workspace_cache,
-                    client_builder.credentials_cache(),
-                )
-                .await?
-            } else {
-                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            }
-        }
-        InstallTarget::Script { script, .. } => {
-            script_extra_build_requires(
-                (*script).into(),
-                &sources,
-                index_locations,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
-        }
-    }
-    .into_inner();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
     // Save an authenticated builder for the malware check before moving the
@@ -310,6 +246,86 @@ pub async fn sync_from_lock(
         .await?;
 
     Ok(changelog)
+}
+
+/// Resolve additional build dependencies using the source declarations of the lock target.
+pub(super) async fn lower_build_dependencies(
+    target: InstallTarget<'_>,
+    settings: &InstallerSettingsRef<'_>,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    client_builder: &BaseClientBuilder<'_>,
+) -> Result<ExtraBuildRequires, EnvironmentError> {
+    let extra_build_dependencies = settings.extra_build_dependencies;
+    let index_locations = settings.index_locations;
+    let sources = &settings.sources;
+
+    Ok(match &target {
+        InstallTarget::Workspace { workspace, .. }
+        | InstallTarget::Project { workspace, .. }
+        | InstallTarget::Projects { workspace, .. }
+        | InstallTarget::NonProjectWorkspace { workspace, .. } => {
+            LoweredExtraBuildDependencies::from_workspace(
+                extra_build_dependencies.clone(),
+                workspace,
+                index_locations,
+                sources,
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            )
+            .await?
+        }
+        InstallTarget::Lockfile {
+            root,
+            project_name,
+            lock,
+            ..
+        } => {
+            let member = project_name.and_then(|name| {
+                lock.workspace_member_paths()
+                    .find_map(|(member, path)| (member == name).then(|| root.join(path)))
+            });
+            if let Some(member) = member.filter(|path| {
+                !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
+            }) {
+                let workspace = Workspace::discover(
+                    &member,
+                    &DiscoveryOptions {
+                        members: MemberDiscovery::Existing,
+                        stop_discovery_at: Some(root.to_path_buf()),
+                    },
+                    cache,
+                    workspace_cache,
+                )
+                .await?;
+                LoweredExtraBuildDependencies::from_workspace(
+                    extra_build_dependencies.clone(),
+                    &workspace,
+                    index_locations,
+                    sources,
+                    cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+            } else {
+                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
+            }
+        }
+        InstallTarget::Script { script, .. } => {
+            script_extra_build_requires(
+                (*script).into(),
+                sources,
+                index_locations,
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            )
+            .await?
+        }
+    }
+    .into_inner())
 }
 
 /// Extract any credentials that are defined on the workspace dependencies themselves. While we

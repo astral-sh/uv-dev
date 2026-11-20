@@ -1754,6 +1754,7 @@ pub async fn sync_environment(
     resolution: &Resolution,
     hasher: HashStrategy,
     modifications: Modifications,
+    extra_build_requires: &ExtraBuildRequires,
     build_constraints: Constraints,
     settings: InstallerSettingsRef<'_>,
     client_builder: &BaseClientBuilder<'_>,
@@ -1774,7 +1775,7 @@ pub async fn sync_environment(
         config_settings_package,
         build_isolation,
         build_hash_checking,
-        extra_build_dependencies,
+        extra_build_dependencies: _,
         extra_build_variables,
         exclude_newer,
         link_mode,
@@ -1822,11 +1823,6 @@ pub async fn sync_environment(
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
-    // Lower the extra build dependencies, if any.
-    let extra_build_requires =
-        LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            .into_inner();
-
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
         &client,
@@ -1841,7 +1837,7 @@ pub async fn sync_environment(
         config_setting,
         config_settings_package,
         build_isolation,
-        &extra_build_requires,
+        extra_build_requires,
         extra_build_variables,
         link_mode,
         build_options,

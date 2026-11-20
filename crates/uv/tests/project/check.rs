@@ -2208,6 +2208,86 @@ fn check_uses_root_checker_outside_selected_packages() -> Result<()> {
     Ok(())
 }
 
+/// A cached source build uses workspace sources and is specific to its build settings.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_uses_workspace_build_settings_for_cached_checker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let root = context.temp_dir.child("pyproject.toml");
+    let manifest = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ty"]
+
+        [tool.uv.sources]
+        ty = { path = "ty" }
+        checker-build-helper = { path = "helper" }
+
+        [tool.uv.extra-build-dependencies]
+        ty = ["checker-build-helper"]
+
+        [tool.uv.extra-build-variables]
+        ty = { CHECKER_MESSAGE = "first build" }
+    "#};
+    context
+        .temp_dir
+        .child("helper/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "checker-build-helper"
+        version = "0.1.0"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("helper/src/checker_build_helper/__init__.py")
+        .write_str(indoc! {r#"
+        import os
+        message = os.environ["CHECKER_MESSAGE"]
+    "#})?;
+
+    context
+        .temp_dir
+        .child("ty/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "ty"
+        version = "1.2.3"
+
+        [project.scripts]
+        ty = "checker:main"
+
+        [build-system]
+        requires = ["setuptools"]
+        build-backend = "setuptools.build_meta"
+    "#})?;
+    context.temp_dir.child("ty/setup.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from setuptools import setup
+        from checker_build_helper import message
+        Path("checker.py").write_text(
+            "import sys\n"
+            "def main():\n"
+            f"    print('ty 1.2.3' if '--version' in sys.argv else {message!r})\n"
+        )
+        setup(py_modules=["checker"])
+    "#})?;
+    for message in ["first build", "second build"] {
+        root.write_str(&manifest.replace("first build", message))?;
+        let output = context.check().arg("--no-sync").assert().success();
+        assert_eq!(
+            std::str::from_utf8(&output.get_output().stdout)?.trim(),
+            message
+        );
+    }
+    Ok(())
+}
+
 /// Install the dependencies of a virtual workspace member when caching a locked checker.
 #[test]
 #[cfg(feature = "test-pypi")]
