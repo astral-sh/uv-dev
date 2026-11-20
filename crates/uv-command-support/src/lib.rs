@@ -64,6 +64,16 @@ impl UvError {
         Self::Unexpected(error)
     }
 
+    /// Add diagnostic context while retaining the exit status associated with the cause.
+    #[must_use]
+    pub fn context(self, context: &'static str) -> Self {
+        match self {
+            Self::User(error) => Self::User(error.context(context)),
+            Self::Argument(error) => Self::Argument(error.context(context)),
+            Self::Unexpected(error) => Self::Unexpected(error.context(context)),
+        }
+    }
+
     /// Add command-specific context to a user error without changing unexpected errors.
     #[must_use]
     pub fn map_user(self, context: impl FnOnce(anyhow::Error) -> anyhow::Error) -> Self {

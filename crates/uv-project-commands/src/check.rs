@@ -500,17 +500,7 @@ pub async fn check(
                         &install_mirrors,
                     )
                     .await
-                    .map_err(|error| -> anyhow::Error {
-                        let add_context = |error: anyhow::Error| {
-                            error.context("Failed to use the workspace's locked `ty`. Use `--no-project` to skip the workspace lookup")
-                        };
-                        match error.downcast() {
-                            Ok(UvError::User(error)) => UvError::User(add_context(error)).into(),
-                            Ok(UvError::Argument(error)) => UvError::Argument(add_context(error)).into(),
-                            Ok(UvError::Unexpected(error)) => UvError::Unexpected(add_context(error)).into(),
-                            Err(error) => add_context(error),
-                        }
-                    })?
+                    .map_err(|error| error.context("Failed to look up or install `ty` from the script's workspace. Use `--no-project` to skip the workspace lookup"))?
             };
         }
 

@@ -2547,7 +2547,7 @@ fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: Failed to use the workspace's locked `ty`. Use `--no-project` to skip the workspace lookup
+    error: Failed to look up or install `ty` from the script's workspace. Use `--no-project` to skip the workspace lookup
       cause: The current Python platform is not compatible with the lockfile's supported environments: `sys_platform == 'win32'`
     ");
     Ok(())
