@@ -15,9 +15,9 @@ NUMBER = int(os.environ["PULL_REQUEST_NUMBER"])
 DIRECTORY = Path(os.environ["RUNNER_TEMP"]) / "behavior"
 
 
-def api(endpoint: str, *args: str):
+def api(endpoint: str):
     return json.loads(
-        subprocess.check_output(["gh", "api", f"repos/{REPOSITORY}/{endpoint}", *args])
+        subprocess.check_output(["gh", "api", f"repos/{REPOSITORY}/{endpoint}"])
     )
 
 
@@ -61,18 +61,33 @@ def prepare() -> None:
         print(f"revisions={json.dumps(commits)}", file=output)
 
 
+def source_location(source, commits: dict[str, str]) -> tuple[str, Path, int]:
+    path = Path(source["path"])
+    line = source["line"]
+    if (
+        not path.name
+        or path.is_absolute()
+        or ".." in path.parts
+        or not str(path).isprintable()
+        or type(line) is not int
+        or line < 1
+    ):
+        raise ValueError("Invalid source location")
+    return commits[source["revision"]], path, line
+
+
 def verify_sources(changes, commits: dict[str, str]) -> None:
     for change in changes:
         for source in change["sources"]:
-            sha = commits[source["revision"]]
+            sha, path, line = source_location(source, commits)
             blob = subprocess.check_output(
-                ["git", "cat-file", "blob", f"{sha}:{source['path']}"],
+                ["git", "cat-file", "blob", f"{sha}:{path}"],
                 cwd=DIRECTORY,
                 stderr=subprocess.PIPE,
             )
             lines = blob.count(b"\n") + bool(blob and not blob.endswith(b"\n"))
-            if not 1 <= source["line"] <= lines:
-                raise ValueError(f"Source line outside {source['path']!r}")
+            if line > lines:
+                raise ValueError(f"Source line {line} outside {path}")
 
 
 def prose(value: str) -> str:
@@ -88,18 +103,11 @@ def prose(value: str) -> str:
 
 
 def source_link(source, commits: dict[str, str]) -> str:
-    sha = commits[source["revision"]]
-    path = source["path"]
-    line = source["line"]
-    if (
-        not path.isprintable()
-        or any(part in {"", ".", ".."} for part in path.split("/"))
-        or type(line) is not int
-        or line < 1
-    ):
-        raise ValueError("Invalid source location")
-    url = f"https://github.com/{REPOSITORY}/blob/{sha}/{quote(path)}#L{line}"
-    return f"[{quote(Path(path).name)}:{line}]({url})"
+    sha, path, line = source_location(source, commits)
+    url = f"https://github.com/{REPOSITORY}/blob/{sha}/{quote(str(path))}#L{line}"
+    # A longer delimiter keeps literal backticks in the filename inside the code span.
+    ticks = "`" * (path.name.count("`") + 1)
+    return f"[{ticks} {path.name}:{line} {ticks}]({url})"
 
 
 def render(changes, commits: dict[str, str]) -> str | None:
@@ -122,31 +130,44 @@ def render(changes, commits: dict[str, str]) -> str | None:
     return "\n\n".join(paragraphs)
 
 
+def existing_summary():
+    page = 1
+    while True:
+        comments = api(f"issues/{NUMBER}/comments?per_page=100&page={page}")
+        for comment in comments:
+            if comment["user"]["id"] != AUTOMATIONS_BOT_ID:
+                continue
+            if comment["body"].startswith(MARKER + "\n"):
+                return comment
+        if len(comments) < 100:
+            return None
+        page += 1
+
+
 def publish(changes, commits: dict[str, str]) -> None:
-    endpoint = f"issues/{NUMBER}/comments"
-    pages = api(f"{endpoint}?per_page=100", "--paginate", "--slurp")
-    existing = next(
-        (
-            comment
-            for page in pages
-            for comment in page
-            if comment["user"]["id"] == AUTOMATIONS_BOT_ID
-            and comment["body"].startswith(MARKER + "\n")
-        ),
-        None,
-    )
+    existing = existing_summary()
     current = revisions(api(f"pulls/{NUMBER}"))
-    if current is None or current != commits:
+    if current is None or current["head"] != commits["head"]:
         print("Skipping a closed or superseded pull request.")
+        return
+    if current["base"] != commits["base"]:
+        # Rewriting a parent branch can change the diff without dispatching a
+        # replacement run for this PR.
+        print(
+            "::warning::The merge base changed during analysis. "
+            "Re-run all jobs to summarize the current diff if no replacement run is queued."
+        )
         return
 
     body = render(changes, current)
     if body == (existing["body"] if existing else None):
         return
-    method = "POST"
     if existing:
         endpoint = f"issues/comments/{existing['id']}"
         method = "PATCH" if body else "DELETE"
+    else:
+        endpoint = f"issues/{NUMBER}/comments"
+        method = "POST"
     command = [
         "gh",
         "api",
