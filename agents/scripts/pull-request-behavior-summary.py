@@ -26,7 +26,8 @@ def revisions(pr) -> dict[str, str] | None:
         return None
     head = pr["head"]["sha"]
     base = pr["base"]["sha"]
-    comparison = api(f"compare/{base}...{head}?per_page=1")
+    # Every page has the merge base. Only page one includes the file patches.
+    comparison = api(f"compare/{base}...{head}?per_page=1&page=2")
     return {"base": comparison["merge_base_commit"]["sha"], "head": head}
 
 
@@ -76,27 +77,13 @@ def source_location(source, commits: dict[str, str]) -> tuple[str, Path, int]:
     return commits[source["revision"]], path, line
 
 
-def verify_sources(changes, commits: dict[str, str]) -> None:
-    for change in changes:
-        for source in change["sources"]:
-            sha, path, line = source_location(source, commits)
-            blob = subprocess.check_output(
-                ["git", "cat-file", "blob", f"{sha}:{path}"],
-                cwd=DIRECTORY,
-                stderr=subprocess.PIPE,
-            )
-            lines = blob.count(b"\n") + bool(blob and not blob.endswith(b"\n"))
-            if line > lines:
-                raise ValueError(f"Source line {line} outside {path}")
-
-
 def prose(value: str) -> str:
     """Allow inline code, keeping links and other markup under publisher control."""
     parts = value.strip().split("`")
     if len(parts) % 2 == 0 or "``" in value or not value.isprintable():
         raise ValueError("Expected a single line with balanced code spans")
     for index in range(0, len(parts), 2):
-        if re.search(r"@|#\d|://|www\.", parts[index], re.IGNORECASE):
+        if re.search(r"@|(?:#|GH-)\d|://|www\.", parts[index], re.IGNORECASE):
             raise ValueError("Unexpected mention, issue reference or URL in prose")
         parts[index] = re.sub(r"([\\*_~<>\[\]&])", r"\\\1", parts[index])
     return "`".join(parts)
@@ -127,7 +114,26 @@ def render(changes, commits: dict[str, str]) -> str | None:
         paragraphs.append(
             " ".join(filter(None, (f"{prefix}**{lead}**", detail, links)))
         )
-    return "\n\n".join(paragraphs)
+    body = "\n\n".join(paragraphs)
+    if len(body.encode()) > 65_536:
+        raise ValueError("Summary exceeds GitHub's comment size limit")
+    return body
+
+
+def verify(changes, commits: dict[str, str]) -> None:
+    # Fail in the analysis job so a retry can regenerate unpublishable output.
+    render(changes, commits)
+    for change in changes:
+        for source in change["sources"]:
+            sha, path, line = source_location(source, commits)
+            blob = subprocess.check_output(
+                ["git", "cat-file", "blob", f"{sha}:{path}"],
+                cwd=DIRECTORY,
+                stderr=subprocess.PIPE,
+            )
+            lines = blob.count(b"\n") + bool(blob and not blob.endswith(b"\n"))
+            if line > lines:
+                raise ValueError(f"Source line {line} outside {path}")
 
 
 def existing_summary():
@@ -135,9 +141,10 @@ def existing_summary():
     while True:
         comments = api(f"issues/{NUMBER}/comments?per_page=100&page={page}")
         for comment in comments:
-            if comment["user"]["id"] != AUTOMATIONS_BOT_ID:
+            user = comment["user"]
+            if user is None or user["id"] != AUTOMATIONS_BOT_ID:
                 continue
-            if comment["body"].startswith(MARKER + "\n"):
+            if comment.get("body", "").startswith(MARKER + "\n"):
                 return comment
         if len(comments) < 100:
             return None
@@ -190,7 +197,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "prepare":
         prepare()
     else:
-        operation = {"verify": verify_sources, "publish": publish}[sys.argv[1]]
+        operation = {"verify": verify, "publish": publish}[sys.argv[1]]
         changes = json.loads(os.environ["RESULT"])["changes"]
         if changes is None:
             sys.exit("Codex could not inspect the revisions.")

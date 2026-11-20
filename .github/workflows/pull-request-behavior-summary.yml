@@ -80,7 +80,7 @@ jobs:
           prompt-file: ${{ github.workspace }}/agents/prompts/pull-request-behavior-summary.md
           output-schema-file: ${{ github.workspace }}/agents/schemas/pull-request-behavior-summary.json
 
-      - name: "Check cited source locations"
+      - name: "Check the summary and cited source locations"
         if: steps.prepare.outputs.revisions != ''
         run: python3 agents/scripts/pull-request-behavior-summary.py verify
         env:
