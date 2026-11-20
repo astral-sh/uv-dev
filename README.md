@@ -1,21 +1,52 @@
-# Issue context
+# Support `--env-file-if-exists` (no error thrown sans `.env` file)
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#23323
 
-Classification: bug, enhancement, duplicate, or question
+Classification: duplicate
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+The reporter proposes a Node-style `uv run --env-file-if-exists .env --script` option so the same
+shebang, development script, or CI command loads `.env` when present and still runs when it is
+absent. The missing-file behavior is already under discussion in astral-sh/uv#16672 and
+astral-sh/uv#9270. An open PR proposes skipping missing files listed in configuration, not adding
+an optional command-line flag.
 
 ## Draft response
 
-Draft a proposed reply for maintainer review.
+`uv run --env-file` treats the named file as required. We're discussing opt-in loading that skips
+missing files in astral-sh/uv#16672. Please add your shebang example there: it shows why a CLI flag
+would be useful even if a config-file option were available. For now, a shell wrapper can pass
+`--env-file .env` when the file exists and `--no-env-file` otherwise.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+The proposed flag gives a new spelling and a shebang use case for the same opt-in behavior already
+requested in astral-sh/uv#16672 and astral-sh/uv#9270: load the named dotenv file if present, and run
+without it if absent. Both older reports start from `UV_ENV_FILE`; the former discusses a separate
+opt-in, and the latter also discusses a command-line flag. The existing strict behavior is covered
+by a test, and the report does not describe a regression.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- astral-sh/uv#16672 (open) — “Do not error when no environment file is found.” Canonical discussion for best-effort dotenv loading in `uv run`. The report uses `UV_ENV_FILE`; a maintainer suggested a separate default-file setting rather than weakening explicitly requested files. The broader dotenv opt-in discussion points here for missing-file handling.
+- astral-sh/uv#9270 (open) — “[Feature request] add option to allow UV_ENV_FILE to point to non-existing file.” Same missing-file failure when sharing a dotenv configuration across projects. The discussion includes an explicit flag to load `.env` only when present.
+- astral-sh/uv#22385 (open PR) — “Add `env-file` setting for loading environment files in `uv run`.” The proposal skips absent files listed in configuration and explicitly leaves missing `--env-file` arguments as errors. It does not implement the requested CLI flag.
+
+## Supporting evidence
+
+`crates/uv-cli/src/lib.rs:3313` binds `--env-file` to `UV_ENV_FILE`.
+`crates/uv-project-commands/src/run.rs:174` propagates the dotenv loader's error before executing
+the script. `crates/uv-command-support/src/child.rs:19` maps `NotFound` to
+`No environment file found at:`, and `crates/uv/tests/project/run.rs:5213` expects exit code 2 for
+an explicitly named missing file. `docs/concepts/configuration-files.md:100` documents
+`--no-env-file` as an override for dotenv loading.
+
+## Search scope
+
+Searched open and closed issues and open, closed, and merged PRs with `gh` for the proposed flag,
+`--env-file`, `UV_ENV_FILE`, `No environment file found at`, and variants for optional or best-effort
+dotenv loading and `uv run --script`. Followed comments and linked dotenv changes.
+astral-sh/uv#8263 added explicit loading, not an optional CLI path. Ruled out astral-sh/uv#16926
+(implicit discovery and persistent opt-in), astral-sh/uv#15806 (a path containing spaces), and
+astral-sh/uv#18017 (an option passed after the script path).
