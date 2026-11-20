@@ -1,6 +1,5 @@
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -18,13 +17,13 @@ use uv_settings::{FrozenSource, LockCheck};
 use uv_shell::shlex_posix;
 use uv_static::EnvVars;
 
+use super::source::TySource;
 use crate::reporters::BinaryDownloadReporter;
 
 /// Run a type check powered by ty.
 #[expect(clippy::fn_params_excessive_bools)]
 pub(super) async fn run(
-    version: Option<String>,
-    ty_path: Option<PathBuf>,
+    source: TySource,
     fix: bool,
     target_dir: &Path,
     workspace_root: Option<&Path>,
@@ -43,108 +42,22 @@ pub(super) async fn run(
     color: ColorChoice,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let (ty_path, ty_version) = if let Some(ty_path) = ty_path {
-        let output = Command::new(&ty_path)
-            .arg("--version")
-            .output()
-            .await
-            .context("Failed to query ty version")?;
-        if !output.status.success() {
-            anyhow::bail!("Failed to query ty version");
+    let (ty_path, ty_version) = match source {
+        TySource::Executable(path) => {
+            let version = query_version(&path, show_version, printer).await?;
+            (path, version)
         }
-        let version = String::from_utf8_lossy(&output.stdout);
-        let ty_version = version
-            .split_whitespace()
-            .nth(1)
-            .context("Failed to parse ty version")?
-            .parse::<Version>()
-            .context("Failed to parse ty version")?;
-
-        if show_version {
-            writeln!(printer.stderr(), "Using {}", version.trim())?;
+        TySource::Standalone(version) => {
+            install_standalone(
+                version,
+                exclude_newer,
+                show_version,
+                client_builder,
+                cache,
+                printer,
+            )
+            .await?
         }
-
-        (ty_path, ty_version)
-    } else {
-        let retry_policy = client_builder.retry_policy();
-        let ty_client = client_builder.clone().retries(0).build()?;
-
-        let reporter = BinaryDownloadReporter::single(printer);
-        let bin_version = version
-            .as_deref()
-            .map(BinVersion::from_str)
-            .transpose()?
-            .unwrap_or(BinVersion::Default);
-
-        let resolved = match bin_version {
-            BinVersion::Default => {
-                let constraints = Binary::Ty.default_constraints();
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    Some(&constraints),
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| {
-                    format!("Failed to find ty version matching default constraints: {constraints}")
-                })?;
-                debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Pinned(version) => {
-                if exclude_newer.is_some() {
-                    debug!("`--exclude-newer` is ignored for pinned version `{version}`");
-                }
-                let resolved = ResolvedVersion::from_version(Binary::Ty, version)?;
-                debug!("Using `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Latest => {
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    None,
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| "Failed to find latest ty version")?;
-                debug!("Resolved `ty@latest` to `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Constraint(constraints) => {
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    Some(&constraints),
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| format!("Failed to find ty version matching: {constraints}"))?;
-                debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
-                resolved
-            }
-        };
-
-        if show_version {
-            writeln!(printer.stderr(), "Using ty {}", resolved.version)?;
-        }
-
-        let ty_path = bin_install(
-            Binary::Ty,
-            &resolved,
-            &ty_client,
-            &retry_policy,
-            cache,
-            &reporter,
-        )
-        .await
-        .with_context(|| format!("Failed to install ty {}", resolved.version))?;
-
-        (ty_path, resolved.version)
     };
 
     let mut command = Command::new(&ty_path);
@@ -264,4 +177,106 @@ pub(super) async fn run(
 
     let handle = command.spawn().context("Failed to spawn `ty check`")?;
     run_to_completion(handle).await
+}
+
+async fn query_version(ty_path: &Path, show_version: bool, printer: Printer) -> Result<Version> {
+    let output = Command::new(ty_path)
+        .arg("--version")
+        .output()
+        .await
+        .context("Failed to query ty version")?;
+    if !output.status.success() {
+        anyhow::bail!("Failed to query ty version");
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    let ty_version = version
+        .split_whitespace()
+        .nth(1)
+        .context("Failed to parse ty version")?
+        .parse::<Version>()
+        .context("Failed to parse ty version")?;
+
+    if show_version {
+        writeln!(printer.stderr(), "Using {}", version.trim())?;
+    }
+
+    Ok(ty_version)
+}
+
+async fn install_standalone(
+    bin_version: BinVersion,
+    exclude_newer: Option<jiff::Timestamp>,
+    show_version: bool,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
+    printer: Printer,
+) -> Result<(PathBuf, Version)> {
+    let retry_policy = client_builder.retry_policy();
+    let ty_client = client_builder.clone().retries(0).build()?;
+
+    let reporter = BinaryDownloadReporter::single(printer);
+    let resolved = match bin_version {
+        BinVersion::Default => {
+            let constraints = Binary::Ty.default_constraints();
+            let resolved = find_matching_version(
+                Binary::Ty,
+                Some(&constraints),
+                exclude_newer,
+                &ty_client,
+                &retry_policy,
+            )
+            .await
+            .with_context(|| {
+                format!("Failed to find ty version matching default constraints: {constraints}")
+            })?;
+            debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
+            resolved
+        }
+        BinVersion::Pinned(version) => {
+            if exclude_newer.is_some() {
+                debug!("`--exclude-newer` is ignored for pinned version `{version}`");
+            }
+            let resolved = ResolvedVersion::from_version(Binary::Ty, version)?;
+            debug!("Using `ty=={}`", resolved.version);
+            resolved
+        }
+        BinVersion::Latest => {
+            let resolved =
+                find_matching_version(Binary::Ty, None, exclude_newer, &ty_client, &retry_policy)
+                    .await
+                    .with_context(|| "Failed to find latest ty version")?;
+            debug!("Resolved `ty@latest` to `ty=={}`", resolved.version);
+            resolved
+        }
+        BinVersion::Constraint(constraints) => {
+            let resolved = find_matching_version(
+                Binary::Ty,
+                Some(&constraints),
+                exclude_newer,
+                &ty_client,
+                &retry_policy,
+            )
+            .await
+            .with_context(|| format!("Failed to find ty version matching: {constraints}"))?;
+            debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
+            resolved
+        }
+    };
+
+    if show_version {
+        writeln!(printer.stderr(), "Using ty {}", resolved.version)?;
+    }
+
+    let ty_path = bin_install(
+        Binary::Ty,
+        &resolved,
+        &ty_client,
+        &retry_policy,
+        cache,
+        &reporter,
+    )
+    .await
+    .with_context(|| format!("Failed to install ty {}", resolved.version))?;
+
+    Ok((ty_path, resolved.version))
 }
