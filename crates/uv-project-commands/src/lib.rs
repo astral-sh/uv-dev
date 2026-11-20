@@ -18,6 +18,7 @@ pub mod lock;
 pub mod remove;
 pub mod run;
 pub mod sync;
+mod toolchain;
 pub mod tree;
 pub mod upgrade;
 pub mod version;
