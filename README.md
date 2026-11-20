@@ -27,6 +27,14 @@ without it if absent. Both older reports start from `UV_ENV_FILE`; the former di
 opt-in, and the latter also discusses a command-line flag. The existing strict behavior is covered
 by a test, and the report does not describe a regression.
 
+## Design feedback
+
+`woodruffw` raised a concern about making a flag's effect conditional on another state, such as
+whether a file exists. This is feedback on the proposed CLI design, not a decision against
+optional dotenv loading. The maintainer asked for the concrete workflow and how it reaches the
+missing-file failure. The shebang illustrates the desired behavior, but the reporter has not yet
+described an actual failing invocation in their workflow.
+
 ## Related
 
 - astral-sh/uv#16672 (open) — “Do not error when no environment file is found.” Canonical discussion for best-effort dotenv loading in `uv run`. The report uses `UV_ENV_FILE`; a maintainer suggested a separate default-file setting rather than weakening explicitly requested files. The broader dotenv opt-in discussion points here for missing-file handling.
