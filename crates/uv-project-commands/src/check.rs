@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use tracing::debug;
@@ -43,9 +43,12 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
-use crate::toolchain;
+use self::source::{TySource, WorkspaceLookup};
 
+mod source;
 mod ty;
+
+static TY: LazyLock<PackageName> = LazyLock::new(|| "ty".parse().expect("valid package name"));
 
 /// Run project checks.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -358,7 +361,7 @@ pub async fn check(
         None
     };
 
-    // Select an environment and, if we found a project, sync it before running checks.
+    // Prepare the analysis environment and select the checker that will inspect it.
     let state = UniversalState::default();
     let tool_installer = LockedToolInstaller {
         settings: &settings,
@@ -370,9 +373,8 @@ pub async fn check(
         printer,
         preview,
     };
-    let ty_name = PackageName::from_str("ty")?;
-    let mut locked_ty_environment = None;
-    let venv = if let Some(script) = &script {
+    let requested = TySource::requested(ty_path, ty_version)?;
+    let (venv, ty_source) = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
         let venv = if let Some(venv) = isolated_venv {
             venv
@@ -475,33 +477,19 @@ pub async fn check(
             );
         }
 
-        if ty_path.is_none() && ty_version.is_none() {
-            locked_ty_environment = if target
-                .for_environment(venv.interpreter(), None)?
-                .dependency_selection(None, &ty_name)?
-                .root()
-                .is_some()
-            {
-                Some(venv.clone())
-            } else if no_project {
-                None
-            } else {
-                toolchain::install_from_script_workspace(&tool_installer, &malware_settings,
-                        &target_dir,
-                        &ty_name,
-                        workspace_cache,
-                        config_discovery,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        &install_mirrors,
-                    )
-                    .await
-                    .map_err(|error| error.context("Failed to look up or install `ty` from the script's workspace. Use `--no-project` to skip the workspace lookup"))?
-            };
-        }
-
-        Some(venv)
+        let workspace = (!no_project).then_some(WorkspaceLookup {
+            script_dir: &target_dir,
+            workspace_cache,
+            config_discovery,
+            python_preference,
+            python_arch,
+            python_downloads,
+            malware_settings: &malware_settings,
+            install_mirrors: &install_mirrors,
+        });
+        let source =
+            TySource::for_script(requested, target, &venv, workspace, &tool_installer).await?;
+        (Some(venv), source)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
@@ -630,24 +618,22 @@ pub async fn check(
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
 
-        if ty_path.is_none() && ty_version.is_none() {
-            locked_ty_environment = toolchain::project_tool(
-                project.project_name(),
-                target,
-                lock_interpreter,
-                &ty_name,
-                (!no_sync).then_some(SyncSelection {
-                    extras: &extras,
-                    groups: &groups,
-                    install_options: &install_options,
-                    build_options: &settings.resolver.build_options,
-                }),
-                &venv,
-                &tool_installer,
-                &mut malware_context,
-            )
-            .await?;
-        }
+        let source = TySource::for_project(
+            requested,
+            project.project_name(),
+            target,
+            lock_interpreter,
+            (!no_sync).then_some(SyncSelection {
+                extras: &extras,
+                groups: &groups,
+                install_options: &install_options,
+                build_options: &settings.resolver.build_options,
+            }),
+            &venv,
+            &tool_installer,
+            &mut malware_context,
+        )
+        .await?;
 
         if no_sync {
             debug!("Skipping environment synchronization due to `--no-sync`");
@@ -682,9 +668,9 @@ pub async fn check(
             }
         }
 
-        Some(venv)
+        (Some(venv), source)
     } else {
-        isolated_venv
+        (isolated_venv, requested.unwrap_or_default())
     };
 
     // Forward the user's explicit Python request so ty can apply its own version selection rules.
@@ -722,16 +708,10 @@ pub async fn check(
     let exclude_newer = settings
         .resolver
         .exclude_newer
-        .exclude_newer_package_for_index(&ty_name, None);
-    let locked_ty_path = locked_ty_environment.map(|environment| {
-        environment
-            .scripts()
-            .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
-    });
+        .exclude_newer_package_for_index(&TY, None);
 
     ty::run(
-        ty_version,
-        ty_path.or(locked_ty_path),
+        ty_source,
         fix,
         &target_dir,
         project
