@@ -21,10 +21,12 @@ def api(endpoint: str):
     )
 
 
-def revisions(pr) -> dict[str, str] | None:
+def revisions(pr, *, expected_head: str | None = None) -> dict[str, str] | None:
     if pr["state"] != "open":
         return None
     head = pr["head"]["sha"]
+    if expected_head is not None and head != expected_head:
+        return None
     base = pr["base"]["sha"]
     # Every page has the merge base. Only page one includes the file patches.
     comparison = api(f"compare/{base}...{head}?per_page=1&page=2")
@@ -91,7 +93,9 @@ def prose(value: str) -> str:
 
 def source_link(source, commits: dict[str, str]) -> str:
     sha, path, line = source_location(source, commits)
-    url = f"https://github.com/{REPOSITORY}/blob/{sha}/{quote(str(path))}#L{line}"
+    url = (
+        f"https://github.com/{REPOSITORY}/blob/{sha}/{quote(str(path))}?plain=1#L{line}"
+    )
     # A longer delimiter keeps literal backticks in the filename inside the code span.
     ticks = "`" * (path.name.count("`") + 1)
     return f"[{ticks} {path.name}:{line} {ticks}]({url})"
@@ -103,7 +107,7 @@ def render(changes, commits: dict[str, str]) -> str | None:
     if not changes:
         return None
 
-    paragraphs = [f"{MARKER}\n### Behavior changes"]
+    paragraphs = [f"{MARKER}\n### Behavior changes at `{commits['head'][:7]}`"]
     for index, change in enumerate(changes, 1):
         lead = prose(change["lead"])
         if not lead or not 1 <= len(change["sources"]) <= 2:
@@ -131,6 +135,8 @@ def verify(changes, commits: dict[str, str]) -> None:
                 cwd=DIRECTORY,
                 stderr=subprocess.PIPE,
             )
+            if b"\0" in blob:
+                raise ValueError(f"Cannot cite a line in binary file {path}")
             lines = blob.count(b"\n") + bool(blob and not blob.endswith(b"\n"))
             if line > lines:
                 raise ValueError(f"Source line {line} outside {path}")
@@ -153,8 +159,8 @@ def existing_summary():
 
 def publish(changes, commits: dict[str, str]) -> None:
     existing = existing_summary()
-    current = revisions(api(f"pulls/{NUMBER}"))
-    if current is None or current["head"] != commits["head"]:
+    current = revisions(api(f"pulls/{NUMBER}"), expected_head=commits["head"])
+    if current is None:
         print("Skipping a closed or superseded pull request.")
         return
     if current["base"] != commits["base"]:
