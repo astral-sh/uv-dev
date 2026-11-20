@@ -17,8 +17,9 @@ use uv_environment_operations::install_target::ToolLocation;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
-    LinkErrorReporting, LockedTool, ProjectEnvironment, ProjectEnvironmentPolicy,
-    ProjectEnvironmentTarget, ProjectInterpreter, ScriptEnvironment, sync_from_lock,
+    LinkErrorReporting, LockedTool, LockedToolInstaller, ProjectEnvironment,
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, ScriptEnvironment,
+    sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -641,19 +642,18 @@ pub async fn check(
                         else {
                             continue;
                         };
-                        let Some(environment) = tool
-                            .install(
-                                lock_interpreter,
-                                &settings,
-                                &mut malware_context,
-                                &client_builder,
-                                &state,
-                                installer_metadata,
-                                &concurrency,
-                                cache,
-                                printer,
-                                preview,
-                            )
+                        let tool_installer = LockedToolInstaller {
+                            settings: &settings,
+                            client_builder: &client_builder,
+                            state: &state,
+                            installer_metadata,
+                            concurrency: &concurrency,
+                            cache,
+                            printer,
+                            preview,
+                        };
+                        let Some(environment) = tool_installer
+                            .install(tool, lock_interpreter, &mut malware_context)
                             .await
                             .map_err(UvError::from)?
                         else {
