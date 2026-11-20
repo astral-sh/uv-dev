@@ -1,5 +1,6 @@
 """Prepare a PR diff for Codex and maintain the bot's behavior summary."""
 
+import base64
 import json
 import os
 import re
@@ -10,8 +11,6 @@ from urllib.parse import quote
 
 MARKER = "<!-- uv-pull-request-behavior-summary -->"
 AUTOMATIONS_BOT_ID = 305554984
-# Manual runs bypass the author filters in `.github/automations-dispatch.json`.
-OPTED_IN_AUTHORS = {"zanieb", "zaniebot"}
 REPOSITORY = os.environ["GITHUB_REPOSITORY"]
 NUMBER = int(os.environ["PULL_REQUEST_NUMBER"])
 DIRECTORY = Path(os.environ["RUNNER_TEMP"]) / "behavior"
@@ -23,12 +22,33 @@ def api(endpoint: str):
     )
 
 
+def author_opted_in(author_id: int | None) -> bool:
+    if author_id is None:
+        return False
+
+    # Reruns use the original workflow commit. Consult the current dispatch
+    # policy so an author can opt out while a summary is queued or in progress.
+    file = api("contents/.github/automations-dispatch.json?ref=main")
+    policy = json.loads(base64.b64decode(file["content"]))
+    rules = [
+        rule
+        for rule in policy["rules"]
+        if rule["workflow"] == "pull-request-behavior-summary.yml"
+        and policy["repositories"][rule["repository"]]["name"] == REPOSITORY
+    ]
+    return bool(rules) and all(
+        author_id in rule["conditions"]["/pull_request/user/id"]["one_of"]
+        for rule in rules
+    )
+
+
 def revisions(pr, *, expected_head: str | None = None) -> dict[str, str] | None:
-    author = (pr.get("user") or {}).get("login")
-    if pr["state"] != "open" or author not in OPTED_IN_AUTHORS:
+    if pr["state"] != "open":
         return None
     head = pr["head"]["sha"]
     if expected_head is not None and head != expected_head:
+        return None
+    if not author_opted_in((pr.get("user") or {}).get("id")):
         return None
     base = pr["base"]["sha"]
     # Every page has the merge base. Only page one includes the file patches.

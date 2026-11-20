@@ -50,7 +50,7 @@
         "pull_request": ["opened", "reopened", "synchronize"]
       },
       "conditions": {
-        "/pull_request/user/login": { "one_of": ["zanieb", "zaniebot"] }
+        "/pull_request/user/id": { "one_of": [2586601, 242828183] }
       },
       "allow_draft": true,
       "allow_forks": true,
@@ -62,7 +62,7 @@
         "pull_request": ["edited"]
       },
       "conditions": {
-        "/pull_request/user/login": { "one_of": ["zanieb", "zaniebot"] },
+        "/pull_request/user/id": { "one_of": [2586601, 242828183] },
         "/changes/base/ref/from": { "exists": true }
       },
       "allow_draft": true,
@@ -132,7 +132,7 @@
         "pull_request": ["opened", "reopened", "synchronize"]
       },
       "conditions": {
-        "/pull_request/user/login": { "one_of": ["zanieb", "zaniebot"] }
+        "/pull_request/user/id": { "one_of": [2586601, 242828183] }
       },
       "allow_draft": true,
       "allow_forks": true,
@@ -144,7 +144,7 @@
         "pull_request": ["edited"]
       },
       "conditions": {
-        "/pull_request/user/login": { "one_of": ["zanieb", "zaniebot"] },
+        "/pull_request/user/id": { "one_of": [2586601, 242828183] },
         "/changes/base/ref/from": { "exists": true }
       },
       "allow_draft": true,
