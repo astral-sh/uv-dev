@@ -4842,10 +4842,16 @@ pub struct CheckArgs {
     )]
     pub package: Vec<PackageName>,
 
-    /// Run checks for the specified PEP 723 Python script, rather than the current project.
+    /// Check a Python script using the dependencies in its PEP 723 inline metadata.
     ///
-    /// By default, uv uses the script's direct `ty` dependency if possible. Otherwise, uv looks for
-    /// a locked `ty` in the containing workspace. Use `--no-project` to skip that lookup.
+    /// By default, uv uses the script's direct `ty` dependency when its markers match the script
+    /// environment. Otherwise, uv looks in the containing workspace's `uv.lock`, first in the root's
+    /// `dev` group and then in its direct production dependencies. Use `--no-project` to skip
+    /// the workspace lookup. If neither source supplies a checker, uv uses a standalone `ty`.
+    ///
+    /// uv installs a workspace checker in a cached environment using a Python interpreter
+    /// selected for the workspace. The checker resolves imports from the script's environment.
+    /// Use `--python` to select the script's interpreter and set the Python version for analysis.
     #[arg(
         long,
         conflicts_with = "extra",
@@ -4907,10 +4913,11 @@ pub struct CheckArgs {
     #[command(flatten)]
     pub dependency_groups: ConflictCheckedDependencyGroupsArgs,
 
-    /// Assert that the `uv.lock` will remain unchanged [env: UV_LOCKED=]
+    /// Require an up-to-date lockfile [env: UV_LOCKED=]
     ///
-    /// Requires that the lockfile is up-to-date. If the lockfile is missing or needs to be updated,
-    /// uv will exit with an error.
+    /// With `--script`, the script's lockfile must be up to date. If uv looks for a checker in
+    /// an existing workspace lockfile, uv checks its freshness when the root manifest or lock
+    /// declares `ty` in the root's `dev` group or direct production dependencies.
     #[arg(long, conflicts_with_all = ["frozen", "upgrade"], overrides_with = "no_locked")]
     pub locked: bool,
 
@@ -4952,10 +4959,14 @@ pub struct CheckArgs {
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
     pub isolated: bool,
 
-    /// The Python interpreter to use for the project environment.
+    /// The Python interpreter for the environment being checked.
     ///
-    /// By default, the first interpreter that meets the project's
-    /// `requires-python` constraint is used.
+    /// For project checks, uv discovers an interpreter using the project's Python requirement
+    /// and any Python version request.
+    ///
+    /// With `--script`, this selects the interpreter for the script environment. uv selects a
+    /// workspace checker's interpreter separately. Its selection accounts for the workspace
+    /// lockfile, the group that declares the checker, and any local Python version request.
     ///
     /// See `uv python` for more details on Python discovery and requests.
     #[arg(
@@ -4966,14 +4977,18 @@ pub struct CheckArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// The version of ty to use for type checking.
+    /// The version of `ty` to use for type checking.
     ///
     /// Accepts either a version (e.g., `0.0.1`) which will be treated as an exact pin,
     /// a version specifier (e.g., `>=0.0.1`), or `latest` to use the latest available version.
     ///
-    /// By default, the exact version resolved in `uv.lock` will be used when `ty` is a project
-    /// dependency or a dependency in the project's `dev` group. Otherwise, a constrained version
-    /// range of ty will be used (e.g., `>=0.0,<0.1`).
+    /// This option selects a standalone `ty` and takes precedence over project and script
+    /// dependencies. The `TY` environment variable selects an executable and takes precedence
+    /// over this option.
+    ///
+    /// By default, uv uses a locked `ty` from the project's `dev` group or direct production
+    /// dependencies. See `--script` for script checks. The default standalone checker uses
+    /// a constrained version range (e.g., `>=0.0,<0.1`).
     #[arg(long, value_hint = ValueHint::Other)]
     pub ty_version: Option<String>,
 
@@ -4987,8 +5002,8 @@ pub struct CheckArgs {
 
     /// Avoid discovering a project or workspace.
     ///
-    /// Instead of running checks in the context of the current project, run them in the context of
-    /// the current directory. This is useful when the current directory is not a project.
+    /// Run checks in the context of the current directory. With `--script`, check the script
+    /// using its inline metadata and skip the workspace lookup for `ty`.
     #[arg(
         long,
         env = EnvVars::UV_NO_PROJECT,
