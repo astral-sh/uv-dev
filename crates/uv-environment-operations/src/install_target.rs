@@ -11,7 +11,7 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
     TargetTriple,
 };
-use uv_distribution_types::{Index, RequiresPython, Resolution};
+use uv_distribution_types::{Dist, Index, RequiresPython, Resolution, ResolvedDist};
 use uv_lock::{DependencySelection, Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
@@ -116,7 +116,7 @@ impl<'lock> LockInstallation<'lock, '_> {
             build_options,
             &InstallOptions::default(),
         )?;
-        Ok(Some(resolution))
+        Ok(Some(exclude_virtual_projects(resolution)))
     }
 
     /// Materialize the requested packages, extras, and dependency groups.
@@ -127,15 +127,32 @@ impl<'lock> LockInstallation<'lock, '_> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
-        self.target.to_resolution(
-            &self.markers,
-            &self.tags,
-            extras,
-            groups,
-            build_options,
-            install_options,
-        )
+        self.target
+            .to_resolution(
+                &self.markers,
+                &self.tags,
+                extras,
+                groups,
+                build_options,
+                install_options,
+            )
+            .map(exclude_virtual_projects)
     }
+}
+
+/// Virtual projects contribute dependencies to the resolution but have no distribution to install.
+fn exclude_virtual_projects(resolution: Resolution) -> Resolution {
+    resolution.filter(|dist| {
+        let ResolvedDist::Installable { dist, .. } = dist else {
+            return true;
+        };
+
+        let Dist::Source(dist) = dist.as_ref() else {
+            return true;
+        };
+
+        !dist.is_virtual()
+    })
 }
 
 /// The workspace packages selected by an installation target.

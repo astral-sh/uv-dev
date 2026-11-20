@@ -2140,6 +2140,7 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
     Ok(())
 }
 
+/// Install the dependencies of a virtual workspace member when caching a locked checker.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
@@ -2160,9 +2161,27 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
 
         [tool.uv.sources]
         ty = { workspace = true }
+        checker-deps = { workspace = true }
 
         [tool.uv.workspace]
-        members = ["ty"]
+        members = ["ty", "checker-deps"]
+    "#})?;
+    context
+        .temp_dir
+        .child("checker-deps/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "checker-deps"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [tool.uv]
+        package = false
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     let ty = context.temp_dir.child("ty");
     ty.create_dir_all()?;
@@ -2171,7 +2190,7 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
         name = "ty"
         version = "1.2.3"
         requires-python = ">=3.12"
-        dependencies = []
+        dependencies = ["checker-deps"]
 
         [project.scripts]
         ty = "ty:main"
@@ -2184,6 +2203,8 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
     ty_package.create_dir_all()?;
     ty_package.child("__init__.py").write_str(indoc! {r#"
         import sys
+
+        import iniconfig
 
         def main():
             if "--version" in sys.argv:
@@ -2203,12 +2224,12 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
 
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
-    Installed 1 package in [TIME]
+    Installed 2 packages in [TIME]
     Using ty 1.2.3
     "
     );
 
-    assert!(!context.site_packages().join("ty").exists());
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }

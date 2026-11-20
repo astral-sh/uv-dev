@@ -8,7 +8,6 @@ use uv_configuration::{
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
@@ -157,9 +156,6 @@ pub async fn sync_from_lock(
     target.validate_groups(groups)?;
 
     let resolution = installation.to_resolution(extras, groups, build_options, &install_options)?;
-
-    // Always skip virtual projects, which shouldn't be built or installed.
-    let resolution = apply_no_virtual_project(resolution);
 
     // If necessary, convert editable to non-editable distributions.
     let resolution = apply_editable_mode(resolution, editable);
@@ -314,25 +310,6 @@ pub async fn sync_from_lock(
         .await?;
 
     Ok(changelog)
-}
-
-/// Filter out any virtual workspace members.
-fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
-    resolution.filter(|dist| {
-        let ResolvedDist::Installable { dist, .. } = dist else {
-            return true;
-        };
-
-        let Dist::Source(dist) = dist.as_ref() else {
-            return true;
-        };
-
-        let SourceDist::Directory(dist) = dist else {
-            return true;
-        };
-
-        !dist.r#virtual.unwrap_or(false)
-    })
 }
 
 /// Extract any credentials that are defined on the workspace dependencies themselves. While we
