@@ -841,6 +841,7 @@ pub async fn install(
                     &resolution,
                     hash_strategy,
                     Modifications::Exact,
+                    &extra_build_requires,
                     build_constraints.clone(),
                     (&settings).into(),
                     &client_builder,
@@ -1042,6 +1043,10 @@ pub async fn install(
             &resolution,
             hash_strategy,
             Modifications::Exact,
+            &LoweredExtraBuildDependencies::from_non_lowered(
+                settings.resolver.extra_build_dependencies.clone(),
+            )
+            .into_inner(),
             build_constraints.clone(),
             (&settings).into(),
             &client_builder,
