@@ -10,6 +10,8 @@ from urllib.parse import quote
 
 MARKER = "<!-- uv-pull-request-behavior-summary -->"
 AUTOMATIONS_BOT_ID = 305554984
+# Manual runs bypass the author filters in `.github/automations-dispatch.json`.
+OPTED_IN_AUTHORS = {"zanieb", "zaniebot"}
 REPOSITORY = os.environ["GITHUB_REPOSITORY"]
 NUMBER = int(os.environ["PULL_REQUEST_NUMBER"])
 DIRECTORY = Path(os.environ["RUNNER_TEMP"]) / "behavior"
@@ -22,7 +24,8 @@ def api(endpoint: str):
 
 
 def revisions(pr, *, expected_head: str | None = None) -> dict[str, str] | None:
-    if pr["state"] != "open":
+    author = (pr.get("user") or {}).get("login")
+    if pr["state"] != "open" or author not in OPTED_IN_AUTHORS:
         return None
     head = pr["head"]["sha"]
     if expected_head is not None and head != expected_head:
@@ -161,7 +164,7 @@ def publish(changes, commits: dict[str, str]) -> None:
     existing = existing_summary()
     current = revisions(api(f"pulls/{NUMBER}"), expected_head=commits["head"])
     if current is None:
-        print("Skipping a closed or superseded pull request.")
+        print("Skipping an ineligible or superseded pull request.")
         return
     if current["base"] != commits["base"]:
         # Rewriting a parent branch can change the diff without dispatching a
