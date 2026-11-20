@@ -619,6 +619,34 @@ impl PythonRequest {
         }
     }
 
+    /// Constrain a version-based discovery request, retaining its implementation and variant.
+    /// A specific executable cannot be redirected to another Python installation.
+    pub fn constrain(&self, specifiers: &VersionSpecifiers) -> Option<Self> {
+        if !self.intersects_specifiers(specifiers) {
+            return None;
+        }
+        let versions = self
+            .as_version_specifiers()
+            .into_iter()
+            .flatten()
+            .chain(specifiers.iter().cloned())
+            .collect();
+        let variant = match self {
+            Self::Version(version) | Self::ImplementationVersion(_, version) => version.variant(),
+            Self::Key(key) => key.version().and_then(VersionRequest::variant),
+            _ => None,
+        };
+        let version = VersionRequest::from_specifiers(versions, variant.unwrap_or_default());
+        match self {
+            Self::Default | Self::Any | Self::Version(_) => Some(Self::Version(version)),
+            Self::Implementation(name) | Self::ImplementationVersion(name, _) => {
+                Some(Self::ImplementationVersion(*name, version))
+            }
+            Self::Key(key) => Some(Self::Key(key.clone().with_version(version))),
+            Self::Directory(_) | Self::File(_) | Self::ExecutableName(_) => None,
+        }
+    }
+
     /// Returns `true` when this request is compatible with the given `requires-python` specifier.
     ///
     /// Requests without version constraints (e.g., paths, executable names) are always considered

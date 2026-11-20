@@ -170,6 +170,34 @@ impl ProjectPythonRequest {
         })
     }
 
+    /// Narrow discovery for an alternate interpreter after the first interpreter fell
+    /// outside the required range. Local version requests remain authoritative, while
+    /// a global preference only applies when it can satisfy the narrower requirement.
+    pub fn for_alternate(&self, requirement: ProjectPythonRequirement) -> Option<Self> {
+        let specifiers = requirement.requires_python.specifiers();
+        let narrowed = self
+            .python_request
+            .as_ref()
+            .and_then(|request| request.constrain(specifiers));
+        let (source, python_request) = if let Some(request) = narrowed {
+            (self.source.clone(), Some(request))
+        } else {
+            let optional = matches!(&self.source, PythonRequestSource::DotPythonVersion(file) if file.is_global());
+            if self.python_request.is_some() && !optional {
+                return None;
+            }
+            (
+                PythonRequestSource::RequiresPython,
+                PythonRequest::from_specifiers(specifiers),
+            )
+        };
+        Some(Self {
+            source,
+            python_request,
+            requirement: Some(requirement),
+        })
+    }
+
     pub fn requires_python(&self) -> Option<&RequiresPython> {
         self.requirement
             .as_ref()
