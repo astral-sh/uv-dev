@@ -31327,6 +31327,84 @@ fn lock_unsupported_version() -> Result<()> {
     Ok(())
 }
 
+/// A name-only dependency reports multiple matches even though its package entry is absent
+/// (astral-sh/uv#23295).
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_check_missing_package_without_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "demo"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-util"]
+        "#,
+    )?;
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "demo"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "demo-util" }]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      cause: Dependency `demo-util` has missing `source` field but has more than one matching package
+    ");
+
+    Ok(())
+}
+
+/// With an explicit registry source but no version, the diagnostic still reports multiple matches
+/// for an absent package (astral-sh/uv#23295).
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_check_missing_package_without_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "demo"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-util"]
+        "#,
+    )?;
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "demo"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "demo-util", source = { registry = "https://pypi.org/simple" } }]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      cause: Dependency `demo-util` has missing `version` field but has more than one matching package
+    ");
+
+    Ok(())
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/7618>
 #[cfg(feature = "test-universal")]
 #[test]
