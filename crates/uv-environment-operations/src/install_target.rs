@@ -12,10 +12,7 @@ use uv_configuration::{
     TargetTriple,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{
-    DependencySelection, Installable, InstallableRootKind, Lock, LockError, Package,
-    SelectedDependency,
-};
+use uv_lock::{DependencySelection, Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
@@ -73,7 +70,7 @@ pub enum InstallTarget<'lock> {
     },
 }
 
-/// An installation target paired with a platform supported by its lockfile.
+/// An installation target paired with a Python version and platform supported by its lockfile.
 pub struct LockInstallation<'lock, 'env> {
     target: InstallTarget<'lock>,
     markers: ResolverMarkerEnvironment,
@@ -90,29 +87,36 @@ impl<'lock> LockInstallation<'lock, '_> {
         &self,
         project_name: Option<&PackageName>,
         dependency_name: &PackageName,
-    ) -> Result<DependencySelection<'lock>, String> {
-        self.target.lock().dependency_selection(
-            project_name,
-            dependency_name,
-            self.markers.markers(),
-        )
+    ) -> Result<DependencySelection<'lock>, EnvironmentError> {
+        Ok(self
+            .target
+            .lock()
+            .dependency_selection(project_name, dependency_name, self.markers.markers())
+            .map_err(anyhow::Error::msg)?)
     }
 
-    /// Materialize the subgraph rooted at a direct dependency.
-    pub(crate) fn to_resolution_from_dependency(
+    /// Select a tool and materialize its subgraph for the same environment.
+    pub(crate) fn resolve_tool(
         &self,
-        dependency: &SelectedDependency<'_>,
+        project_name: Option<&PackageName>,
+        name: &PackageName,
+        group: &GroupName,
         build_options: &BuildOptions,
-    ) -> Result<Resolution, LockError> {
-        self.target.lock().to_resolution_from_dependency(
+    ) -> Result<Option<Resolution>, EnvironmentError> {
+        let selection = self.dependency_selection(project_name, name)?;
+        let Some(dependency) = selection.group(group).or_else(|| selection.production()) else {
+            return Ok(None);
+        };
+        let resolution = self.target.lock().to_resolution_from_dependency(
             self.target.install_path(),
             dependency,
-            self.target.project_name(),
+            project_name,
             &self.markers,
             &self.tags,
             build_options,
             &InstallOptions::default(),
-        )
+        )?;
+        Ok(Some(resolution))
     }
 
     /// Materialize the requested packages, extras, and dependency groups.
@@ -480,8 +484,17 @@ impl<'lock> InstallTarget<'lock> {
         interpreter: &'env Interpreter,
         python_platform: Option<&TargetTriple>,
     ) -> Result<LockInstallation<'lock, 'env>, EnvironmentError> {
-        let markers = resolution_markers(None, python_platform, interpreter);
         let lock = self.lock();
+        if !lock
+            .requires_python()
+            .contains(interpreter.python_version())
+        {
+            return Err(EnvironmentError::LockedPythonIncompatibility(
+                interpreter.python_version().clone(),
+                lock.requires_python().clone(),
+            ));
+        }
+        let markers = resolution_markers(None, python_platform, interpreter);
         let environments = lock.supported_environments();
         if !environments.is_empty() && !environments.iter().any(|env| env.evaluate(&markers, &[])) {
             // The simplified markers reflect what the user wrote, without implicit Python bounds.

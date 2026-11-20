@@ -10,7 +10,7 @@ use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
-use uv_test::packse::{PackseServer, WheelBuilder};
+use uv_test::packse::PackseServer;
 use uv_test::{diff_snapshot, uv_snapshot};
 
 fn workspace_check(context: &uv_test::TestContext) -> Command {
@@ -1438,17 +1438,11 @@ fn check_no_sync_uses_compatible_lock_interpreter() -> Result<()> {
     Ok(())
 }
 
-/// Outside the supported environments, even an unconditional dependency on `ty` can appear
-/// inactive. Reject the lock before falling back to the standalone checker.
+/// The declared checker is pruned from the resolved edges because it only applies outside the
+/// supported environments. Its declaration in the lock still rules out a standalone fallback.
 #[test]
 fn check_no_sync_locked_ty_unsupported_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = WheelBuilder::new(&"ty".parse()?, &"1.2.3".parse()?).build();
-    context
-        .temp_dir
-        .child("wheels")
-        .child(filename)
-        .write_binary(&wheel)?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1459,12 +1453,10 @@ fn check_no_sync_locked_ty_unsupported_environment() -> Result<()> {
         requires-python = ">=3.10"
 
         [dependency-groups]
-        dev = ["ty"]
+        dev = ["ty; python_version >= '3.12'"]
 
         [tool.uv]
         environments = ["python_version < '3.12'"]
-        find-links = ["wheels"]
-        no-index = true
     "#})?;
 
     uv_snapshot!(context.filters(), context.check().args(["--no-sync", "--offline"]), @"
@@ -1472,6 +1464,47 @@ fn check_no_sync_locked_ty_unsupported_environment() -> Result<()> {
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     error: The current Python platform is not compatible with the lockfile's supported environments: `python_full_version < '3.12'`
+    ");
+    Ok(())
+}
+
+/// A frozen lock can carry a direct checker edge without declaration metadata. The cached
+/// checker still needs an interpreter that satisfies the lock's Python requirement.
+#[test]
+fn check_no_sync_frozen_locked_ty_incompatible_python() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.dev-dependencies]
+        dev = [{ name = "ty" }]
+
+        [[package]]
+        name = "ty"
+        version = "1.2.3"
+        source = { virtual = "ty" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.check().args(["--no-sync", "--frozen", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    error: The current Python version (3.11.[X]) is not compatible with the locked Python requirement: `>=3.12`
     ");
     Ok(())
 }

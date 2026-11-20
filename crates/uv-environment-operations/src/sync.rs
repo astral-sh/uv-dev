@@ -147,17 +147,7 @@ pub async fn sync_from_lock(
     // primary builder into the registry client below.
     let malware_check_client_builder = client_builder.clone();
 
-    // Validate that the Python version is supported by the lockfile.
-    if !target
-        .lock()
-        .requires_python()
-        .contains(venv.interpreter().python_version())
-    {
-        return Err(EnvironmentError::LockedPythonIncompatibility(
-            venv.interpreter().python_version().clone(),
-            target.lock().requires_python().clone(),
-        ));
-    }
+    let installation = target.for_environment(venv.interpreter(), python_platform)?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
@@ -166,7 +156,6 @@ pub async fn sync_from_lock(
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
 
-    let installation = target.for_environment(venv.interpreter(), python_platform)?;
     let resolution = installation.to_resolution(extras, groups, build_options, &install_options)?;
 
     // Always skip virtual projects, which shouldn't be built or installed.
@@ -352,7 +341,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 ///
 /// These credentials can come from any of `tool.uv.sources`, `tool.uv.dev-dependencies`,
 /// `project.dependencies`, and `project.optional-dependencies`.
-pub fn store_credentials_from_target(
+pub(crate) fn store_credentials_from_target(
     target: InstallTarget<'_>,
     client_builder: &BaseClientBuilder,
 ) -> Result<(), EnvironmentError> {
