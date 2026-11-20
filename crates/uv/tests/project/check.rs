@@ -2689,6 +2689,87 @@ fn checker_wheel() -> Result<(String, Vec<u8>)> {
     Ok((filename, wheel))
 }
 
+/// `--locked` validates a workspace that supplies the checker, including declarations
+/// added since locking. `--frozen` accepts a changed pin within the same root project.
+#[test]
+fn check_script_workspace_ty_lock_modes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let wheels = context.temp_dir.child("wheels");
+    let (filename, wheel) = checker_wheel()?;
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"ty".parse()?, &"1.2.4".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let project = context.temp_dir.child("pyproject.toml");
+    let manifest = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty==1.2.3"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#};
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let check = |flag: &str| {
+        context
+            .check()
+            .args(["--offline", "--show-version", "--script", "script.py", flag])
+            .assert()
+    };
+
+    project.write_str(&manifest.replace("dev = [\"ty==1.2.3\"]", "dev = []"))?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .lock()
+        .args(["--offline", "--script", "script.py"])
+        .assert()
+        .success();
+    let script_lock = context.read("script.py.lock");
+    let empty_lock = context.read("uv.lock");
+
+    project.write_str(manifest)?;
+    let stale = check("--locked").failure();
+    assert!(String::from_utf8_lossy(&stale.get_output().stderr).contains("needs to be updated"));
+    assert_eq!(context.read("uv.lock"), empty_lock);
+
+    context.lock().arg("--offline").assert().success();
+    let workspace_lock = context.read("uv.lock");
+    check("--locked").success();
+
+    project.write_str(&manifest.replace("ty==1.2.3", "ty==1.2.4"))?;
+    let stale = check("--locked").failure();
+    assert!(String::from_utf8_lossy(&stale.get_output().stderr).contains("needs to be updated"));
+    let frozen = check("--frozen").success();
+    assert!(String::from_utf8_lossy(&frozen.get_output().stderr).contains("Using ty 1.2.3"));
+
+    project.write_str(&manifest.replace("name = \"project\"", "name = \"renamed\""))?;
+    for mode in ["--locked", "--frozen"] {
+        let mismatch = check(mode).failure();
+        assert!(
+            String::from_utf8_lossy(&mismatch.get_output().stderr)
+                .contains("workspace root in `uv.lock`")
+        );
+    }
+    assert_eq!(context.read("uv.lock"), workspace_lock);
+    assert_eq!(context.read("script.py.lock"), script_lock);
+    let (_, groups) = manifest.split_once("[dependency-groups]").unwrap();
+    project.write_str(&format!("[dependency-groups]{groups}"))?;
+    context.lock().arg("--offline").assert().success();
+    check("--locked").success();
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
 /// A `3.12` pin selects production `ty` when `dev` requires Python 3.13+ and its checker is PyPy-only.
 #[test]
 fn check_script_workspace_ty_uses_applicable_production_dependency() -> Result<()> {

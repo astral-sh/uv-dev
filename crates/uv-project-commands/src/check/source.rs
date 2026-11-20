@@ -21,9 +21,13 @@ use uv_preview::Preview;
 use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
-use uv_settings::{MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings};
+use uv_settings::{
+    LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
+};
 use uv_warnings::warn_user;
 use uv_workspace::{VirtualProject, Workspace, WorkspaceCache};
+
+use super::workspace_lock;
 
 use super::TY;
 
@@ -158,6 +162,7 @@ pub(super) struct WorkspaceLookup<'a, F> {
     pub(super) script_dir: &'a Path,
     pub(super) workspace_cache: &'a WorkspaceCache,
     pub(super) config_discovery: ConfigDiscovery,
+    pub(super) lock_check: LockCheck,
     pub(super) resolve_settings: F,
 }
 
@@ -184,9 +189,15 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
         let [dev_scope, production_scope] = tool_scopes();
         let dev = LockedTool::find(target, project_name, &TY, dev_scope)?;
         let production = LockedTool::find(target, project_name, &TY, production_scope)?;
-        if dev.is_none() && production.is_none() {
+        let has_candidate = dev.is_some()
+            || production.is_some()
+            || (matches!(self.lock_check, LockCheck::Enabled(_))
+                && workspace_lock::manifest_declares_checker(workspace, &TY)?);
+        if !has_candidate {
             return Ok(None);
         }
+
+        workspace_lock::check_root(workspace, &lock)?;
 
         let settings =
             (self.resolve_settings)(workspace.install_path()).map_err(UvError::unexpected)?;
@@ -215,6 +226,18 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
         let interpreter = settings
             .interpreter(workspace, base.clone(), cache, printer)
             .await?;
+
+        if let LockCheck::Enabled(locked) = self.lock_check {
+            workspace_lock::check_freshness(
+                workspace,
+                &lock,
+                locked,
+                &interpreter,
+                &installer,
+                self.workspace_cache,
+            )
+            .await?;
+        }
 
         let dev_python = if dev.is_some() {
             settings
