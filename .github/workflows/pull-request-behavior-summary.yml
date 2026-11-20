@@ -1,0 +1,124 @@
+name: "Pull request behavior summary"
+run-name: "Behavior summary for #${{ inputs.pull_request }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "Pull request number"
+        type: number
+        required: true
+      head_sha:
+        description: "Head at dispatch time (the run reads the current diff)"
+        type: string
+
+permissions: {}
+
+# Serialize writers and coalesce pending pushes. Even a delayed dispatch
+# analyzes the live PR when it reaches the front of the queue.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pull_request }}
+
+env:
+  PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+
+jobs:
+  summarize:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev')
+    runs-on: github-ubuntu-24.04-x86_64-4
+    environment:
+      name: automations
+      deployment: false
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      revisions: ${{ steps.prepare.outputs.revisions }}
+      result: ${{ steps.summarize.outputs.final-message }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: agents
+          persist-credentials: false
+
+      - name: "Fetch the merge base and head"
+        id: prepare
+        run: |
+          python3 agents/scripts/pull-request-behavior-summary.py prepare
+          mkdir -p "$RUNNER_TEMP/codex"
+          cat > "$RUNNER_TEMP/codex/config.toml" <<EOF
+          web_search = "disabled"
+          shell_environment_policy.inherit = "core"
+
+          [permissions.behavior-summary.filesystem]
+          ":minimal" = "read"
+          ":workspace_roots" = "read"
+          # codex-action installs the CLI under its own setup-node version.
+          # The Linux sandbox re-executes that binary inside the sandbox.
+          "$RUNNER_TOOL_CACHE/node" = "read"
+          EOF
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: "Identify observable changes"
+        id: summarize
+        if: steps.prepare.outputs.revisions != ''
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.169.0"
+          model: gpt-6.2-astra
+          effort: high
+          working-directory: ${{ runner.temp }}/behavior
+          codex-home: ${{ runner.temp }}/codex
+          permission-profile: "behavior-summary"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot]"
+          prompt-file: ${{ github.workspace }}/agents/prompts/pull-request-behavior-summary.md
+          output-schema-file: ${{ github.workspace }}/agents/schemas/pull-request-behavior-summary.json
+
+      - name: "Check the summary and cited source locations"
+        if: steps.prepare.outputs.revisions != ''
+        run: python3 agents/scripts/pull-request-behavior-summary.py verify
+        env:
+          REVISIONS: ${{ steps.prepare.outputs.revisions }}
+          RESULT: ${{ steps.summarize.outputs.final-message }}
+
+  publish:
+    needs: summarize
+    if: needs.summarize.outputs.result != ''
+    runs-on: github-ubuntu-24.04-x86_64-4
+    environment:
+      name: automations
+      deployment: false
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # for the credential broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: agents/scripts
+          persist-credentials: false
+
+      - name: "Get repository token"
+        id: token
+        uses: astral-sh/github-actions/simple-token-service@67dc9ee1ddc113eccd8116e7b949fb6cdcd89889 # 2026.11.16.0
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: "Update the behavior summary"
+        run: python3 agents/scripts/pull-request-behavior-summary.py publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOT_TOKEN: ${{ steps.token.outputs.token }}
+          REVISIONS: ${{ needs.summarize.outputs.revisions }}
+          RESULT: ${{ needs.summarize.outputs.result }}
