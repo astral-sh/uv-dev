@@ -1,5 +1,6 @@
 use tracing::debug;
 
+use crate::malware::MalwareCheckContext;
 use crate::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
     sync_environment,
@@ -21,7 +22,6 @@ use uv_distribution_types::{
 };
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
-use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -120,19 +120,15 @@ impl CachedEnvironment {
 
     /// Get or create a [`CachedEnvironment`] from a lock-backed [`Resolution`].
     ///
-    /// Prefer [`Self::from_spec`] when starting from unresolved requirements; it selects the base
-    /// interpreter and resolves the requirements for that interpreter before delegating here.
-    ///
     /// This method checks `resolution` for malware when enabled and verifies its recorded hashes.
     /// Both checks run before cache lookup. `interpreter` must be the base interpreter for which
-    /// `resolution` was produced. In particular, callers materializing a universal lock must derive
-    /// its markers and tags from the same interpreter.
-    pub async fn from_locked_resolution(
+    /// `resolution` was produced.
+    pub(crate) async fn from_locked_resolution(
         resolution: &Resolution,
         build_constraints: Constraints,
         interpreter: &Interpreter,
         settings: &ResolverInstallerSettings,
-        malware_settings: &MalwareCheckSettings,
+        malware_context: &mut MalwareCheckContext<'_>,
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
         install: Box<dyn InstallLogger>,
@@ -149,7 +145,7 @@ impl CachedEnvironment {
             resolution,
             &malware_check_client_builder,
             concurrency,
-            malware_settings,
+            malware_context,
             cache,
             preview,
         )
@@ -317,7 +313,7 @@ impl CachedEnvironment {
     ///
     /// When caching, always use the base interpreter, rather than that of the virtual
     /// environment.
-    pub fn base_interpreter(
+    pub(crate) fn base_interpreter(
         interpreter: &Interpreter,
         cache: &Cache,
     ) -> Result<Interpreter, uv_python_discovery::Error> {
