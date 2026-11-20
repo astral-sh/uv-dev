@@ -13,7 +13,7 @@ use uv_distribution_types::Resolution;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
-    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
     apply_no_virtual_project, store_credentials_from_target,
 };
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -91,17 +91,20 @@ impl LockedToolInstaller<'_> {
         target: InstallTarget<'_>,
         dependency: &SelectedDependency<'_>,
         interpreter: &Interpreter,
-    ) -> Result<(PythonEnvironment, Resolution)> {
+    ) -> Result<(PythonEnvironment, Resolution), UvError> {
         let markers = interpreter.to_resolver_marker_environment();
-        let resolution = target.lock().to_resolution_from_dependency(
-            target.install_path(),
-            dependency,
-            target.project_name(),
-            &markers,
-            interpreter.tags()?,
-            &self.settings.resolver.build_options,
-            &InstallOptions::default(),
-        )?;
+        let resolution = target
+            .lock()
+            .to_resolution_from_dependency(
+                target.install_path(),
+                dependency,
+                target.project_name(),
+                &markers,
+                interpreter.tags().map_err(EnvironmentError::from)?,
+                &self.settings.resolver.build_options,
+                &InstallOptions::default(),
+            )
+            .map_err(EnvironmentError::from)?;
         let resolution = apply_no_virtual_project(resolution);
         store_credentials_from_target(target, self.client_builder)?;
         let environment = CachedEnvironment::from_locked_resolution(
@@ -119,8 +122,7 @@ impl LockedToolInstaller<'_> {
             self.printer,
             self.preview,
         )
-        .await
-        .map_err(UvError::from)?;
+        .await?;
         Ok((PythonEnvironment::from(environment), resolution))
     }
 
@@ -135,9 +137,11 @@ impl LockedToolInstaller<'_> {
         python_arch: Option<PythonArchitecture>,
         python_downloads: PythonDownloads,
         install_mirrors: &PythonInstallMirrors,
-    ) -> Result<Option<PythonEnvironment>> {
+    ) -> Result<Option<PythonEnvironment>, UvError> {
         let Some(project) =
-            VirtualProject::discover_for_script(script_dir, self.cache, workspace_cache).await?
+            VirtualProject::discover_for_script(script_dir, self.cache, workspace_cache)
+                .await
+                .map_err(EnvironmentError::from)?
         else {
             return Ok(None);
         };
@@ -180,7 +184,8 @@ impl LockedToolInstaller<'_> {
             workspace.install_path(),
             config_discovery,
         )
-        .await?;
+        .await
+        .map_err(EnvironmentError::from)?;
         let interpreter = ProjectInterpreter::discover(
             ProjectEnvironmentTarget::from(workspace),
             project_python,
@@ -196,7 +201,8 @@ impl LockedToolInstaller<'_> {
         )
         .await?
         .into_interpreter();
-        let interpreter = CachedEnvironment::base_interpreter(&interpreter, self.cache)?;
+        let interpreter = CachedEnvironment::base_interpreter(&interpreter, self.cache)
+            .map_err(EnvironmentError::from)?;
         target.validate_platform(&interpreter.to_resolver_marker_environment())?;
         let Some(tool) = find_locked_tool(
             target.project_name(),
@@ -205,7 +211,8 @@ impl LockedToolInstaller<'_> {
             name,
             dependency_group,
             &groups,
-        )?
+        )
+        .map_err(UvError::unexpected)?
         else {
             warn_user!(
                 "No locked `{name}` dependency applies to workspace Python {}. Using the standalone checker.",
