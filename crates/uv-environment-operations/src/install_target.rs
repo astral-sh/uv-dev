@@ -11,8 +11,13 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
     TargetTriple,
 };
-use uv_distribution_types::{Dist, Index, RequiresPython, Resolution, ResolvedDist};
-use uv_lock::{DependencySelection, Installable, InstallableRootKind, Lock, LockError, Package};
+use uv_distribution_types::{
+    Dist, Edge, Index, Name, Node, RequiresPython, Resolution, ResolvedDist,
+};
+use uv_lock::{
+    DependencyScope, DependencySelection, Installable, InstallableRootKind, Lock, LockError,
+    Package,
+};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
@@ -70,6 +75,24 @@ pub enum InstallTarget<'lock> {
     },
 }
 
+/// The packages requested for the project environment.
+pub struct SyncSelection<'a> {
+    pub extras: &'a ExtrasSpecificationWithDefaults,
+    pub groups: &'a DependencyGroupsWithDefaults,
+    pub install_options: &'a InstallOptions,
+    pub build_options: &'a BuildOptions,
+}
+
+/// Where a project can obtain a tool declared in its lockfile.
+pub enum ToolLocation {
+    /// No declaration applies to the project interpreter.
+    Inactive,
+    /// Synchronization includes the preferred declaration.
+    Project,
+    /// Re-evaluate the declarations against the interpreter for the cached environment.
+    Cache,
+}
+
 /// An installation target paired with a Python version and platform supported by its lockfile.
 pub struct LockInstallation<'lock, 'env> {
     target: InstallTarget<'lock>,
@@ -95,16 +118,62 @@ impl<'lock> LockInstallation<'lock, '_> {
             .map_err(anyhow::Error::msg)?)
     }
 
+    /// Locate the first applicable declaration in scope order for this project sync.
+    pub fn tool_location(
+        &self,
+        owner: Option<&PackageName>,
+        name: &PackageName,
+        scopes: &[DependencyScope<'_>],
+        sync: &SyncSelection<'_>,
+    ) -> Result<ToolLocation, EnvironmentError> {
+        let selection = self.dependency_selection(owner, name)?;
+        let Some(scope) = scopes
+            .iter()
+            .copied()
+            .find(|scope| selection.in_scope(*scope).is_some())
+        else {
+            return Ok(ToolLocation::Inactive);
+        };
+        let is_root = owner.is_none_or(|name| self.target.roots().any(|root| root == name));
+        let included = match scope {
+            DependencyScope::Group(group) => {
+                (is_root || self.target.group_root(sync.groups) == owner)
+                    && self.target.includes_group(owner, group, sync.groups)
+            }
+            DependencyScope::Production if is_root => sync.groups.prod(),
+            DependencyScope::Production => {
+                // A selected member can pull in the declaring package transitively.
+                let resolution = self.to_resolution(
+                    sync.extras,
+                    sync.groups,
+                    sync.build_options,
+                    sync.install_options,
+                )?;
+                let graph = resolution.graph();
+                graph.raw_edges().iter().any(|edge| {
+                    matches!(edge.weight, Edge::Prod)
+                        && matches!(&graph[edge.source()], Node::Dist { dist, .. } if Some(dist.name()) == owner)
+                        && matches!(&graph[edge.target()], Node::Dist { dist, install: true, .. } if dist.name() == name)
+                })
+            }
+        };
+        Ok(if included {
+            ToolLocation::Project
+        } else {
+            ToolLocation::Cache
+        })
+    }
+
     /// Select a tool and materialize its subgraph for the same environment.
     pub(crate) fn resolve_tool(
         &self,
         project_name: Option<&PackageName>,
         name: &PackageName,
-        group: &GroupName,
+        scope: DependencyScope<'_>,
         build_options: &BuildOptions,
     ) -> Result<Option<Resolution>, EnvironmentError> {
         let selection = self.dependency_selection(project_name, name)?;
-        let Some(dependency) = selection.group(group).or_else(|| selection.production()) else {
+        let Some(dependency) = selection.in_scope(scope) else {
             return Ok(None);
         };
         let resolution = self.target.lock().to_resolution_from_dependency(

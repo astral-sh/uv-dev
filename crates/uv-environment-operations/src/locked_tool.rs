@@ -1,11 +1,11 @@
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults};
+use uv_configuration::Concurrency;
 use uv_dispatch::UniversalState;
 use uv_install_operations::loggers::SummaryInstallLogger;
-use uv_lock::Installable;
-use uv_normalize::{GroupName, PackageName};
+use uv_lock::{DependencyScope, Installable};
+use uv_normalize::PackageName;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_settings::ResolverInstallerSettings;
@@ -21,20 +21,20 @@ pub struct LockedTool<'lock> {
     target: InstallTarget<'lock>,
     project_name: Option<&'lock PackageName>,
     name: &'lock PackageName,
-    group: &'lock GroupName,
+    scope: DependencyScope<'lock>,
 }
 
 impl<'lock> LockedTool<'lock> {
-    /// Find a direct declaration in the preferred group or production dependencies.
+    /// Find a direct declaration in the given scope.
     pub fn find(
         target: InstallTarget<'lock>,
         project_name: Option<&'lock PackageName>,
         name: &'lock PackageName,
-        group: &'lock GroupName,
+        scope: DependencyScope<'lock>,
     ) -> Result<Option<Self>, EnvironmentError> {
         if !target
             .lock()
-            .declares_dependency(project_name, name, group)
+            .declares_dependency(project_name, name, scope)
             .map_err(anyhow::Error::msg)?
         {
             return Ok(None);
@@ -43,17 +43,13 @@ impl<'lock> LockedTool<'lock> {
             target,
             project_name,
             name,
-            group,
+            scope,
         }))
     }
 
-    /// Use the project environment if synchronization will install the tool there.
-    /// Otherwise install the tool's subgraph in a cached environment.
-    ///
-    /// Returns `None` when the declared dependency is inactive for the chosen interpreter.
-    pub async fn environment(
+    /// Install the tool's subgraph in a cached environment when its markers apply.
+    pub async fn install(
         &self,
-        project_environment: Option<(&PythonEnvironment, &DependencyGroupsWithDefaults)>,
         interpreter: &Interpreter,
         settings: &ResolverInstallerSettings,
         malware_context: &mut MalwareCheckContext<'_>,
@@ -65,29 +61,12 @@ impl<'lock> LockedTool<'lock> {
         printer: Printer,
         preview: Preview,
     ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
-        if let Some((environment, groups)) = project_environment {
-            let installation = self
-                .target
-                .for_environment(environment.interpreter(), None)?;
-            let selection = installation.dependency_selection(self.project_name, self.name)?;
-            let included = if selection.group(self.group).is_some() {
-                groups.contains(self.group)
-            } else if selection.production().is_some() {
-                groups.prod()
-            } else {
-                return Ok(None);
-            };
-            if included {
-                return Ok(Some(environment.clone()));
-            }
-        }
-
         let interpreter = CachedEnvironment::base_interpreter(interpreter, cache)?;
         let installation = self.target.for_environment(&interpreter, None)?;
         let Some(resolution) = installation.resolve_tool(
             self.project_name,
             self.name,
-            self.group,
+            self.scope,
             &settings.resolver.build_options,
         )?
         else {

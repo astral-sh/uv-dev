@@ -12,6 +12,8 @@ use uv_configuration::{
     DryRun, ExtrasSpecification, InstallOptions, Modifications,
 };
 use uv_dispatch::UniversalState;
+use uv_environment_operations::install_target::SyncSelection;
+use uv_environment_operations::install_target::ToolLocation;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
@@ -20,6 +22,7 @@ use uv_environment_operations::{
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
+use uv_lock::DependencyScope;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -604,28 +607,65 @@ pub async fn check(
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
 
-        if ty_path.is_none()
-            && ty_version.is_none()
-            && let Some(tool) =
-                LockedTool::find(target, project.project_name(), &ty_name, &DEV_DEPENDENCIES)?
-        {
-            let environment = tool
-                .environment(
-                    (!no_sync).then_some((&venv, &groups)),
-                    lock_interpreter,
-                    &settings,
-                    &mut malware_context,
-                    &client_builder,
-                    &state,
-                    installer_metadata,
-                    &concurrency,
-                    cache,
-                    printer,
-                    preview,
-                )
-                .await
-                .map_err(UvError::from)?;
-            locked_ty_path = environment.map(|environment| {
+        if ty_path.is_none() && ty_version.is_none() {
+            let scopes = [
+                DependencyScope::Group(&DEV_DEPENDENCIES),
+                DependencyScope::Production,
+            ];
+
+            let location = if no_sync {
+                ToolLocation::Cache
+            } else {
+                target
+                    .for_environment(venv.interpreter(), None)?
+                    .tool_location(
+                        project.project_name(),
+                        &ty_name,
+                        &scopes,
+                        &SyncSelection {
+                            extras: &extras,
+                            groups: &groups,
+                            install_options: &install_options,
+                            build_options: &settings.resolver.build_options,
+                        },
+                    )?
+            };
+            let mut checker = None;
+            match location {
+                ToolLocation::Inactive => {}
+                ToolLocation::Project => checker = Some(venv.clone()),
+                ToolLocation::Cache => {
+                    for scope in scopes {
+                        let Some(tool) =
+                            LockedTool::find(target, project.project_name(), &ty_name, scope)?
+                        else {
+                            continue;
+                        };
+                        let Some(environment) = tool
+                            .install(
+                                lock_interpreter,
+                                &settings,
+                                &mut malware_context,
+                                &client_builder,
+                                &state,
+                                installer_metadata,
+                                &concurrency,
+                                cache,
+                                printer,
+                                preview,
+                            )
+                            .await
+                            .map_err(UvError::from)?
+                        else {
+                            continue;
+                        };
+
+                        checker = Some(environment);
+                        break;
+                    }
+                }
+            }
+            locked_ty_path = checker.map(|environment| {
                 environment
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
