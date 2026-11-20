@@ -2177,13 +2177,13 @@ pub enum VirtualProject {
 }
 
 impl VirtualProject {
-    /// Discover the workspace containing a script for a lookup at its root.
+    /// Discover the workspace containing a script for a lookup in its root lockfile.
     ///
     /// Start at the script's directory. Only the root and enclosing project are needed,
     /// so sibling member manifests can be absent.
     ///
     /// The script directory must be absolute, as required by [`Self::discover`].
-    pub async fn discover_for_script(
+    pub async fn discover_for_script_lock_lookup(
         script_dir: &Path,
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
@@ -2199,6 +2199,22 @@ impl VirtualProject {
             {
                 directory = physical.into();
             }
+        }
+        // Manifests are only relevant if the script could inherit a lockfile. Discovery
+        // still determines the owning workspace, which may be nested inside a locked project.
+        let mut has_lock = false;
+        for ancestor in directory.ancestors() {
+            // Only the owning workspace's lock must be readable. Defer errors to its read.
+            if !matches!(
+                fs_err::tokio::try_exists(ancestor.join("uv.lock")).await,
+                Ok(false)
+            ) {
+                has_lock = true;
+                break;
+            }
+        }
+        if !has_lock {
+            return Ok(None);
         }
         match Self::discover(
             directory.simplified(),
@@ -3048,6 +3064,8 @@ mod tests {
         physical
             .child("pyproject.toml")
             .write_str("[tool.uv.workspace]")?;
+        logical.child("uv.lock").write_str("")?;
+        physical.child("uv.lock").write_str("")?;
         let member = physical.child("member");
         member
             .child("pyproject.toml")
@@ -3058,20 +3076,26 @@ mod tests {
 
         let cache = Cache::from_path(root.child("cache").path().to_owned());
         let workspace_cache = WorkspaceCache::default();
-        let through_member =
-            VirtualProject::discover_for_script(&link.join("sub/.."), &cache, &workspace_cache)
-                .await?
-                .expect("member workspace");
+        let through_member = VirtualProject::discover_for_script_lock_lookup(
+            &link.join("sub/.."),
+            &cache,
+            &workspace_cache,
+        )
+        .await?
+        .expect("member workspace");
         assert_eq!(
             through_member.project_name().map(AsRef::as_ref),
             Some("member")
         );
         assert_eq!(through_member.workspace().install_path(), logical.path());
 
-        let through_parent =
-            VirtualProject::discover_for_script(&link.join(".."), &cache, &workspace_cache)
-                .await?
-                .expect("parent workspace");
+        let through_parent = VirtualProject::discover_for_script_lock_lookup(
+            &link.join(".."),
+            &cache,
+            &workspace_cache,
+        )
+        .await?
+        .expect("parent workspace");
         assert!(through_parent.project_name().is_none());
         assert_eq!(through_parent.workspace().install_path(), physical.path());
         Ok(())

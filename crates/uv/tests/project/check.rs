@@ -2614,6 +2614,30 @@ fn check_script_uses_workspace_ty() -> Result<()> {
     Ok(())
 }
 
+/// A manifest on the script's path is irrelevant when no ancestor has a lockfile.
+#[test]
+fn check_script_skips_unlocked_malformed_project() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str("[tool.uv.sources]\nfoo = 42")?;
+    project.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+
+    context
+        .check()
+        .args(["--script", "project/script.py"])
+        .assert()
+        .success();
+    assert!(!project.child("uv.lock").exists());
+    Ok(())
+}
+
 /// Script checks with `--no-project` skip the workspace lockfile even if it is invalid.
 #[test]
 #[cfg(feature = "test-pypi")]

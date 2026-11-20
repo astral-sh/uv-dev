@@ -163,10 +163,13 @@ pub(super) struct WorkspaceLookup<'a, F> {
 
 impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, F> {
     async fn checker(self, cache: &Cache, printer: Printer) -> Result<Option<TySource>, UvError> {
-        let Some(project) =
-            VirtualProject::discover_for_script(self.script_dir, cache, self.workspace_cache)
-                .await
-                .map_err(EnvironmentError::from)?
+        let Some(project) = VirtualProject::discover_for_script_lock_lookup(
+            self.script_dir,
+            cache,
+            self.workspace_cache,
+        )
+        .await
+        .map_err(EnvironmentError::from)?
         else {
             return Ok(None);
         };
