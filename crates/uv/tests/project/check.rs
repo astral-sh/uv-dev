@@ -2319,11 +2319,14 @@ fn check_script() -> Result<()> {
     Ok(())
 }
 
-/// A script uses the workspace's locked checker while keeping its own Python environment.
+/// With both locks up to date, `--locked` uses the workspace's checker to analyze the script
+/// against its own Python version and dependencies.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_script_uses_workspace_ty() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -2351,12 +2354,21 @@ fn check_script_uses_workspace_ty() -> Result<()> {
         version: Literal[11] = sys.version_info[1]
         iniconfig.IniConfig("config.ini")
     "#})?;
+    // Select a version older than the default standalone checker.
     context
         .lock()
-        .args(["--exclude-newer", "2026-02-11T00:00:00Z"])
+        .args(["--upgrade-package", "ty==0.0.16"])
+        .assert()
+        .success();
+    let script_path = "packages/member/scripts/example.py";
+    let script_lock_path = "packages/member/scripts/example.py.lock";
+    context
+        .lock()
+        .args(["--script", script_path])
         .assert()
         .success();
     let workspace_lock = context.read_bytes("uv.lock");
+    let script_lock = context.read_bytes(script_lock_path);
 
     // Run from a separate workspace so `../example.py` must lead uv to the script's workspace.
     let caller = scripts.child("other");
@@ -2364,7 +2376,7 @@ fn check_script_uses_workspace_ty() -> Result<()> {
         .child("pyproject.toml")
         .write_str("[tool.uv.workspace]\n")?;
 
-    uv_snapshot!(context.filters(), context.check().current_dir(caller.path()).args(["--script", "../example.py", "--python", "3.11", "--show-version"]), @"
+    uv_snapshot!(context.filters(), context.check().current_dir(caller.path()).args(["--script", "../example.py", "--locked", "--python", "3.11", "--show-version"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     All checks passed!
@@ -2374,10 +2386,11 @@ fn check_script_uses_workspace_ty() -> Result<()> {
     Installed 1 package in [TIME]
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Installed 1 package in [TIME]
-    Using ty 0.0.16 (e96ea4cd9 2026-02-10)
+    Using ty 0.0.16
     ");
 
     assert_eq!(context.read_bytes("uv.lock"), workspace_lock);
+    assert_eq!(context.read_bytes(script_lock_path), script_lock);
     assert!(!context.venv.exists());
     Ok(())
 }
@@ -2489,7 +2502,7 @@ fn check_script_workspace_ty_uses_applicable_production_dependency() -> Result<(
     Ok(())
 }
 
-/// A lock's supported environments can make even an unconditional checker edge inactive.
+/// Reject a workspace lock outside its supported environments before selecting its checker.
 #[test]
 #[cfg(unix)]
 fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
@@ -2540,7 +2553,8 @@ fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
     Ok(())
 }
 
-/// Older locks record the edge marker but omit the group's Python requirement.
+/// A revision-4 lock records the group's Python bound on its checker dependency.
+/// The edge marker excludes the interpreter in the existing workspace environment.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_script_workspace_ty_reports_inactive_dependency_from_old_lock() -> Result<()> {
@@ -2994,7 +3008,7 @@ fn check_script_ignores_transitive_ty_for_tool_selection() -> Result<()> {
     wrapper_package.create_dir_all()?;
     wrapper_package.child("__init__.py").write_str("")?;
 
-    // Both locks contain ty, but neither the script nor the workspace root declares it.
+    // Both the script and the workspace root depend on `ty` only through `wrapper`.
     context
         .temp_dir
         .child("pyproject.toml")
