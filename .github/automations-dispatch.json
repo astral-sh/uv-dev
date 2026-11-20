@@ -47,6 +47,27 @@
     {
       "repository": "uv",
       "on": {
+        "pull_request": ["opened", "reopened", "synchronize"]
+      },
+      "allow_draft": true,
+      "allow_forks": true,
+      "workflow": "pull-request-behavior-summary.yml"
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "pull_request": ["edited"]
+      },
+      "conditions": {
+        "/changes/base/ref/from": { "exists": true }
+      },
+      "allow_draft": true,
+      "allow_forks": true,
+      "workflow": "pull-request-behavior-summary.yml"
+    },
+    {
+      "repository": "uv",
+      "on": {
         "pull_request": ["labeled"]
       },
       "conditions": {
@@ -100,6 +121,27 @@
       },
       "allow_draft": true,
       "workflow": "pull-request-labels.yml"
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "pull_request": ["opened", "reopened", "synchronize"]
+      },
+      "allow_draft": true,
+      "allow_forks": true,
+      "workflow": "pull-request-behavior-summary.yml"
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "pull_request": ["edited"]
+      },
+      "conditions": {
+        "/changes/base/ref/from": { "exists": true }
+      },
+      "allow_draft": true,
+      "allow_forks": true,
+      "workflow": "pull-request-behavior-summary.yml"
     },
     {
       "repository": "uv-dev",
