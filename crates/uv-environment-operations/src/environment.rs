@@ -1,13 +1,15 @@
 use tracing::debug;
 
+use crate::install_target::InstallTarget;
 use crate::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment,
+    store_credentials_from_target, sync_environment,
 };
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, HashCheckingMode, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
 use uv_install_operations::loggers::InstallLogger;
+use uv_lock::SelectedDependency;
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::ResolverInstallerSettings;
 use uv_virtualenv::UpgradePolicy;
@@ -118,18 +120,13 @@ impl CachedEnvironment {
         .await
     }
 
-    /// Get or create a [`CachedEnvironment`] from a lock-backed [`Resolution`].
+    /// Get or create a [`CachedEnvironment`] for a locked dependency.
     ///
-    /// Prefer [`Self::from_spec`] when starting from unresolved requirements; it selects the base
-    /// interpreter and resolves the requirements for that interpreter before delegating here.
-    ///
-    /// This method checks `resolution` for malware when enabled and verifies its recorded hashes.
-    /// Both checks run before cache lookup. `interpreter` must be the base interpreter for which
-    /// `resolution` was produced. In particular, callers materializing a universal lock must derive
-    /// its markers and tags from the same interpreter.
-    pub async fn from_locked_resolution(
-        resolution: &Resolution,
-        build_constraints: Constraints,
+    /// Materializes the dependency's subgraph for the base interpreter, checks it for malware
+    /// when enabled, and requires hash verification for the cached environment.
+    pub async fn from_locked_dependency(
+        target: InstallTarget<'_>,
+        dependency: &SelectedDependency<'_>,
         interpreter: &Interpreter,
         settings: &ResolverInstallerSettings,
         malware_settings: &MalwareCheckSettings,
@@ -141,12 +138,17 @@ impl CachedEnvironment {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+    ) -> Result<(Self, Resolution), EnvironmentError> {
+        let interpreter = Self::base_interpreter(interpreter, cache)?;
+        let resolution = target
+            .for_environment(&interpreter, None)?
+            .to_resolution_from_dependency(dependency, &settings.resolver.build_options)?;
+        store_credentials_from_target(target, client_builder)?;
         let malware_check_client_builder = client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider);
         crate::malware::check_resolution_malware(
-            resolution,
+            &resolution,
             &malware_check_client_builder,
             concurrency,
             malware_settings,
@@ -155,12 +157,12 @@ impl CachedEnvironment {
         )
         .await?;
 
-        let hash_strategy = HashStrategy::from_resolution(resolution, HashCheckingMode::Verify)?;
-        Self::from_resolution(
-            resolution,
+        let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
+        let environment = Self::from_resolution(
+            &resolution,
             hash_strategy,
-            build_constraints,
-            interpreter,
+            target.build_constraints(),
+            &interpreter,
             settings,
             client_builder,
             state,
@@ -171,7 +173,8 @@ impl CachedEnvironment {
             printer,
             preview,
         )
-        .await
+        .await?;
+        Ok((environment, resolution))
     }
 
     async fn from_resolution(

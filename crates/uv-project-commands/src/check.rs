@@ -17,7 +17,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
+    ProjectInterpreter, ScriptEnvironment, sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -424,16 +424,15 @@ pub async fn check(
             Err(err) => return Err(UvError::from(err).into()),
         };
 
-        let marker_environment = venv.interpreter().to_resolver_marker_environment();
+        let target = InstallTarget::Script {
+            script,
+            lock: result.lock(),
+        };
         if ty_path.is_none()
             && ty_version.is_none()
-            && result
-                .lock()
-                .dependency_selection(
-                    None,
-                    &PackageName::from_str("ty")?,
-                    marker_environment.markers(),
-                )
+            && target
+                .for_environment(venv.interpreter(), None)?
+                .dependency_selection(None, &PackageName::from_str("ty")?)
                 .map_err(anyhow::Error::msg)?
                 .root()
                 .is_some()
@@ -444,10 +443,6 @@ pub async fn check(
             );
         }
 
-        let target = InstallTarget::Script {
-            script,
-            lock: result.lock(),
-        };
         match sync_from_lock(
             target,
             &venv,
@@ -615,8 +610,8 @@ pub async fn check(
         if ty_path.is_none()
             && ty_version.is_none()
             && let Some(tool) = toolchain::find_locked_tool(
-                project,
-                result.lock(),
+                project.project_name(),
+                target,
                 lock_interpreter,
                 &PackageName::from_str("ty")?,
                 &DEV_DEPENDENCIES,
@@ -631,23 +626,11 @@ pub async fn check(
             } else {
                 // Do not modify the selected environment when synchronization is disabled or the
                 // locked tool is excluded from it. Install only the locked `ty` subgraph.
-                let base_interpreter =
-                    CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
-                let resolution = toolchain::resolution_from_lock(
-                    project,
-                    result.lock(),
-                    &tool,
-                    &base_interpreter,
-                    &settings.resolver.build_options,
-                )?;
-                store_credentials_from_target(target, &client_builder)?;
                 let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
-                    &resolution,
-                    result
-                        .lock()
-                        .build_constraints(project.workspace().install_path()),
-                    &base_interpreter,
+                let (environment, resolution) = match CachedEnvironment::from_locked_dependency(
+                    target,
+                    tool.dependency(),
+                    lock_interpreter,
                     &settings,
                     &malware_settings,
                     &client_builder,
