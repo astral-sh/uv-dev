@@ -47,13 +47,14 @@ use uv_fs::{CWD, Simplified, normalize_path};
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
 use uv_preview::PreviewFeature;
+use uv_project_commands::check::WorkspaceSettings;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_types::PythonRequest;
 use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
-use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
+use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, MalwareCheckSettings, Options};
 use uv_static::EnvVars;
 use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
@@ -65,6 +66,14 @@ mod commands;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
+
+/// Combine project, user, and system configuration in priority order.
+fn project_configuration(root: &Path) -> Result<Option<FilesystemOptions>> {
+    let project = FilesystemOptions::find(root).map_err(map_settings_error)?;
+    let system = FilesystemOptions::system().map_err(map_settings_error)?;
+    let user = FilesystemOptions::user().map_err(map_settings_error)?;
+    Ok(project.combine(user).combine(system))
+}
 
 /// Construct the shared HTTP client builder from the resolved global settings.
 fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBuilder<'a> {
@@ -335,16 +344,9 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     )
     .await
     {
-        let project =
-            FilesystemOptions::find(workspace.install_path()).map_err(map_settings_error)?;
-        let system = FilesystemOptions::system().map_err(map_settings_error)?;
-        let user = FilesystemOptions::user().map_err(map_settings_error)?;
-        project.combine(user).combine(system)
+        project_configuration(workspace.install_path())?
     } else {
-        let project = FilesystemOptions::find(&project_dir).map_err(map_settings_error)?;
-        let system = FilesystemOptions::system().map_err(map_settings_error)?;
-        let user = FilesystemOptions::user().map_err(map_settings_error)?;
-        project.combine(user).combine(system)
+        project_configuration(&project_dir)?
     };
 
     // If the target is a remote script, download it.
@@ -496,6 +498,15 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     } else {
         script_filesystem
     };
+    // The checker uses the same explicit configuration before the script's inline overlay.
+    let checker_config = if cli.top_level.config_file.is_some()
+        && script.is_some()
+        && matches!(&*cli.command, Commands::Project(command) if matches!(&**command, ProjectCommand::Check(_)))
+    {
+        filesystem.clone()
+    } else {
+        None
+    };
     let filesystem = script_filesystem.combine(filesystem);
 
     let custom_certificate_file = match &*cli.command {
@@ -549,13 +560,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         uv_preview::finalize()?;
     }
 
-    // Enforce the required version.
-    if let Some(required_version) = globals.required_version.as_ref() {
-        let package_version = uv_pep440::Version::from_str(uv_version::version())?;
-        if !required_version.contains(&package_version) {
-            return Err(required_version_error(required_version, &package_version));
-        }
-    }
+    check_required_version(&globals)?;
 
     // Configure the `Printer`, which controls user-facing output in the CLI.
     let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress);
@@ -1463,7 +1468,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 script,
                 globals,
                 config_discovery,
-                cli.top_level.global_args.project.is_some(),
+                &cli.top_level.global_args,
+                checker_config,
                 client_builder,
                 filesystem,
                 cache,
@@ -2214,6 +2220,16 @@ fn map_settings_error(err: uv_settings::Error) -> anyhow::Error {
     }
 }
 
+fn check_required_version(globals: &GlobalSettings) -> Result<()> {
+    if let Some(required_version) = globals.required_version.as_ref() {
+        let package_version = uv_pep440::Version::from_str(uv_version::version())?;
+        if !required_version.contains(&package_version) {
+            return Err(required_version_error(required_version, &package_version));
+        }
+    }
+    Ok(())
+}
+
 fn required_version_error(
     required_version: &uv_configuration::RequiredVersion,
     package_version: &uv_pep440::Version,
@@ -2259,7 +2275,8 @@ async fn run_project(
     script: Option<Pep723Item>,
     globals: GlobalSettings,
     config_discovery: ConfigDiscovery,
-    explicit_project: bool,
+    global_args: &uv_cli::GlobalArgs,
+    checker_config: Option<FilesystemOptions>,
     client_builder: BaseClientBuilder<'_>,
     filesystem: Option<FilesystemOptions>,
     cache: Cache,
@@ -2278,6 +2295,8 @@ async fn run_project(
 
     // Load environment variables not handled by Clap
     let environment = EnvironmentOptions::new()?;
+
+    let explicit_project = global_args.project.is_some();
 
     match *project_command {
         ProjectCommand::Init(args) => {
@@ -2911,7 +2930,60 @@ async fn run_project(
         }
         ProjectCommand::Check(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::CheckSettings::resolve(args, filesystem, environment)?;
+            let checker_args = args
+                .script
+                .as_ref()
+                .map(|_| (args.installer.clone(), args.build.clone()));
+            let args = settings::CheckSettings::resolve(args, filesystem, &environment)?;
+            let refresh = args.refresh.clone();
+            let resolve_workspace_settings = |root: &Path| -> Result<WorkspaceSettings> {
+                let (resolver, build) =
+                    checker_args.expect("workspace checker lookup requires a script");
+                // The workspace supplying the checker owns its installation policy. Reapply the
+                // invocation's explicit settings, resolving named indexes against that workspace.
+                let filesystem = if let Some(config) = checker_config {
+                    Some(config)
+                } else if !config_discovery.enabled() {
+                    None
+                } else {
+                    project_configuration(root)?
+                };
+                let globals =
+                    GlobalSettings::resolve(global_args, filesystem.as_ref(), &environment, None)?;
+                check_required_version(&globals)?;
+                globals.network_settings.check_refresh_conflict(&refresh)?;
+                let malware_settings =
+                    MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
+                let install_mirrors = environment.install_mirrors.clone().combine(
+                    filesystem
+                        .as_ref()
+                        .map_or_default(|fs| fs.install_mirrors.clone()),
+                );
+                let settings = settings::resolve_resolver_installer_settings_with_preview(
+                    resolver,
+                    build,
+                    filesystem,
+                    &environment,
+                    Some(globals.preview),
+                )?;
+                let refresh = refresh
+                    .combine(Refresh::from(settings.reinstall.clone()))
+                    .combine(Refresh::from(settings.resolver.upgrade.clone()));
+                Ok(WorkspaceSettings {
+                    settings,
+                    refresh,
+                    malware_settings,
+                    client_builder: base_client_builder(&globals)
+                        .subcommand(vec!["check".to_owned()]),
+                    python_preference: globals.python_preference,
+                    python_arch: globals.python_arch,
+                    python_downloads: globals.python_downloads,
+                    install_mirrors,
+                    concurrency: globals.concurrency,
+                    installer_metadata: globals.installer_metadata,
+                    preview: globals.preview,
+                })
+            };
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2965,6 +3037,7 @@ async fn run_project(
                 args.no_project,
                 config_discovery,
                 args.malware_settings,
+                resolve_workspace_settings,
             ))
             .await
         }

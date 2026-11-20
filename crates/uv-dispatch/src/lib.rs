@@ -655,6 +655,7 @@ impl BuildContext for BuildDispatch<'_> {
             build_kind,
             environment_variables,
             build_output,
+            self.preview,
             self.client.credentials_cache(),
         )
         .boxed_local()

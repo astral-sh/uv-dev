@@ -2772,6 +2772,60 @@ fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
     Ok(())
 }
 
+/// Apply the supplying workspace's wheel policy even when the caller is outside the workspace.
+#[test]
+fn check_script_workspace_ty_uses_workspace_installation_policy() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let (filename, wheel) = WheelBuilder::new(&"ty".parse()?, &"1.2.3".parse()?).build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ty"]
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--find-links", "wheels"])
+        .assert()
+        .success();
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(r#"no-binary-package = ["ty"]"#)?;
+    let caller = context.root.child("caller");
+    caller.create_dir_all()?;
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.check().current_dir(caller.path()).arg("--offline").arg("--script").arg(script.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Failed to look up or install `ty` from the script's workspace. Use `--no-project` to skip the workspace lookup
+      cause: Distribution `ty==1.2.3 @ registry+wheels` can't be installed because it is marked as `--no-binary` but has no source distribution
+    ");
+    Ok(())
+}
+
 /// A revision-4 lock records the group's Python bound on its checker dependency.
 /// The edge marker excludes the interpreter in the existing workspace environment.
 #[test]
