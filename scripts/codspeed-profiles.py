@@ -29,9 +29,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal, overload
 
 UPLOAD_URL = "https://api.codspeed.io/upload"
 SOURCE_REPOSITORY = "astral-sh/uv"
@@ -285,22 +286,48 @@ def finish_capture(directory: Path) -> None:
     verify_profile(directory / "profile.tar", metadata)
 
 
+@overload
+def github_read(
+    arguments: Sequence[str], *, missing_ok: Literal[False] = False
+) -> str: ...
+
+
+@overload
+def github_read(arguments: Sequence[str], *, missing_ok: bool) -> str | None: ...
+
+
+def github_read(arguments: Sequence[str], *, missing_ok: bool = False) -> str | None:
+    attempt = 1
+    while True:
+        try:
+            return subprocess.check_output(
+                ["gh", "api", "--method", "GET", *arguments],
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.CalledProcessError as error:
+            if missing_ok and "(HTTP 404)" in (error.stderr or ""):
+                return None
+            if attempt == 5:
+                raise
+            attempt += 1
+            # A failed paginated read can have partial stdout. Only a complete
+            # successful command may contribute pages to the result.
+            time.sleep(5)
+
+
 def github_items(path: str, key: str) -> list[dict]:
-    pages = json.loads(
-        subprocess.check_output(["gh", "api", "--paginate", "--slurp", path], text=True)
-    )
+    pages = json.loads(github_read(("--paginate", "--slurp", path)))
     return [item for page in pages for item in page[key]]
 
 
 def github_object(path: str, *, missing_ok: bool = False) -> dict | None:
-    result = subprocess.run(
-        ["gh", "api", path], capture_output=True, text=True, check=False
-    )
-    if result.returncode:
-        if missing_ok and "(HTTP 404)" in result.stderr:
-            return None
-        raise RuntimeError("Could not read GitHub workflow information")
-    return json.loads(result.stdout)
+    try:
+        output = github_read((path,), missing_ok=missing_ok)
+    except subprocess.CalledProcessError:
+        raise RuntimeError("Could not read GitHub workflow information") from None
+    return json.loads(output) if output is not None else None
 
 
 def find_source_run(sha: str, run_id: str | None = None) -> str | None:
