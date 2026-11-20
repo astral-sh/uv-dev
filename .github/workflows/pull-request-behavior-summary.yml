@@ -48,12 +48,18 @@ jobs:
         id: prepare
         run: |
           python3 agents/scripts/pull-request-behavior-summary.py prepare
+          # The Linux sandbox re-executes the CLI installed by codex-action.
+          packages="$(npm root --global)/@openai"
           mkdir -p "$RUNNER_TEMP/codex"
-          {
-            echo 'web_search = "disabled"'
-            echo 'shell_environment_policy.inherit = "core"'
-            cat agents/codex/config.toml
-          } > "$RUNNER_TEMP/codex/config.toml"
+          cat > "$RUNNER_TEMP/codex/config.toml" <<EOF
+          web_search = "disabled"
+          shell_environment_policy.inherit = "core"
+
+          [permissions.behavior-summary.filesystem]
+          ":minimal" = "read"
+          ":workspace_roots" = "read"
+          "$packages" = "read"
+          EOF
         env:
           GH_TOKEN: ${{ github.token }}
 

@@ -107,11 +107,3 @@ enabled = true
 [permissions.pull-request-labels.network.domains]
 "api.github.com" = "allow"
 "github.com" = "allow"
-
-
-[permissions.behavior-summary]
-description = "Read the pull request's Git objects and context."
-
-[permissions.behavior-summary.filesystem]
-":minimal" = "read"
-":workspace_roots" = "read"

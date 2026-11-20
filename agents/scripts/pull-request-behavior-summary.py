@@ -170,7 +170,7 @@ if __name__ == "__main__":
         prepare()
     else:
         operation = {"verify": verify_sources, "publish": publish}[sys.argv[1]]
-        operation(
-            json.loads(os.environ["RESULT"])["changes"],
-            json.loads(os.environ["REVISIONS"]),
-        )
+        changes = json.loads(os.environ["RESULT"])["changes"]
+        if changes is None:
+            sys.exit("Codex could not inspect the revisions.")
+        operation(changes, json.loads(os.environ["REVISIONS"]))

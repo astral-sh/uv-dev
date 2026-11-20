@@ -3,7 +3,7 @@
   "additionalProperties": false,
   "properties": {
     "changes": {
-      "type": "array",
+      "type": ["array", "null"],
       "items": {
         "type": "object",
         "additionalProperties": false,
