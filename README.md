@@ -4,6 +4,8 @@ Issue: astral-sh/uv#23298
 
 Classification: enhancement
 
+Status: Closed by the reporter on November 20, 2026, after identifying the preview as what they were looking for. Default validation is unchanged.
+
 ## Summary
 
 A consumer with an independent `uv.lock` depends on a sibling library through `tool.uv.sources`. Changing the library's unrequested `test` extra from `pytest>=8` to `pytest>=9` makes `uv lock --check` exit 1. Regenerating the lock changes only the library's `[package.metadata].requires-dist` entry; the two resolved packages are unchanged and `pytest` is not locked. In a monorepo, this can force unrelated consumer lockfile updates in CI.
@@ -12,7 +14,7 @@ astral-sh/uv#19081 tracks the analogous behavior for dependency groups, not extr
 
 ## Preview workaround
 
-A maintainer asked the reporter to try `UV_PREVIEW_FEATURES=lock-without-metadata`. Set it when regenerating the consumer lockfile with `uv lock` and when running `uv lock --check` in CI. This is the environment-variable equivalent of the flag verified in the offline reproduction below. The reporter has not yet confirmed whether it works in their setup.
+A maintainer suggested `UV_PREVIEW_FEATURES=lock-without-metadata`. Set it when regenerating the consumer lockfile with `uv lock` and when running `uv lock --check` in CI. This is the environment-variable equivalent of the flag verified in the offline reproduction below. The reporter plans to test it in their own setup and file any bugs separately; they did not report a test result before closing the issue.
 
 ## Draft response
 
