@@ -2177,6 +2177,55 @@ pub enum VirtualProject {
 }
 
 impl VirtualProject {
+    /// Discover the workspace containing a script for a lookup at its root.
+    ///
+    /// Start at the script's directory. Only the root and enclosing project are needed,
+    /// so sibling member manifests can be absent.
+    ///
+    /// The script directory must be absolute, as required by [`Self::discover`].
+    pub async fn discover_for_script(
+        script_dir: &Path,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+    ) -> Result<Option<Self>, WorkspaceError> {
+        // Collapse `..` before walking ancestors, keeping symlinked members under their workspace
+        // root. Use the physical path if collapsing `symlink/..` changes the directory it names.
+        let mut directory = normalize_path(script_dir);
+        if directory.as_ref() != script_dir {
+            let physical = fs_err::tokio::canonicalize(script_dir).await?;
+            if !fs_err::tokio::canonicalize(directory.as_ref())
+                .await
+                .is_ok_and(|path| path == physical)
+            {
+                directory = physical.into();
+            }
+        }
+        match Self::discover(
+            directory.simplified(),
+            &DiscoveryOptions {
+                members: MemberDiscovery::None,
+                ..DiscoveryOptions::default()
+            },
+            cache,
+            workspace_cache,
+        )
+        .await
+        {
+            Ok(project) => Ok(Some(project)),
+            Err(err)
+                if matches!(
+                    err.as_ref(),
+                    WorkspaceErrorKind::MissingPyprojectToml
+                        | WorkspaceErrorKind::MissingProject(_)
+                        | WorkspaceErrorKind::NonWorkspace(_)
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Find the current project or virtual workspace root, given the current directory.
     ///
     /// Similar to calling [`ProjectWorkspace::discover`] with a fallback to [`Workspace::discover`],
@@ -2982,6 +3031,49 @@ mod tests {
             VirtualProject::NonProject(_) => bail!("expected a cached workspace member project"),
         }
 
+        Ok(())
+    }
+
+    /// A symlinked member belongs to the workspace at its logical path. Walking up from
+    /// the link itself with `..` reaches the parent of its physical directory.
+    #[tokio::test]
+    async fn discover_workspace_for_script_in_symlinked_member() -> Result<()> {
+        let temp = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temp.path())?);
+        let logical = root.child("logical");
+        logical
+            .child("pyproject.toml")
+            .write_str("[tool.uv.workspace]\nmembers = ['member']")?;
+        let physical = root.child("physical");
+        physical
+            .child("pyproject.toml")
+            .write_str("[tool.uv.workspace]")?;
+        let member = physical.child("member");
+        member
+            .child("pyproject.toml")
+            .write_str("[project]\nname = 'member'\nversion = '0'")?;
+        member.child("sub").create_dir_all()?;
+        let link = logical.child("member");
+        fs_err::os::unix::fs::symlink(member.path(), link.path())?;
+
+        let cache = Cache::from_path(root.child("cache").path().to_owned());
+        let workspace_cache = WorkspaceCache::default();
+        let through_member =
+            VirtualProject::discover_for_script(&link.join("sub/.."), &cache, &workspace_cache)
+                .await?
+                .expect("member workspace");
+        assert_eq!(
+            through_member.project_name().map(AsRef::as_ref),
+            Some("member")
+        );
+        assert_eq!(through_member.workspace().install_path(), logical.path());
+
+        let through_parent =
+            VirtualProject::discover_for_script(&link.join(".."), &cache, &workspace_cache)
+                .await?
+                .expect("parent workspace");
+        assert!(through_parent.project_name().is_none());
+        assert_eq!(through_parent.workspace().install_path(), physical.path());
         Ok(())
     }
 
