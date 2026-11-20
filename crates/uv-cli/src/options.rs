@@ -3,6 +3,8 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, Command, FromArgMatches, Id};
 
 use uv_cache::Refresh;
 use uv_configuration::{
@@ -17,9 +19,9 @@ use uv_warnings::owo_colors::OwoColorize;
 
 use crate::{
     BuildIsolationArgs, BuildOptionsArgs, CompileBytecodeArgs, ExcludeNewerArgs, FetchArgs,
-    IndexArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
-    RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs, ResolverInstallerArgs,
-    SourcesArgs, UpgradeArgs, VersionSelectionArgs,
+    IndexArgs, IndexOptionsArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs,
+    PackageExcludeNewerArgs, RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs,
+    ResolverInstallerArgs, SourcesArgs, UpgradeArgs, VersionSelectionArgs,
 };
 
 /// An error caused by an invalid combination of command-line arguments.
@@ -528,7 +530,68 @@ impl IntoPipOptions for FetchArgs {
     }
 }
 
+impl Args for IndexArgs {
+    fn group_id() -> Option<Id> {
+        IndexOptionsArgs::group_id()
+    }
+
+    fn augment_args(command: Command) -> Command {
+        IndexOptionsArgs::augment_args(command)
+    }
+
+    fn augment_args_for_update(command: Command) -> Command {
+        IndexOptionsArgs::augment_args_for_update(command)
+    }
+}
+
+impl FromArgMatches for IndexArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        Ok(Self {
+            options: IndexOptionsArgs::from_arg_matches(matches)?,
+            explicit_index: matches.value_source("index") == Some(ValueSource::CommandLine),
+            explicit_default_index: matches.value_source("default_index")
+                == Some(ValueSource::CommandLine),
+        })
+    }
+
+    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
+        let explicit_index = matches.value_source("index") == Some(ValueSource::CommandLine);
+        let explicit_default_index =
+            matches.value_source("default_index") == Some(ValueSource::CommandLine);
+        Ok(Self {
+            options: IndexOptionsArgs::from_arg_matches_mut(matches)?,
+            explicit_index,
+            explicit_default_index,
+        })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        if let Some(source) = matches.value_source("index") {
+            self.explicit_index = source == ValueSource::CommandLine;
+        }
+        if let Some(source) = matches.value_source("default_index") {
+            self.explicit_default_index = source == ValueSource::CommandLine;
+        }
+        self.options.update_from_arg_matches(matches)
+    }
+    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
+        if let Some(source) = matches.value_source("index") {
+            self.explicit_index = source == ValueSource::CommandLine;
+        }
+        if let Some(source) = matches.value_source("default_index") {
+            self.explicit_default_index = source == ValueSource::CommandLine;
+        }
+        self.options.update_from_arg_matches_mut(matches)
+    }
+}
+
 impl IndexArgs {
+    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+        self.options.resolve(configured_indexes)
+    }
+}
+
+impl IndexOptionsArgs {
     /// Resolve the index arguments shared by pip, resolver, and installer settings.
     fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
         let Self {
