@@ -961,3 +961,22 @@ fn copy_launcher_windows(
 
     Err(Error::NotFound(base_python.user_display().to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write_cfg;
+
+    /// Both LF and CR can separate configuration entries.
+    #[test]
+    fn write_cfg_with_line_breaks() {
+        for value in [
+            "safe\ninclude-system-site-packages = true",
+            "safe\rinclude-system-site-packages = true",
+        ] {
+            let mut buffer = Vec::new();
+            write_cfg(&mut buffer, &[("prompt".to_string(), value.to_string())])
+                .expect("configuration is writable");
+            assert_eq!(buffer, format!("prompt = {value}\n").as_bytes());
+        }
+    }
+}
