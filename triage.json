@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22399,
+        "title": "Write lockfiles atomically for concurrent frozen readers",
+        "url": "https://github.com/astral-sh/uv/pull/22399",
+        "state": "merged",
+        "reason": "Introduced the shared writer and made project and script lockfile publication atomic. It deliberately preserved symlink targets; it fixed partial reads, not writes outside the project."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22402,
+        "title": "Write Python version files atomically",
+        "url": "https://github.com/astral-sh/uv/pull/22402",
+        "state": "merged",
+        "reason": "Adopted the same writer for `.python-version`, explicitly retaining symlink following. It fixed concurrent readers seeing an empty pin, not where the pin is written."
+      },
+      {
+        "kind": "issue",
+        "number": 21857,
+        "title": "uv Git checkout marker follows a repository-controlled symlink",
+        "url": "https://github.com/astral-sh/uv/issues/21857",
+        "state": "closed",
+        "reason": "Documents the same class of out-of-checkout write through a tracked symlink, but the affected writer created a `.ok` readiness marker in a cached Git dependency checkout."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21891,
+        "title": "Store Git checkout markers outside working trees",
+        "url": "https://github.com/astral-sh/uv/pull/21891",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#21857 by moving the readiness marker outside the dependency working tree. It shipped in 0.12.19 and did not change pin or lockfile writes."
+      },
+      {
+        "kind": "issue",
+        "number": 23056,
+        "title": "Generated files can follow existing destination links",
+        "url": "https://github.com/astral-sh/uv/issues/23056",
+        "state": "open",
+        "reason": "Reports a similar external overwrite, but only for generated files under `uv venv --allow-existing`. The maintainer discussion distinguishes ordinary behavior triage from a vulnerability determination."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23104,
+        "title": "fix(virtualenv): write generated venv files atomically via tempfile rename (astral-sh/uv#23056)",
+        "url": "https://github.com/astral-sh/uv/pull/23104",
+        "state": "closed",
+        "reason": "Proposed atomically replacing destination links without following them, but only for generated virtualenv files. It closed without merging and did not change either project-state writer."
+      }
+    ],
+    "search_scope": "Used authenticated GitHub CLI searches for open and closed issues and open, closed, and merged PRs in astral-sh/uv. Searched the pin and lock/sync symptoms separately using command and file names, the exact `Failed to parse` lockfile diagnostic, and variants for version-file destination links, lockfile symlinks, and external writes. Separate fix searches covered `write_atomic_preserve`, dangling targets, repository-controlled links, overwrite, atomic publication, and 0.13.9. Inspected candidate discussions, PR reviews, linked changes, and release history, and scanned recent PRs when PR search returned no known matches. Ruled out astral-sh/uv#19222 and its proposed fixes astral-sh/uv#21981 and astral-sh/uv#23035: they concern locating a lockfile beside a symlinked PEP 723 script, not writing through a symlink at `uv.lock`. Also ruled out managed-Python sysconfig publication in astral-sh/uv#22403 and the special output file handling in astral-sh/uv#22487 and astral-sh/uv#22496. The other virtualenv proposal, astral-sh/uv#23160, and the linked-directory report astral-sh/uv#23055 do not cover these writers."
+  },
+  "type": "bug",
+  "type_reason": "The 0.13.9 source confirms that a repository-shipped link can redirect a pin or lock update outside the project. The pin writer does not require a valid existing pin; a lock update stops on a TOML parse failure but can otherwise publish to the resolved target. Deliberate symlink preservation explains the behavior without addressing the write boundary. The atomic-write PRs kept link following while fixing partial reads, and the Git marker fix covered a different writer. This is not a duplicate or a regression of those fixes.",
+  "summary": "The closest matches are the atomic-write changes for `.python-version` and `uv.lock`, plus separate symlink-write reports for Git checkout markers and generated virtualenv files. None tracks or fixes the reported project-state writes.",
+  "draft_response": "Thanks for reporting this. Both writers preserve the symlink and write to its target. `uv python pin` doesn't require the target to contain a valid pin; `uv lock` and `uv sync` stop if an existing target can't be parsed as a lockfile. The atomic-write changes in astral-sh/uv#22399 and astral-sh/uv#22402 prevent partial reads, not writes outside the project. You still need to trust projects before running commands such as `uv lock`. The next step is to decide how these writers should handle out-of-project links without breaking intentional symlink setups. For now, use regular project files where you want the updates to stay local."
+}
