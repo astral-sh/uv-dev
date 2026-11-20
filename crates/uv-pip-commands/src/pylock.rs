@@ -4,13 +4,17 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use itertools::Itertools;
 use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
-use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
+use uv_configuration::{
+    BuildOptions, DependencyGroups, ExtrasSpecification, HashCheckingMode, RequirementsInput,
+    TargetTriple,
+};
 use uv_distribution_types::{RequiresPython, Resolution};
 use uv_lock::{PylockToml, PylockTomlError};
-use uv_normalize::{ExtraName, GroupName};
+use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName};
 use uv_pep440::Version;
 use uv_platform_tags::TagsError;
 use uv_python_interpreter::Interpreter;
@@ -29,6 +33,10 @@ pub enum PylockResolutionError {
         python_version: Version,
         requires_python: RequiresPython,
     },
+    #[error("Extra `{0}` is not declared in the `pylock.toml` file")]
+    UndeclaredExtra(ExtraName),
+    #[error("Dependency group `{0}` is not listed in the `pylock.toml` file's `dependency-groups`")]
+    UndeclaredGroup(GroupName),
     #[error(transparent)]
     Tags(#[from] TagsError),
     #[error(transparent)]
@@ -41,9 +49,11 @@ impl uv_errors::Hinted for PylockResolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::Pylock(error) => error.hints(),
-            Self::IncompatiblePython { .. } | Self::Tags(_) | Self::Hash(_) => {
-                uv_errors::Hints::none()
-            }
+            Self::IncompatiblePython { .. }
+            | Self::UndeclaredExtra(_)
+            | Self::UndeclaredGroup(_)
+            | Self::Tags(_)
+            | Self::Hash(_) => uv_errors::Hints::none(),
         }
     }
 }
@@ -96,11 +106,42 @@ pub(crate) fn resolve_pylock_toml(
     interpreter: &Interpreter,
     python_version: Option<&PythonVersion>,
     python_platform: Option<&TargetTriple>,
-    extras: &[ExtraName],
-    groups: &[GroupName],
+    extras: &ExtrasSpecification,
+    groups: &DependencyGroups,
     build_options: &BuildOptions,
     hash_checking: Option<HashCheckingMode>,
 ) -> Result<(Resolution, HashStrategy), PylockResolutionError> {
+    for extra in extras.explicit_names() {
+        if !lock.extras.contains(extra) {
+            return Err(PylockResolutionError::UndeclaredExtra(extra.clone()));
+        }
+    }
+    for group in groups.explicit_names() {
+        if !lock.dependency_groups.contains(group) {
+            return Err(PylockResolutionError::UndeclaredGroup(group.clone()));
+        }
+    }
+
+    // Convert the extras and groups specifications into a concrete form.
+    let extras = extras.with_defaults(DefaultExtras::default());
+    let extras = extras
+        .extra_names(lock.extras.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let groups = groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
+    let groups = groups
+        .group_names(lock.dependency_groups.iter())
+        // PEP 751 allows synthetic default groups that aren't publicly selectable.
+        .chain(
+            lock.default_groups
+                .iter()
+                .filter(|group| groups.contains_because_default(group)),
+        )
+        .unique()
+        .cloned()
+        .collect::<Vec<_>>();
+
     if let Some(requires_python) = lock.requires_python.as_ref() {
         if !requires_python.contains(interpreter.python_version()) {
             return Err(PylockResolutionError::IncompatiblePython {
@@ -116,8 +157,8 @@ pub(crate) fn resolve_pylock_toml(
     let resolution = lock.to_resolution(
         install_path,
         marker_env.markers(),
-        extras,
-        groups,
+        &extras,
+        &groups,
         &tags,
         build_options,
     )?;
