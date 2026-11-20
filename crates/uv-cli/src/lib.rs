@@ -1229,12 +1229,16 @@ impl IndexArg {
     }
 
     /// Resolve the argument against indexes from the effective configuration.
-    fn resolve(self, indexes: &[Index]) -> Result<Index> {
+    fn resolve(self, indexes: &[Index], preview: Option<uv_preview::Preview>) -> Result<Index> {
         let index = match self {
             Self::Resolved(index) => index,
-            Self::Unresolved(index) => {
-                index.resolve(indexes, uv_preview::is_enabled(PreviewFeature::IndexByName))?
-            }
+            Self::Unresolved(index) => index.resolve(
+                indexes,
+                preview.map_or_else(
+                    || uv_preview::is_enabled(PreviewFeature::IndexByName),
+                    |p| p.is_enabled(PreviewFeature::IndexByName),
+                ),
+            )?,
         };
 
         index.url().warn_on_disambiguated_relative_path();
@@ -6510,7 +6514,7 @@ pub struct GenerateShellCompletionArgs {
     pub version: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct IndexArgs {
     /// The indexes to use when resolving dependencies, in addition to the default index.
     ///
@@ -6621,7 +6625,7 @@ pub struct IndexArgs {
 }
 
 /// Arguments that configure the package registry client.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct RegistryClientArgs {
     /// The strategy to use when resolving against multiple index URLs.
@@ -6654,7 +6658,7 @@ pub struct RegistryClientArgs {
 }
 
 /// Arguments that control dependency sources.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct SourcesArgs {
     /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
@@ -6674,7 +6678,7 @@ pub struct SourcesArgs {
 }
 
 /// Arguments that configure package version selection.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct VersionSelectionArgs {
     /// The strategy to use when selecting between the different compatible versions for a given
@@ -6872,7 +6876,7 @@ pub struct HashCheckingArgs {
 }
 
 /// Arguments that filter packages by upload date.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct ExcludeNewerArgs {
     /// Limit candidate packages to those that were uploaded prior to the given date.
@@ -6901,7 +6905,7 @@ pub struct ExcludeNewerArgs {
 }
 
 /// Arguments that filter packages by global and package-specific upload dates.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct PackageExcludeNewerArgs {
     #[command(flatten)]
@@ -6944,7 +6948,7 @@ pub struct RefreshArgs {
     refresh_package: Vec<PackageName>,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct BuildOptionsArgs {
     /// Don't build source distributions.
     ///
@@ -7039,7 +7043,7 @@ pub struct BuildOptionsArgs {
 }
 
 /// Arguments that configure build isolation for source distributions.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct BuildIsolationArgs {
     /// Disable isolation when building source distributions.
@@ -7064,7 +7068,7 @@ pub struct BuildIsolationArgs {
 }
 
 /// Arguments that configure global and package-specific build isolation.
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct PackageBuildIsolationArgs {
     #[command(flatten)]
@@ -7077,7 +7081,7 @@ pub struct PackageBuildIsolationArgs {
     no_build_isolation_package: Vec<PackageName>,
 }
 
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct ReinstallArgs {
     /// Reinstall all packages, regardless of whether they're already installed. Implies
@@ -7104,7 +7108,7 @@ pub struct ReinstallArgs {
     reinstall_package: Vec<PackageName>,
 }
 
-#[derive(Args)]
+#[derive(Clone, Args)]
 #[group(skip)]
 pub struct CompileBytecodeArgs {
     /// Compile Python files to bytecode after installation.
@@ -7284,7 +7288,7 @@ pub struct ResolverArgs {
 }
 
 /// Arguments that are used by commands that need to resolve and install packages.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ResolverInstallerArgs {
     #[command(flatten)]
     index_args: IndexArgs,

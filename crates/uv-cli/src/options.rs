@@ -530,7 +530,11 @@ impl IntoPipOptions for FetchArgs {
 
 impl IndexArgs {
     /// Resolve the index arguments shared by pip, resolver, and installer settings.
-    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+    fn resolve(
+        self,
+        configured_indexes: &[Index],
+        preview: Option<uv_preview::Preview>,
+    ) -> anyhow::Result<IndexOptions> {
         let Self {
             default_index,
             index,
@@ -542,7 +546,7 @@ impl IndexArgs {
 
         let default_index = default_index
             .and_then(Maybe::into_option)
-            .map(|index| index.resolve(configured_indexes))
+            .map(|index| index.resolve(configured_indexes, preview))
             .transpose()?
             .map(|index| vec![index]);
         let index = index
@@ -551,7 +555,7 @@ impl IndexArgs {
                     .into_iter()
                     .flatten()
                     .filter_map(Maybe::into_option)
-                    .map(|index| index.resolve(configured_indexes))
+                    .map(|index| index.resolve(configured_indexes, preview))
                     .collect::<anyhow::Result<Vec<_>>>()
             })
             .transpose()?;
@@ -573,7 +577,7 @@ impl IntoPipOptions for IndexArgs {
     /// Convert index arguments into pip options, resolving configured index names.
     fn into_pip_options(self, configured_indexes: &[Index]) -> anyhow::Result<PipOptions> {
         Ok(PipOptions::from(
-            self.resolve(configured_indexes)?
+            self.resolve(configured_indexes, None)?
                 .relative_to(&env::current_dir()?)?,
         ))
     }
@@ -639,7 +643,7 @@ pub(crate) fn resolver_options(
     } = build_args;
 
     ResolverOptions {
-        indexes: index_args.resolve(configured_indexes)?,
+        indexes: index_args.resolve(configured_indexes, None)?,
         upgrade: Upgrade::from_args(
             flag(upgrade, no_upgrade, "upgrade")?,
             upgrade_package.into_iter().map(Requirement::from).collect(),
@@ -720,7 +724,7 @@ pub(crate) fn upgrade_options(
     } = args;
 
     let options = ResolverOptions {
-        indexes: index_args.resolve(configured_indexes)?,
+        indexes: index_args.resolve(configured_indexes, None)?,
         index_strategy,
         keyring_provider,
         require_build_hashes: flag(
@@ -740,6 +744,7 @@ pub(crate) fn resolver_installer_options(
     resolver_installer_args: ResolverInstallerArgs,
     build_args: BuildOptionsArgs,
     configured_indexes: &[Index],
+    preview: Option<uv_preview::Preview>,
 ) -> anyhow::Result<ResolverInstallerOptions> {
     let ResolverInstallerArgs {
         index_args,
@@ -806,7 +811,7 @@ pub(crate) fn resolver_installer_options(
     } = build_args;
 
     ResolverInstallerOptions {
-        indexes: index_args.resolve(configured_indexes)?,
+        indexes: index_args.resolve(configured_indexes, preview)?,
         upgrade: Upgrade::from_args(
             flag(upgrade, no_upgrade, "upgrade")?,
             upgrade_package.into_iter().map(Requirement::from).collect(),

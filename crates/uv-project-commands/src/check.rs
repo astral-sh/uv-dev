@@ -43,6 +43,7 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+pub use self::source::WorkspaceSettings;
 use self::source::{TySource, WorkspaceLookup};
 
 mod source;
@@ -86,6 +87,7 @@ pub async fn check(
     no_project: bool,
     config_discovery: ConfigDiscovery,
     malware_settings: MalwareCheckSettings,
+    resolve_workspace_settings: impl FnOnce(&Path) -> Result<WorkspaceSettings>,
 ) -> Result<ExitStatus> {
     if !preview.is_enabled(PreviewFeature::CheckCommand) {
         warn_user!(
@@ -363,16 +365,6 @@ pub async fn check(
 
     // Prepare the analysis environment and select the checker that will inspect it.
     let state = UniversalState::default();
-    let tool_installer = LockedToolInstaller {
-        settings: &settings,
-        client_builder: &client_builder,
-        state: &state,
-        installer_metadata,
-        concurrency: &concurrency,
-        cache,
-        printer,
-        preview,
-    };
     let requested = TySource::requested(ty_path, ty_version)?;
     let (venv, ty_source) = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
@@ -481,14 +473,10 @@ pub async fn check(
             script_dir: &target_dir,
             workspace_cache,
             config_discovery,
-            python_preference,
-            python_arch,
-            python_downloads,
-            malware_settings: &malware_settings,
-            install_mirrors: &install_mirrors,
+            resolve_settings: resolve_workspace_settings,
         });
         let source =
-            TySource::for_script(requested, target, &venv, workspace, &tool_installer).await?;
+            TySource::for_script(requested, target, &venv, workspace, cache, printer).await?;
         (Some(venv), source)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
@@ -618,6 +606,16 @@ pub async fn check(
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
 
+        let tool_installer = LockedToolInstaller {
+            settings: &settings,
+            client_builder: &client_builder,
+            state: &state,
+            installer_metadata,
+            concurrency: &concurrency,
+            cache,
+            printer,
+            preview,
+        };
         let source = TySource::for_project(
             requested,
             project.project_name(),

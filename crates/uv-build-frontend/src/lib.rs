@@ -39,7 +39,7 @@ use uv_fs::{LockedFile, LockedFileMode};
 use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_preview::PreviewFeature;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
@@ -312,6 +312,7 @@ impl SourceBuild {
         build_kind: BuildKind,
         mut environment_variables: FxHashMap<OsString, OsString>,
         level: BuildOutput,
+        preview: Preview,
         credentials_cache: &CredentialsCache,
     ) -> Result<Self, Error> {
         let temp_dir = build_context.cache().venv_dir()?;
@@ -452,7 +453,11 @@ impl SourceBuild {
 
         // Create the PEP 517 build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
-        let runner = PythonRunner::new(source_build_context.concurrent_build_slots.clone(), level);
+        let runner = PythonRunner::new(
+            source_build_context.concurrent_build_slots.clone(),
+            level,
+            preview,
+        );
         if let Some(resolved_requirements) = resolved_requirements {
             debug!("Creating PEP 517 build environment");
 
@@ -1248,6 +1253,7 @@ async fn get_pep517_build_requirements(
 /// concurrency limit.
 #[derive(Debug)]
 struct PythonRunner {
+    preview: Preview,
     concurrent_build_slots: Arc<Semaphore>,
     level: BuildOutput,
 }
@@ -1261,8 +1267,9 @@ struct PythonRunnerOutput {
 
 impl PythonRunner {
     /// Create a `PythonRunner` with the provided shared concurrency semaphore and output level.
-    fn new(concurrent_build_slots: Arc<Semaphore>, level: BuildOutput) -> Self {
+    fn new(concurrent_build_slots: Arc<Semaphore>, level: BuildOutput, preview: Preview) -> Self {
         Self {
+            preview,
             concurrent_build_slots,
             level,
         }
@@ -1304,7 +1311,7 @@ impl PythonRunner {
         let _permit = self.concurrent_build_slots.acquire().await.unwrap();
 
         let mut command = Command::new(venv.python_executable());
-        if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
+        if self.preview.is_enabled(PreviewFeature::BuildLazyImports)
             && venv.interpreter().implementation_name() == "cpython"
             && venv.interpreter().python_tuple() >= (3, 15)
         {

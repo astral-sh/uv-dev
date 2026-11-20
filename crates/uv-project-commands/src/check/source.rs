@@ -1,8 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use uv_bin_install::BinVersion;
+use uv_cache::{Cache, Refresh};
+use uv_client::BaseClientBuilder;
+use uv_command_support::Printer;
 use uv_command_support::UvError;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults};
+use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::install_target::{SyncSelection, ToolLocation};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -13,10 +17,11 @@ use uv_environment_operations::{LockedTool, LockedToolInstaller};
 use uv_lock::{DependencyScope, Package};
 use uv_lock_operations::LockTarget;
 use uv_normalize::{DEV_DEPENDENCIES, PackageName};
+use uv_preview::Preview;
 use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
-use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
+use uv_settings::{MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings};
 use uv_warnings::warn_user;
 use uv_workspace::{VirtualProject, WorkspaceCache};
 
@@ -68,8 +73,11 @@ impl TySource {
         requested: Option<Self>,
         target: InstallTarget<'_>,
         environment: &PythonEnvironment,
-        workspace: Option<WorkspaceLookup<'_>>,
-        installer: &LockedToolInstaller<'_>,
+        workspace: Option<
+            WorkspaceLookup<'_, impl FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>>,
+        >,
+        cache: &Cache,
+        printer: Printer,
     ) -> Result<Self, UvError> {
         if let Some(source) = requested {
             return Ok(source);
@@ -85,7 +93,7 @@ impl TySource {
         let Some(workspace) = workspace else {
             return Ok(Self::default());
         };
-        let source = workspace.checker(installer).await.map_err(|error| {
+        let source = workspace.checker(cache, printer).await.map_err(|error| {
             error.context("Failed to look up or install `ty` from the script's workspace. Use `--no-project` to skip the workspace lookup")
         })?;
         Ok(source.unwrap_or_default())
@@ -130,30 +138,35 @@ impl TySource {
     }
 }
 
+/// Installation settings resolved with the checker's workspace as the configuration root.
+pub struct WorkspaceSettings {
+    pub refresh: Refresh,
+    pub settings: ResolverInstallerSettings,
+    pub malware_settings: MalwareCheckSettings,
+    pub client_builder: BaseClientBuilder<'static>,
+    pub python_preference: PythonPreference,
+    pub python_arch: Option<PythonArchitecture>,
+    pub python_downloads: PythonDownloads,
+    pub install_mirrors: PythonInstallMirrors,
+    pub concurrency: Concurrency,
+    pub installer_metadata: bool,
+    pub preview: Preview,
+}
+
 /// Inputs to workspace discovery, used only when the script needs a checker.
-pub(super) struct WorkspaceLookup<'a> {
+pub(super) struct WorkspaceLookup<'a, F> {
     pub(super) script_dir: &'a Path,
     pub(super) workspace_cache: &'a WorkspaceCache,
     pub(super) config_discovery: ConfigDiscovery,
-    pub(super) python_preference: PythonPreference,
-    pub(super) python_arch: Option<PythonArchitecture>,
-    pub(super) python_downloads: PythonDownloads,
-    pub(super) malware_settings: &'a MalwareCheckSettings,
-    pub(super) install_mirrors: &'a PythonInstallMirrors,
+    pub(super) resolve_settings: F,
 }
 
-impl WorkspaceLookup<'_> {
-    async fn checker(
-        &self,
-        installer: &LockedToolInstaller<'_>,
-    ) -> Result<Option<TySource>, UvError> {
-        let Some(project) = VirtualProject::discover_for_script(
-            self.script_dir,
-            installer.cache,
-            self.workspace_cache,
-        )
-        .await
-        .map_err(EnvironmentError::from)?
+impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, F> {
+    async fn checker(self, cache: &Cache, printer: Printer) -> Result<Option<TySource>, UvError> {
+        let Some(project) =
+            VirtualProject::discover_for_script(self.script_dir, cache, self.workspace_cache)
+                .await
+                .map_err(EnvironmentError::from)?
         else {
             return Ok(None);
         };
@@ -175,6 +188,20 @@ impl WorkspaceLookup<'_> {
             return Ok(None);
         }
 
+        let settings =
+            (self.resolve_settings)(workspace.install_path()).map_err(UvError::unexpected)?;
+        let cache = &cache.clone().with_refresh(settings.refresh.clone());
+        let state = UniversalState::default();
+        let installer = LockedToolInstaller {
+            settings: &settings.settings,
+            client_builder: &settings.client_builder,
+            state: &state,
+            concurrency: &settings.concurrency,
+            installer_metadata: settings.installer_metadata,
+            preview: settings.preview,
+            cache,
+            printer,
+        };
         // Only the checker subgraph is installed. Select one workspace interpreter without
         // group-specific bounds, then evaluate both declarations against its markers.
         let groups = DependencyGroupsWithDefaults::none();
@@ -192,10 +219,10 @@ impl WorkspaceLookup<'_> {
             ProjectEnvironmentTarget::from(workspace),
             project_python,
             installer.client_builder,
-            self.python_preference,
-            self.python_arch,
-            self.python_downloads,
-            self.install_mirrors,
+            settings.python_preference,
+            settings.python_arch,
+            settings.python_downloads,
+            &settings.install_mirrors,
             ProjectEnvironmentPolicy::Optional,
             ActiveEnvironment::Ignore,
             installer.cache,
@@ -208,7 +235,7 @@ impl WorkspaceLookup<'_> {
                 .install(
                     tool,
                     &interpreter,
-                    &mut MalwareCheckContext::from(self.malware_settings),
+                    &mut MalwareCheckContext::from(&settings.malware_settings),
                 )
                 .await?
             {

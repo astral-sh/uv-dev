@@ -984,6 +984,7 @@ impl ToolRunSettings {
                     .as_ref()
                     .and_then(|options| options.top_level.index.as_deref())
                     .unwrap_or_default(),
+                None,
             )?,
             &environment,
         )
@@ -1112,6 +1113,7 @@ impl ToolInstallSettings {
                     .as_ref()
                     .and_then(|options| options.top_level.index.as_deref())
                     .unwrap_or_default(),
+                None,
             )?,
             &environment,
         )
@@ -1238,7 +1240,12 @@ impl ToolUpgradeSettings {
         };
 
         let args = resolver_installer_options_with_environment(
-            resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem.as_ref()),
+                None,
+            )?,
             environment,
         );
         let filesystem = filesystem.map(FilesystemOptions::into_options);
@@ -2427,8 +2434,12 @@ impl AddSettings {
             no_editable_package,
         );
         let refresh = Refresh::try_from(refresh)?;
-        let options =
-            resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
+        let options = resolver_installer_options(
+            installer,
+            build,
+            configured_indexes(filesystem.as_ref()),
+            None,
+        )?;
         let indexes = options.indexes.index.clone().unwrap_or_default();
 
         Ok(Self {
@@ -3037,7 +3048,7 @@ impl CheckSettings {
     pub fn resolve(
         args: CheckArgs,
         filesystem: Option<FilesystemOptions>,
-        environment: EnvironmentOptions,
+        environment: &EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let CheckArgs {
             fix,
@@ -3106,11 +3117,11 @@ impl CheckSettings {
             Some(environment.dev),
             Some(environment.no_dev),
         );
-        let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
+        let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), environment);
         let settings =
-            resolve_resolver_installer_settings(installer, build, filesystem, &environment)?;
+            resolve_resolver_installer_settings(installer, build, filesystem, environment)?;
         Ok(Self {
-            ty_path: environment.ty_path,
+            ty_path: environment.ty_path.clone(),
             script,
             fix,
             all_packages,
@@ -3142,6 +3153,7 @@ impl CheckSettings {
             python: python.and_then(Maybe::into_option),
             install_mirrors: environment
                 .install_mirrors
+                .clone()
                 .combine(filesystem_install_mirrors),
             refresh: Refresh::try_from(refresh)?,
             settings,
@@ -4487,7 +4499,23 @@ fn resolve_resolver_installer_settings(
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
 ) -> Result<ResolverInstallerSettings> {
-    let args = resolver_installer_options(args, build, configured_indexes(filesystem.as_ref()))?;
+    resolve_resolver_installer_settings_with_preview(args, build, filesystem, environment, None)
+}
+
+/// Resolve installer settings, using a scoped preview configuration for index names when supplied.
+pub fn resolve_resolver_installer_settings_with_preview(
+    args: ResolverInstallerArgs,
+    build: BuildOptionsArgs,
+    filesystem: Option<FilesystemOptions>,
+    environment: &EnvironmentOptions,
+    preview: Option<uv_preview::Preview>,
+) -> Result<ResolverInstallerSettings> {
+    let args = resolver_installer_options(
+        args,
+        build,
+        configured_indexes(filesystem.as_ref()),
+        preview,
+    )?;
 
     combine_resolver_installer_settings(args, filesystem, environment)
 }
