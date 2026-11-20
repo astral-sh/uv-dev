@@ -45,8 +45,8 @@ use tracing::instrument;
 use unscanny::{Pattern, Scanner};
 
 #[cfg(feature = "http")]
-use uv_client::{BaseClient, ClientBuildError};
-use uv_client::{BaseClientBuilder, Connectivity};
+use uv_client::ClientBuildError;
+use uv_client::{BaseClient, BaseClientBuilder, Connectivity};
 use uv_configuration::{
     NoBinary, NoBuild, PackageNameSpecifier, RequirementsInput, RequirementsInputError,
 };
@@ -200,6 +200,7 @@ impl RequirementsTxt {
             &requirements_txt,
             working_dir,
             client_builder,
+            &mut None,
             &mut visited,
             cache,
         )
@@ -227,6 +228,7 @@ impl RequirementsTxt {
             content,
             working_dir,
             client_builder,
+            &mut None,
             &requirements_txt,
             &mut visited,
             source_contents,
@@ -244,6 +246,7 @@ impl RequirementsTxt {
         requirements_txt: &RequirementsInput,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
+        client: &mut Option<BaseClient>,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
@@ -294,16 +297,20 @@ impl RequirementsTxt {
                                 )),
                             });
                         }
-                        let client =
-                            client_builder
-                                .build()
-                                .map_err(|err| RequirementsTxtFileError {
+                        // Nested remote files share the connection pool, while entirely local
+                        // inputs do not need to construct an HTTP client.
+                        let client = match client {
+                            Some(client) => client,
+                            None => client.insert(client_builder.build().map_err(|err| {
+                                RequirementsTxtFileError {
                                     file: Box::new(requirements_txt.clone()),
                                     error: RequirementsTxtParserError::ClientBuild(
                                         url.clone(),
                                         Box::new(err),
                                     ),
-                                })?;
+                                }
+                            })?),
+                        };
                         read_url_to_string(url, client).await.map_err(|err| {
                             RequirementsTxtFileError {
                                 file: Box::new(requirements_txt.clone()),
@@ -321,6 +328,7 @@ impl RequirementsTxt {
             &content,
             working_dir,
             client_builder,
+            client,
             requirements_txt,
             visited,
             cache,
@@ -344,6 +352,7 @@ impl RequirementsTxt {
         content: &str,
         working_dir: &Path,
         client_builder: &BaseClientBuilder<'_>,
+        client: &mut Option<BaseClient>,
         requirements_txt: &RequirementsInput,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
@@ -385,6 +394,7 @@ impl RequirementsTxt {
                         &sub_file,
                         working_dir,
                         client_builder,
+                        client,
                         visited,
                         cache,
                     ))
@@ -447,6 +457,7 @@ impl RequirementsTxt {
                         &sub_file,
                         working_dir,
                         client_builder,
+                        client,
                         &mut visited,
                         cache,
                     ))
@@ -1113,7 +1124,7 @@ fn parse_value<'a, T>(
 #[cfg(feature = "http")]
 async fn read_url_to_string(
     url: &SafeUrl,
-    client: BaseClient,
+    client: &BaseClient,
 ) -> Result<String, RequirementsTxtParserError> {
     let response = client
         .for_host(url)
@@ -1552,6 +1563,65 @@ mod test {
     use uv_fs::Simplified;
 
     use crate::{RequirementsTxt, calculate_row_column, eat_option};
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn nested_remote_files_reuse_connections() -> Result<()> {
+        use std::time::Duration;
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use uv_client::BaseClientBuilder;
+        use uv_configuration::RequirementsInput;
+        use uv_redacted::SafeUrl;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = SafeUrl::parse(&format!(
+            "http://{}/requirements.txt",
+            listener.local_addr()?
+        ))?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            for (path, body) in [
+                ("/requirements.txt", "-r child.txt\n-c constraints.txt\n"),
+                ("/child.txt", "iniconfig>=2\n"),
+                ("/constraints.txt", "iniconfig<3\n"),
+            ] {
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await?);
+                    anyhow::ensure!(request.len() < 16384, "Request headers too large");
+                }
+                anyhow::ensure!(
+                    String::from_utf8(request)?.starts_with(&format!("GET {path} HTTP/1.1\r\n")),
+                    "Unexpected request"
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let directory = tempdir()?;
+        let parsed = RequirementsTxt::parse_with_cache(
+            RequirementsInput::Remote(url),
+            directory.path(),
+            &BaseClientBuilder::default().retries(0),
+            &mut crate::SourceCache::default(),
+        )
+        .await?;
+        assert_eq!(parsed.requirements.len(), 1);
+        assert_eq!(parsed.constraints.len(), 1);
+        tokio::time::timeout(Duration::from_secs(3), server).await???;
+        Ok(())
+    }
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
