@@ -31,6 +31,25 @@ impl FlatDependencyGroups {
         path: &Path,
         pyproject_toml: &PyProjectToml,
     ) -> Result<Self, DependencyGroupError> {
+        Self::from_manifest(path, pyproject_toml, None)
+    }
+
+    /// Flatten one group and its includes. Other groups may be invalid or unavailable.
+    pub fn from_group(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+        group: &GroupName,
+    ) -> Result<Option<FlatDependencyGroup>, DependencyGroupError> {
+        Ok(Self::from_manifest(path, pyproject_toml, Some(group))?
+            .0
+            .remove(group))
+    }
+
+    fn from_manifest(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+        selected: Option<&GroupName>,
+    ) -> Result<Self, DependencyGroupError> {
         // First, collect `tool.uv.dev_dependencies`
         let dev_dependencies = pyproject_toml
             .tool
@@ -56,8 +75,8 @@ impl FlatDependencyGroups {
 
         // Flatten the dependency groups.
         let mut dependency_groups =
-            Self::from_dependency_groups(&dependency_groups, group_settings.inner()).map_err(
-                |err| DependencyGroupError {
+            Self::from_dependency_groups(&dependency_groups, group_settings.inner(), selected)
+                .map_err(|err| DependencyGroupError {
                     package: pyproject_toml
                         .project
                         .as_ref()
@@ -65,8 +84,7 @@ impl FlatDependencyGroups {
                         .unwrap_or_default(),
                     path: path.user_display().to_string(),
                     error: err.with_dev_dependencies(dev_dependencies),
-                },
-            )?;
+                })?;
 
         // Add the `dev` group, if the legacy `dev-dependencies` is defined.
         //
@@ -91,6 +109,7 @@ impl FlatDependencyGroups {
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
+        selected: Option<&GroupName>,
     ) -> Result<Self, DependencyGroupErrorInner> {
         fn resolve_group<'data>(
             resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
@@ -203,7 +222,7 @@ impl FlatDependencyGroups {
 
         // Validate the settings
         for (group_name, ..) in settings {
-            if !groups.contains_key(group_name) {
+            if selected.is_none_or(|name| name == group_name) && !groups.contains_key(group_name) {
                 return Err(DependencyGroupErrorInner::SettingsGroupNotFound(
                     group_name.clone(),
                 ));
@@ -211,7 +230,11 @@ impl FlatDependencyGroups {
         }
 
         let mut resolved = BTreeMap::new();
-        for name in groups.keys() {
+        for name in groups
+            .keys()
+            .copied()
+            .filter(|name| selected.is_none_or(|group| *name == group))
+        {
             let mut parents = Vec::new();
             resolve_group(&mut resolved, groups, settings, name, &mut parents)?;
         }

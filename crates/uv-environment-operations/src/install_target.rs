@@ -30,6 +30,7 @@ use uv_python_discovery::PythonRequirementSource;
 use uv_python_interpreter::Interpreter;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_scripts::Pep723Script;
+use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
 use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProject, Workspace};
 
@@ -486,6 +487,50 @@ impl<'lock> InstallTarget<'lock> {
             }
         }
 
+        Self::intersect_python_requirements(lock, group_requirements)
+    }
+
+    /// Intersect the workspace lock's Python requirement with the bound on one root group.
+    /// A checker inherited from the root runs independently of the members' groups.
+    pub fn root_group_python_requirement(
+        workspace: &Workspace,
+        lock: &Lock,
+        group: &GroupName,
+    ) -> Result<ProjectPythonRequirement, EnvironmentError> {
+        let root = lock.root().map(Package::name);
+        let bound = if let Some(mut members) = lock.member_group_metadata() {
+            match root {
+                Some(name) => members
+                    .find(|(member, _)| *member == name)
+                    .and_then(|(_, groups)| groups.get(group)),
+                None => lock.workspace_group_metadata().get(group),
+            }
+            .and_then(|metadata| metadata.requires_python.clone())
+        } else {
+            // Earlier locks encode the bound in the edge markers. The manifest also exposes
+            // it as a requirement we can use to find Python before evaluating those markers.
+            FlatDependencyGroups::from_group(
+                workspace.install_path(),
+                workspace.pyproject_toml(),
+                group,
+            )?
+            .and_then(|group| group.requires_python)
+        };
+        let mut requirements = RequiresPythonSources::new();
+        if let Some(bound) = bound {
+            let declaration = match root {
+                Some(name) => RequiresPythonDeclaration::Member(name.clone(), Some(group.clone())),
+                None => RequiresPythonDeclaration::Workspace(group.clone()),
+            };
+            requirements.insert(declaration, bound);
+        }
+        Self::intersect_python_requirements(lock, requirements)
+    }
+
+    fn intersect_python_requirements(
+        lock: &Lock,
+        group_requirements: RequiresPythonSources,
+    ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let Some(requires_python) = RequiresPython::intersection(
             std::iter::once(lock.requires_python().specifiers()).chain(group_requirements.values()),
         ) else {

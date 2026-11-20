@@ -14,7 +14,7 @@ use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_environment_operations::{LockedTool, LockedToolInstaller};
-use uv_lock::{DependencyScope, Package};
+use uv_lock::{DependencyScope, Lock, Package};
 use uv_lock_operations::LockTarget;
 use uv_normalize::{DEV_DEPENDENCIES, PackageName};
 use uv_preview::Preview;
@@ -23,7 +23,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings};
 use uv_warnings::warn_user;
-use uv_workspace::{VirtualProject, WorkspaceCache};
+use uv_workspace::{VirtualProject, Workspace, WorkspaceCache};
 
 use super::TY;
 
@@ -181,13 +181,10 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
         let project_name = root.map(Package::name);
         let selection = PackageSelection::from_args(false, &[], project_name);
         let target = InstallTarget::from_project(&project, &lock, selection);
-        let mut tools = Vec::new();
-        for scope in tool_scopes() {
-            if let Some(tool) = LockedTool::find(target, project_name, &TY, scope)? {
-                tools.push(tool);
-            }
-        }
-        if tools.is_empty() {
+        let [dev_scope, production_scope] = tool_scopes();
+        let dev = LockedTool::find(target, project_name, &TY, dev_scope)?;
+        let production = LockedTool::find(target, project_name, &TY, production_scope)?;
+        if dev.is_none() && production.is_none() {
             return Ok(None);
         }
 
@@ -205,11 +202,8 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
             cache,
             printer,
         };
-        // Only the checker subgraph is installed. Select one workspace interpreter without
-        // group-specific bounds, then evaluate both declarations against its markers.
-        let groups = DependencyGroupsWithDefaults::none();
-        let requirement = target.python_requirement(&groups)?;
-        let project_python = ProjectPythonRequest::from_requirements(
+        let requirement = target.python_requirement(&DependencyGroupsWithDefaults::none())?;
+        let base = ProjectPythonRequest::from_requirements(
             None,
             Some(workspace.install_path()),
             Some(requirement),
@@ -218,26 +212,36 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
         )
         .await
         .map_err(EnvironmentError::from)?;
-        let interpreter = ProjectInterpreter::discover(
-            ProjectEnvironmentTarget::from(workspace),
-            project_python,
-            installer.client_builder,
-            settings.python_preference,
-            settings.python_arch,
-            settings.python_downloads,
-            &settings.install_mirrors,
-            ProjectEnvironmentPolicy::Optional,
-            ActiveEnvironment::Ignore,
-            installer.cache,
-            installer.printer,
-        )
-        .await?
-        .into_interpreter();
-        for tool in tools {
+        let interpreter = settings
+            .interpreter(workspace, base.clone(), cache, printer)
+            .await?;
+
+        let dev_python = if dev.is_some() {
+            settings
+                .dev_interpreter(
+                    workspace,
+                    &lock,
+                    &interpreter,
+                    &base,
+                    target,
+                    cache,
+                    printer,
+                )
+                .await?
+        } else {
+            None
+        };
+        if dev_python.is_none() && production.is_none() {
+            // Even an inactive checker belongs to a lock with platform restrictions.
+            target.for_environment(&interpreter, None)?;
+        }
+        let dev = dev.zip(dev_python.as_ref());
+        let production = production.map(|tool| (tool, &interpreter));
+        for (tool, python) in dev.into_iter().chain(production) {
             if let Some(environment) = installer
                 .install(
                     tool,
-                    &interpreter,
+                    python,
                     &mut MalwareCheckContext::from(&settings.malware_settings),
                 )
                 .await?
@@ -250,5 +254,79 @@ impl<F: FnOnce(&Path) -> anyhow::Result<WorkspaceSettings>> WorkspaceLookup<'_, 
             interpreter.python_minor_version()
         );
         Ok(None)
+    }
+}
+
+impl WorkspaceSettings {
+    /// Look for another interpreter when the workspace Python cannot run the root's `dev`
+    /// group. A local pin takes precedence. Production always uses the workspace interpreter.
+    async fn dev_interpreter(
+        &self,
+        workspace: &Workspace,
+        lock: &Lock,
+        interpreter: &Interpreter,
+        base: &ProjectPythonRequest,
+        target: InstallTarget<'_>,
+        cache: &Cache,
+        printer: Printer,
+    ) -> Result<Option<Interpreter>, EnvironmentError> {
+        let requirement = match InstallTarget::root_group_python_requirement(
+            workspace,
+            lock,
+            &DEV_DEPENDENCIES,
+        ) {
+            Err(EnvironmentError::DisjointLockedRequiresPython { .. }) => return Ok(None),
+            result => result?,
+        };
+        if requirement
+            .requires_python
+            .contains(interpreter.python_version())
+        {
+            return Ok(Some(interpreter.clone()));
+        }
+        let Some(request) = base.for_alternate(requirement) else {
+            return Ok(None);
+        };
+        match self.interpreter(workspace, request, cache, printer).await {
+            Ok(alternate) => {
+                // A different Python may fall outside the lock's supported environments.
+                // Production still has the original interpreter to try in that case.
+                match target.for_environment(&alternate, None) {
+                    Err(EnvironmentError::LockedPlatformIncompatibility(_)) => Ok(None),
+                    Err(err) => Err(err),
+                    Ok(_) => Ok(Some(alternate)),
+                }
+            }
+            Err(EnvironmentError::Python(err))
+                if matches!(*err, uv_python_discovery::Error::MissingPython(..)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn interpreter(
+        &self,
+        workspace: &Workspace,
+        project_python: ProjectPythonRequest,
+        cache: &Cache,
+        printer: Printer,
+    ) -> Result<Interpreter, EnvironmentError> {
+        Ok(ProjectInterpreter::discover(
+            ProjectEnvironmentTarget::from(workspace),
+            project_python,
+            &self.client_builder,
+            self.python_preference,
+            self.python_arch,
+            self.python_downloads,
+            &self.install_mirrors,
+            ProjectEnvironmentPolicy::Optional,
+            ActiveEnvironment::Ignore,
+            cache,
+            printer,
+        )
+        .await?
+        .into_interpreter())
     }
 }
