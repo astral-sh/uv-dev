@@ -16,7 +16,6 @@ use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
     apply_no_virtual_project, store_credentials_from_target,
 };
-use uv_fs::{Simplified, normalize_path};
 use uv_install_operations::loggers::SummaryInstallLogger;
 use uv_lock::{Installable, Lock, Package, SelectedDependency};
 use uv_lock_operations::LockTarget;
@@ -27,9 +26,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings};
 use uv_warnings::warn_user;
-use uv_workspace::{
-    DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache, WorkspaceErrorKind,
-};
+use uv_workspace::{VirtualProject, WorkspaceCache};
 
 /// A locked package selected for use as a project tool.
 pub(super) struct LockedTool<'lock> {
@@ -139,41 +136,10 @@ impl LockedToolInstaller<'_> {
         python_downloads: PythonDownloads,
         install_mirrors: &PythonInstallMirrors,
     ) -> Result<Option<PythonEnvironment>> {
-        // Collapse `..` before walking ancestors, keeping symlinked members under their workspace
-        // root. Use the physical path if collapsing `symlink/..` changes the directory it names.
-        let mut directory = normalize_path(script_dir);
-        if directory.as_ref() != script_dir {
-            let physical = fs_err::tokio::canonicalize(script_dir).await?;
-            if !fs_err::tokio::canonicalize(directory.as_ref())
-                .await
-                .is_ok_and(|path| path == physical)
-            {
-                directory = physical.into();
-            }
-        }
-        let project = match VirtualProject::discover(
-            directory.simplified(),
-            &DiscoveryOptions {
-                members: MemberDiscovery::None,
-                ..DiscoveryOptions::default()
-            },
-            self.cache,
-            workspace_cache,
-        )
-        .await
-        {
-            Ok(project) => project,
-            Err(err)
-                if matches!(
-                    err.as_ref(),
-                    WorkspaceErrorKind::MissingPyprojectToml
-                        | WorkspaceErrorKind::MissingProject(_)
-                        | WorkspaceErrorKind::NonWorkspace(_)
-                ) =>
-            {
-                return Ok(None);
-            }
-            Err(err) => return Err(err.into()),
+        let Some(project) =
+            VirtualProject::discover_for_script(script_dir, self.cache, workspace_cache).await?
+        else {
+            return Ok(None);
         };
         let workspace = project.workspace();
         let Some(lock) = LockTarget::Workspace(workspace).read().await? else {
