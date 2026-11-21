@@ -1,0 +1,128 @@
+name: Publish binary-size changes
+
+on:
+  workflow_call:
+    inputs:
+      report-json:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev')
+    runs-on: github-ubuntu-24.04-x86_64-2
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    concurrency:
+      group: binary-size-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Read the stored comment ID
+        id: comment-state
+        uses: astral-sh/github-actions/key-value-store/get@9ece8e1afa7e9485a0bc35c40e34e1fa495ae454
+        with:
+          service-url: ${{ secrets.KV_API_URL }}
+          scope: pull-request
+          key: report-comment-binary-size
+          mask-value: "false"
+
+      - name: Get a pull request comment token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: Update the binary-size report
+        id: publish
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          REPORT_JSON: ${{ inputs.report-json }}
+          STORED_COMMENT_ID: ${{ steps.comment-state.outputs.value }}
+          STORED_COMMENT_FOUND: ${{ steps.comment-state.outputs.found }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          script: |
+            const pullRequestNumber = context.payload.pull_request.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: pullRequestNumber,
+            });
+            if (
+              pullRequest.state !== "open" ||
+              pullRequest.head.sha !== context.payload.pull_request.head.sha ||
+              pullRequest.merge_commit_sha !== context.sha ||
+              !pullRequest.labels.some(label => label.name === "build:binary-size")
+            ) {
+              core.info("The pull request changed or no longer requests a binary-size report.");
+              return;
+            }
+
+            const marker = "<!-- uv-binary-size -->";
+            let commentId;
+            if (process.env.STORED_COMMENT_FOUND === "true") {
+              const storedId = process.env.STORED_COMMENT_ID;
+              commentId = Number(storedId);
+              if (!Number.isSafeInteger(commentId) || commentId <= 0 || String(commentId) !== storedId) {
+                throw new Error("The stored comment ID is invalid.");
+              }
+              let comment;
+              try {
+                ({ data: comment } = await github.rest.issues.getComment({
+                  ...context.repo,
+                  comment_id: commentId,
+                }));
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+                commentId = undefined;
+              }
+              if (comment && (
+                comment.user?.id !== 305554984 ||
+                comment.issue_url !== `${context.apiUrl}/repos/${context.repo.owner}/${context.repo.repo}/issues/${pullRequestNumber}` ||
+                !comment.body?.startsWith(marker)
+              )) {
+                throw new Error("The stored ID does not identify this pull request's binary-size report.");
+              }
+            } else if (process.env.STORED_COMMENT_FOUND !== "false") {
+              throw new Error("The key-value lookup did not return a result.");
+            }
+
+            const report = JSON.parse(process.env.REPORT_JSON);
+            if (typeof report !== "string") {
+              throw new Error("The binary-size report must be a string.");
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/attempts/${process.env.GITHUB_RUN_ATTEMPT}`;
+            const body = `${marker}\n${report}\n[CI run](${runUrl}).\n`;
+            const { data: published } = commentId
+              ? await github.rest.issues.updateComment({
+                  ...context.repo,
+                  comment_id: commentId,
+                  body,
+                })
+              : await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: pullRequestNumber,
+                  body,
+                });
+            core.setOutput("comment-id", String(published.id));
+
+      - name: Store the comment ID
+        if: steps.publish.outputs.comment-id != ''
+        uses: astral-sh/github-actions/key-value-store/put@9ece8e1afa7e9485a0bc35c40e34e1fa495ae454
+        with:
+          service-url: ${{ secrets.KV_API_URL }}
+          scope: pull-request
+          key: report-comment-binary-size
+          value: ${{ steps.publish.outputs.comment-id }}
