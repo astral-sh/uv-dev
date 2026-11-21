@@ -62,8 +62,13 @@ windows-registry = { workspace = true }
 [dev-dependencies]
 uv-pep440 = { workspace = true }
 
+async-trait = { workspace = true }
+flate2 = { workspace = true }
+http = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true }
+sha2 = { workspace = true }
+tar-codec = { workspace = true }
 temp-env = { workspace = true }
 
 [build-dependencies]

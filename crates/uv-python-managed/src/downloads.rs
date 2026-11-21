@@ -154,8 +154,8 @@ impl RetriableError for Error {
     /// Returns `true` if trying an alternative URL makes sense after this error.
     ///
     /// HTTP-level failures (4xx, 5xx) and connection-level failures return `true`.
-    /// Hash mismatches, extraction failures, and similar post-download errors return `false`
-    /// because switching to a different host would not fix them.
+    /// Errors classified as retryable can trigger fallback even when surfaced during extraction
+    /// or hashing. Hash mismatches do not trigger fallback.
     fn should_try_next_url(&self) -> bool {
         match self {
             // There are two primary reasons to try an alternative URL:
@@ -168,7 +168,10 @@ impl RetriableError for Error {
             // `Io` uses `#[error(transparent)]`, so `source()` delegates to the inner error's
             // own source rather than returning the `io::Error` itself. We must unwrap it
             // explicitly so that `retryable_on_request_failure` can inspect the io error kind.
-            Self::Io(err) => retryable_on_request_failure(err).is_some(),
+            Self::Io(err) | Self::HashExhaustion(err) => {
+                retryable_on_request_failure(err).is_some()
+            }
+            Self::ExtractError(_, err) => retryable_on_request_failure(err).is_some(),
             _ => false,
         }
     }
@@ -472,9 +475,14 @@ impl ManagedPythonDownload {
             return Err(Error::NoPythonDownloadUrlFound);
         }
         fetch_with_url_fallback(&urls, *retry_policy, &format!("`{}`", self.key()), |url| {
+            // Bound each request to the preferred mirror so a trickling response cannot
+            // indefinitely prevent fallback. The final URL and explicitly configured mirrors
+            // only use the read timeout, allowing slow downloads to keep making progress.
+            let timeout = (urls.last() != Some(&url)).then(|| client.read_timeout());
             self.fetch_from_url(
                 url,
                 client,
+                timeout,
                 installation_dir,
                 scratch_dir,
                 reinstall,
@@ -490,6 +498,7 @@ impl ManagedPythonDownload {
         &self,
         url: SafeUrl,
         client: &BaseClient,
+        timeout: Option<Duration>,
         installation_dir: &Path,
         scratch_dir: &Path,
         reinstall: bool,
@@ -563,6 +572,7 @@ impl ManagedPythonDownload {
                         self.download_archive(
                             &url,
                             client,
+                            timeout,
                             reporter,
                             &python_builds_dir,
                             &target_cache_file,
@@ -598,7 +608,7 @@ impl ManagedPythonDownload {
                 temp_dir.path().simplified_display()
             );
 
-            let (reader, size) = read_url(&url, client).await?;
+            let (reader, size) = read_url(&url, client, timeout).await?;
             self.extract_reader(
                 reader,
                 temp_dir,
@@ -689,6 +699,7 @@ impl ManagedPythonDownload {
         &self,
         url: &SafeUrl,
         client: &BaseClient,
+        timeout: Option<Duration>,
         reporter: Option<&dyn Reporter>,
         python_builds_dir: &Path,
         target_cache_file: &Path,
@@ -699,7 +710,7 @@ impl ManagedPythonDownload {
             target_cache_file.simplified_display()
         );
 
-        let (mut reader, size) = read_url(url, client).await?;
+        let (mut reader, size) = read_url(url, client, timeout).await?;
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
 
@@ -1138,6 +1149,7 @@ where
 async fn read_url(
     url: &SafeUrl,
     client: &BaseClient,
+    timeout: Option<Duration>,
 ) -> Result<(impl AsyncRead + Unpin, Option<u64>), Error> {
     if url.scheme() == "file" {
         // Loads downloaded distribution from the given `file://` URL.
@@ -1151,9 +1163,11 @@ async fn read_url(
         Ok((Either::Left(reader), Some(size)))
     } else {
         let start = Instant::now();
-        let response = client
-            .for_host(url)
-            .get(url.clone())
+        let mut request = client.for_host(url).get(url.clone());
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request
             .send()
             .await
             .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
@@ -1187,7 +1201,18 @@ mod tests {
     use uv_python_types::VersionRequest;
 
     use std::collections::HashSet;
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flate2::write::GzEncoder;
+    use sha2::{Digest as _, Sha256};
+    use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+
+    use uv_client::{AuthIntegration, ExtraMiddleware};
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
 
@@ -1541,6 +1566,255 @@ mod tests {
         );
         let err = Error::NetworkError(url, wrapped);
         assert!(err.should_try_next_url());
+    }
+
+    struct DownloadServer {
+        url: SafeUrl,
+        requests: Arc<AtomicUsize>,
+        task: JoinHandle<()>,
+    }
+
+    impl DownloadServer {
+        async fn start(archive: Vec<u8>, delay: Duration) -> anyhow::Result<Self> {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let url = SafeUrl::parse(&format!("http://{}/", listener.local_addr()?))?;
+            let requests = Arc::new(AtomicUsize::new(0));
+            let received = Arc::clone(&requests);
+            let task = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut headers = Vec::new();
+                    while let Ok(byte) = stream.read_u8().await {
+                        headers.push(byte);
+                        if headers.ends_with(b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    received.fetch_add(1, Ordering::Relaxed);
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        archive.len()
+                    );
+                    if stream.set_nodelay(true).is_err()
+                        || stream.write_all(headers.as_bytes()).await.is_err()
+                    {
+                        continue;
+                    }
+                    for chunk in archive.chunks(archive.len().div_ceil(40)) {
+                        if stream.write_all(chunk).await.is_err() {
+                            break;
+                        }
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            });
+            Ok(Self {
+                url,
+                requests,
+                task,
+            })
+        }
+    }
+
+    impl Drop for DownloadServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    struct LocalDownloadUrls {
+        mirror: SafeUrl,
+        github: SafeUrl,
+    }
+
+    #[async_trait::async_trait]
+    impl reqwest_middleware::Middleware for LocalDownloadUrls {
+        async fn handle(
+            &self,
+            mut request: reqwest::Request,
+            extensions: &mut http::Extensions,
+            next: reqwest_middleware::Next<'_>,
+        ) -> reqwest_middleware::Result<Response> {
+            let local = match request.url().host_str() {
+                Some("releases.astral.sh") => &self.mirror,
+                Some("github.com") => &self.github,
+                Some("127.0.0.1") => return next.run(request, extensions).await,
+                host => {
+                    return Err(anyhow::anyhow!("Unexpected download host: {host:?}").into());
+                }
+            };
+            *request.url_mut() = local.clone().into_unsafe_url();
+            next.run(request, extensions).await
+        }
+    }
+
+    fn download_client(
+        mirror: &DownloadServer,
+        github: &DownloadServer,
+    ) -> anyhow::Result<BaseClient> {
+        Ok(BaseClientBuilder::default()
+            .read_timeout(Duration::from_secs(1))
+            .retries(0)
+            .auth_integration(AuthIntegration::NoAuthMiddleware)
+            .no_proxy(Some(vec!["127.0.0.1".to_owned()]))
+            .extra_middleware(ExtraMiddleware(vec![Arc::new(LocalDownloadUrls {
+                mirror: mirror.url.clone(),
+                github: github.url.clone(),
+            })]))
+            .build()?)
+    }
+
+    async fn python_archive() -> anyhow::Result<(ManagedPythonDownload, Vec<u8>)> {
+        let mut archive = Vec::new();
+        let mut builder = TarEncoder::new(&mut archive).builder();
+        builder
+            .add_file(
+                "python/bin/python3.12",
+                b"interpreter".as_slice(),
+                EntryMetadata::default(),
+            )
+            .await?;
+        builder.finish().await?;
+        let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&archive)?;
+        let archive = encoder.finish()?;
+        let mut download = cpython_download_for_url(
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4.tar.gz",
+        );
+        download.sha256 = Some(Digest::from_bytes(Sha256::digest(&archive).into()));
+        Ok((download, archive))
+    }
+
+    /// A mirror that keeps sending data must still yield to the fallback. The final source can
+    /// take longer than the same deadline as long as its individual reads keep making progress.
+    #[tokio::test]
+    async fn python_mirror_timeout_streaming() -> anyhow::Result<()> {
+        Box::pin(temp_env::async_with_vars(
+            [
+                ("UV_ASTRAL_MIRROR_URL", None::<&str>),
+                (EnvVars::UV_PYTHON_CACHE_DIR, None),
+            ],
+            async {
+                let root = tempfile::tempdir()?;
+                let (download, archive) = python_archive().await?;
+                let mirror =
+                    DownloadServer::start(archive.clone(), Duration::from_millis(50)).await?;
+                let github = DownloadServer::start(archive, Duration::from_millis(50)).await?;
+                let client = download_client(&mirror, &github)?;
+                download
+                    .fetch_with_retry(
+                        &client,
+                        &client.retry_policy(),
+                        root.path(),
+                        root.path(),
+                        false,
+                        PythonDownloadMirrors::default(),
+                        None,
+                    )
+                    .await?;
+                assert_eq!(mirror.requests.load(Ordering::Relaxed), 1);
+                assert_eq!(github.requests.load(Ordering::Relaxed), 1);
+                assert_eq!(
+                    fs_err::read(
+                        root.path()
+                            .join(download.key().to_string())
+                            .join("bin/python3.12")
+                    )?,
+                    b"interpreter"
+                );
+                Ok(())
+            },
+        ))
+        .await
+    }
+
+    /// A timed-out mirror response must not become a cached archive. Only the complete fallback
+    /// response can be reused by later installations.
+    #[tokio::test]
+    async fn python_mirror_timeout_cached() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let cache = root.path().join("archives");
+        Box::pin(temp_env::async_with_vars(
+            [
+                ("UV_ASTRAL_MIRROR_URL", None),
+                (EnvVars::UV_PYTHON_CACHE_DIR, Some(cache.as_os_str())),
+            ],
+            async {
+                let (download, archive) = python_archive().await?;
+                let mirror =
+                    DownloadServer::start(archive.clone(), Duration::from_millis(50)).await?;
+                let github = DownloadServer::start(archive.clone(), Duration::ZERO).await?;
+                let client = download_client(&mirror, &github)?;
+                download
+                    .fetch_with_retry(
+                        &client,
+                        &client.retry_policy(),
+                        root.path(),
+                        root.path(),
+                        false,
+                        PythonDownloadMirrors::default(),
+                        None,
+                    )
+                    .await?;
+                assert_eq!(mirror.requests.load(Ordering::Relaxed), 1);
+                assert_eq!(github.requests.load(Ordering::Relaxed), 1);
+                let cached = fs_err::read_dir(&cache)?.collect::<io::Result<Vec<_>>>()?;
+                assert_eq!(cached.len(), 1);
+                assert_eq!(fs_err::read(cached[0].path())?, archive);
+                assert_eq!(
+                    fs_err::read(
+                        root.path()
+                            .join(download.key().to_string())
+                            .join("bin/python3.12")
+                    )?,
+                    b"interpreter"
+                );
+                Ok(())
+            },
+        ))
+        .await
+    }
+
+    /// An explicitly selected mirror is the only source, so slow but progressing downloads
+    /// must not be interrupted by the deadline used for the built-in mirror.
+    #[tokio::test]
+    async fn python_mirror_timeout_custom_mirror() -> anyhow::Result<()> {
+        Box::pin(temp_env::async_with_vars(
+            [(EnvVars::UV_PYTHON_CACHE_DIR, None::<&str>)],
+            async {
+                let root = tempfile::tempdir()?;
+                let (download, archive) = python_archive().await?;
+                let mirror =
+                    DownloadServer::start(archive.clone(), Duration::from_millis(50)).await?;
+                let github = DownloadServer::start(archive, Duration::ZERO).await?;
+                let client = download_client(&mirror, &github)?;
+                download
+                    .fetch_with_retry(
+                        &client,
+                        &client.retry_policy(),
+                        root.path(),
+                        root.path(),
+                        false,
+                        PythonDownloadMirrors {
+                            cpython: Some(mirror.url.as_str()),
+                            ..PythonDownloadMirrors::default()
+                        },
+                        None,
+                    )
+                    .await?;
+                assert_eq!(mirror.requests.load(Ordering::Relaxed), 1);
+                assert_eq!(github.requests.load(Ordering::Relaxed), 0);
+                assert_eq!(
+                    fs_err::read(
+                        root.path()
+                            .join(download.key().to_string())
+                            .join("bin/python3.12")
+                    )?,
+                    b"interpreter"
+                );
+                Ok(())
+            },
+        ))
+        .await
     }
 
     /// Every [`PythonVersion`] in the embedded download metadata must be convertible
