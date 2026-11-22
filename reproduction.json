@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The reported directory deletion was not independently verified. The report uses uv 0.13.9; the installed binary is uv 0.13.7 with Python 3.12.3 on x86_64 Linux. I did not run the deletion scenario. The checked-in external-target test expects uv to rebuild the target and retain the redirect, but it does not check whether unrelated files survive. The missing evidence is a controlled runtime result on uv 0.13.9, not a new fixture from the reporter. I updated the issue-context README without changing the checkout or GitHub."
+}
