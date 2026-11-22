@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21822,
+        "title": "Add preview support for consuming PEP 832 redirect files",
+        "url": "https://github.com/astral-sh/uv/pull/21822",
+        "state": "merged",
+        "reason": "Introduced redirect handling in uv 0.13.9. The description says an incompatible redirect is replaced with a directory, but the non-cache sync test expects a file in the target to be deleted and the redirect to remain. The review also explains why empty redirects are rejected."
+      },
+      {
+        "kind": "issue",
+        "number": 21364,
+        "title": "`uv run --active --script` deletes the contents of a non-virtual-environment `VIRTUAL_ENV`",
+        "url": "https://github.com/astral-sh/uv/issues/21364",
+        "state": "closed",
+        "reason": "Earlier data loss during environment replacement, but the script command selected a non-virtualenv directory through `VIRTUAL_ENV`. The new report concerns a recognized virtual environment selected by a project redirect file."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21464,
+        "title": "Protect non-virtualenv directories with --active --script",
+        "url": "https://github.com/astral-sh/uv/pull/21464",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#21364 by rejecting nonempty non-virtualenv destinations for active scripts. It does not protect a recognized virtualenv behind a project redirect."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21487,
+        "title": "Refuse to remove non-virtualenv directories in `remove_virtualenv`",
+        "url": "https://github.com/astral-sh/uv/pull/21487",
+        "state": "open",
+        "reason": "Proposes moving the non-virtualenv check into the shared removal helper. Its guard would still permit replacement of a recognized virtualenv, so it would not make the project replace the redirect rather than its target."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged PRs with authenticated gh, including recent PR listings and candidate comments, reviews, and cross-references. Literal searches covered PEP 832, venv-redirect-files, read_venv_redirect, and the empty-file diagnostic. Separate symptom searches covered external deletion, unexpected recreation during sync, and empty or non-directory .venv paths. Fix searches covered centralized environments, symlinks, pyvenv.cfg, and remove_virtualenv, with checks against the 0.13.9 release source. Ruled out astral-sh/uv#10325 (general opt-out from recreation), astral-sh/uv#11850 (repeated recreation before redirect support), astral-sh/uv#14670 and astral-sh/uv#14933 (filesystem symlink retention in uv venv), astral-sh/uv#23055 and astral-sh/uv#23158 (writes through symlinked subdirectories), and astral-sh/uv#23319 and astral-sh/uv#23325 (symlinked project metadata). For the empty-file claim, astral-sh/uv#9423 concerns a directory, while astral-sh/uv#22950 and astral-sh/uv#23339 concern parsing preview configuration."
+  },
+  "type": "bug",
+  "type_reason": "The 0.13.9 source confirms that an interpreter mismatch can cause uv to clear and recreate the non-cached target instead of replacing the local redirect. This shipped with astral-sh/uv#21822 and is not a recurrence of the active-script bug. No separate item tracks the same problem. The empty-file diagnostic is also real, but it is a validation error rather than a crash: the preview setting only controls the warning. The interpreter mismatch is confirmed; `--reinstall` alone is not established as a trigger.",
+  "summary": "astral-sh/uv#21822 introduced the redirect behavior and added a test that expects the non-cache target to be rebuilt. The earlier active-script deletion fix covers a different path. No separate issue or pull request was found that tracks either reported behavior.",
+  "draft_response": "We confirmed from the 0.13.9 source that `uv sync` can remove files in a non-cached environment when switching Python versions through a `.venv` redirect. Replacement should leave the target alone. Until this is fixed, move only the `.venv` redirect file aside and use a project-local environment before syncing with a different Python version. The empty-file error also occurs without `--preview-features venv-redirect-files`: that option silences the warning but does not turn redirect handling on or off."
+}
