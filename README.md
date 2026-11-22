@@ -12,9 +12,11 @@ Security-sensitive bug report: potential data loss outside the project directory
 
 ## Reproduction
 
-**Outcome: needs_more_information (not independently verified).** The installed binary reports uv 0.13.7 (`x86_64-unknown-linux-gnu`) and the local Python is 3.12.3 on x86_64 Linux. No deletion scenario was run; this is not a negative reproduction. The missing evidence is controlled runtime confirmation on the reported uv 0.13.9 build, not an additional fixture from the reporter. For an authorized verification, the decisive observations are whether unrelated files in the external target survive and whether the project-local redirect is replaced.
+**Outcome: needs_more_information (corroborated by a second user, not verified locally).** A commenter separate from the original reporter says that uv 0.13.9 replaced an external Python 3.11 environment, deleted their canary file, and left the redirect file in place. The comment does not provide the exact command or platform, and does not address the empty-file error.
 
-- `crates/uv/tests/sync/centralized_project_envs.rs:677`, `sync_venv_redirect_file`: the checked-in snapshot expects an external environment to be removed and rebuilt after an interpreter change. The assertions check that the redirect contents are unchanged and that the target runs the newly selected interpreter. This test was inspected, not run; it does not assert the fate of unrelated files.
+The installed binary reports uv 0.13.7 (`x86_64-unknown-linux-gnu`) and the local Python is 3.12.3 on x86_64 Linux. No deletion scenario was run locally; this is not a negative reproduction. The remaining gap is controlled runtime confirmation on the reported uv 0.13.9 build, not an additional fixture from the reporter. The decisive observations are whether unrelated files in the external target survive and whether the project-local redirect is replaced.
+
+- `crates/uv/tests/sync/centralized_project_envs.rs:677`, `sync_venv_redirect_file`: the checked-in snapshot expects an external environment to be removed and rebuilt after an interpreter change. The assertions check that the redirect contents are unchanged, the sentinel file `external/keep` is gone, and the target runs the newly selected interpreter. This test was inspected, not run.
 - `crates/uv/tests/sync/centralized_project_envs.rs:636`, `sync_replaces_cached_venv_redirect_without_removing_target`: a distinct case checks that an incompatible redirect to a uv-managed cached environment is replaced with a local environment while the cached environment still runs its original interpreter. It does not cover preservation of a non-cache target. This test was also inspected, not run.
 
 ## Related
