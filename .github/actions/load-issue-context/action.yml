@@ -44,23 +44,8 @@ runs:
         ALLOW_MISSING: ${{ inputs.allow-missing }}
         DIRECTORY: ${{ inputs.path }}
         GH_TOKEN: ${{ github.token }}
-        GIT_CONFIG_GLOBAL: /dev/null
-        GIT_CONFIG_NOSYSTEM: "1"
         ISSUE_FILE: ${{ inputs.issue-file }}
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         REPOSITORY: ${{ inputs.repository }}
         TEMPLATE: ${{ inputs.template }}
-      run: |
-        arguments=(
-          load
-          --repository "$REPOSITORY"
-          --issue-number "$ISSUE_NUMBER"
-          --path "$DIRECTORY"
-        )
-        if [ "$ALLOW_MISSING" = "true" ]; then
-          arguments+=(--allow-missing)
-        fi
-        if [ -n "$TEMPLATE" ]; then
-          arguments+=(--template "$TEMPLATE" --issue-file "$ISSUE_FILE")
-        fi
-        python3 "$GITHUB_ACTION_PATH/issue_context.py" "${arguments[@]}"
+      run: python3 "$GITHUB_ACTION_PATH/issue_context.py" load

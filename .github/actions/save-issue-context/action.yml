@@ -51,18 +51,4 @@ runs:
         REPOSITORY: ${{ inputs.repository }}
         RESULT_FILE: ${{ inputs.result-file }}
         RESULT_NAME: ${{ inputs.result-name }}
-      run: |
-        arguments=(
-          save
-          --repository "$REPOSITORY"
-          --issue-number "$ISSUE_NUMBER"
-          --expected-revision "$EXPECTED_REVISION"
-          --readme "$README"
-        )
-        if [ -n "$ISSUE_FILE" ]; then
-          arguments+=(--issue-file "$ISSUE_FILE")
-        fi
-        if [ -n "$RESULT_FILE" ]; then
-          arguments+=(--result-name "$RESULT_NAME" --result-file "$RESULT_FILE")
-        fi
-        python3 "$GITHUB_ACTION_PATH/../load-issue-context/issue_context.py" "${arguments[@]}"
+      run: python3 "$GITHUB_ACTION_PATH/../load-issue-context/issue_context.py" save

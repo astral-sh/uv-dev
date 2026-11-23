@@ -1,8 +1,11 @@
-"""Load and publish the versioned triage report attached to an upstream issue."""
+"""Load and publish issue triage reports for GitHub Actions.
+
+An issue artifact contains the Markdown report followed by its structured results.
+Workflows edit local files and pass the source revision back to the publisher.
+"""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -24,54 +27,6 @@ RESULT_NAMES = ("triage", "reproduction", "fix")
 LEGACY_REPOSITORY = "https://github.com/astral-sh/uv-dev.git"
 
 
-def api(endpoint, *, method="GET", payload=None):
-    command = [
-        "gh",
-        "api",
-        "--method",
-        method,
-        "--header",
-        "Accept: application/vnd.github+json",
-        "--header",
-        "X-GitHub-Api-Version: 2026-03-10",
-        endpoint,
-    ]
-    if payload is not None:
-        command.extend(["--input", "-"])
-    result = subprocess.run(
-        command,
-        input=json.dumps(payload) if payload is not None else None,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError(f"GitHub API request failed: {result.stderr.strip()}")
-    return json.loads(result.stdout)
-
-
-def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-
-
-def git(*arguments, directory=None, check=True):
-    return subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "credential.helper=",
-            *arguments,
-        ],
-        cwd=directory,
-        env=os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
-        text=True,
-        stdout=subprocess.PIPE,
-        check=check,
-    )
-
-
 @dataclass
 class Context:
     readme: str | None
@@ -80,7 +35,35 @@ class Context:
     artifact_number: int | None = None
 
 
-def validate_data(data, repository, issue_number):
+def api(endpoint: str, *, method: str = "GET", payload: dict | None = None):
+    command = ["gh", "api", endpoint, "--method", method]
+    command.extend(["--header", "X-GitHub-Api-Version: 2026-03-10"])
+    body = None
+    if payload is not None:
+        command.extend(["--input", "-"])
+        body = json.dumps(payload)
+    return json.loads(subprocess.check_output(command, input=body, text=True))
+
+
+def digest(value: list) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def git(
+    *arguments: str, directory: str | None = None, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "credential.helper="]
+    return subprocess.run(
+        [*command, *arguments],
+        cwd=directory,
+        env=os.environ | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
+        text=True,
+        stdout=subprocess.PIPE,
+        check=check,
+    )
+
+
+def validate_data(data: dict, repository: str, issue_number: int) -> None:
     if not isinstance(data, dict) or data.get("repository") != repository:
         raise ValueError("The issue context belongs to a different repository.")
     issue = data.get("issue")
@@ -98,11 +81,11 @@ def validate_data(data, repository, issue_number):
             raise ValueError(f"The {name} result must be a JSON object.")
 
 
-def encode(readme, data):
+def encode(readme: str, data: dict) -> str:
     return readme.rstrip() + DATA_HEADER + json.dumps(data, indent=2) + DATA_FOOTER
 
 
-def decode(body, repository, issue_number):
+def decode(body: str, repository: str, issue_number: int) -> tuple[str, dict]:
     readme, separator, structured = body.rpartition(DATA_HEADER)
     if not separator or not structured.endswith(DATA_FOOTER):
         raise ValueError("The triage artifact has no supported structured results.")
@@ -111,28 +94,33 @@ def decode(body, repository, issue_number):
     return readme + "\n", data
 
 
-def read_artifact(repository, issue_number):
-    endpoint = f"repos/{repository}/issues/{issue_number}/artifacts"
-    matches = []
+def find_artifact(endpoint: str) -> int | None:
+    number = None
     page = 1
     while True:
         artifacts = api(f"{endpoint}?per_page=100&page={page}")
         if not isinstance(artifacts, list):
             raise TypeError("GitHub returned an invalid issue artifact list.")
-        matches.extend(
-            artifact for artifact in artifacts if artifact.get("name") == ARTIFACT_NAME
-        )
+        for artifact in artifacts:
+            if artifact["name"] != ARTIFACT_NAME:
+                continue
+            if number is not None:
+                raise ValueError("The issue has more than one triage artifact.")
+            number = artifact["number"]
+            if type(number) is not int or number < 1:
+                raise ValueError("The triage artifact number is invalid.")
         # This endpoint does not return pagination links.
         if len(artifacts) < 100:
-            break
+            return number
         page += 1
-    if not matches:
-        return None
-    if len(matches) != 1:
-        raise ValueError("The issue has more than one triage artifact.")
-    number = matches[0]["number"]
-    if type(number) is not int or number < 1:
-        raise ValueError("The triage artifact number is invalid.")
+
+
+def read_context(repository: str, issue_number: int) -> Context:
+    endpoint = f"repos/{repository}/issues/{issue_number}/artifacts"
+    number = find_artifact(endpoint)
+    if number is None:
+        return read_legacy(repository, issue_number)
+
     response = api(f"{endpoint}/{number}")
     artifact = response["artifact"]
     if (
@@ -143,20 +131,16 @@ def read_artifact(repository, issue_number):
     ):
         raise ValueError("The triage artifact is not owned by this automation.")
     versions = response["versions"]
-    if (
-        not versions
-        or type(versions[0]["version"]) is not int
-        or versions[0]["version"] < 1
-    ):
+    version = versions[0]["version"] if versions else None
+    if type(version) is not int or version < 1:
         raise ValueError("The triage artifact has no valid version history.")
     readme, data = decode(artifact["body"], repository, issue_number)
-    revision = digest(
-        ["artifact", artifact["id"], number, versions[0]["version"], artifact["body"]]
-    )
+    # Restoring an older body still invalidates analyses of the previous version.
+    revision = digest(["artifact", artifact["id"], number, version, artifact["body"]])
     return Context(readme, data, revision, number)
 
 
-def read_legacy(repository, issue_number):
+def read_legacy(repository: str, issue_number: int) -> Context:
     # Reports written before issue artifacts remain available until their next update.
     # Public Git reads do not require a cross-repository contents token.
     reference = git(
@@ -166,13 +150,15 @@ def read_legacy(repository, issue_number):
         f"refs/heads/issue/{issue_number}",
         check=False,
     )
-    if reference.returncode == 2:
+    if reference.returncode == 2:  # No matching branch.
         return Context(None, {}, digest(["missing"]))
     reference.check_returncode()
     revision = reference.stdout.split()[0]
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("The legacy issue-context revision is invalid.")
-    files = {}
+    # Read only regular blobs, without checking out untrusted branch contents.
+    readme = None
+    data = {"repository": repository}
     with tempfile.TemporaryDirectory(
         prefix="issue-context-", dir=os.environ["RUNNER_TEMP"]
     ) as directory:
@@ -200,44 +186,32 @@ def read_legacy(repository, issue_number):
             mode, kind, name = entry.split(" ", 2)
             if mode not in {"100644", "100755"} or kind != "blob":
                 raise ValueError(f"The legacy {name} is not a regular file.")
-            files[name] = git("show", f"{revision}:{name}", directory=directory).stdout
-    if "issue.json" not in files:
-        raise ValueError("The legacy issue-context branch has no issue metadata.")
-    data = {"repository": repository}
-    data.update(
-        (name.removesuffix(".json"), json.loads(content))
-        for name, content in files.items()
-        if name.endswith(".json")
-    )
+            content = git("show", f"{revision}:{name}", directory=directory).stdout
+            if name == "README.md":
+                readme = content
+            else:
+                data[name.removesuffix(".json")] = json.loads(content)
     validate_data(data, repository, issue_number)
-    return Context(files.get("README.md"), data, digest(["legacy", revision]))
+    return Context(readme, data, digest(["legacy", revision]))
 
 
-def read_context(repository, issue_number):
-    return read_artifact(repository, issue_number) or read_legacy(
-        repository, issue_number
-    )
+def output(**values: str) -> None:
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as file:
+        for name, value in values.items():
+            print(f"{name}={value}", file=file)
 
 
-def output(**values):
-    if path := os.environ.get("GITHUB_OUTPUT"):
-        with Path(path).open("a") as file:
-            file.writelines(
-                f"{name.replace('_', '-')}={value}\n" for name, value in values.items()
-            )
-
-
-def read_file(path):
-    path = Path(path)
+def read_file(filename: str) -> str:
+    path = Path(filename)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Expected a regular file: {path}")
     return path.read_text()
 
 
-def load(args):
-    if not re.fullmatch(r"[A-Za-z0-9_./-]+", args.path):
+def destination(path: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", path):
         raise ValueError("The issue-context destination is invalid.")
-    directory = Path(args.path).resolve()
+    directory = Path(path).resolve()
     roots = [
         Path(os.environ[name]).resolve() for name in ("RUNNER_TEMP", "GITHUB_WORKSPACE")
     ]
@@ -247,20 +221,34 @@ def load(args):
         )
     if directory.exists():
         raise ValueError("The issue-context destination already exists.")
-    context = read_context(args.repository, args.issue_number)
+    return directory
+
+
+def load(repository: str, issue_number: int) -> None:
+    directory = destination(os.environ["DIRECTORY"])
+    template = os.environ["TEMPLATE"]
+    issue_file = os.environ["ISSUE_FILE"]
+    if bool(template) != bool(issue_file):
+        raise ValueError(
+            "Initializing context requires both a template and issue file."
+        )
+
+    context = read_context(repository, issue_number)
+    # Early issue branches contain JSON results but no Markdown report.
     if context.readme is None:
-        if args.template and args.issue_file:
-            context.readme = read_file(args.template)
+        if template:
+            context.readme = read_file(template)
             context.data.update(
-                repository=args.repository,
-                issue=json.loads(read_file(args.issue_file)),
+                repository=repository,
+                issue=json.loads(read_file(issue_file)),
             )
-            validate_data(context.data, args.repository, args.issue_number)
-        elif args.allow_missing:
+            validate_data(context.data, repository, issue_number)
+        elif os.environ["ALLOW_MISSING"] == "true":
             output(exists="false")
             return
         else:
             raise ValueError("No triage report exists for this issue.")
+
     directory.mkdir(parents=True)
     (directory / "README.md").write_text(context.readme)
     for name in ("issue", *RESULT_NAMES):
@@ -268,61 +256,52 @@ def load(args):
             (directory / f"{name}.json").write_text(
                 json.dumps(context.data[name], indent=2) + "\n"
             )
-    # A local snapshot lets the comment workflow reject changes outside README.md.
-    git("init", "--quiet", directory=directory)
-    git("add", "README.md", "*.json", directory=directory)
-    git(
-        "-c",
-        "user.name=github-actions[bot]",
-        "-c",
-        "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-        "-c",
-        "commit.gpgSign=false",
-        "commit",
-        "--quiet",
-        "--message",
-        "Load issue context",
-        directory=directory,
-    )
-    output(exists="true", revision=context.revision, path=directory)
+    output(exists="true", revision=context.revision, path=str(directory))
 
 
-def save(args):
-    if not re.fullmatch(r"[0-9a-f]{64}", args.expected_revision):
+def save(repository: str, issue_number: int) -> None:
+    expected_revision = os.environ["EXPECTED_REVISION"]
+    issue_file = os.environ["ISSUE_FILE"]
+    result_name = os.environ["RESULT_NAME"]
+    result_file = os.environ["RESULT_FILE"]
+    if bool(result_name) != bool(result_file):
+        raise ValueError("A structured result requires both a name and file.")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
         raise ValueError("The expected issue-context revision is invalid.")
-    # Callers serialize publishers per issue; the REST update has no version argument.
-    context = read_context(args.repository, args.issue_number)
-    if context.revision != args.expected_revision:
-        print("The issue context changed during analysis; skipping the stale update.")
+
+    # Callers serialize publishers per issue because the API has no conditional update.
+    context = read_context(repository, issue_number)
+    if context.revision != expected_revision:
+        print("Skipping the update because the report changed during analysis.")
         output(current="false", changed="false")
         return
+
     data = context.data.copy()
-    if args.issue_file:
-        data.update(
-            repository=args.repository, issue=json.loads(read_file(args.issue_file))
-        )
-    if args.result_file:
-        if args.result_name not in RESULT_NAMES:
+    if issue_file:
+        data.update(repository=repository, issue=json.loads(read_file(issue_file)))
+    if result_file:
+        if result_name not in RESULT_NAMES:
             raise ValueError("A structured result must have a supported result name.")
-        data[args.result_name] = json.loads(read_file(args.result_file))
-    validate_data(data, args.repository, args.issue_number)
-    body = encode(read_file(args.readme), data)
-    endpoint = f"repos/{args.repository}/issues/{args.issue_number}/artifacts"
+        data[result_name] = json.loads(read_file(result_file))
+    validate_data(data, repository, issue_number)
+
+    body = encode(read_file(os.environ["README"]), data)
+    endpoint = f"repos/{repository}/issues/{issue_number}/artifacts"
+    number = context.artifact_number
     changed = True
-    if context.artifact_number is None:
+    if number is None:
         artifact = api(
             endpoint,
             method="POST",
             payload={"name": ARTIFACT_NAME, "type": "generic", "body": body},
         )
         number = artifact["number"]
+    elif context.readme is not None and body == encode(context.readme, context.data):
+        changed = False
     else:
-        number = context.artifact_number
-        if body == encode(context.readme, context.data):
-            changed = False
-        else:
-            api(f"{endpoint}/{number}", method="PATCH", payload={"body": body})
-    url = f"https://github.com/{args.repository}/issues/{args.issue_number}/artifacts/{number}"
+        api(f"{endpoint}/{number}", method="PATCH", payload={"body": body})
+
+    url = f"https://github.com/{repository}/issues/{issue_number}/artifacts/{number}"
     print(f"Issue context: {url}")
     if path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(path).open("a") as file:
@@ -330,53 +309,21 @@ def save(args):
     output(current="true", changed=str(changed).lower(), url=url)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("load", "save"))
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--issue-number", required=True, type=int)
-    parser.add_argument("--path")
-    parser.add_argument("--allow-missing", action="store_true")
-    parser.add_argument("--template")
-    parser.add_argument("--issue-file")
-    parser.add_argument("--readme")
-    parser.add_argument("--expected-revision")
-    parser.add_argument("--result-name", choices=RESULT_NAMES)
-    parser.add_argument("--result-file")
-    args = parser.parse_args()
-    if (
-        not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository)
-        or args.issue_number < 1
-    ):
-        parser.error("The issue repository or number is invalid.")
-    if args.operation == "load":
-        if not args.path:
-            parser.error("Loading issue context requires a destination path.")
-        if bool(args.template) != bool(args.issue_file):
-            parser.error(
-                "Initializing issue context requires both a template and issue file."
-            )
-        load(args)
+def main() -> None:
+    repository = os.environ["REPOSITORY"]
+    number = os.environ["ISSUE_NUMBER"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("Invalid issue repository.")
+    if not re.fullmatch(r"[1-9][0-9]*", number):
+        raise ValueError("Invalid issue number.")
+
+    if sys.argv[1:] == ["load"]:
+        load(repository, int(number))
+    elif sys.argv[1:] == ["save"]:
+        save(repository, int(number))
     else:
-        if not args.readme or not args.expected_revision:
-            parser.error(
-                "Saving issue context requires a README and expected revision."
-            )
-        if bool(args.result_name) != bool(args.result_file):
-            parser.error("A structured result requires both a name and file.")
-        save(args)
+        raise ValueError("Expected load or save.")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        KeyError,
-        RuntimeError,
-        subprocess.CalledProcessError,
-    ) as error:
-        print(error, file=sys.stderr)
-        sys.exit(1)
+    main()
