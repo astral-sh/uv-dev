@@ -53,18 +53,15 @@ impl ServiceError {
         bearer_token: Option<&str>,
     ) -> Self {
         let status = response.status();
-        let source = response.error_for_status_ref().err();
-        let body = match response.text().await {
-            Ok(body) => body,
-            Err(err) => {
-                return Self {
-                    service,
-                    status,
-                    detail: String::new(),
-                    source: Some(err),
-                };
-            }
-        };
+        // A reqwest status error includes the server's HTTP/1 reason phrase.
+        let mut source = response
+            .error_for_status_ref()
+            .err()
+            .filter(|err| bearer_token.is_none_or(|token| !err.to_string().contains(token)));
+        let body = response.text().await.unwrap_or_else(|err| {
+            source = Some(err);
+            String::new()
+        });
         let message = body.trim();
         let detail = if message.is_empty() {
             String::new()
@@ -116,6 +113,8 @@ pub enum SigningError {
     FulcioResponse(#[source] reqwest::Error),
     #[error("Invalid Fulcio certificate response at {line}:{column}")]
     FulcioJson { line: usize, column: usize },
+    #[error("Fulcio returned the OIDC token in the certificate chain")]
+    ReflectedToken,
     #[error("Fulcio returned an empty certificate chain")]
     EmptyCertificateChain,
     #[error("Invalid Fulcio signing certificate PEM")]
@@ -324,10 +323,12 @@ async fn request_certificate(
             line: err.line(),
             column: err.column(),
         })?;
-    response
-        .signed_certificate_embedded_sct
-        .chain
-        .certificates
+    let certificates = response.signed_certificate_embedded_sct.chain.certificates;
+    // PEM errors can quote input, and the original leaf PEM is sent to the public log.
+    if certificates.iter().any(|pem| pem.contains(token)) {
+        return Err(SigningError::ReflectedToken);
+    }
+    certificates
         .into_iter()
         .next()
         .ok_or(SigningError::EmptyCertificateChain)
