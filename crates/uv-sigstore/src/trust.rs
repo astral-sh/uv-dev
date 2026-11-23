@@ -142,9 +142,30 @@ impl TrustedRoot {
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     use super::TrustedRoot;
+
+    #[test]
+    fn ct_key_must_be_valid_at_issuance_and_now() -> Result<(), serde_json::Error> {
+        let mut root: TrustedRoot = serde_json::from_value(json!({
+            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+            "tlogs": [],
+            "ctlogs": [{"baseUrl": "https://ct.example", "publicKey": {
+                "rawBytes": "AQ==", "keyDetails": "PKIX_ECDSA_P256_SHA_256",
+                "validFor": {"start": "2000-01-01T00:00:00Z"}
+            }}],
+        }))?;
+        let id = Sha256::digest([1]).into();
+        let start = root.ctlogs[0].public_key.valid_for.start;
+        assert!(root.ct_key(&id, start).is_some());
+        assert!(root.ct_key(&id, Timestamp::UNIX_EPOCH).is_none());
+        root.ctlogs[0].public_key.valid_for.end = Some(start);
+        assert!(root.ct_key(&id, start).is_none());
+        Ok(())
+    }
 
     #[test]
     fn malformed_key_falls_back_during_rotation() -> Result<(), serde_json::Error> {

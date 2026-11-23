@@ -157,8 +157,9 @@ pub struct SignedStatement {
 impl TrustedRoot {
     /// Sign an in-toto statement using a CI token for the `sigstore` audience.
     ///
-    /// The signer checks the certificate timestamp and Rekor receipt. Consumers verify the
-    /// Fulcio chain and the signing identity against their own policy.
+    /// The signer checks the leaf public key, embedded certificate timestamp, and Rekor receipt.
+    /// Consumers independently verify the Fulcio chain, certificate timestamp, log evidence,
+    /// and signing identity against their own policy.
     pub async fn sign_statement(
         &self,
         client: &ClientWithMiddleware,
@@ -383,19 +384,27 @@ mod tests {
 
     use super::{ServiceError, sign_with_services};
 
-    // Public test vector: P-256 scalars 1 (self-issued certificate) and 2 (CT log).
-    // The embedded SCT was signed independently of uv, over the certificate without that extension.
+    // Independent P-256 test vector using scalars 1 (leaf), 2 (CT log), and 3 (issuer).
+    // The SCT binds the issuer's public key to the leaf without its SCT extension.
     const CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----
-MIIBrTCCAVOgAwIBAgIBATAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDAR0ZXN0MB4X
-DTIwMDEwMTAwMDAwMFoXDTMwMDEwMTAwMDAwMFowDzENMAsGA1UEAwwEdGVzdDBZ
-MBMGByqGSM49AgEGCCqGSM49AwEHA0IABGsX0fLhLEJH+Lzm5WOkQPJ3A32BLesz
-oPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfWjgZ8wgZww
-DAYDVR0TAQH/BAIwADCBiwYKKwYBBAHWeQIEAgR9BHsAeQB3ANwM5jPbzJE9r6+k
-uJrETYzmg/38P2DIvfISE7nytTS6AAABi8/laAAAAAQDAEgwRgIhAMG7vppaMeXl
-9xHFE2kwt1x8gzVD9WRB8/kvoBuBKk6uAiEA14nsmTWzbphg06sm8pXwHBpxmRxe
-42fI5UnFaNspHwgwCgYIKoZIzj0EAwIDSAAwRQIgOB1zifoRKGKnBCzEbo9677Bo
-yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
-5A==
+MIIBqzCCAVCgAwIBAgIBATAKBggqhkjOPQQDAjANMQswCQYDVQQDDAJjYTAeFw0y
+MDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMA8xDTALBgNVBAMMBHRlc3QwWTAT
+BgcqhkjOPQIBBggqhkjOPQMBBwNCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0
+oTlF2JjClk/jQuL+Gn+bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1o4GeMIGbMAwG
+A1UdEwEB/wQCMAAwgYoGCisGAQQB1nkCBAIEfAR6AHgAdgDcDOYz28yRPa+vpLia
+xE2M5oP9/D9gyL3yEhO58rU0ugAAAYvP5WgAAAAEAwBHMEUCIQDR05+VYd15h6Hl
+NXi5wRiDf1TbR1ZCbGHicC8TNc9FxQIgToW3Z3dPSucFGF4HYvDR4NOJ93ImYOqG
+AcRFxsFaGyowCgYIKoZIzj0EAwIDSQAwRgIhANOVRsEHhQql/GcwtyUAXZrq44Wa
+6H58pr/+9P4RdqjiAiEArAfhIbRMM70U9LS4gm6LYkGRNjYgSNGz9LNLYMyAWqc=
+-----END CERTIFICATE-----
+";
+    const ISSUER: &str = "-----BEGIN CERTIFICATE-----
+MIIBGjCBwqADAgECAgECMAoGCCqGSM49BAMCMA0xCzAJBgNVBAMMAmNhMB4XDTIw
+MDEwMTAwMDAwMFoXDTMwMDEwMTAwMDAwMFowDTELMAkGA1UEAwwCY2EwWTATBgcq
+hkjOPQIBBggqhkjOPQMBBwNCAARey+TRpjMKRMj375UdS/Fl5sa3Ie+tqYX7QWYb
+xuf9bIc0ZAxJmP9+N0sGzhpkouzYKrA2OE+4PZp5sSeifVAyoxMwETAPBgNVHRMB
+Af8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQCIDQFsxNfSoHlMnrdRKrD3VVwFVXW
+VsCte2tcbtqrpdI4AiBMH4q8XV+Q667AkngzxxGxPSTrcAiRUhBi0V/cmgxHaA==
 -----END CERTIFICATE-----
 ";
     const KEY: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
@@ -439,11 +448,11 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
         let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
         let trust = trusted_root(&key)?;
         // Flip a bit in the embedded SCT signature, leaving the DER structure intact.
-        let tampered = CERTIFICATE.replacen("42fI5UnF", "42fI5UnE", 1);
+        let tampered = CERTIFICATE.replacen("AcRFxsFa", "AMRFxsFa", 1);
         Mock::given(method("POST"))
             .and(path("/fulcio"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "signedCertificateEmbeddedSct": {"chain": {"certificates": [tampered, CERTIFICATE]}}
+                "signedCertificateEmbeddedSct": {"chain": {"certificates": [tampered, ISSUER]}}
             })))
             .expect(1)
             .mount(&server)
@@ -498,7 +507,7 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
                 assert_eq!(csr.public_key.subject_public_key_info(), expected_key);
                 ResponseTemplate::new(200).set_body_json(json!({
                     "signedCertificateEmbeddedSct": {
-                        "chain": {"certificates": [CERTIFICATE, CERTIFICATE]}
+                        "chain": {"certificates": [CERTIFICATE, ISSUER]}
                     }
                 }))
             })
