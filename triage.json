@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15669,
+        "title": "\"uv python upgrade\" always complains python is not managed by uv",
+        "url": "https://github.com/astral-sh/uv/issues/15669",
+        "state": "closed",
+        "reason": "The same Linux upgrade warning appeared for a uv-created python3.13 link on uv 0.8.15, even after a forced install. The maintainer could not reproduce it later and the reporter said it had stopped; neither a symlinked ancestor nor a fixing commit was identified."
+      },
+      {
+        "kind": "issue",
+        "number": 14247,
+        "title": "`uv python upgrade` does not repoint shims created by `uv python install --default`",
+        "url": "https://github.com/astral-sh/uv/issues/14247",
+        "state": "closed",
+        "reason": "An upgrade left Windows default-install shims stale, and a later attempt printed the same ownership warning. The contributor identified a separate default-install upgradeability bug and could not reproduce the warning."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14261,
+        "title": "Ensure preview default Python installs are upgradeable",
+        "url": "https://github.com/astral-sh/uv/pull/14261",
+        "state": "merged",
+        "reason": "Closed astral-sh/uv#14247 by making preview default installs without a version argument upgradeable. It did not address the separately reported ownership warning or symlinked Unix install paths."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22547,
+        "title": "Resolve fresh managed Python installations to absolute paths",
+        "url": "https://github.com/astral-sh/uv/pull/22547",
+        "state": "merged",
+        "reason": "Prevented broken minor-version aliases when installing into a relative directory by making newly downloaded installation paths absolute. It did not resolve symlink components in absolute paths or change bin-link ownership matching."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs in astral-sh/uv. Literal searches covered the executable-exists and not-managed warning fragments, both directory environment variables, uv 0.13.9, and the older issue reference. Symptom searches covered stale bin links, shims, and managed patch upgrades; separate cause and fix searches covered symlinked ancestors and home directories, /var/home, canonicalization, ownership matching, relative targets, and matcher names. PR search missed a known merged result, so recent repository PR listings, changelogs, and linked discussions and diffs supplemented it. No tracker or fix specific to this failure surfaced. Ruled out astral-sh/uv#15955 and astral-sh/uv#15959 (prerelease ordering after ownership was recognized), astral-sh/uv#21639 (validation of unmanaged relative links), and astral-sh/uv#17959 and astral-sh/uv#18459 (listing links rather than updating them)."
+  },
+  "type": "bug",
+  "type_reason": "uv 0.13.9 incorrectly classifies its own valid bin link as unmanaged and leaves it on the old patch. The Unix matcher resolves the bin link but compares it against an installation path that retains the symlinked ancestor. The same failure reproduces on uv 0.9.8, released before astral-sh/uv#15669 closed. That issue does not establish the symlink trigger or identify a fix, so this is neither a confirmed regression nor a duplicate of an established tracker for this mechanism.",
+  "summary": "Confirmed on Linux that uv 0.13.9 installs Python 3.11.18 but leaves its bin link on 3.11.17 when the install path has a symlinked ancestor. astral-sh/uv#15669 is the closest prior report, with the same warning but no confirmed trigger or linked fix. The related merged PRs address default launcher upgradeability or relative install paths, not this ownership check.",
+  "draft_response": "I reproduced this on Linux with uv 0.13.9: the upgrade installed Python 3.11.18, but uv's `python3.11` link still ran 3.11.17. The ownership check resolves the bin link but compares it against an install path that still contains the symlinked directory. uv should recognize and update its own link without `--force`. For now, set `UV_PYTHON_INSTALL_DIR` to the resolved path of the same directory and run `uv python install 3.11` again. That repaired the link in my test without `--force` or a change to `UV_PYTHON_BIN_DIR`."
+}
