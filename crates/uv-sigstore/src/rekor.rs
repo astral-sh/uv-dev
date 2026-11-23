@@ -47,11 +47,13 @@ pub enum RekorError {
     Base64(&'static str, #[source] base64::DecodeError),
     #[error("Invalid trusted Rekor public key")]
     KeyDer(#[source] DerError<X509Error>),
-    #[error("No trusted Rekor key for log {id} at Unix time {time} (current log IDs: {current})")]
+    #[error(
+        "No trusted Rekor key for log {id} at Unix time {time} (candidate log IDs: {candidates})"
+    )]
     LogId {
         id: String,
         time: i64,
-        current: String,
+        candidates: String,
     },
     #[error("Invalid Rekor signed entry timestamp for entry {0}")]
     TimestampSignature(u64),
@@ -116,11 +118,11 @@ impl LogEntry {
             <[u8; 32]>::from_hex(&self.log_id).map_err(|err| RekorError::Hex("log ID", err))?;
         let log_key = keys
             .iter()
-            .find(|key| key.id == key_id && key.valid_at(self.integrated_time))
+            .find(|key| key.id == key_id && key.can_verify(self.integrated_time))
             .ok_or_else(|| RekorError::LogId {
                 id: self.log_id.clone(),
                 time: self.integrated_time,
-                current: keys.iter().map(|key| hex::encode(key.id)).join(", "),
+                candidates: keys.iter().map(|key| hex::encode(key.id)).join(", "),
             })?;
         let (_, spki) =
             SubjectPublicKeyInfo::from_der(log_key.der.as_ref()).map_err(RekorError::KeyDer)?;
