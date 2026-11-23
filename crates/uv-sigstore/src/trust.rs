@@ -22,6 +22,7 @@ pub struct TrustedRoot {
     #[serde(rename = "mediaType")]
     media_type: MediaType,
     tlogs: Vec<Log>,
+    ctlogs: Vec<Log>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -121,20 +122,57 @@ impl TrustedRoot {
             Err(error)
         }
     }
+
+    pub(super) fn ct_key(
+        &self,
+        id: &[u8; 32],
+        signed_at: Timestamp,
+    ) -> Option<SubjectPublicKeyInfoDer<'static>> {
+        let now = Timestamp::now();
+        self.ctlogs
+            .iter()
+            .filter(|log| log.public_key.has_supported_algorithm())
+            // A retired key may verify old releases, but must not vouch for a new signature.
+            .filter(|log| log.public_key.valid_for.contains(signed_at))
+            .filter(|log| log.public_key.valid_for.contains(now))
+            .filter_map(|log| log.public_key.decode().ok())
+            .find(|key| Sha256::digest(key.as_ref()).as_slice() == id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     use super::TrustedRoot;
+
+    #[test]
+    fn ct_key_must_be_valid_at_issuance_and_now() -> Result<(), serde_json::Error> {
+        let mut root: TrustedRoot = serde_json::from_value(json!({
+            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+            "tlogs": [],
+            "ctlogs": [{"baseUrl": "https://ct.example", "publicKey": {
+                "rawBytes": "AQ==", "keyDetails": "PKIX_ECDSA_P256_SHA_256",
+                "validFor": {"start": "2000-01-01T00:00:00Z"}
+            }}],
+        }))?;
+        let id = Sha256::digest([1]).into();
+        let start = root.ctlogs[0].public_key.valid_for.start;
+        assert!(root.ct_key(&id, start).is_some());
+        assert!(root.ct_key(&id, Timestamp::UNIX_EPOCH).is_none());
+        root.ctlogs[0].public_key.valid_for.end = Some(start);
+        assert!(root.ct_key(&id, start).is_none());
+        Ok(())
+    }
 
     #[test]
     fn malformed_key_falls_back_during_rotation() -> Result<(), serde_json::Error> {
         let origin = "https://rekor.example";
         let mut trust: TrustedRoot = serde_json::from_value(json!({
             "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
-            "tlogs": [],
+            "tlogs": [], "ctlogs": [],
         }))?;
         let error = trust.rekor_keys(origin).expect_err("no decodable key");
         insta::assert_snapshot!(error, @"No current Rekor v1 signing key for https://rekor.example in trusted_root.json");
