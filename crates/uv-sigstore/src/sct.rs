@@ -32,12 +32,16 @@ pub enum TimestampError {
     TrailingIssuerData(usize),
     #[error("Missing or malformed signed certificate timestamp")]
     Missing,
-    #[error("No certificate timestamp was signed by a trusted CT log")]
+    #[error("Expected one signed certificate timestamp, got {0}")]
+    Count(usize),
+    #[error("No valid key for certificate transparency log {0}")]
+    LogKey(String),
+    #[error("Invalid certificate timestamp signature")]
     Signature,
 }
 
 /// Reconstruct the signature input for an embedded SCT (RFC 6962 section 3.2).
-pub(super) fn signature_input(
+fn signature_input(
     timestamp: u64,
     issuer_spki: &[u8],
     tbs: &[u8],
@@ -77,44 +81,39 @@ pub(super) fn verify(
     let ParsedExtension::SCT(timestamps) = extension.parsed_extension() else {
         return Err(TimestampError::Missing);
     };
+    // PyPI's Sigstore verifier requires a single embedded timestamp.
+    let [sct] = timestamps.as_slice() else {
+        return Err(TimestampError::Count(timestamps.len()));
+    };
+    let signature = &sct.signature;
+    // Only RFC 6962 v1 with SHA-256 and ECDSA.
+    if sct.version != CtVersion::V1 || signature.hash_alg_id != 4 || signature.sign_alg_id != 3 {
+        return Err(TimestampError::Signature);
+    }
+    let time = i64::try_from(sct.timestamp)
+        .ok()
+        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        .ok_or(TimestampError::Missing)?;
+    let invalid_key = || TimestampError::LogKey(hex::encode(sct.id.key_id));
+    let key = root.ct_key(sct.id.key_id, time).ok_or_else(invalid_key)?;
+    let Ok(([], spki)) = SubjectPublicKeyInfo::from_der(key.as_ref()) else {
+        return Err(invalid_key());
+    };
+
     // The SCT signs the to-be-signed certificate before Fulcio inserts the SCT list itself.
     let mut tbs = x509_cert::TbsCertificate::from_der(cert.tbs_certificate.as_ref())?;
     tbs.extensions
         .as_mut()
         .ok_or(TimestampError::Missing)?
         .retain(|ext| ext.extn_id != SCT_LIST);
-    let tbs = tbs.to_der()?;
-    for sct in timestamps {
-        let signature = &sct.signature;
-        if sct.version != CtVersion::V1 || signature.hash_alg_id != 4 || signature.sign_alg_id != 3
-        {
-            continue; // Only RFC 6962 v1 with SHA-256 and ECDSA.
-        }
-        let Some(time) = i64::try_from(sct.timestamp)
-            .ok()
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-        else {
-            continue;
-        };
-        let Some(key) = root.ct_key(sct.id.key_id, time) else {
-            continue;
-        };
-        let Ok(([], spki)) = SubjectPublicKeyInfo::from_der(key.as_ref()) else {
-            continue;
-        };
-        let input = signature_input(
-            sct.timestamp,
-            issuer.public_key().raw,
-            &tbs,
-            sct.extensions.0,
-        )
-        .ok_or(TimestampError::Missing)?;
-        if UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &*spki.subject_public_key.data)
-            .verify(&input, signature.data)
-            .is_ok()
-        {
-            return Ok(());
-        }
-    }
-    Err(TimestampError::Signature)
+    let input = signature_input(
+        sct.timestamp,
+        issuer.public_key().raw,
+        &tbs.to_der()?,
+        sct.extensions.0,
+    )
+    .ok_or(TimestampError::Missing)?;
+    UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &*spki.subject_public_key.data)
+        .verify(&input, signature.data)
+        .map_err(|_| TimestampError::Signature)
 }

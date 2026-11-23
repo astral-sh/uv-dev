@@ -165,7 +165,6 @@ impl TrustedRoot {
         token: &str,
         statement: &str,
     ) -> Result<SignedStatement, SigningError> {
-        check_identity_token(token)?;
         let key =
             KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
         sign_with_services(client, FULCIO, REKOR, self, &key, token, statement).await
@@ -181,6 +180,7 @@ async fn sign_with_services(
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
+    check_identity_token(token)?;
     let log_keys = trust.rekor_keys(REKOR_ORIGIN)?;
     let certificates = request_certificate(client, fulcio, token, key).await?;
     let [pem, issuer, ..] = certificates.as_slice() else {
@@ -379,6 +379,14 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
     const CT_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI/EdmmXgHd1UQ\
          247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==";
 
+    fn token() -> String {
+        let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
+        format!(
+            "header.{}.signature",
+            BASE64_URL_SAFE_NO_PAD.encode(claims.to_string())
+        )
+    }
+
     fn trusted_root(log_key: &KeyPair) -> Result<super::TrustedRoot, serde_json::Error> {
         let log = |url: &str, raw_bytes: &str| {
             json!({
@@ -421,7 +429,7 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
             &format!("{}/rekor", server.uri()),
             &trust,
             &key,
-            "synthetic-token",
+            &token(),
             "{}",
         )
         .await;
@@ -444,9 +452,7 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
         let log_key = KeyPair::generate()?;
         let log_id = Sha256::digest(log_key.subject_public_key_info());
         let trust = trusted_root(&log_key)?;
-        let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
-        let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
-        let token = format!("header.{claims}.signature");
+        let token = token();
         Mock::given(method("POST"))
             .and(header("x-test-client", "signer"))
             .and(path("/api/v2/signingCert"))
