@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11130,
+        "title": "Azure Artifacts authentication stopped working: 401",
+        "url": "https://github.com/astral-sh/uv/issues/11130",
+        "state": "closed",
+        "reason": "Closest precedent: Windows, artifacts-keyring, an index URL lookup followed by host fallback, and a 401. The reporter confirmed that Windows was picking up Anaconda's keyring without the plugin; correcting PATH resolved it. The new report tests keyring through the uv tool runner, not the executable found by name in the failing shell."
+      },
+      {
+        "kind": "issue",
+        "number": 12042,
+        "title": "Azure Devops Artifacts authentication with artifacts-keyring not working from within active venv",
+        "url": "https://github.com/astral-sh/uv/issues/12042",
+        "state": "open",
+        "reason": "Commenters observed an active virtual environment's keyring without the plugin taking precedence over the uv-installed tool. The new report does not identify an active virtual environment or establish that another executable takes precedence."
+      },
+      {
+        "kind": "issue",
+        "number": 17357,
+        "title": "Azure cloud keyring auth fail - 401 Unauthorized",
+        "url": "https://github.com/astral-sh/uv/issues/17357",
+        "state": "open",
+        "reason": "Another Azure cloud feed 401 with keyring, but that report describes a configured URL versus a UUID-form URL and succeeds with --extra-index-url. The new trace shows an index-root lookup, and the successful comparison is a direct keyring invocation rather than a different index option."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12651,
+        "title": "Use index URL instead of package URL for keyring credential lookups",
+        "url": "https://github.com/astral-sh/uv/pull/12651",
+        "state": "merged",
+        "reason": "Shipped in uv 0.7.0 and fixed lookups that used package URLs for backends requiring the configured index root, closing astral-sh/uv#4583, astral-sh/uv#11236, astral-sh/uv#11391, and astral-sh/uv#11507. The new trace already shows an index-root lookup, so it does not show a recurrence of that bug."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged pull requests. Literal searches covered 401 Unauthorized, artifacts-keyring, UV_KEYRING_PROVIDER, VssSessionToken, Checking keyring for host, and uv pip install. Broader searches covered direct keyring versus installer authentication, index-root lookup, executable selection and PATH, and subprocess output. Followed comments, cross-references, and merged commit history and checked release notes for version-specific fixes. Ruled out astral-sh/uv#18611 (lookup never ran), astral-sh/uv#17144 (on-premises Azure DevOps Server), astral-sh/uv#3260 (first-attempt-only failure with plugin output mixed into the credential), and astral-sh/uv#17436 and astral-sh/uv#17448 (tool @latest lookup skipped keyring)."
+  },
+  "type": "question",
+  "type_reason": "The trace confirms that uv entered the configured subprocess lookup path, but the successful check through uv tool run does not verify that the failing install finds the same keyring executable or backend. Correct executable selection is a documented prerequisite that has not yet been verified. The report establishes neither incorrect uv behavior nor a regression, and the closest precedent does not establish the same cause here.",
+  "summary": "The closest Windows 401 report was resolved by correcting which keyring was on PATH. The new report confirms an index lookup attempt, but not that the installer uses the same keyring as the successful direct test.",
+  "draft_response": "Your trace shows that uv tries the configured index URL and falls back to the host. `uv pip install` launches `keyring` by name, so a successful `uv tool run keyring` check doesn't tell us which executable the installer uses. That distinction mattered in astral-sh/uv#11130, where another Windows installation of `keyring` took precedence.\n\nIn the same Command Prompt where the install fails, run `where.exe keyring` and `keyring --list-backends`. Check that the first result is in the directory reported by `uv tool dir --bin` and that the backend list includes `ArtifactsKeyringBackend`. If the tool directory is missing or another keyring comes first, put the tool directory first on `PATH` and retry. If those checks pass and the 401 persists, please confirm that the direct check used the exact index URL shown in the trace and share any redacted keyring warnings. Please do not share credentials or the output of `keyring get`."
+}
