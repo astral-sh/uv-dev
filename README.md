@@ -8,6 +8,8 @@ Classification: question
 
 On Windows with uv 0.13.9, the reporter installed `keyring` with `artifacts-keyring` as a uv tool, configured a named private Azure Artifacts index and default PyPI in `uv.toml`, and set `UV_INDEX_COMPANY_PYTHON_FEED_USERNAME=VssSessionToken` and `UV_KEYRING_PROVIDER=subprocess`. They expected `uv pip install --dry-run package-name -vv` to use the same backend that reportedly succeeds after browser sign-in through `uv tool run keyring get`. Instead, the installer traces an index-root lookup and host fallback, then reports `401 Unauthorized`. The report does not give the Python, `keyring`, or `artifacts-keyring` versions or identify the bare `keyring` executable visible to the failing shell.
 
+**Reported workaround:** Supplying an Azure access token explicitly via `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD`, while keeping the index username and subprocess provider configured, let the dry run resolve 26 packages and show an install plan. This is consistent with uv's documented direct authentication path. It does not show that subprocess keyring supplied the credential or explain why that lookup failed.
+
 ## Classification
 
 Authentication troubleshooting, not a confirmed uv bug or regression. The controlled reproduction shows that `PATH` shadowing is sufficient to produce the reported discrepancy, but does not establish that it occurred on the reporter's machine. No before/after uv version comparison is reported.
@@ -35,7 +37,7 @@ Existing tests cover the underlying auth paths, not the Windows/Azure report. `c
 
 ## Suggested follow-up
 
-In the same Windows Command Prompt where installation fails, compare `where.exe keyring` with `uv tool dir --bin` and run bare `keyring --list-backends`. If an executable without `ArtifactsKeyringBackend` takes precedence, put the plugin-enabled tool directory first on `PATH` and retry. If bare keyring lists the backend and the 401 persists, ask for the Python and package versions, the redacted executable paths, and any redacted subprocess warnings. Confirm that the direct check uses the exact index root from the installer trace. Do not request the output of `keyring get` or any credentials.
+In the same Windows Command Prompt where installation fails, compare `where.exe keyring` with `uv tool dir --bin` and run bare `keyring --list-backends`. If an executable without `ArtifactsKeyringBackend` takes precedence, put the plugin-enabled tool directory first on `PATH` and retry. Leave `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD` unset for the retry so that it tests keyring rather than the workaround. If bare keyring lists the backend and the 401 persists, ask for the Python and package versions, the redacted executable paths, and any redacted subprocess warnings. Confirm that the direct check uses the exact index root from the installer trace. Do not request the output of `keyring get` or any credentials.
 
 ## Related
 
@@ -46,7 +48,7 @@ In the same Windows Command Prompt where installation fails, compare `where.exe 
 
 ## Supporting evidence
 
-- `docs/guides/integration/azure.md:55` requires the plugin-enabled `keyring` executable to be on `PATH`. `docs/concepts/tools.md:254` explains how the tool executable directory gets onto `PATH`.
+- `docs/guides/integration/azure.md:22` documents direct Azure access-token authentication via named-index environment variables. `docs/guides/integration/azure.md:55` requires the plugin-enabled `keyring` executable to be on `PATH`, and `docs/concepts/tools.md:254` explains how the tool executable directory gets onto `PATH`.
 - `crates/uv-auth/src/middleware.rs:856` selects the configured index URL when a username and index context are available. `crates/uv-auth/src/keyring.rs:227` falls back to the host when the initial lookup returns no credentials. `crates/uv-auth/src/keyring.rs:268` invokes `keyring get` by name, while `crates/uv-tool-commands/src/run.rs:430` prepends the chosen tool environment's scripts directory when launching a tool.
 - `CHANGELOG.md:6` records uv 0.13.9, released November 17, 2026. Neither the report nor the related fixes establish a change in this behavior in that release.
 
