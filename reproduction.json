@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with uv 0.13.9 on Ubuntu 24.04.5 LTS (Linux x86_64). In a fresh temporary directory, I ran `mkdir real` and `ln -s \"$PWD/real\" alias`, set `UV_PYTHON_INSTALL_DIR=\"$PWD/alias/py\"` and `UV_PYTHON_BIN_DIR=\"$PWD/alias/bin\"`, then ran `uv python install 3.11.17` followed by `uv python upgrade 3.11`. The upgrade exited 0 and installed CPython 3.11.18, but warned that the link uv had just created was \"not managed by uv\". Its target was unchanged and still ran 3.11.17. The install-path symlink alone reproduced the issue; the bin-path symlink alone did not. Setting only the install directory to its physical path and rerunning `uv python install 3.11` repaired the link without `--force`."
+}

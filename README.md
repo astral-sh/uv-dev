@@ -6,17 +6,58 @@ Classification: bug
 
 ## Summary
 
-On Linux with uv 0.13.9, a symlinked ancestor of `UV_PYTHON_INSTALL_DIR` can cause `uv python upgrade 3.11` to install CPython 3.11.18 but leave uv's `python3.11` bin link pointing at 3.11.17. The command incorrectly warns that the existing link is not managed by uv. The reporter encountered this with a symlinked home directory on Fedora Atomic and provided a reproduction using temporary directories.
+Reproduced on Linux x86_64 with uv 0.13.9. When `UV_PYTHON_INSTALL_DIR` traverses a symlink, `uv python upgrade 3.11` can install CPython 3.11.18 but leave uv's `python3.11` bin link pointing to 3.11.17. The command exits successfully while warning that the link is not managed by uv. The reporter encountered this with a symlinked home directory on Fedora Atomic; the same behavior occurs with an ordinary directory symlink on Ubuntu.
 
-The closest prior report is astral-sh/uv#15669, which had the same warning but no confirmed symlink trigger or linked fix. astral-sh/uv#14247 and astral-sh/uv#14261 cover a separate launcher update bug, while astral-sh/uv#22547 fixes relative install paths rather than symlink aliases.
-
-## Draft response
-
-I reproduced this on Linux with uv 0.13.9: the upgrade installed Python 3.11.18, but uv's `python3.11` link still ran 3.11.17. The ownership check resolves the bin link but compares it against an install path that still contains the symlinked directory. uv should recognize and update its own link without `--force`. For now, set `UV_PYTHON_INSTALL_DIR` to the resolved path of the same directory and run `uv python install 3.11` again. That repaired the link in my test without `--force` or a change to `UV_PYTHON_BIN_DIR`.
+**Verified workaround:** Set `UV_PYTHON_INSTALL_DIR` to the physical path of the same installation directory and run `uv python install 3.11` again. This repaired the link without `--force` or a change to `UV_PYTHON_BIN_DIR`.
 
 ## Classification
 
-This is a bug: a valid uv-created link is incorrectly classified as unmanaged and skipped during a patch upgrade. The same symlink-triggered failure also reproduces on uv 0.9.8, which was released before astral-sh/uv#15669 closed. That issue does not establish the symlink trigger or identify a fix, so this is neither a confirmed regression nor a duplicate of an established tracker for this mechanism.
+This is a bug: the link was created by uv and still points to a uv-managed interpreter, so the upgrade should repoint it without `--force`. No regression window is established. Prior triage also reproduced the warning and stale link on uv 0.9.8 with CPython 3.11.13 to 3.11.14. The similar warning in astral-sh/uv#15669 does not establish a duplicate: that report did not confirm the symlink trigger or identify a fix.
+
+## Reproduction
+
+**Outcome: reproducible.** Tested with the installed `uv 0.13.9 (x86_64-unknown-linux-gnu)` on Ubuntu 24.04.5 LTS, kernel `7.0.0-1017-azure`, in an isolated temporary directory with no user configuration. The report used Homebrew uv 0.13.9 on Fedora Atomic and listed Python 3.14.10; the actual reproduction installs and upgrades managed CPython in the 3.11 series and does not require Python 3.14.10.
+
+```sh
+(
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/uv-23364.XXXXXX")
+  mkdir -p "$scratch/real" "$scratch/home" "$scratch/tmp"
+  ln -s "$scratch/real" "$scratch/alias"
+  cd "$scratch" || exit 1
+  export HOME="$scratch/home" TMPDIR="$scratch/tmp" UV_NO_CONFIG=1
+  export XDG_DATA_HOME="$scratch/data" XDG_CONFIG_HOME="$scratch/config"
+  export XDG_CACHE_HOME="$scratch/xdg-cache" UV_CACHE_DIR="$scratch/cache"
+  export UV_PYTHON_INSTALL_DIR="$scratch/alias/py" UV_PYTHON_BIN_DIR="$scratch/alias/bin"
+  uv python install 3.11.17
+  readlink "$UV_PYTHON_BIN_DIR/python3.11"
+  "$UV_PYTHON_BIN_DIR/python3.11" --version
+  uv python upgrade 3.11
+  printf 'upgrade exit: %s\n' "$?"
+  readlink "$UV_PYTHON_BIN_DIR/python3.11"
+  "$UV_PYTHON_BIN_DIR/python3.11" --version
+)
+```
+
+**Expected:** The upgrade installs 3.11.18 and repoints uv's `python3.11` link to the upgraded interpreter without an ownership warning.
+
+**Observed:** The initial install creates the link and it runs `Python 3.11.17`. The upgrade exits `0` and installs a working CPython 3.11.18, but warns:
+
+```text
+warning: Executable already exists at `…/alias/bin/python3.11` but is not managed by uv; use `uv python install 3.11 --force` to replace it
+```
+
+`readlink` shows the same 3.11.17 target before and after the upgrade, and invoking the link still prints `Python 3.11.17`.
+
+| Install path | Bin path | Ownership warning | Python run through the bin link after upgrade |
+| --- | --- | --- | --- |
+| Symlinked ancestor | Symlinked ancestor | Yes | 3.11.17 |
+| Physical | Physical | No | 3.11.18 |
+| Symlinked ancestor | Physical | Yes | 3.11.17 |
+| Physical | Symlinked ancestor | No | 3.11.18 |
+
+**Implementation evidence:** The resolved bin link and the old interpreter under the aliased install path refer to the same inode. This is consistent with the Unix matcher in `crates/uv-python-commands/src/install.rs:1339`, which canonicalizes the bin link and compares it by path equality with `installation.executable(false)`. The discovered install path is made absolute without resolving symlink ancestors in `crates/uv-python-managed/src/managed.rs:342`.
+
+**Existing tests:** `python_upgrade` in `crates/uv/tests/python/python_upgrade.rs:14` checks successful ordinary patch upgrades, and `python_upgrade_force_install` in `crates/uv/tests/python/python_upgrade.rs:520` checks that uv warns about an unmanaged executable explicitly created in the bin directory. Neither test checks upgrading uv's own link through a symlinked install ancestor. The module is gated by `test-python-managed`.
 
 ## Related
 
@@ -25,16 +66,4 @@ This is a bug: a valid uv-created link is incorrectly classified as unmanaged an
 - astral-sh/uv#14261 (merged): Closed astral-sh/uv#14247 by making preview default installs without a version argument upgradeable. It did not fix the separate ownership warning or a symlinked Unix install root.
 - astral-sh/uv#22547 (merged): Made newly downloaded installation paths absolute to prevent broken minor-version aliases with a relative install directory. It did not resolve symlink components in absolute paths or change bin-link ownership matching.
 
-## Evidence
-
-- The official Linux x86-64 uv 0.13.9 binary reproduced the report in isolated temporary directories: with both paths under a symlinked ancestor, `uv python install 3.11.17` created the bin link and `uv python upgrade 3.11` installed 3.11.18 but warned and left the link on 3.11.17. Using physical paths for both directories repointed the link to 3.11.18 without the ownership warning.
-- A symlinked install path with a physical bin path reproduced the warning and stale link. A physical install path with a symlinked bin path upgraded normally. After the failed relink, pointing `UV_PYTHON_INSTALL_DIR` at the same physical directory and running `uv python install 3.11` repaired the link without `--force`.
-- `find_matching_bin_link` in `crates/uv-python-commands/src/install.rs:1339` canonicalizes the Unix bin symlink and compares it for path equality against `installation.executable(false)`. `ManagedPythonInstallation::from_path` in `crates/uv-python-managed/src/managed.rs:342` makes the discovered path absolute without resolving its symlinked ancestor. The mismatch reaches the warning-and-skip branch in `crates/uv-python-commands/src/install.rs:1038`, even though both paths refer to the same executable.
-- uv 0.9.8, released November 7, 2025, showed the same failure with CPython 3.11.13 to 3.11.14. Its Unix matcher also canonicalizes only the bin link. astral-sh/uv#15669 closed on November 9, 2025, without an identified fix.
-- A focused Unix case in `crates/uv/tests/python/python_upgrade.rs` can verify both the absence of the warning and the new link target with a symlinked install ancestor. The existing tests cover normal upgrades and protecting a genuinely unmanaged executable, not this combination. The module already uses the `test-python-managed` feature gate.
-
-## Search scope
-
-Used authenticated `gh` to search open and closed issues and open, closed, and merged PRs in astral-sh/uv. Literal searches covered the executable-exists and not-managed warning fragments, both directory environment variables, uv 0.13.9, and the older issue reference. Symptom searches covered stale or unrepointed bin links, shims, and managed Python patch upgrades. Separate cause and fix searches covered symlinked ancestors and home directories, `/var/home`, canonicalization, ownership matching, relative link targets, and the matcher names. PR search did not surface even a known merged PR by title, so it was supplemented with recent repository PR listings, changelogs, and linked discussions and diffs.
-
-No existing tracker or fix specifically for this symlink-triggered failure surfaced. astral-sh/uv#15955 and astral-sh/uv#15959 were ruled out because they concern version ordering for release candidates after a link was recognized. astral-sh/uv#21639 fixes validation of unmanaged relative symlink targets, not ownership matching. astral-sh/uv#17959 and astral-sh/uv#18459 concern listing links, not repointing them.
+- Prior triage searched open and closed issues and pull requests using the warning, directory settings, upgrade symptoms, and symlink matching terms. No tracker or fix specifically for this failure surfaced. astral-sh/uv#15955 and astral-sh/uv#15959 concern release-candidate ordering after a link was recognized; astral-sh/uv#21639 concerns validation of unmanaged relative symlink targets; astral-sh/uv#17959 and astral-sh/uv#18459 concern listing links, not repointing them.
