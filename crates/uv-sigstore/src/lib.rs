@@ -112,8 +112,10 @@ pub enum SigningError {
     Fulcio(#[source] reqwest_middleware::Error),
     #[error(transparent)]
     FulcioStatus(ServiceError),
-    #[error("Failed to decode the Fulcio certificate response")]
+    #[error("Failed to read the Fulcio certificate response")]
     FulcioResponse(#[source] reqwest::Error),
+    #[error("Invalid Fulcio certificate response at {line}:{column}")]
+    FulcioJson { line: usize, column: usize },
     #[error("Fulcio returned an empty certificate chain")]
     EmptyCertificateChain,
     #[error("Invalid Fulcio signing certificate PEM")]
@@ -312,10 +314,16 @@ async fn request_certificate(
             ServiceError::from_response("Fulcio", response, Some(token)).await,
         ));
     }
-    let response: CertificateResponse = response
-        .json()
+    let body = response
+        .bytes()
         .await
         .map_err(SigningError::FulcioResponse)?;
+    // Serde type errors can quote response values, including a reflected bearer token.
+    let response: CertificateResponse =
+        serde_json::from_slice(&body).map_err(|err| SigningError::FulcioJson {
+            line: err.line(),
+            column: err.column(),
+        })?;
     response
         .signed_certificate_embedded_sct
         .chain
@@ -525,6 +533,26 @@ mod tests {
             &BitString::new(0, &signature),
             pae.as_bytes(),
         )?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_fulcio_response_does_not_expose_the_token() -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        let token = "synthetic-token";
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "signedCertificateEmbeddedSct": token,
+            })))
+            .mount(&server)
+            .await;
+        let client = ClientBuilder::new(Client::new()).build();
+        let error =
+            super::request_certificate(&client, &server.uri(), token, &KeyPair::generate()?)
+                .await
+                .expect_err("invalid certificate response");
+        insta::assert_snapshot!(error, @"Invalid Fulcio certificate response at 1:49");
+        assert!(error.source().is_none());
         Ok(())
     }
 
