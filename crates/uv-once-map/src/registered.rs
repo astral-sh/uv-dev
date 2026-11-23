@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::{BuildHasher, Hash, RandomState};
 
-use crate::OnceMap;
+use crate::{Abandoned, OnceMap, Producer};
 
 /// A [`OnceMap`] with registered entry handles.
 /// Entries can only be removed with exclusive access.
@@ -17,7 +17,7 @@ use crate::OnceMap;
 /// map.done("package", 42);
 /// let entry = map.get_registered("package").expect("completed entry");
 /// map.remove(&"package"); // Cannot remove entries while a handle borrows the map.
-/// assert_eq!(entry.wait_blocking(), 42);
+/// assert_eq!(entry.wait_blocking(), Ok(42));
 /// ```
 ///
 /// Shared ownership does not grant the ability to remove entries:
@@ -67,8 +67,8 @@ impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> RegisteredOnceMap<K
             .then_some(RegisteredEntry { map: &self.0, key })
     }
 
-    /// Register a new job, returning `None`, or wait for an existing job's result.
-    pub async fn register_or_wait(&self, key: &K) -> Option<V> {
+    /// Claim a job with a cancellation guard, or wait for its cached result.
+    pub async fn register_or_wait(&self, key: &K) -> Registration<Producer<V>, V> {
         self.0.register_or_wait(key).await
     }
 
@@ -110,11 +110,11 @@ impl<K: Eq + Hash, V, S: Default + BuildHasher + Clone> FromIterator<(K, V)>
     }
 }
 
-/// Whether the caller must start a job or can share its existing registration.
+/// Whether the caller owns new work or can reuse an existing registration or result.
 #[derive(Debug)]
-pub enum Registration<T> {
+pub enum Registration<T, U = T> {
     New(T),
-    Existing(T),
+    Existing(U),
 }
 
 /// A registered job in a map that cannot remove entries while borrowed.
@@ -138,17 +138,15 @@ impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> RegisteredEntry<'_,
         &self.key
     }
 
-    /// Wait for the registered job. The producer must eventually call [`RegisteredOnceMap::done`].
-    pub async fn wait(&self) -> V {
+    /// Wait for the registered job, returning [`Abandoned`] if its producer is dropped.
+    /// Externally queued jobs must eventually call [`RegisteredOnceMap::done`].
+    pub async fn wait(&self) -> Result<V, Abandoned> {
         // Only RegisteredOnceMap constructs handles, and removal requires an exclusive borrow.
-        self.map
-            .wait_registered(&self.key)
-            .await
-            .expect("registered entries cannot be removed while borrowed")
+        self.map.wait_registered(&self.key).await.ok_or(Abandoned)
     }
 
     /// Wait for the registered job in a blocking context.
-    pub fn wait_blocking(&self) -> V {
+    pub fn wait_blocking(&self) -> Result<V, Abandoned> {
         futures::executor::block_on(self.wait())
     }
 }
