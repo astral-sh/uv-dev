@@ -94,6 +94,14 @@ def decode(body: str, repository: str, issue_number: int) -> tuple[str, dict]:
     return readme + "\n", data
 
 
+def is_triage_artifact(artifact: dict) -> bool:
+    return (
+        artifact["name"] == ARTIFACT_NAME
+        and artifact["type"] == "generic"
+        and (artifact.get("creator") or {}).get("login") == ARTIFACT_CREATOR
+    )
+
+
 def find_artifact(endpoint: str) -> int | None:
     number = None
     page = 1
@@ -102,7 +110,7 @@ def find_artifact(endpoint: str) -> int | None:
         if not isinstance(artifacts, list):
             raise TypeError("GitHub returned an invalid issue artifact list.")
         for artifact in artifacts:
-            if artifact["name"] != ARTIFACT_NAME:
+            if not is_triage_artifact(artifact):
                 continue
             if number is not None:
                 raise ValueError("The issue has more than one triage artifact.")
@@ -121,19 +129,19 @@ def read_context(repository: str, issue_number: int) -> Context:
     if number is None:
         return read_legacy(repository, issue_number)
 
-    response = api(f"{endpoint}/{number}")
+    response = api(f"{endpoint}/{number}?per_page=1")
     artifact = response["artifact"]
-    if (
-        artifact["number"] != number
-        or artifact["name"] != ARTIFACT_NAME
-        or artifact["type"] != "generic"
-        or artifact.get("creator", {}).get("login") != ARTIFACT_CREATOR
-    ):
+    if artifact["number"] != number or not is_triage_artifact(artifact):
         raise ValueError("The triage artifact is not owned by this automation.")
     versions = response["versions"]
-    version = versions[0]["version"] if versions else None
+    latest = versions[0] if versions else {}
+    version = latest.get("version")
     if type(version) is not int or version < 1:
         raise ValueError("The triage artifact has no valid version history.")
+    if (latest.get("actor") or {}).get("login") != ARTIFACT_CREATOR:
+        raise ValueError(
+            "The latest triage results were not written by this automation."
+        )
     readme, data = decode(artifact["body"], repository, issue_number)
     # Restoring an older body still invalidates analyses of the previous version.
     revision = digest(["artifact", artifact["id"], number, version, artifact["body"]])
@@ -182,6 +190,9 @@ def read_legacy(repository: str, issue_number: int) -> Context:
             *(f"{name}.json" for name in RESULT_NAMES),
             directory=directory,
         )
+        # An issue branch can still point to the empty issue/base commit.
+        if not entries.stdout:
+            return Context(None, {}, digest(["legacy", revision]))
         for entry in entries.stdout.splitlines():
             mode, kind, name = entry.split(" ", 2)
             if mode not in {"100644", "100755"} or kind != "blob":
@@ -243,6 +254,7 @@ def load(repository: str, issue_number: int) -> None:
                 issue=json.loads(read_file(issue_file)),
             )
             validate_data(context.data, repository, issue_number)
+            output(issue=json.dumps(context.data["issue"], ensure_ascii=False))
         elif os.environ["ALLOW_MISSING"] == "true":
             output(exists="false")
             return

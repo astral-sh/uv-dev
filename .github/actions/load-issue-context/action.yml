@@ -27,6 +27,9 @@ outputs:
   exists:
     description: "Whether an existing report was loaded or a local report initialized."
     value: ${{ steps.load.outputs.exists }}
+  initial-issue:
+    description: "The verified issue JSON if the report was initialized from the template."
+    value: ${{ steps.load.outputs.issue }}
   revision:
     description: "The source revision to check before publishing an update."
     value: ${{ steps.load.outputs.revision }}

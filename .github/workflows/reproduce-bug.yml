@@ -74,6 +74,7 @@ jobs:
     outputs:
       issue-number: ${{ steps.issue.outputs.number }}
       context-revision: ${{ steps.issue-context.outputs.revision }}
+      initial-issue: ${{ steps.issue-context.outputs.initial-issue }}
       result: ${{ steps.reproduce.outputs.final-message }}
       thread-artifact-id: ${{ steps.upload-thread.outputs.artifact-id }}
     steps:
@@ -122,6 +123,9 @@ jobs:
         with:
           issue-number: ${{ steps.issue.outputs.number }}
           path: ${{ runner.temp }}/issue-context
+          # Only direct dispatches can start a report. Reusable runs inherit the caller's workflow name.
+          template: ${{ github.workflow == 'reproduce-bug' && 'agents/templates/issue-context-template.md' || '' }}
+          issue-file: ${{ github.workflow == 'reproduce-bug' && '.issue-triage-event.json' || '' }}
 
       - name: "Reproduce issue behavior"
         id: reproduce
@@ -176,12 +180,18 @@ jobs:
     outputs:
       current: ${{ steps.publish.outputs.current }}
     steps:
-      - name: "Write reproduction summary"
+      - name: "Prepare reproduction context"
+        id: prepare
         run: |
+          if [ -n "$INITIAL_ISSUE" ]; then
+            printf '%s\n' "$INITIAL_ISSUE" > "$RUNNER_TEMP/issue.json"
+            echo "issue-file=$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
+          fi
           printf '%s\n%s\n%s\n' '```json' "$REPRODUCTION_RESULT" '```' \
             >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/reproduction.json"
         env:
+          INITIAL_ISSUE: ${{ needs.reproduce.outputs.initial-issue }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Download issue context"
@@ -197,6 +207,7 @@ jobs:
           issue-number: ${{ needs.reproduce.outputs.issue-number }}
           expected-revision: ${{ needs.reproduce.outputs.context-revision }}
           readme: ${{ runner.temp }}/issue-context-update/README.md
+          issue-file: ${{ steps.prepare.outputs.issue-file }}
           result-name: reproduction
           result-file: ${{ runner.temp }}/reproduction.json
 
