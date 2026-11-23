@@ -69,6 +69,19 @@ impl Key {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct RekorKey<'a> {
+    pub(super) id: [u8; 32],
+    pub(super) der: SubjectPublicKeyInfoDer<'static>,
+    valid_for: &'a Validity,
+}
+
+impl RekorKey<'_> {
+    pub(super) fn valid_at(&self, seconds: i64) -> bool {
+        Timestamp::from_second(seconds).is_ok_and(|time| self.valid_for.contains(time))
+    }
+}
+
 impl TrustedRoot {
     /// URL of the Sigstore trust document. Fetch it without sending the OIDC token.
     ///
@@ -77,25 +90,34 @@ impl TrustedRoot {
     pub const URL: &str =
         "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json";
 
-    pub(super) fn rekor_key(
+    pub(super) fn rekor_keys(
         &self,
         origin: &'static str,
-    ) -> Result<SubjectPublicKeyInfoDer<'static>, SigningError> {
+    ) -> Result<Vec<RekorKey<'_>>, SigningError> {
         let now = Timestamp::now();
+        let mut keys = Vec::new();
         let mut error = SigningError::MissingRekorKey { origin };
         for log in &self.tlogs {
             if log.base_url == origin
                 && log.public_key.has_supported_algorithm()
                 && log.public_key.valid_for.contains(now)
             {
-                // A malformed candidate shouldn't mask another current key during rotation.
+                // Validity windows can overlap. The receipt identifies the signing key.
                 match log.public_key.decode() {
-                    Ok(key) => return Ok(key),
+                    Ok(der) => keys.push(RekorKey {
+                        id: Sha256::digest(&der).into(),
+                        der,
+                        valid_for: &log.public_key.valid_for,
+                    }),
                     Err(source) => error = SigningError::RekorKeyEncoding { origin, source },
                 }
             }
         }
-        Err(error)
+        if keys.is_empty() {
+            Err(error)
+        } else {
+            Ok(keys)
+        }
     }
 
     pub(super) fn ct_key(
@@ -128,7 +150,7 @@ mod tests {
             "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
             "tlogs": [], "ctlogs": [],
         }))?;
-        let error = trust.rekor_key(origin).expect_err("no decodable key");
+        let error = trust.rekor_keys(origin).expect_err("no decodable key");
         insta::assert_snapshot!(error, @"No current Rekor v1 signing key for https://rekor.example in trusted_root.json");
 
         let mut candidate = json!({
@@ -137,18 +159,14 @@ mod tests {
                 "validFor": {"start": "2000-01-01T00:00:00Z"}},
         });
         trust.tlogs.push(serde_json::from_value(candidate.clone())?);
-        let error = trust.rekor_key(origin).expect_err("no decodable key");
+        let error = trust.rekor_keys(origin).expect_err("no decodable key");
         insta::assert_snapshot!(error, @"Invalid base64 in the Rekor v1 signing key for https://rekor.example in trusted_root.json");
 
         candidate["publicKey"]["rawBytes"] = json!("AQ==");
         trust.tlogs.push(serde_json::from_value(candidate)?);
-        assert_eq!(
-            trust
-                .rekor_key(origin)
-                .expect("second key decodes")
-                .as_ref(),
-            &[1]
-        );
+        let keys = trust.rekor_keys(origin).expect("second key decodes");
+        assert_eq!(keys[0].der.as_ref(), &[1]);
+        assert!(!keys[0].valid_at(0));
         Ok(())
     }
 }

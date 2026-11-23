@@ -55,18 +55,15 @@ impl ServiceError {
         bearer_token: Option<&str>,
     ) -> Self {
         let status = response.status();
-        let source = response.error_for_status_ref().err();
-        let body = match response.text().await {
-            Ok(body) => body,
-            Err(err) => {
-                return Self {
-                    service,
-                    status,
-                    detail: String::new(),
-                    source: Some(err),
-                };
-            }
-        };
+        // A reqwest status error includes the server's HTTP/1 reason phrase.
+        let mut source = response
+            .error_for_status_ref()
+            .err()
+            .filter(|err| bearer_token.is_none_or(|token| !err.to_string().contains(token)));
+        let body = response.text().await.unwrap_or_else(|err| {
+            source = Some(err);
+            String::new()
+        });
         let message = body.trim();
         let detail = if message.is_empty() {
             String::new()
@@ -120,6 +117,8 @@ pub enum SigningError {
     FulcioResponse(#[source] reqwest::Error),
     #[error("Invalid Fulcio certificate response at {line}:{column}")]
     FulcioJson { line: usize, column: usize },
+    #[error("Fulcio returned the OIDC token in the certificate chain")]
+    ReflectedToken,
     #[error("Invalid Fulcio signing certificate PEM")]
     CertificatePem(#[from] rustls_pki_types::pem::Error),
     #[error("Invalid Fulcio signing certificate")]
@@ -182,7 +181,7 @@ async fn sign_with_services(
     token: &str,
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
-    let log_key = trust.rekor_key(REKOR_ORIGIN)?;
+    let log_keys = trust.rekor_keys(REKOR_ORIGIN)?;
     let certificates = request_certificate(client, fulcio, token, key).await?;
     let [pem, issuer, ..] = certificates.as_slice() else {
         return Err(TimestampError::MissingIssuer.into());
@@ -218,7 +217,7 @@ async fn sign_with_services(
     })
     .to_string();
     let (integrated_time, entry) = rekor::record(
-        client, rekor, &log_key, &envelope, statement, &signature, pem,
+        client, rekor, &log_keys, &envelope, statement, &signature, pem,
     )
     .await?;
     // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
@@ -333,7 +332,12 @@ async fn request_certificate(
             line: err.line(),
             column: err.column(),
         })?;
-    Ok(response.signed_certificate_embedded_sct.chain.certificates)
+    let certificates = response.signed_certificate_embedded_sct.chain.certificates;
+    // PEM errors can quote input, and the original leaf PEM is sent to the public log.
+    if certificates.iter().any(|pem| pem.contains(token)) {
+        return Err(SigningError::ReflectedToken);
+    }
+    Ok(certificates)
 }
 
 #[cfg(test)]
@@ -388,7 +392,10 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
         let trust = json!({
             "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
             "ctlogs": [log("https://ct.example", CT_KEY)],
-            "tlogs": [log(super::REKOR_ORIGIN, &BASE64_STANDARD.encode(log_key.subject_public_key_info()))],
+            "tlogs": [
+                log(super::REKOR_ORIGIN, CT_KEY),
+                log(super::REKOR_ORIGIN, &BASE64_STANDARD.encode(log_key.subject_public_key_info())),
+            ],
         });
         serde_json::from_value(trust)
     }

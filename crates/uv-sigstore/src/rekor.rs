@@ -10,7 +10,7 @@ use itertools::Itertools as _;
 use reqwest::{StatusCode, header::LOCATION};
 use reqwest_middleware::ClientWithMiddleware;
 use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
-use rustls_pki_types::{CertificateDer, SubjectPublicKeyInfoDer, pem::PemObject as _};
+use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -20,6 +20,7 @@ use x509_parser::nom::Err as DerError;
 use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 
 use crate::ServiceError;
+use crate::trust::RekorKey;
 
 /// An error submitting a DSSE envelope to Rekor or authenticating its receipt.
 #[derive(Debug, Error)]
@@ -46,12 +47,16 @@ pub enum RekorError {
     Base64(&'static str, #[source] base64::DecodeError),
     #[error("Invalid trusted Rekor public key")]
     KeyDer(#[source] DerError<X509Error>),
-    #[error("Unexpected Rekor log ID: expected {expected}, got {actual}")]
-    LogId { expected: String, actual: String },
+    #[error("No trusted Rekor key for log {id} at Unix time {time} (current log IDs: {current})")]
+    LogId {
+        id: String,
+        time: i64,
+        current: String,
+    },
     #[error("Invalid Rekor signed entry timestamp for entry {0}")]
     TimestampSignature(u64),
-    #[error("Missing Rekor checkpoint signatures for entry {0}")]
-    MissingCheckpointSignatures(u64),
+    #[error("Malformed Rekor checkpoint for entry {0}")]
+    MalformedCheckpoint(u64),
     #[error("Invalid Rekor checkpoint signature for entry {0}")]
     CheckpointSignature(u64),
     #[error("Rekor tree size {0} exceeds the maximum signed 64-bit integer")]
@@ -106,21 +111,19 @@ struct InclusionProof {
 }
 
 impl LogEntry {
-    fn verify_signatures(
-        &self,
-        log_key: &SubjectPublicKeyInfoDer<'_>,
-    ) -> Result<[u8; 32], RekorError> {
-        let key_id = Sha256::digest(log_key.as_ref());
-        if <[u8; 32]>::from_hex(&self.log_id).map_err(|err| RekorError::Hex("log ID", err))?
-            != key_id.as_slice()
-        {
-            return Err(RekorError::LogId {
-                expected: hex::encode(key_id),
-                actual: self.log_id.clone(),
-            });
-        }
+    fn verify_signatures(&self, keys: &[RekorKey<'_>]) -> Result<[u8; 32], RekorError> {
+        let key_id =
+            <[u8; 32]>::from_hex(&self.log_id).map_err(|err| RekorError::Hex("log ID", err))?;
+        let log_key = keys
+            .iter()
+            .find(|key| key.id == key_id && key.valid_at(self.integrated_time))
+            .ok_or_else(|| RekorError::LogId {
+                id: self.log_id.clone(),
+                time: self.integrated_time,
+                current: keys.iter().map(|key| hex::encode(key.id)).join(", "),
+            })?;
         let (_, spki) =
-            SubjectPublicKeyInfo::from_der(log_key.as_ref()).map_err(RekorError::KeyDer)?;
+            SubjectPublicKeyInfo::from_der(log_key.der.as_ref()).map_err(RekorError::KeyDer)?;
         let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &*spki.subject_public_key.data);
 
         // Rekor signs these four fields as canonical JSON (RFC 8785). The signed index is
@@ -143,7 +146,8 @@ impl LogEntry {
         let checkpoint = &self.verification.inclusion_proof.checkpoint;
         let (header, signatures) = checkpoint
             .split_once("\n\n")
-            .ok_or(RekorError::MissingCheckpointSignatures(self.log_index))?;
+            .filter(|(_, signatures)| signatures.ends_with('\n') && !signatures.contains("\n\n"))
+            .ok_or(RekorError::MalformedCheckpoint(self.log_index))?;
         let note = &checkpoint.as_bytes()[..=header.len()];
         let valid = signatures
             .lines()
@@ -159,14 +163,14 @@ impl LogEntry {
         if !valid {
             return Err(RekorError::CheckpointSignature(self.log_index));
         }
-        Ok(key_id.into())
+        Ok(key_id)
     }
 }
 
 pub(super) async fn record(
     client: &ClientWithMiddleware,
     url: &str,
-    log_key: &SubjectPublicKeyInfoDer<'_>,
+    log_keys: &[RekorKey<'_>],
     envelope: &str,
     statement: &str,
     signature: &str,
@@ -215,7 +219,7 @@ pub(super) async fn record(
         .into_values()
         .exactly_one()
         .map_err(|entries| RekorError::EntryCount(entries.len()))?;
-    let key_id = entry.verify_signatures(log_key)?;
+    let key_id = entry.verify_signatures(log_keys)?;
     let body = BASE64_STANDARD
         .decode(&entry.body)
         .map_err(|err| RekorError::Base64("entry body", err))?;
@@ -250,14 +254,11 @@ pub(super) async fn record(
     if lines.next().is_none_or(str::is_empty) {
         return Err(RekorError::MissingCheckpointOrigin);
     }
-    let size = lines.next();
-    if size.and_then(|line| line.parse().ok()) != Some(proof.tree_size) {
-        return Err(RekorError::mismatch(
-            "checkpoint tree size",
-            proof.tree_size.to_string(),
-            size.unwrap_or("<missing>"),
-        ));
-    }
+    check_field(
+        "checkpoint tree size",
+        &proof.tree_size.to_string(),
+        lines.next().unwrap_or("<missing>"),
+    )?;
     check_field(
         "checkpoint root hash",
         &encoded_root,
@@ -288,22 +289,14 @@ pub(super) async fn record(
     Ok((entry.integrated_time, transparency_entry))
 }
 
-impl RekorError {
-    fn mismatch(field: &'static str, expected: String, actual: &str) -> Self {
-        // Even a malformed digest from the server should fit in a terminal diagnostic.
-        let actual = &actual[..actual.floor_char_boundary(128)];
-        Self::Mismatch {
-            field,
-            expected,
-            actual: actual.to_owned(),
-        }
-    }
-}
-
 /// Only report public receipt fields here, never the DSSE payload or credential.
 fn check_field(field: &'static str, expected: &str, actual: &str) -> Result<(), RekorError> {
     if actual != expected {
-        return Err(RekorError::mismatch(field, expected.to_owned(), actual));
+        return Err(RekorError::Mismatch {
+            field,
+            expected: expected.to_owned(),
+            actual: actual[..actual.floor_char_boundary(128)].to_owned(),
+        });
     }
     Ok(())
 }
