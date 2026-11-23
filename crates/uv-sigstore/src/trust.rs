@@ -77,8 +77,11 @@ pub(super) struct RekorKey<'a> {
 }
 
 impl RekorKey<'_> {
-    pub(super) fn valid_at(&self, seconds: i64) -> bool {
-        Timestamp::from_second(seconds).is_ok_and(|time| self.valid_for.contains(time))
+    /// An upcoming key must have become active by the time we receive the receipt.
+    pub(super) fn can_verify(&self, integrated_time: i64) -> bool {
+        self.valid_for.start <= Timestamp::now()
+            && Timestamp::from_second(integrated_time)
+                .is_ok_and(|time| self.valid_for.contains(time))
     }
 }
 
@@ -100,9 +103,9 @@ impl TrustedRoot {
         for log in &self.tlogs {
             if log.base_url == origin
                 && log.public_key.has_supported_algorithm()
-                && log.public_key.valid_for.contains(now)
+                && log.public_key.valid_for.end.is_none_or(|end| now <= end)
             {
-                // Validity windows can overlap. The receipt identifies the signing key.
+                // Keep upcoming keys in case Rekor rotates while signing is in flight.
                 match log.public_key.decode() {
                     Ok(der) => keys.push(RekorKey {
                         id: Sha256::digest(&der).into(),
@@ -113,10 +116,10 @@ impl TrustedRoot {
                 }
             }
         }
-        if keys.is_empty() {
-            Err(error)
-        } else {
+        if keys.iter().any(|key| key.valid_for.contains(now)) {
             Ok(keys)
+        } else {
+            Err(error)
         }
     }
 
@@ -166,7 +169,7 @@ mod tests {
         trust.tlogs.push(serde_json::from_value(candidate)?);
         let keys = trust.rekor_keys(origin).expect("second key decodes");
         assert_eq!(keys[0].der.as_ref(), &[1]);
-        assert!(!keys[0].valid_at(0));
+        assert!(!keys[0].can_verify(0));
         Ok(())
     }
 }

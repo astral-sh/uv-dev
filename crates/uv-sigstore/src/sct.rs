@@ -1,7 +1,6 @@
 //! Verify the embedded RFC 6962 timestamp before using a certificate issued by Fulcio.
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
 use jiff::Timestamp;
-use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use x509_cert::der::{Decode, Encode, asn1::ObjectIdentifier};
@@ -25,7 +24,7 @@ pub enum TimestampError {
     #[error("Missing Fulcio issuer certificate")]
     MissingIssuer,
     #[error("Invalid Fulcio issuer certificate PEM")]
-    IssuerPem(#[source] rustls_pki_types::pem::Error),
+    IssuerPem(#[source] pem_rfc7468::Error),
     #[error("Invalid Fulcio issuer certificate")]
     IssuerDer(#[source] nom::Err<X509Error>),
     #[error("Unexpected trailing data after the Fulcio issuer certificate ({0} bytes)")]
@@ -65,11 +64,10 @@ fn signature_input(
 pub(super) fn verify(
     root: &TrustedRoot,
     cert: &X509Certificate<'_>,
-    issuer_pem: &str,
+    issuer_der: &[u8],
 ) -> Result<(), TimestampError> {
-    let der =
-        CertificateDer::from_pem_slice(issuer_pem.as_bytes()).map_err(TimestampError::IssuerPem)?;
-    let (remaining, issuer) = parse_x509_certificate(&der).map_err(TimestampError::IssuerDer)?;
+    let (remaining, issuer) =
+        parse_x509_certificate(issuer_der).map_err(TimestampError::IssuerDer)?;
     if !remaining.is_empty() {
         return Err(TimestampError::TrailingIssuerData(remaining.len()));
     }

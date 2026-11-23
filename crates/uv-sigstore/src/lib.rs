@@ -20,7 +20,7 @@ use rcgen::{
 pub use rekor::RekorError;
 use reqwest::{Response, StatusCode};
 use reqwest_middleware::ClientWithMiddleware;
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
+use rustls_pki_types::CertificateDer;
 pub use sct::TimestampError;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -117,10 +117,10 @@ pub enum SigningError {
     FulcioResponse(#[source] reqwest::Error),
     #[error("Invalid Fulcio certificate response at {line}:{column}")]
     FulcioJson { line: usize, column: usize },
-    #[error("Fulcio returned the OIDC token in the certificate chain")]
-    ReflectedToken,
+    #[error("Fulcio returned an empty certificate chain")]
+    EmptyCertificateChain,
     #[error("Invalid Fulcio signing certificate PEM")]
-    CertificatePem(#[from] rustls_pki_types::pem::Error),
+    CertificatePem(#[from] pem_rfc7468::Error),
     #[error("Invalid Fulcio signing certificate")]
     CertificateDer(#[from] nom::Err<X509Error>),
     #[error("Unexpected trailing data after the Fulcio signing certificate ({0} bytes)")]
@@ -171,6 +171,13 @@ impl TrustedRoot {
     }
 }
 
+/// Keep the receipt checks tied to the exact DSSE envelope submitted to Rekor.
+struct SignedEnvelope<'a> {
+    json: String,
+    statement: &'a str,
+    signature: String,
+}
+
 async fn sign_with_services(
     client: &ClientWithMiddleware,
     fulcio: &str,
@@ -182,11 +189,8 @@ async fn sign_with_services(
 ) -> Result<SignedStatement, SigningError> {
     check_identity_token(token)?;
     let log_keys = trust.rekor_keys(REKOR_ORIGIN)?;
-    let certificates = request_certificate(client, fulcio, token, key).await?;
-    let [pem, issuer, ..] = certificates.as_slice() else {
-        return Err(TimestampError::MissingIssuer.into());
-    };
-    let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
+    let CertificateChain { leaf: der, issuer } =
+        request_certificate(client, fulcio, token, key).await?;
     let (remaining, cert) = parse_x509_certificate(&der)?;
     if !remaining.is_empty() {
         return Err(SigningError::TrailingCertificateData(remaining.len()));
@@ -199,7 +203,7 @@ async fn sign_with_services(
         });
     }
 
-    sct::verify(trust, &cert, issuer)?;
+    sct::verify(trust, &cert, &issuer)?;
 
     // DSSE signs the payload type and the exact payload bytes, each prefixed with its byte length.
     let pae = format!(
@@ -209,17 +213,19 @@ async fn sign_with_services(
     );
     let signature = BASE64_STANDARD.encode(key.sign(pae.as_bytes()).map_err(SigningError::Sign)?);
     let payload = BASE64_STANDARD.encode(statement);
-    // Rekor hashes the submitted envelope JSON verbatim. Reuse these bytes to check its receipt.
-    let envelope = json!({
-        "payloadType": PAYLOAD_TYPE,
-        "payload": payload,
-        "signatures": [{"sig": signature}],
-    })
-    .to_string();
-    let (integrated_time, entry) = rekor::record(
-        client, rekor, &log_keys, &envelope, statement, &signature, pem,
-    )
-    .await?;
+    let envelope = SignedEnvelope {
+        json: json!({
+            "payloadType": PAYLOAD_TYPE,
+            "payload": payload,
+            "signatures": [{"sig": signature}],
+        })
+        .to_string(),
+        statement,
+        signature,
+    };
+    // Send only the validated leaf. The logged verifier must match its canonical PEM bytes.
+    let pem = pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &der)?;
+    let (integrated_time, entry) = rekor::record(client, rekor, &log_keys, &envelope, &pem).await?;
     // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
     // expired between issuance and log insertion, for example if a CI runner was suspended.
     let not_before = cert.validity().not_before.timestamp();
@@ -233,7 +239,7 @@ async fn sign_with_services(
     }
     Ok(SignedStatement {
         payload,
-        signature,
+        signature: envelope.signature,
         certificate: BASE64_STANDARD.encode(der),
         transparency_entry: entry,
     })
@@ -282,12 +288,27 @@ fn check_identity_token(token: &str) -> Result<(), SigningError> {
     Ok(())
 }
 
+/// Decode one certificate without exposing any response bytes in PEM errors.
+fn certificate_der(pem: &str) -> Result<CertificateDer<'static>, pem_rfc7468::Error> {
+    let (label, der) = pem_rfc7468::decode_vec(pem.as_bytes())?;
+    if label != "CERTIFICATE" {
+        return Err(pem_rfc7468::Error::Label);
+    }
+    Ok(der.into())
+}
+
+#[derive(Debug)]
+struct CertificateChain {
+    leaf: CertificateDer<'static>,
+    issuer: CertificateDer<'static>,
+}
+
 async fn request_certificate(
     client: &ClientWithMiddleware,
     url: &str,
     token: &str,
     key: &KeyPair,
-) -> Result<Vec<String>, SigningError> {
+) -> Result<CertificateChain, SigningError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct CertificateResponse {
@@ -333,11 +354,14 @@ async fn request_certificate(
             column: err.column(),
         })?;
     let certificates = response.signed_certificate_embedded_sct.chain.certificates;
-    // PEM errors can quote input, and the original leaf PEM is sent to the public log.
-    if certificates.iter().any(|pem| pem.contains(token)) {
-        return Err(SigningError::ReflectedToken);
-    }
-    Ok(certificates)
+    let leaf = certificates
+        .first()
+        .ok_or(SigningError::EmptyCertificateChain)?;
+    let issuer = certificates.get(1).ok_or(TimestampError::MissingIssuer)?;
+    Ok(CertificateChain {
+        leaf: certificate_der(leaf)?,
+        issuer: certificate_der(issuer).map_err(TimestampError::IssuerPem)?,
+    })
 }
 
 #[cfg(test)]
@@ -345,6 +369,7 @@ mod tests {
     use std::error::Error;
     use std::sync::{Arc, OnceLock};
 
+    use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
     use base64::Engine as _;
     use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
     use rcgen::{CertificateSigningRequestParams, KeyPair, PublicKeyData as _, SigningKey as _};
@@ -354,7 +379,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
-    use x509_parser::{asn1_rs::BitString, parse_x509_certificate, verify::verify_signature};
+    use x509_parser::parse_x509_certificate;
 
     use super::{ServiceError, sign_with_services};
 
@@ -606,12 +631,12 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
             "DSSEv1 28 application/vnd.in-toto+json {} {statement}",
             statement.len()
         );
-        verify_signature(
-            cert.public_key(),
-            &cert.signature_algorithm,
-            &BitString::new(0, &signature),
-            pae.as_bytes(),
-        )?;
+        UnparsedPublicKey::new(
+            &ECDSA_P256_SHA256_ASN1,
+            &*cert.public_key().subject_public_key.data,
+        )
+        .verify(pae.as_bytes(), &signature)
+        .expect("valid DSSE signature");
         Ok(())
     }
 
