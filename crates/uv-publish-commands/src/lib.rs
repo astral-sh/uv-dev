@@ -225,7 +225,7 @@ async fn publish_files(
 
     for prepared in distributions {
         let reporter = Arc::new(PublishReporter::single(printer, dry_run));
-        match publish_file(prepared, session, reporter, dry_run, printer).await {
+        match publish_file(&prepared, session, reporter, dry_run, printer).await {
             Ok(()) => {}
             Err(err) => {
                 if !dry_run {
@@ -256,7 +256,7 @@ async fn publish_files(
 
 /// Upload a prepared distribution unless this is a dry run.
 async fn publish_file(
-    prepared: PreparedDistribution,
+    prepared: &PreparedDistribution,
     session: &mut PublishSession<'_>,
     reporter: Arc<PublishReporter>,
     dry_run: bool,
@@ -271,7 +271,7 @@ async fn publish_file(
         return Ok(());
     }
 
-    if session.check_existing(&prepared, reporter.clone()).await? {
+    if session.check_existing(prepared, reporter.clone()).await? {
         writeln!(
             printer.stderr(),
             "File {} already exists, skipping",
@@ -281,7 +281,7 @@ async fn publish_file(
     }
 
     if dry_run {
-        session.dry_run(&prepared, reporter).await?;
+        session.dry_run(prepared, reporter).await?;
         return Ok(());
     }
 

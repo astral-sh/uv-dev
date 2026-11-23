@@ -1867,10 +1867,6 @@ pub struct SimpleDetailMetadatum {
 }
 
 impl SimpleDetailMetadata {
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &SimpleDetailMetadatum> {
-        self.versions.iter()
-    }
-
     fn from_pypi_files(
         files: Vec<uv_pypi_types::PypiFile>,
         package_name: &PackageName,
@@ -2592,7 +2588,7 @@ mod tests {
             &base,
         );
         let versions: Vec<String> = simple_metadata
-            .iter()
+            .into_iter()
             .map(|SimpleDetailMetadatum { version, .. }| version.to_string())
             .collect();
         assert_eq!(versions, ["1.7.8".to_string()]);
