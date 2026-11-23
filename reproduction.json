@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced the reported split with uv 0.13.9 on Linux x86_64, CPython 3.12.3, keyring 25.7.0, and artifacts-keyring 1.0.0, using a loopback HTTPS feed and a stand-in credential provider. With the reported index username and UV_KEYRING_PROVIDER=subprocess set, `uv tool run keyring get \"$FEED\" VssSessionToken >/dev/null` exited 0. With a plugin-less `keyring` first on PATH, `uv pip install --dry-run uv-triage-synthetic -vv` tried the index root and then the host, reported 401 Unauthorized, and exited 1. Putting the plugin-enabled keyring first made the same dry run succeed. This confirms that PATH shadowing can produce the symptom, not that it caused the reported Windows failure. The next check is `where.exe keyring` and bare `keyring --list-backends` in the failing shell. Updated the issue-context README."
+}
