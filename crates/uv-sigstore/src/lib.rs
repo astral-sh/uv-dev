@@ -375,12 +375,7 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
     const CT_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI/EdmmXgHd1UQ\
          247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==";
 
-    #[tokio::test]
-    async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
-        let server = MockServer::start().await;
-        let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
-        let log_key = KeyPair::generate()?;
-        let log_id = Sha256::digest(log_key.subject_public_key_info());
+    fn trusted_root(log_key: &KeyPair) -> Result<super::TrustedRoot, serde_json::Error> {
         let log = |url: &str, raw_bytes: &str| {
             json!({
                 "baseUrl": url, "publicKey": {
@@ -395,7 +390,53 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
             "ctlogs": [log("https://ct.example", CT_KEY)],
             "tlogs": [log(super::REKOR_ORIGIN, &BASE64_STANDARD.encode(log_key.subject_public_key_info()))],
         });
-        let trust = serde_json::from_value(trust)?;
+        serde_json::from_value(trust)
+    }
+
+    #[tokio::test]
+    async fn invalid_certificate_timestamp_stops_signing() -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
+        let trust = trusted_root(&key)?;
+        // Flip a bit in the embedded SCT signature, leaving the DER structure intact.
+        let tampered = CERTIFICATE.replacen("42fI5UnF", "42fI5UnE", 1);
+        Mock::given(method("POST"))
+            .and(path("/fulcio"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "signedCertificateEmbeddedSct": {"chain": {"certificates": [tampered, CERTIFICATE]}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = sign_with_services(
+            &ClientBuilder::new(Client::new()).build(),
+            &format!("{}/fulcio", server.uri()),
+            &format!("{}/rekor", server.uri()),
+            &trust,
+            &key,
+            "synthetic-token",
+            "{}",
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::SigningError::CertificateTimestamp(
+                super::TimestampError::Signature
+            ))
+        ));
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert_eq!(requests.len(), 1, "only Fulcio should receive a request");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sign_in_toto_statement() -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        let key = KeyPair::try_from(BASE64_STANDARD.decode(KEY)?.as_slice())?;
+        let expected_key = key.subject_public_key_info();
+        let log_key = KeyPair::generate()?;
+        let log_id = Sha256::digest(log_key.subject_public_key_info());
+        let trust = trusted_root(&log_key)?;
         let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
         let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
         let token = format!("header.{claims}.signature");
@@ -412,10 +453,11 @@ yQIfUlSCmnCDG1oeK8MCIQCo9wZIwKcSLn4TSsr1athgks3QmFkKMnZjswn8Us8t
                             .expect("Certificate signing request"),
                     )
                     .expect("Base64 CSR");
-                CertificateSigningRequestParams::from_pem(
+                let csr = CertificateSigningRequestParams::from_pem(
                     std::str::from_utf8(&csr).expect("PEM CSR"),
                 )
                 .expect("Valid signed CSR");
+                assert_eq!(csr.public_key.subject_public_key_info(), expected_key);
                 ResponseTemplate::new(200).set_body_json(json!({
                     "signedCertificateEmbeddedSct": {
                         "chain": {"certificates": [CERTIFICATE, CERTIFICATE]}
