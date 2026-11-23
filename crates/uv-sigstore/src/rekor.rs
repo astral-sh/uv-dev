@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use ct_merkle::{InclusionProof as MerkleProof, InclusionVerifError, RootHash};
@@ -9,8 +10,6 @@ use hex::FromHex as _;
 use itertools::Itertools as _;
 use reqwest::{StatusCode, header::LOCATION};
 use reqwest_middleware::ClientWithMiddleware;
-use ring::signature::{ECDSA_P256_SHA256_ASN1, UnparsedPublicKey};
-use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -19,8 +18,8 @@ use x509_parser::error::X509Error;
 use x509_parser::nom::Err as DerError;
 use x509_parser::prelude::{FromDer as _, SubjectPublicKeyInfo};
 
-use crate::ServiceError;
 use crate::trust::RekorKey;
+use crate::{ServiceError, SignedEnvelope};
 
 /// An error submitting a DSSE envelope to Rekor or authenticating its receipt.
 #[derive(Debug, Error)]
@@ -78,8 +77,6 @@ pub enum RekorError {
         expected: String,
         actual: String,
     },
-    #[error("Invalid Rekor verifier certificate")]
-    Certificate(#[source] rustls_pki_types::pem::Error),
     #[error("Rekor returned a different envelope signature")]
     SignatureMismatch,
 }
@@ -173,9 +170,7 @@ pub(super) async fn record(
     client: &ClientWithMiddleware,
     url: &str,
     log_keys: &[RekorKey<'_>],
-    envelope: &str,
-    statement: &str,
-    signature: &str,
+    envelope: &SignedEnvelope<'_>,
     pem: &str,
 ) -> Result<(i64, Value), RekorError> {
     let mut response = client
@@ -184,7 +179,7 @@ pub(super) async fn record(
             "apiVersion": "0.0.1",
             "kind": "dsse",
             "spec": {"proposedContent": {
-                "envelope": envelope,
+                "envelope": envelope.json,
                 "verifiers": [BASE64_STANDARD.encode(pem)],
             }}
         }))
@@ -225,7 +220,7 @@ pub(super) async fn record(
     let body = BASE64_STANDARD
         .decode(&entry.body)
         .map_err(|err| RekorError::Base64("entry body", err))?;
-    check_body(&body, envelope, statement, signature, pem)?;
+    check_body(&body, envelope, pem)?;
     let proof = entry.verification.inclusion_proof;
     let root =
         <[u8; 32]>::from_hex(&proof.root_hash).map_err(|err| RekorError::Hex("root hash", err))?;
@@ -304,13 +299,7 @@ fn check_field(field: &'static str, expected: &str, actual: &str) -> Result<(), 
 }
 
 /// Match the log's canonical entry to the bytes submitted for signing.
-fn check_body(
-    body: &[u8],
-    envelope: &str,
-    statement: &str,
-    signature: &str,
-    pem: &str,
-) -> Result<(), RekorError> {
+fn check_body(body: &[u8], envelope: &SignedEnvelope<'_>, pem: &str) -> Result<(), RekorError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct CanonicalEntry {
@@ -352,23 +341,23 @@ fn check_body(
     entry
         .spec
         .envelope_hash
-        .check("envelope digest", envelope)?;
-    entry.spec.payload_hash.check("payload digest", statement)?;
+        .check("envelope digest", &envelope.json)?;
+    entry
+        .spec
+        .payload_hash
+        .check("payload digest", envelope.statement)?;
     let [logged] = entry.spec.signatures;
     let verifier = BASE64_STANDARD
         .decode(logged.verifier)
         .map_err(|err| RekorError::Base64("verifier", err))?;
-    if logged.signature != signature {
+    if logged.signature != envelope.signature {
         return Err(RekorError::SignatureMismatch);
     }
-    let expected =
-        CertificateDer::from_pem_slice(pem.as_bytes()).map_err(RekorError::Certificate)?;
-    let actual = CertificateDer::from_pem_slice(&verifier).map_err(RekorError::Certificate)?;
-    if expected != actual {
+    if verifier != pem.as_bytes() {
         return Err(RekorError::Mismatch {
-            field: "certificate fingerprint (SHA-256)",
-            expected: hex::encode(Sha256::digest(expected)),
-            actual: hex::encode(Sha256::digest(actual)),
+            field: "verifier PEM digest (SHA-256)",
+            expected: hex::encode(Sha256::digest(pem)),
+            actual: hex::encode(Sha256::digest(verifier)),
         });
     }
     Ok(())
