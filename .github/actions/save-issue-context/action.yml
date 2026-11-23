@@ -15,9 +15,6 @@ inputs:
   readme:
     description: "The updated Markdown report."
     required: true
-  issue-file:
-    description: "Updated verified issue JSON, required when creating the first report."
-    required: false
   result-name:
     description: "The structured result to update: triage, reproduction, or fix."
     required: false
@@ -45,7 +42,6 @@ runs:
       env:
         EXPECTED_REVISION: ${{ inputs.expected-revision }}
         GH_TOKEN: ${{ github.token }}
-        ISSUE_FILE: ${{ inputs.issue-file }}
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         README: ${{ inputs.readme }}
         REPOSITORY: ${{ inputs.repository }}

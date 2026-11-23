@@ -12,10 +12,6 @@ inputs:
   path:
     description: "A destination inside the workspace or runner temporary directory."
     required: true
-  allow-missing:
-    description: "Return exists=false when no report exists."
-    default: "false"
-    required: false
   template:
     description: "A Markdown template for initializing a new local report."
     required: false
@@ -24,12 +20,6 @@ inputs:
     required: false
 
 outputs:
-  exists:
-    description: "Whether an existing report was loaded or a local report initialized."
-    value: ${{ steps.load.outputs.exists }}
-  initial-issue:
-    description: "The verified issue JSON if the report was initialized from the template."
-    value: ${{ steps.load.outputs.issue }}
   revision:
     description: "The source revision to check before publishing an update."
     value: ${{ steps.load.outputs.revision }}
@@ -44,7 +34,6 @@ runs:
       id: load
       shell: bash
       env:
-        ALLOW_MISSING: ${{ inputs.allow-missing }}
         DIRECTORY: ${{ inputs.path }}
         GH_TOKEN: ${{ github.token }}
         ISSUE_FILE: ${{ inputs.issue-file }}

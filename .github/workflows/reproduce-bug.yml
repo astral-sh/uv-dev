@@ -73,8 +73,8 @@ jobs:
       issues: read
     outputs:
       issue-number: ${{ steps.issue.outputs.number }}
+      context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
       context-revision: ${{ steps.issue-context.outputs.revision }}
-      initial-issue: ${{ steps.issue-context.outputs.initial-issue }}
       result: ${{ steps.reproduce.outputs.final-message }}
       thread-artifact-id: ${{ steps.upload-thread.outputs.artifact-id }}
     steps:
@@ -147,6 +147,7 @@ jobs:
           output-schema-file: "agents/schemas/issue-triage-bug.json"
 
       - name: "Upload issue context"
+        id: upload-context
         if: steps.reproduce.outputs.final-message != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -181,23 +182,17 @@ jobs:
       current: ${{ steps.publish.outputs.current }}
     steps:
       - name: "Prepare reproduction context"
-        id: prepare
         run: |
-          if [ -n "$INITIAL_ISSUE" ]; then
-            printf '%s\n' "$INITIAL_ISSUE" > "$RUNNER_TEMP/issue.json"
-            echo "issue-file=$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
-          fi
           printf '%s\n%s\n%s\n' '```json' "$REPRODUCTION_RESULT" '```' \
             >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/reproduction.json"
         env:
-          INITIAL_ISSUE: ${{ needs.reproduce.outputs.initial-issue }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Download issue context"
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: issue-context-${{ needs.reproduce.outputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.reproduce.outputs.context-artifact-id }}
           path: ${{ runner.temp }}/issue-context-update
 
       - name: "Publish reproduction context"
@@ -207,7 +202,6 @@ jobs:
           issue-number: ${{ needs.reproduce.outputs.issue-number }}
           expected-revision: ${{ needs.reproduce.outputs.context-revision }}
           readme: ${{ runner.temp }}/issue-context-update/README.md
-          issue-file: ${{ steps.prepare.outputs.issue-file }}
           result-name: reproduction
           result-file: ${{ runner.temp }}/reproduction.json
 

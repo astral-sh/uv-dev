@@ -29,7 +29,8 @@ jobs:
       contents: read
       issues: read
     outputs:
-      issue-context: ${{ steps.issue.outputs.context }}
+      issue-number: ${{ steps.issue.outputs.number }}
+      context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
       context-revision: ${{ steps.issue-context.outputs.revision }}
       result: ${{ steps.triage.outputs.final-message }}
     steps:
@@ -51,7 +52,7 @@ jobs:
 
           jaq -er --arg repository "$GITHUB_REPOSITORY" '
             if .url | startswith("https://github.com/\($repository)/issues/") then
-              "context=\(tojson)", "prompt-title=\(.title | gsub("[\r\n]+"; " "))"
+              "number=\(.number)", "prompt-title=\(.title | gsub("[\r\n]+"; " "))"
             else error("The issue must belong to \($repository).")
             end
           ' .issue-triage-event.json >> "$GITHUB_OUTPUT"
@@ -63,7 +64,7 @@ jobs:
         id: issue-context
         uses: $/.github/actions/load-issue-context
         with:
-          issue-number: ${{ fromJSON(steps.issue.outputs.context).number }}
+          issue-number: ${{ steps.issue.outputs.number }}
           path: ${{ runner.temp }}/issue-context
           template: ${{ github.workspace }}/agents/templates/issue-context-template.md
           issue-file: ${{ github.workspace }}/.issue-triage-event.json
@@ -75,7 +76,7 @@ jobs:
             cat agents/prompts/triage-issue.md
           } > "$RUNNER_TEMP/triage-issue-prompt.md"
         env:
-          ISSUE_NUMBER: ${{ fromJSON(steps.issue.outputs.context).number }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           PROMPT_TITLE: ${{ steps.issue.outputs.prompt-title }}
 
       - name: "Triage issue"
@@ -97,6 +98,7 @@ jobs:
           output-schema-file: "agents/schemas/issue-triage.json"
 
       - name: "Upload issue context"
+        id: upload-context
         if: steps.triage.outputs.final-message != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -109,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: codex-thread-issue-${{ fromJSON(steps.issue.outputs.context).number }}
+          name: codex-thread-issue-${{ steps.issue.outputs.number }}
           path: agents/codex/sessions
           if-no-files-found: warn
           overwrite: true
@@ -123,7 +125,7 @@ jobs:
       deployment: false
     timeout-minutes: 10
     concurrency:
-      group: issue-context-${{ fromJSON(needs.triage.outputs.issue-context).number }}
+      group: issue-context-${{ needs.triage.outputs.issue-number }}
       cancel-in-progress: false
     permissions:
       issues: write
@@ -133,26 +135,23 @@ jobs:
       - name: "Download issue context"
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: issue-triage-context-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.triage.outputs.context-artifact-id }}
           path: ${{ runner.temp }}/issue-context-update
 
       - name: "Prepare issue context"
         run: |
-          printf '%s\n' "$ISSUE_CONTEXT" > "$RUNNER_TEMP/issue.json"
           printf '%s\n' "$TRIAGE_RESULT" > "$RUNNER_TEMP/triage.json"
           printf '%s\n%s\n%s\n' '```json' "$TRIAGE_RESULT" '```' >> "$GITHUB_STEP_SUMMARY"
         env:
-          ISSUE_CONTEXT: ${{ needs.triage.outputs.issue-context }}
           TRIAGE_RESULT: ${{ toJSON(fromJSON(needs.triage.outputs.result)) }}
 
       - name: "Publish issue context"
         id: publish
         uses: $/.github/actions/save-issue-context
         with:
-          issue-number: ${{ fromJSON(needs.triage.outputs.issue-context).number }}
+          issue-number: ${{ needs.triage.outputs.issue-number }}
           expected-revision: ${{ needs.triage.outputs.context-revision }}
           readme: ${{ runner.temp }}/issue-context-update/README.md
-          issue-file: ${{ runner.temp }}/issue.json
           result-name: triage
           result-file: ${{ runner.temp }}/triage.json
 

@@ -25,6 +25,7 @@ jobs:
       issues: read
     outputs:
       changed: ${{ steps.changes.outputs.changed }}
+      context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
       context-revision: ${{ steps.issue-context.outputs.revision }}
       issue-number: ${{ steps.issue.outputs.number }}
     steps:
@@ -72,17 +73,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
 
-      - name: "Load issue context"
-        id: issue-context
-        uses: $/.github/actions/load-issue-context
-        with:
-          issue-number: ${{ steps.issue.outputs.number }}
-          path: ${{ runner.temp }}/issue-context
-          allow-missing: "true"
-
       - name: "Find previous Codex thread"
         id: find-thread
-        if: steps.issue-context.outputs.exists == 'true'
         run: |
           artifact_name="codex-thread-issue-$ISSUE_NUMBER"
           artifacts="$(gh api \
@@ -207,19 +199,21 @@ jobs:
 
           echo "session-id=$root_session_id" >> "$GITHUB_OUTPUT"
 
+      - name: "Load issue context"
+        id: issue-context
+        if: steps.find-thread.outputs.found == 'true'
+        uses: $/.github/actions/load-issue-context
+        with:
+          issue-number: ${{ steps.issue.outputs.number }}
+          path: ${{ runner.temp }}/issue-context
+          # A retained thread can outlive a failed first publication.
+          template: ${{ github.workspace }}/agents/templates/issue-context-template.md
+          issue-file: ${{ runner.temp }}/issue.json
+
       - name: "Prepare the issue context for editing"
         if: steps.find-thread.outputs.found == 'true'
         working-directory: ${{ steps.issue-context.outputs.path }}
-        env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
         run: |
-          git init --quiet
-          git add README.md *.json
-          git -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            -c core.hooksPath=/dev/null commit --quiet --message "Load issue context"
-
           mkdir "$RUNNER_TEMP/codex-scratch"
           cp README.md "$RUNNER_TEMP/codex-scratch/README.md"
 
@@ -228,7 +222,7 @@ jobs:
         uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Keep Git metadata and runner command files outside the sandbox's writable directory.
+          # Keep the original report and runner command files outside the sandbox's writable directory.
           TMPDIR: ${{ runner.temp }}/codex-scratch
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -249,35 +243,30 @@ jobs:
         working-directory: ${{ steps.issue-context.outputs.path }}
         run: |
           # Move the file out of the sandbox so it can't be replaced after the check.
-          readme="$RUNNER_TEMP/updated-README.md"
+          mkdir "$RUNNER_TEMP/issue-context-update"
+          readme="$RUNNER_TEMP/issue-context-update/README.md"
           mv -T "$RUNNER_TEMP/codex-scratch/README.md" "$readme"
           if [ -L "$readme" ] || [ ! -f "$readme" ]; then
             echo "The updated README must be a regular file." >&2
             exit 1
           fi
-          cp "$readme" README.md
 
-          if [ -n "$(git status --porcelain -- . ':!README.md')" ]; then
-            echo "Codex changed files outside the issue-context README."
-            git status --short
-            exit 1
-          fi
-
-          if git diff --quiet HEAD -- README.md; then
+          if cmp -s README.md "$readme"; then
             echo "The comment does not require an issue-context update."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          git diff --check HEAD -- README.md
+          # With --no-index, a clean diff can exit 1. Whitespace errors exit 3.
+          git diff --no-index --check -- README.md "$readme" || [ "$?" -eq 1 ]
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: "Upload issue context"
+        id: upload-context
         if: steps.changes.outputs.changed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: issue-comment-context-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue-context/README.md
+          path: ${{ runner.temp }}/issue-context-update/README.md
           if-no-files-found: error
           retention-days: 1
 
@@ -307,7 +296,7 @@ jobs:
       - name: "Download issue context"
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: issue-comment-context-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.update.outputs.context-artifact-id }}
           path: ${{ runner.temp }}/issue-context-update
 
       - name: "Publish issue context"

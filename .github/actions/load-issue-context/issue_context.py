@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,7 @@ DATA_HEADER = (
 )
 DATA_FOOTER = "\n```\n</details>\n"
 RESULT_NAMES = ("triage", "reproduction", "fix")
+MIGRATION_MARKER = "<!-- uv-issue-context-migrated -->"
 LEGACY_REPOSITORY = "https://github.com/astral-sh/uv-dev.git"
 
 
@@ -45,8 +47,15 @@ def api(endpoint: str, *, method: str = "GET", payload: dict | None = None):
     return json.loads(subprocess.check_output(command, input=body, text=True))
 
 
-def digest(value: list) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+class StaleRevision(Exception):
+    """The report changed after the analysis started."""
+
+
+def check_revision(source: list, expected: str | None) -> str:
+    revision = hashlib.sha256(json.dumps(source).encode()).hexdigest()
+    if expected is not None and revision != expected:
+        raise StaleRevision
+    return revision
 
 
 def git(
@@ -61,6 +70,10 @@ def git(
         stdout=subprocess.PIPE,
         check=check,
     )
+
+
+def issue_identity(repository: str, number: int) -> dict:
+    return {"number": number, "url": f"https://github.com/{repository}/issues/{number}"}
 
 
 def validate_data(data: dict, repository: str, issue_number: int) -> None:
@@ -102,53 +115,64 @@ def is_triage_artifact(artifact: dict) -> bool:
     )
 
 
-def find_artifact(endpoint: str) -> int | None:
-    number = None
+def list_items(endpoint: str) -> Iterator[dict]:
+    # The issue artifact list has no pagination links.
     page = 1
     while True:
-        artifacts = api(f"{endpoint}?per_page=100&page={page}")
-        if not isinstance(artifacts, list):
-            raise TypeError("GitHub returned an invalid issue artifact list.")
-        for artifact in artifacts:
-            if not is_triage_artifact(artifact):
-                continue
-            if number is not None:
-                raise ValueError("The issue has more than one triage artifact.")
-            number = artifact["number"]
-            if type(number) is not int or number < 1:
-                raise ValueError("The triage artifact number is invalid.")
-        # This endpoint does not return pagination links.
-        if len(artifacts) < 100:
-            return number
+        items = api(f"{endpoint}?per_page=100&page={page}")
+        if not isinstance(items, list):
+            raise TypeError(f"Expected a list from {endpoint}.")
+        yield from items
+        if len(items) < 100:
+            return
         page += 1
 
 
-def read_context(repository: str, issue_number: int) -> Context:
+def find_artifact(endpoint: str) -> int | None:
+    number = None
+    for artifact in list_items(endpoint):
+        if not is_triage_artifact(artifact):
+            continue
+        if number is not None:
+            raise ValueError("The issue has more than one triage artifact.")
+        number = artifact["number"]
+        if type(number) is not int or number < 1:
+            raise ValueError("The triage artifact number is invalid.")
+    return number
+
+
+def read_context(
+    repository: str, issue_number: int, expected: str | None = None
+) -> Context:
     endpoint = f"repos/{repository}/issues/{issue_number}/artifacts"
     number = find_artifact(endpoint)
     if number is None:
-        return read_legacy(repository, issue_number)
+        return read_legacy(repository, issue_number, expected)
 
     response = api(f"{endpoint}/{number}?per_page=1")
     artifact = response["artifact"]
-    if artifact["number"] != number or not is_triage_artifact(artifact):
-        raise ValueError("The triage artifact is not owned by this automation.")
     versions = response["versions"]
     latest = versions[0] if versions else {}
     version = latest.get("version")
     if type(version) is not int or version < 1:
         raise ValueError("The triage artifact has no valid version history.")
+    # Restoring an older body still creates a new version.
+    revision = check_revision(
+        ["artifact", artifact["id"], number, version, latest["body"]], expected
+    )
+    if artifact["number"] != number or not is_triage_artifact(artifact):
+        raise ValueError("The triage artifact is not owned by this automation.")
     if (latest.get("actor") or {}).get("login") != ARTIFACT_CREATOR:
         raise ValueError(
             "The latest triage results were not written by this automation."
         )
-    readme, data = decode(artifact["body"], repository, issue_number)
-    # Restoring an older body still invalidates analyses of the previous version.
-    revision = digest(["artifact", artifact["id"], number, version, artifact["body"]])
+    if latest["body"] != artifact["body"]:
+        raise ValueError("The triage artifact does not match its latest version.")
+    readme, data = decode(latest["body"], repository, issue_number)
     return Context(readme, data, revision, number)
 
 
-def read_legacy(repository: str, issue_number: int) -> Context:
+def read_legacy(repository: str, issue_number: int, expected: str | None) -> Context:
     # Reports written before issue artifacts remain available until their next update.
     # Public Git reads do not require a cross-repository contents token.
     reference = git(
@@ -159,11 +183,20 @@ def read_legacy(repository: str, issue_number: int) -> Context:
         check=False,
     )
     if reference.returncode == 2:  # No matching branch.
-        return Context(None, {}, digest(["missing"]))
+        return Context(None, {}, check_revision(["missing"], expected))
     reference.check_returncode()
     revision = reference.stdout.split()[0]
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("The legacy issue-context revision is invalid.")
+    legacy_revision = check_revision(["legacy", revision], expected)
+    for comment in list_items(f"repos/{repository}/issues/{issue_number}/comments"):
+        author = (comment.get("user") or {}).get("login")
+        if author == ARTIFACT_CREATOR and comment["body"].startswith(MIGRATION_MARKER):
+            raise ValueError(
+                "The migrated triage artifact is missing. To import the legacy branch "
+                "again, a maintainer must remove the bot's migration notice."
+            )
+
     # Read only regular blobs, without checking out untrusted branch contents.
     readme = None
     data = {"repository": repository}
@@ -192,7 +225,7 @@ def read_legacy(repository: str, issue_number: int) -> Context:
         )
         # An issue branch can still point to the empty issue/base commit.
         if not entries.stdout:
-            return Context(None, {}, digest(["legacy", revision]))
+            return Context(None, {}, legacy_revision)
         for entry in entries.stdout.splitlines():
             mode, kind, name = entry.split(" ", 2)
             if mode not in {"100644", "100755"} or kind != "blob":
@@ -203,7 +236,7 @@ def read_legacy(repository: str, issue_number: int) -> Context:
             else:
                 data[name.removesuffix(".json")] = json.loads(content)
     validate_data(data, repository, issue_number)
-    return Context(readme, data, digest(["legacy", revision]))
+    return Context(readme, data, legacy_revision)
 
 
 def output(**values: str) -> None:
@@ -247,20 +280,16 @@ def load(repository: str, issue_number: int) -> None:
     context = read_context(repository, issue_number)
     # Early issue branches contain JSON results but no Markdown report.
     if context.readme is None:
-        if template:
-            context.readme = read_file(template)
-            context.data.update(
-                repository=repository,
-                issue=json.loads(read_file(issue_file)),
-            )
-            validate_data(context.data, repository, issue_number)
-            output(issue=json.dumps(context.data["issue"], ensure_ascii=False))
-        elif os.environ["ALLOW_MISSING"] == "true":
-            output(exists="false")
-            return
-        else:
+        if not template:
             raise ValueError("No triage report exists for this issue.")
+        context.readme = read_file(template)
+        context.data.update(
+            repository=repository, issue=json.loads(read_file(issue_file))
+        )
+        validate_data(context.data, repository, issue_number)
 
+    # Workflows fetch the current issue separately. Discard old copies of user content.
+    context.data["issue"] = issue_identity(repository, issue_number)
     directory.mkdir(parents=True)
     (directory / "README.md").write_text(context.readme)
     for name in ("issue", *RESULT_NAMES):
@@ -268,12 +297,11 @@ def load(repository: str, issue_number: int) -> None:
             (directory / f"{name}.json").write_text(
                 json.dumps(context.data[name], indent=2) + "\n"
             )
-    output(exists="true", revision=context.revision, path=str(directory))
+    output(revision=context.revision, path=str(directory))
 
 
 def save(repository: str, issue_number: int) -> None:
     expected_revision = os.environ["EXPECTED_REVISION"]
-    issue_file = os.environ["ISSUE_FILE"]
     result_name = os.environ["RESULT_NAME"]
     result_file = os.environ["RESULT_FILE"]
     if bool(result_name) != bool(result_file):
@@ -281,27 +309,43 @@ def save(repository: str, issue_number: int) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
         raise ValueError("The expected issue-context revision is invalid.")
 
-    # Callers serialize publishers per issue because the API has no conditional update.
-    context = read_context(repository, issue_number)
-    if context.revision != expected_revision:
+    readme = read_file(os.environ["README"])
+    updates = {
+        "repository": repository,
+        "issue": issue_identity(repository, issue_number),
+    }
+    if result_file:
+        if result_name not in RESULT_NAMES:
+            raise ValueError("A structured result must have a supported result name.")
+        updates[result_name] = json.loads(read_file(result_file))
+
+    # Publishers are serialized per issue. GitHub has no conditional PATCH, so
+    # an external edit after this final read can still be overwritten.
+    try:
+        context = read_context(repository, issue_number, expected_revision)
+    except StaleRevision:
         print("Skipping the update because the report changed during analysis.")
         output(current="false", changed="false")
         return
 
-    data = context.data.copy()
-    if issue_file:
-        data.update(repository=repository, issue=json.loads(read_file(issue_file)))
-    if result_file:
-        if result_name not in RESULT_NAMES:
-            raise ValueError("A structured result must have a supported result name.")
-        data[result_name] = json.loads(read_file(result_file))
+    data = context.data | updates
     validate_data(data, repository, issue_number)
-
-    body = encode(read_file(os.environ["README"]), data)
+    body = encode(readme, data)
     endpoint = f"repos/{repository}/issues/{issue_number}/artifacts"
     number = context.artifact_number
     changed = True
     if number is None:
+        # Retire nonempty legacy reports before publishing. If creation fails,
+        # reimport requires a maintainer to remove the notice.
+        if context.data:
+            api(
+                f"repos/{repository}/issues/{issue_number}/comments",
+                method="POST",
+                payload={
+                    "body": f"{MIGRATION_MARKER}\nFuture triage updates use issue artifacts. "
+                    "The old report branch will no longer be imported automatically."
+                },
+            )
         artifact = api(
             endpoint,
             method="POST",
