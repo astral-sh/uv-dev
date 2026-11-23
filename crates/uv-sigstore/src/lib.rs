@@ -176,7 +176,7 @@ async fn sign_with_services(
     statement: &str,
 ) -> Result<SignedStatement, SigningError> {
     check_identity_token(token)?;
-    let log_key = trust.rekor_key(REKOR_ORIGIN)?;
+    let log_keys = trust.rekor_keys(REKOR_ORIGIN)?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(SigningError::GenerateKey)?;
     let pem = request_certificate(client, fulcio, token, &key).await?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())?;
@@ -208,7 +208,7 @@ async fn sign_with_services(
     })
     .to_string();
     let (integrated_time, entry) = rekor::record(
-        client, rekor, &log_key, &envelope, statement, &signature, &pem,
+        client, rekor, &log_keys, &envelope, statement, &signature, &pem,
     )
     .await?;
     // Warehouse verifies the certificate at the time authenticated by Rekor. It may have
@@ -361,18 +361,21 @@ mod tests {
         let issuer = Issuer::new(CertificateParams::default(), KeyPair::generate()?);
         let log_key = KeyPair::generate()?;
         let log_id = Sha256::digest(log_key.subject_public_key_info());
-        let trust = json!({
-            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
-            "tlogs": [{
+        let log = |key: &KeyPair| {
+            json!({
                 "baseUrl": super::REKOR_ORIGIN,
                 "publicKey": {
-                    "rawBytes": BASE64_STANDARD.encode(log_key.subject_public_key_info()),
+                    "rawBytes": BASE64_STANDARD.encode(key.subject_public_key_info()),
                     "keyDetails": "PKIX_ECDSA_P256_SHA_256",
                     "validFor": {"start": "2000-01-01T00:00:00Z"}
                 }
-            }],
-        });
-        let trust = serde_json::from_value(trust)?;
+            })
+        };
+        // During rotation both keys are valid, but the second signed this receipt.
+        let trust = serde_json::from_value(json!({
+            "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+            "tlogs": [log(&KeyPair::generate()?), log(&log_key)],
+        }))?;
         let claims = json!({"aud": "sigstore", "exp": 4_102_444_800_i64});
         let claims = BASE64_URL_SAFE_NO_PAD.encode(claims.to_string());
         let token = format!("header.{claims}.signature");
