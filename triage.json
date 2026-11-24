@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13102,
+        "title": "`uv pip install` panics when using `*` under windows powershell",
+        "url": "https://github.com/astral-sh/uv/issues/13102",
+        "state": "closed",
+        "reason": "When PowerShell passed `wheel-*.whl` literally, the parser panicked with `InvalidNameError(\"wheel-\")`. The shell and suffix differ, but the parser reached the same invalid name token followed by more input. The maintainer linked the parser fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13105,
+        "title": "Fix panic with invalid last char in PEP 508 name",
+        "url": "https://github.com/astral-sh/uv/pull/13105",
+        "state": "merged",
+        "reason": "Fixes astral-sh/uv#13102 by validating the last character of the name token regardless of what follows, before constructing `PackageName`. The regression test expects a parse error for `wheel-*.whl`, and the same check covers the reported suffixes. The fix shipped in uv 0.6.17."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged PRs using the exact panic and error fragments, `Requirement::from_str`, `D-==1`, and `pep508_rs` 0.9.2, then broader searches for trailing punctuation, invalid package names, PEP 508 parser panics, and crate publication. Followed the original report’s maintainer comment to the merged fix and checked its diff, release notes, and published crate source. Ruled out astral-sh/uv#8281 and astral-sh/uv#8282 (leading-whitespace cursor bounds), astral-sh/uv#23091 (deep marker nesting), and astral-sh/uv#3538 (crate synchronization rather than a parser panic)."
+  },
+  "type": "duplicate",
+  "type_reason": "The published 0.9.2 source and the pre-fix uv parser both check for invalid final punctuation only at end of input, then assume package-name validation succeeds. The existing issue and fix cover the same bug. The standalone crate was published before the uv fix and never received it in a release, so this is not a regression.",
+  "summary": "astral-sh/uv#13102 tracks the same name-token panic. astral-sh/uv#13105 fixed uv, but not the older standalone `pep508_rs` 0.9.2 release.",
+  "draft_response": "You’re hitting the same package-name parser panic tracked in astral-sh/uv#13102. The fix in astral-sh/uv#13105 shipped in uv 0.6.17 and makes the parser return an error for inputs like `D-==1`. The separately published `pep508_rs` 0.9.2 predates that fix and has no newer release. If your integration can use an unstable Rust API, try the `uv-pep508` crate, which includes the fix."
+}
