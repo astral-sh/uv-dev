@@ -32,8 +32,13 @@ by a test, and the report does not describe a regression.
 `woodruffw` raised a concern about making a flag's effect conditional on another state, such as
 whether a file exists. This is feedback on the proposed CLI design, not a decision against
 optional dotenv loading. The maintainer asked for the concrete workflow and how it reaches the
-missing-file failure. The shebang illustrates the desired behavior, but the reporter has not yet
-described an actual failing invocation in their workflow.
+missing-file failure.
+
+The reporter clarified that the same executable script should run with an unchanged shebang both
+locally and in GitHub Actions. Locally it would load an uncommitted `.env` file; in CI there is no
+`.env`, and the workflow would supply the variables through its environment from repository
+secrets. The flag name is negotiable; the requirement is to continue when the file is absent.
+The shebang illustrates the requested behavior; no failing CI invocation was provided.
 
 ## Related
 
