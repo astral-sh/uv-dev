@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 23278,
+        "title": "Render venv activator templates correctly even when using unusual substitutions",
+        "url": "https://github.com/astral-sh/uv/pull/23278",
+        "state": "open",
+        "reason": "This is the canonical match. It replaces chained substitutions with a single pass over the original template and adds an activation test that checks literal values for both the environment path and the prompt."
+      },
+      {
+        "kind": "issue",
+        "number": 23058,
+        "title": "Bash prompt values can change meaning under older compatibility modes (POSIX)",
+        "url": "https://github.com/astral-sh/uv/issues/23058",
+        "state": "open",
+        "reason": "This tracks shell interpretation of activation prompts and overlaps with the explicit --prompt example. That behavior does not require a template marker or a second replacement pass."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23155,
+        "title": "fix(virtualenv): keep activation prompts literal",
+        "url": "https://github.com/astral-sh/uv/pull/23155",
+        "state": "open",
+        "reason": "This proposes quoting explicit prompts as shell literals for astral-sh/uv#23058 and tests sourcing with a custom prompt. It does not stop later template substitutions from rewriting an inserted path."
+      }
+    ],
+    "search_scope": "Used authenticated GitHub CLI searches across open and closed issues and open, closed, and merged PRs for the exact marker, CVE and advisory IDs, and for path and prompt activation symptoms separately. Broadened to activator templates, substitution order, shell quoting, prompt expansion, and path escaping without the reported platform or Python version. Checked candidate comments and cross-references, the repository PR listing, the 0.13.7 tag, and activation-file history; the listing and history supplemented rate-limited search calls. Ruled out astral-sh/uv#23059 and astral-sh/uv#23376 as canonical matches because they focus on prompt expansion by the shell, not template rewriting. The merged astral-sh/uv#23152 fixes apostrophes in Windows batch paths, not this defect."
+  },
+  "type": "duplicate",
+  "type_reason": "The open astral-sh/uv#23278 predates this report and covers the same underlying template defect: a later replacement can rewrite text inserted by an earlier one. It is not a response to this issue or a previously shipped fix. The explicit prompt's separate shell-quoting defect is already tracked in astral-sh/uv#23058.",
+  "summary": "astral-sh/uv#23278 already tracks activation-template substitutions rewriting inserted values. The explicit prompt case also overlaps with the separate shell-quoting bug in astral-sh/uv#23058 and its proposed fix in astral-sh/uv#23155.",
+  "draft_response": "Please follow astral-sh/uv#23278 for the template-rendering fix. It makes the renderer replace only placeholders in the original template, so a marker in your path or prompt stays literal. uv 0.13.7 does not use `__VIRTUAL_NAME__` as a marker, so the source does not confirm that exact path example. Your `--prompt` example also overlaps with astral-sh/uv#23058: the generated script can interpret the prompt as shell syntax even without a template marker."
+}
