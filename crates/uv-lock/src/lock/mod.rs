@@ -2432,6 +2432,15 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
     }
 }
 
+/// Where to look for a direct dependency of a project or workspace.
+#[derive(Debug, Clone, Copy)]
+pub enum DependencyScope<'a> {
+    /// A dependency in the named group, including requirements from included groups.
+    Group(&'a GroupName),
+    /// A direct production dependency of the project.
+    Production,
+}
+
 /// Direct dependency selections from a [`Lock`] for a named package.
 ///
 /// The dependency can come from the lock manifest, a dependency group, the production packages,
@@ -2444,19 +2453,17 @@ pub struct DependencySelection<'lock> {
 }
 
 impl<'lock> DependencySelection<'lock> {
+    /// Select the dependency in the given scope for this marker environment.
+    pub fn in_scope(&self, scope: DependencyScope<'_>) -> Option<&SelectedDependency<'lock>> {
+        match scope {
+            DependencyScope::Group(group) => self.groups.get(group),
+            DependencyScope::Production => self.production.as_ref(),
+        }
+    }
+
     /// Returns the direct requirement selection from the lock manifest.
     pub fn root(&self) -> Option<&SelectedDependency<'lock>> {
         self.root.as_ref()
-    }
-
-    /// Returns the production dependency selection.
-    pub fn production(&self) -> Option<&SelectedDependency<'lock>> {
-        self.production.as_ref()
-    }
-
-    /// Returns the dependency selection for the given dependency group.
-    pub fn group(&self, group: &GroupName) -> Option<&SelectedDependency<'lock>> {
-        self.groups.get(group)
     }
 }
 
@@ -3305,45 +3312,55 @@ impl Lock {
         &self.manifest.dependency_groups
     }
 
-    /// Whether a target declares a dependency in production or the given group, before
-    /// selecting a marker environment. A non-project workspace only contributes the group.
+    /// Whether a direct dependency is declared in this scope before selecting Python.
     pub fn declares_dependency(
         &self,
         project_name: Option<&PackageName>,
         dependency_name: &PackageName,
-        group: &GroupName,
+        scope: DependencyScope<'_>,
     ) -> Result<bool, String> {
         let declares = |requirement: &Requirement| {
             &requirement.name == dependency_name
                 && requirement.marker.evaluate_optional_environment(None, &[])
         };
         let Some(project_name) = project_name else {
-            return Ok(self
-                .dependency_groups()
-                .get(group)
-                .into_iter()
-                .flatten()
-                .any(declares));
+            return Ok(match scope {
+                DependencyScope::Group(group) => self
+                    .dependency_groups()
+                    .get(group)
+                    .into_iter()
+                    .flatten()
+                    .any(declares),
+                DependencyScope::Production => false,
+            });
         };
         let Some(project) = self.find_by_name(project_name)? else {
             return Ok(false);
         };
-        // A requirement outside the supported environments can be present only in metadata.
-        let mut requirements = project.metadata.requires_dist.iter().chain(
-            project
-                .metadata
-                .dependency_groups
-                .get(group)
-                .into_iter()
-                .flatten(),
-        );
-        // Locks without declaration metadata can still supply a resolved dependency.
-        let mut dependencies = project
-            .dependencies
-            .iter()
-            .chain(project.dependency_groups.get(group).into_iter().flatten());
-        Ok(requirements.any(declares)
-            || dependencies.any(|dependency| dependency.package_name() == dependency_name))
+        // Requirements outside the supported environments may appear only in metadata.
+        // A resolved edge also identifies the dependency in the absence of metadata.
+        let resolved = |dependency: &Dependency| dependency.package_name() == dependency_name;
+        Ok(match scope {
+            DependencyScope::Group(group) => {
+                project
+                    .metadata
+                    .dependency_groups
+                    .get(group)
+                    .into_iter()
+                    .flatten()
+                    .any(declares)
+                    || project
+                        .dependency_groups
+                        .get(group)
+                        .into_iter()
+                        .flatten()
+                        .any(resolved)
+            }
+            DependencyScope::Production => {
+                project.metadata.requires_dist.iter().any(declares)
+                    || project.dependencies.iter().any(resolved)
+            }
+        })
     }
 
     /// Returns the environment-specific direct dependency selections for a lock target.
@@ -11141,13 +11158,16 @@ source = { registry = "https://example.com/simple" }
         let selection = lock
             .dependency_selection(Some(&project_name), &dependency_name, &marker_environment)
             .expect("unique project package");
-        let preferred = selection.group(&dev).expect("dev dependency").package();
+        let preferred = selection
+            .in_scope(super::DependencyScope::Group(&dev))
+            .expect("dev dependency")
+            .package();
         let included = selection
-            .group(&typing)
+            .in_scope(super::DependencyScope::Group(&typing))
             .expect("typing dependency")
             .package();
         let production = selection
-            .production()
+            .in_scope(super::DependencyScope::Production)
             .expect("production dependency")
             .package();
 
@@ -11182,7 +11202,11 @@ source = { registry = "https://example.com/simple" }
         let root = selection.root().expect("root dependency");
 
         assert_eq!(root.package().name(), &dependency_name);
-        assert!(selection.production().is_none());
+        assert!(
+            selection
+                .in_scope(super::DependencyScope::Production)
+                .is_none()
+        );
     }
 
     #[test]

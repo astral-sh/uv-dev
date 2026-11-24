@@ -1363,7 +1363,9 @@ provides-extras = ["cli"]
                 DARWIN_MARKERS.markers(),
             )
             .expect("unique dependency selection");
-        let dependency = selection.group(&group).expect("group dependency");
+        let dependency = selection
+            .in_scope(crate::DependencyScope::Group(&group))
+            .expect("group dependency");
 
         lock.to_resolution_from_dependency(
             Path::new("."),

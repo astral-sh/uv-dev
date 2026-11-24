@@ -2140,6 +2140,74 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
     Ok(())
 }
 
+/// Reuse the root checker when a selected member brings it into the project environment.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn check_uses_root_checker_outside_selected_packages() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ty==0.0.16"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    write_workspace_member(&context, "a", "")?;
+    write_workspace_member(&context, "b", "")?;
+
+    let result = context
+        .check()
+        .args(["--package", "a", "--package", "b", "--show-version"])
+        .assert()
+        .success();
+    assert!(String::from_utf8_lossy(&result.get_output().stderr).contains("Using ty 0.0.16"));
+    context.assert_not_installed("ty");
+
+    context
+        .temp_dir
+        .child("packages/a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["root"]
+
+        [tool.uv.sources]
+        root = { workspace = true }
+    "#})?;
+    context
+        .sync()
+        .args(["--package", "a", "--package", "b"])
+        .assert()
+        .success();
+    // Only the synchronized environment can supply the checker with an empty, offline cache.
+    context
+        .check()
+        .args([
+            "--package",
+            "a",
+            "--package",
+            "b",
+            "--show-version",
+            "--frozen",
+            "--no-cache",
+            "--offline",
+        ])
+        .assert()
+        .success();
+    Ok(())
+}
+
 /// Install the dependencies of a virtual workspace member when caching a locked checker.
 #[test]
 #[cfg(feature = "test-pypi")]
