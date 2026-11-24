@@ -40,6 +40,14 @@ locally and in GitHub Actions. Locally it would load an uncommitted `.env` file;
 secrets. The flag name is negotiable; the requirement is to continue when the file is absent.
 The shebang illustrates the requested behavior; no failing CI invocation was provided.
 
+## CI workaround
+
+BurntSushi suggested running `touch .env` in the CI job before launching the script. With the
+existing `--env-file .env` in the shared shebang, creating an empty file at the path uv reads
+avoids the missing-file error without adding dotenv values, so the script can use variables
+supplied by CI. A script that checks whether `.env` exists will now find it, so this is not
+equivalent to optional loading. The reporter has not confirmed the workaround in their workflow.
+
 ## Related
 
 - astral-sh/uv#16672 (open) — “Do not error when no environment file is found.” Canonical discussion for best-effort dotenv loading in `uv run`. The report uses `UV_ENV_FILE`; a maintainer suggested a separate default-file setting rather than weakening explicitly requested files. The broader dotenv opt-in discussion points here for missing-file handling.
