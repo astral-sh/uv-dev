@@ -10665,7 +10665,7 @@ fn sync_scripts_without_build_system() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+    warning: Skipping installation of entry point `entry` (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
 
@@ -10711,7 +10711,7 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+    warning: Skipping installation of entry point `entry` (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
 
@@ -10759,7 +10759,7 @@ fn sync_scripts_workspace_member_not_packaged() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    warning: Skipping installation of entry points (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+    warning: Skipping installation of entry point `member` (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
 
@@ -10923,7 +10923,7 @@ fn sync_scripts_required_workspace_member_not_packaged() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    warning: Skipping installation of entry points (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+    warning: Skipping installation of entry point `member-entry` (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
 
