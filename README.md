@@ -16,6 +16,8 @@ You’re hitting the same package-name parser panic tracked in astral-sh/uv#1310
 
 The released 0.9.2 source and the pre-fix uv parser both check the final punctuation only at end of input, then assume package-name validation succeeds. The existing issue and fix cover the same bug. The affected standalone crate was published before the uv fix and never received it in a release, so this is not a regression.
 
+The duplicate classification links the shared parser bug, not the two release tracks. As the uv project member noted, the reported crate is not `uv-pep508`: the standalone `pep508_rs` package comes from `konstin/pep508_rs`. astral-sh/uv#3538 documents the earlier vendoring relationship and separate codebases. The fix in uv does not change the standalone release; a fix for that crate would belong in its own repository.
+
 ## Related
 
 - astral-sh/uv#13102 (closed) — `uv pip install` panicked with `InvalidNameError("wheel-")` when PowerShell passed `wheel-*.whl` literally. The shell and suffix differ, but the parser reached the same invalid name token followed by more input. The maintainer linked the parser fix.
@@ -23,13 +25,13 @@ The released 0.9.2 source and the pre-fix uv parser both check the final punctua
 
 ## Downstream impact
 
-- The reporter found malformed entries in public `requirements.txt` files, `tensorflow-==2.15.0` and `djangorestframework-==.14.0`. Both reportedly trigger `InvalidNameError` panics in `pep508_rs` 0.9.2, so the trigger is not limited to synthetic or fuzzed inputs.
+- The reporter attributes `tensorflow-==2.15.0` and `djangorestframework-==.14.0` to public `requirements.txt` files and reports that both panic with `InvalidNameError` in `pep508_rs` 0.9.2. These are malformed requirements, not valid package names or evidence that valid requirements panic. The bug is that malformed input panics instead of returning a parse error. No source files were linked in the discussion.
 - The reporter also observed `maturin build` aborting with Maturin 1.10.2 when `pyproject.toml` contained `dependencies = ["tensorflow-==2.15.0"]`. The `PyO3/maturin` `v1.10.2` `Cargo.lock` confirms that release resolves `pep508_rs` to 0.9.2; the build failure was not independently reproduced.
 - The reporter observed a normal parse error with uv 0.13.7. That is consistent with the existing uv fix and does not indicate a regression in uv.
 
 ## Supporting evidence
 
-- The published `pep508_rs` 0.9.2 source (`src/lib.rs`, `parse_name`) rejects `-` as the last character only when `cursor.peek().is_none()`. With `D-==1`, the `=` ends the name token without triggering that check. `PackageName::new` rejects `D-`, and the subsequent `expect` panics. The same check does run for bare `D-`.
+- A uv project member disputed the panic based on the `FromStr` docs. Those docs describe the `Result` return type, not what happens on this path. In the published `pep508_rs` 0.9.2 source, `Requirement::from_str` calls `parse_pep508_requirement`, which calls `parse_name` before parsing the version specifier (`src/lib.rs`). The `=` in `D-==1` ends the name token without triggering the end-of-input punctuation check. `PackageName::new` rejects `D-`, and the subsequent `expect` panics instead of returning `Err(Pep508Error)`. For bare `D-`, the end-of-input check does return that error. This was confirmed by source inspection, not an independent runtime reproduction.
 - The crates.io index records `pep508_rs` 0.9.2 on January 2, 2025, with no newer release. The uv fix merged on April 25, 2025, and the uv 0.6.17 release notes list it. The separately published `uv-pep508` crate includes the fix from 0.0.1; its Rust API is internal and unstable under `docs/reference/policies/versioning.md`. The standalone project documents that it is no longer actively maintained in konstin/pep508_rs#25.
 
 ## Search scope
