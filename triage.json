@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23340,
+        "title": "Arbitrary external directory deletion during PEP 832 .venv redirect replacement",
+        "url": "https://github.com/astral-sh/uv/issues/23340",
+        "state": "closed",
+        "reason": "The parent report included the same empty-file failure without preview. A maintainer confirmed that failure was a bug but said rebuilding an existing referenced environment was intentional. The closed replacement discussion did not resolve the empty-file bug."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23387,
+        "title": "Skip empty `.venv` files during Python discovery by default",
+        "url": "https://github.com/astral-sh/uv/pull/23387",
+        "state": "open",
+        "reason": "The patch lets Python discovery skip empty or non-UTF-8 `.venv` files without preview. For `uv sync`, it changes the error for an empty project-root `.venv` to say that the path is a file and leaves it in place. It still parses redirects and does not change validation for a missing target or `pyvenv.cfg`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21822,
+        "title": "Add preview support for consuming PEP 832 redirect files",
+        "url": "https://github.com/astral-sh/uv/pull/21822",
+        "state": "merged",
+        "reason": "Introduced redirect support in uv 0.13.9, released November 17, 2026. Its implementation and tests show that valid redirects are followed with an experimental warning when the flag is absent. This introduced the reported behavior; it did not fix it."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23363,
+        "title": "Preserve targets when replacing venv redirects",
+        "url": "https://github.com/astral-sh/uv/pull/23363",
+        "state": "closed",
+        "reason": "A PR comment identifies the same early return for dangling targets, but the patch addressed replacement of an existing, incompatible external environment. It closed without merging and did not change invalid redirect handling."
+      }
+    ],
+    "search_scope": "Used authenticated `gh` to search open and closed issues and open, closed, and merged pull requests in astral-sh/uv. Literal searches covered `read_venv_redirect`, the empty-file and missing-`pyvenv.cfg` diagnostics, and `venv-redirect-files`. Conceptual searches treated empty or non-directory `.venv` files and dangling targets separately, using project environment, Python discovery, and linked-environment terminology. Fix-oriented searches covered PEP 832 and redirect validation, cross-checked recent PR listings, and followed comments, references, and diffs against the 0.13.9 release. Ruled out astral-sh/uv#8092 and its fix astral-sh/uv#9075 because they concern `uv init` finding a parent `.venv` directory, and astral-sh/uv#23216 because it fixes stale interpreter metadata rather than missing redirect targets."
+  },
+  "type": "bug",
+  "type_reason": "Source inspection shows that project environment resolution returns both the empty-file error and the missing-target error for non-cache redirects before the preview-warning check. A maintainer confirmed the empty-file behavior is a bug in astral-sh/uv#23340. That closed report concerns a separate replacement question, and astral-sh/uv#23387 only partially overlaps: it changes the empty-file diagnostic for project commands but leaves dangling redirects unchanged. Neither supersedes this report.",
+  "summary": "In uv 0.13.9, `uv sync` and project-mode `uv run` can reject an empty or dangling `.venv` redirect without preview flags. astral-sh/uv#23340 confirms the empty-file bug, astral-sh/uv#21822 introduced the behavior, and astral-sh/uv#23387 proposes a partial change that leaves dangling targets unchanged.",
+  "draft_response": "Confirmed: `uv sync` and project-mode `uv run` can report a redirect error before checking the preview setting. Valid redirects already work without the flag; the flag suppresses their experimental warning. astral-sh/uv#23387 proposes reporting an empty project-root `.venv` as a file blocking the environment directory, but it leaves dangling redirects unchanged. Let's track the project-command behavior here. If the `.venv` file is unintended, move it aside and rerun `uv sync`."
+}
