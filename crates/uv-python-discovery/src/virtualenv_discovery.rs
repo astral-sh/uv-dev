@@ -118,17 +118,28 @@ pub(crate) fn virtualenv_from_working_dir() -> Result<Option<PathBuf>, Error> {
             Err(err) => return Err(err.into()),
         };
         let redirect = dot_venv.is_file();
+        let experimental_redirect =
+            redirect && !uv_preview::is_enabled(PreviewFeature::VenvRedirectFiles);
         let root = if redirect {
-            read_venv_redirect(&dot_venv)?
+            match read_venv_redirect(&dot_venv) {
+                Ok(target) => target,
+                Err(err) if err.kind() == io::ErrorKind::InvalidData && experimental_redirect => {
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            }
         } else if metadata.is_dir() || metadata.is_symlink() {
             dot_venv
         } else {
             continue;
         };
         if !uv_fs::is_virtualenv_base(&root) {
+            if experimental_redirect {
+                continue;
+            }
             return Err(Error::MissingPyVenvCfg(root));
         }
-        if redirect && !uv_preview::is_enabled(PreviewFeature::VenvRedirectFiles) {
+        if experimental_redirect {
             warn_user_once!(
                 "Using `.venv` redirect files is experimental and may change without warning. Pass `--preview-features venv-redirect-files` to disable this warning."
             );

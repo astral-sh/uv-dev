@@ -614,13 +614,12 @@ fn sync_recovers_from_centralized_environment_path_file() -> Result<()> {
     write_project(&context, ">=3.12", &[])?;
     let environment = context.temp_dir.child(".venv");
 
-    // An arbitrary `.venv` file is preserved, but is interpreted as a redirect without preview
-    // enabled, resulting in a misleading missing-target error (astral-sh/uv#23386).
+    // An arbitrary `.venv` file is preserved and blocks creating a local environment.
     environment.write_str("user-data")?;
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Project virtual environment directory `[TEMP_DIR]/user-data` cannot be used because no `pyvenv.cfg` file was found
+    error: Project virtual environment directory `[VENV]/` cannot be used because expected directory but found a file
     ");
     assert_eq!(context.read(".venv"), "user-data");
 
@@ -816,8 +815,8 @@ fn sync_invalid_venv_redirect_file() -> Result<()> {
     Ok(())
 }
 
-/// An empty `.venv` file is incorrectly parsed as a redirect without preview enabled, so `uv run`
-/// reports a redirect-specific error instead of a regular-file conflict (astral-sh/uv#23386).
+/// Without preview, an empty `.venv` file blocks creating the project environment but is not
+/// reported as a broken redirect.
 #[test]
 fn run_empty_venv_redirect_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -827,8 +826,9 @@ fn run_empty_venv_redirect_file() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Virtual environment redirect file at `.venv` is empty
+    error: Project virtual environment directory `[VENV]/` cannot be used because expected directory but found a file
     ");
+    assert_eq!(context.read(".venv"), "");
     Ok(())
 }
 
