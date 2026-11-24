@@ -892,7 +892,8 @@ fn python_find_venv_redirect_file() -> Result<()> {
     let child = context.temp_dir.child("child");
     child.create_dir_all()?;
     context.venv().arg("other").assert().success();
-    child.child(".venv").write_str("../other\n")?;
+    let child_redirect = child.child(".venv");
+    child_redirect.write_str("../other\n")?;
     uv_snapshot!(context.filters(), context.python_find()
         .current_dir(&child).arg("--preview-features").arg("venv-redirect-files"), @"
     exit_code: 0 (success)
@@ -900,20 +901,34 @@ fn python_find_venv_redirect_file() -> Result<()> {
     [TEMP_DIR]/other/[BIN]/[PYTHON]
     ");
 
-    // A missing target is ignored when searching for Python.
-    redirect.write_str("missing\n")?;
-    uv_snapshot!(context.filters(), context.python_find(), @"
+    // Invalid redirects do not hide the parent environment without preview.
+    child_redirect.write_str("")?;
+    uv_snapshot!(context.filters(), context.python_find().current_dir(&child), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [PYTHON-3.12]
+    [TEMP_DIR]/external/[BIN]/[PYTHON]
+
+    ----- stderr -----
+    warning: Using `.venv` redirect files is experimental and may change without warning. Pass `--preview-features venv-redirect-files` to disable this warning.
     ");
 
-    // A missing target is an error when a virtual environment is required.
+    child_redirect.write_str("missing\n")?;
+    uv_snapshot!(context.filters(), context.python_find().current_dir(&child), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/external/[BIN]/[PYTHON]
+
+    ----- stderr -----
+    warning: Using `.venv` redirect files is experimental and may change without warning. Pass `--preview-features venv-redirect-files` to disable this warning.
+    ");
+
+    // With preview, a missing target is an error when a virtual environment is required.
     uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").arg("anyio")
+        .current_dir(&child).arg("--preview-features").arg("venv-redirect-files")
         .env_remove(EnvVars::VIRTUAL_ENV), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Broken virtual environment `[TEMP_DIR]/missing`: missing `pyvenv.cfg`
+    error: Broken virtual environment `[TEMP_DIR]/child/missing`: missing `pyvenv.cfg`
     ");
     Ok(())
 }
