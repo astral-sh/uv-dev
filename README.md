@@ -18,6 +18,8 @@ Please follow astral-sh/uv#23278 for the template-rendering fix. It makes the re
 
 The open astral-sh/uv#23278 predates this report and covers the same underlying template defect: a later replacement can rewrite text inserted by an earlier one. It is not a response to this issue or a previously shipped fix. The explicit prompt's separate shell-quoting defect is already tracked in astral-sh/uv#23058.
 
+A uv maintainer confirmed that this report is outside uv's security scope and will follow ordinary issue triage. The rationale is that control over process environment variables can already permit code execution. This decision does not confirm either reproduction or change the duplicate classification.
+
 ## Related
 
 - astral-sh/uv#23278 — **Open.** Canonical for the template defect. Replaces the chained substitutions with a single pass over the original template and adds an activation test that checks literal values for both the environment path and the prompt.
