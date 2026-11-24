@@ -765,7 +765,7 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload::Target, CachedClientError<CallBackError>> {
-        let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
+        let mut retry_state = RetryState::start(self.uncached().retry_policy());
         loop {
             let fresh_req = req.try_clone().expect("HTTP request must be cloneable");
             let result = self
@@ -786,7 +786,7 @@ impl CachedClient {
                 Err(err)
                     if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
                 {
-                    retry_state.sleep_backoff(backoff).await;
+                    RetryState::sleep_backoff(SafeUrl::ref_cast(req.url()), backoff).await;
                 }
                 Err(err) => return Err(err.with_retries(retry_state.total_retries())),
             }
@@ -809,7 +809,7 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
     ) -> Result<Payload, CachedClientError<CallBackError>> {
-        let mut retry_state = RetryState::start(self.uncached().retry_policy(), req.url().clone());
+        let mut retry_state = RetryState::start(self.uncached().retry_policy());
         loop {
             let fresh_req = req.try_clone().expect("HTTP request must be cloneable");
             let result = self
@@ -830,7 +830,7 @@ impl CachedClient {
                 Err(err)
                     if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
                 {
-                    retry_state.sleep_backoff(backoff).await;
+                    RetryState::sleep_backoff(SafeUrl::ref_cast(req.url()), backoff).await;
                 }
                 Err(err) => return Err(err.with_retries(retry_state.total_retries())),
             }

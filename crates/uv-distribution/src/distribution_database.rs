@@ -1366,7 +1366,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 let Some(backoff) = retry_state.should_retry(&err, 0) else {
                     return Err(err);
                 };
-                retry_state.sleep_backoff(backoff).await;
+                RetryState::sleep_backoff(url, backoff).await;
             }
 
             // Finally our resumption, which is a range request.

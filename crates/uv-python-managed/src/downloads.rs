@@ -452,9 +452,7 @@ impl ManagedPythonDownload {
 
     /// Download and extract a Python distribution, retrying on failure.
     ///
-    /// For CPython without a user-configured mirror, the default Astral mirror is tried first.
-    /// Each attempt tries all URLs in sequence without backoff between them; backoff is only
-    /// applied after all URLs have been exhausted.
+    /// Use the URLs from [`Self::download_urls`] with the retry policy in [`fetch_with_url_fallback`].
     #[instrument(skip_all, fields(download = % self.key()))]
     pub async fn fetch_with_retry(
         &self,
@@ -788,11 +786,9 @@ impl ManagedPythonDownload {
 
     /// Return the ordered list of [`SafeUrl`]s to try when downloading the distribution.
     ///
-    /// For CPython without a user-configured mirror, the default Astral mirror is listed first,
-    /// followed by the canonical GitHub URL as a fallback.
-    ///
-    /// For all other cases (user mirror explicitly set, PyPy, GraalPy, Pyodide), a single URL
-    /// is returned with no fallback.
+    /// By default, CPython releases from `python-build-standalone` use the Astral mirror first
+    /// and the canonical GitHub URL as a fallback. Other distributions and explicitly configured
+    /// mirrors use a single URL.
     pub fn download_urls(&self, mirrors: PythonDownloadMirrors<'_>) -> Result<Vec<SafeUrl>, Error> {
         let custom_astral_mirror = astral_mirror_url_from_env();
         self.download_urls_with_astral_mirror(mirrors, custom_astral_mirror.as_deref())

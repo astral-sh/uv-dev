@@ -700,7 +700,7 @@ impl<'a> PublishSession<'a> {
         let mut n_past_redirections = 0;
         let max_redirects = DEFAULT_MAX_REDIRECTS;
         let mut current_registry = self.publish_url.clone();
-        let mut retry_state = RetryState::start(self.retry_policy, self.publish_url.clone());
+        let mut retry_state = RetryState::start(self.retry_policy);
 
         loop {
             let (request, idx) = self
@@ -800,7 +800,7 @@ impl<'a> PublishSession<'a> {
                             0
                         };
                     if let Some(backoff) = retry_state.should_retry(&err, middleware_retries) {
-                        retry_state.sleep_backoff(backoff).await;
+                        RetryState::sleep_backoff(&current_registry, backoff).await;
                         continue;
                     }
                     return Err(PublishError::PublishSend(

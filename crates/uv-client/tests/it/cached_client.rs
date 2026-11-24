@@ -620,8 +620,8 @@ async fn send_counts_middleware_retries() -> Result<()> {
             .no_retry_delay(true)
             .build()?;
         let url = server.uri().parse()?;
-        let request = client.for_host(&url).get(url.clone());
-        let mut retry_state = RetryState::start(client.retry_policy(), url);
+        let request = client.for_host(&url).get(url);
+        let mut retry_state = RetryState::start(client.retry_policy());
         let result = retry_state.send(request).await;
         assert_eq!(result.is_err(), network_error);
 
