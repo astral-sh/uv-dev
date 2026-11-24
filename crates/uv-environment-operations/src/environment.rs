@@ -1,12 +1,14 @@
+mod locked_tool;
+pub use locked_tool::{LockedTool, LockedToolInstaller};
+
 use tracing::debug;
 
-use crate::malware::MalwareCheckContext;
 use crate::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
     sync_environment,
 };
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, HashCheckingMode, Modifications, TargetTriple};
+use uv_configuration::{Concurrency, Constraints, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
 use uv_install_operations::loggers::InstallLogger;
 use uv_resolve_operations::loggers::ResolveLogger;
@@ -105,58 +107,6 @@ impl CachedEnvironment {
             HashStrategy::default(),
             build_constraints,
             &interpreter,
-            settings,
-            client_builder,
-            state,
-            install,
-            installer_metadata,
-            concurrency,
-            cache,
-            printer,
-            preview,
-        )
-        .await
-    }
-
-    /// Get or create a [`CachedEnvironment`] from a lock-backed [`Resolution`].
-    ///
-    /// This method checks `resolution` for malware when enabled and verifies its recorded hashes.
-    /// Both checks run before cache lookup. `interpreter` must be the base interpreter for which
-    /// `resolution` was produced.
-    pub(crate) async fn from_locked_resolution(
-        resolution: &Resolution,
-        build_constraints: Constraints,
-        interpreter: &Interpreter,
-        settings: &ResolverInstallerSettings,
-        malware_context: &mut MalwareCheckContext<'_>,
-        client_builder: &BaseClientBuilder<'_>,
-        state: &PlatformState,
-        install: Box<dyn InstallLogger>,
-        installer_metadata: bool,
-        concurrency: &Concurrency,
-        cache: &Cache,
-        printer: Printer,
-        preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
-        let malware_check_client_builder = client_builder
-            .clone()
-            .keyring(settings.resolver.keyring_provider);
-        crate::malware::check_resolution_malware(
-            resolution,
-            &malware_check_client_builder,
-            concurrency,
-            malware_context,
-            cache,
-            preview,
-        )
-        .await?;
-
-        let hash_strategy = HashStrategy::from_resolution(resolution, HashCheckingMode::Verify)?;
-        Self::from_resolution(
-            resolution,
-            hash_strategy,
-            build_constraints,
-            interpreter,
             settings,
             client_builder,
             state,
@@ -309,7 +259,7 @@ impl CachedEnvironment {
     ///
     /// When caching, always use the base interpreter, rather than that of the virtual
     /// environment.
-    pub(crate) fn base_interpreter(
+    fn base_interpreter(
         interpreter: &Interpreter,
         cache: &Cache,
     ) -> Result<Interpreter, uv_python_discovery::Error> {
