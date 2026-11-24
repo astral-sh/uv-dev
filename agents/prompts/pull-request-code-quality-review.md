@@ -81,11 +81,10 @@ sequence from the same starting state at the merge base (`base` in `revisions.js
 Report newly broken behavior, new exposure to an existing defect, and incomplete intended fixes,
 even in unchanged code. Explain what changes for the user. If the defect exists on the base, say so.
 
-When a PR tightens validation, check every path that performs the affected operation. For example, a
-ZIP extraction check applies to both streaming and seekable readers. Installing a previously
-extracted wheel from cache skips that operation. Omit findings based solely on a cache entry
-predating the check. Report reuse if the change makes older entries incompatible, exposes users to a
-new failure, or violates a guarantee that also applies to cache hits.
+When a PR tightens validation, check every path that performs the affected operation. Omit findings
+based solely on a cache entry predating the check. Report reuse if the change makes older entries
+incompatible, exposes users to a new failure, or violates a guarantee that also applies to cache
+hits.
 
 Once you've investigated the change, decide which findings to return before assigning priorities.
 
