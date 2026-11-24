@@ -1,0 +1,10 @@
+{
+  "outcome": "fixed",
+  "summary": "Without preview enabled, empty or dangling `.venv` files produced misleading redirect errors and could hide a usable parent environment. Project commands now report a regular-file conflict without altering the file, and Python discovery skips invalid redirects and continues searching. The updated regression tests cover both behaviors while preserving valid redirects and explicit preview diagnostics.",
+  "validation": [
+    "Both parent regressions passed with the original diagnostics and failed as expected after updating their assertions, before the production fix.",
+    "All 10 focused debug-profile integration tests passed, including the parent regressions, Python discovery, and centralized environment round trips.",
+    "`cargo +stable fmt --all -- --check` and `git diff --check` passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3167"
+}
