@@ -6,15 +6,49 @@ Classification: bug
 
 ## Summary
 
-On uv 0.13.9, `uv sync` and project-mode `uv run` can fail without preview flags if the project's `.venv` is an empty regular file or points to a missing or invalid environment outside uv's centralized cache. The report gives an empty-file `uv sync` reproduction on Windows and describes the dangling-target case. astral-sh/uv#23340 confirms the empty-file bug, astral-sh/uv#21822 introduced the redirect behavior, and astral-sh/uv#23387 proposes a partial change that leaves dangling targets unchanged.
+On uv 0.13.9, `uv sync` and project-mode `uv run` produce redirect-specific errors without preview enabled when the project's `.venv` is an empty regular file or points to a missing environment outside uv's centralized cache. The reporter expects uv not to parse or validate redirects when preview is off. The report demonstrates the empty-file case on Windows; both cases reproduced on Linux. Version 0.13.8 also rejects both files, but reports that it expected a directory rather than interpreting them as redirects.
 
 ## Draft response
 
-Confirmed: `uv sync` and project-mode `uv run` can report a redirect error before checking the preview setting. Valid redirects already work without the flag; the flag suppresses their experimental warning. astral-sh/uv#23387 proposes reporting an empty project-root `.venv` as a file blocking the environment directory, but it leaves dangling redirects unchanged. Let's track the project-command behavior here. If the `.venv` file is unintended, move it aside and rerun `uv sync`.
+I reproduced both errors without preview enabled. Version 0.13.8 rejected the same files because `.venv` wasn't a directory, so the change is in how uv interprets and reports the files, not whether they prevent sync. Valid redirects work without opting in and emit an experimental warning. astral-sh/uv#23387 proposes a clearer error for an empty file without preview but leaves dangling redirects unchanged. If the `.venv` file is unintended, move it aside and rerun `uv sync`.
 
 ## Classification
 
 This is a bug in how project commands handle invalid `.venv` files, not evidence that all redirect support was intended to be opt-in. The maintainer explicitly confirmed the empty-file failure in astral-sh/uv#23340, which was closed over the separate question of replacing the referenced environment. The open astral-sh/uv#23387 overlaps on empty files but does not cover the full project-command report: it changes the error for empty files and does not change missing-target validation. This issue is the place to track the project behavior, not a duplicate of the closed parent or the partial PR.
+
+## Reproduction
+
+**Outcome: reproducible.** The reporter used Windows 11 x86_64, uv 0.13.9 (6b2d39dcc), and Python 3.12.16. The reproduction used the installed `uv` 0.13.9 from `PATH` on Ubuntu 24.04.5 LTS (Linux x86_64) with CPython 3.12.3 at `/usr/bin/python3`. The project has no dependencies or workspace configuration. The runs used an isolated environment, home, and cache, with no preview flags or preview-related environment variables.
+
+In a clean shell with no uv configuration or preview overrides, create the fixture and run:
+
+```sh
+work=$(mktemp -d)
+mkdir "$work/project"
+cd "$work/project"
+export UV_CACHE_DIR="$work/cache" UV_NO_CONFIG=1 UV_OFFLINE=1
+export UV_PYTHON=/usr/bin/python3 UV_PYTHON_DOWNLOADS=never
+printf '[project]\nname = "demo"\nversion = "0.1.0"\n' > pyproject.toml
+
+: > .venv
+uv sync
+uv run python --version
+
+printf 'missing\n' > .venv
+uv sync
+uv run python --version
+```
+
+- With an empty `.venv`, both commands exit 2: ``error: Virtual environment redirect file at `.venv` is empty``.
+- With `.venv` containing `missing` and no such target outside the uv cache, both commands exit 2 with ``cannot be used because no `pyvenv.cfg` file was found`` for the resolved `missing` directory. Neither failure emits the experimental warning.
+- After removing the fixture's `.venv` file, `uv sync` exits 0 and creates the environment directory. Moving that directory to `external` and writing `external` to `.venv` makes `uv sync` exit 0 with the experimental redirect warning, still without preview flags.
+- The official uv 0.13.8 Linux binary was tested against the same fixture. `uv sync` exits 2 for both file contents with `expected directory but found a file`, naming `.venv` rather than the redirect target. Disabling redirect parsing would not by itself make sync succeed while a regular file occupies that path.
+
+Existing coverage, inspected but not run:
+
+- `crates/uv/tests/sync/centralized_project_envs.rs:677`, `sync_venv_redirect_file`: creates a valid external venv and asserts that plain sync follows the redirect, leaves it in place, and warns. It also asserts success without the warning when the redirect preview feature is enabled.
+- `crates/uv/tests/sync/centralized_project_envs.rs:791`, `sync_invalid_venv_redirect_file`: writes `missing` into `.venv`, asserts that locking succeeds, and snapshots the missing-`pyvenv.cfg` sync error **with** preview enabled. It does not cover the no-preview variant.
+- `crates/uv-fs/src/lib.rs:1176`, `read_venv_redirect_rejects_empty_path`: checks that the parser returns `InvalidData` for empty and newline-only contents; it does not exercise preview settings or project commands.
 
 ## Related
 
@@ -26,8 +60,7 @@ This is a bug in how project commands handle invalid `.venv` files, not evidence
 ## Supporting evidence
 
 - `crates/uv-fs/src/lib.rs:973`: `read_venv_redirect` returns `InvalidData` for an empty file. `resolve_project_env` in `crates/uv-environment-operations/src/lib.rs:444` propagates that error and separately rejects a non-cache target with no `pyvenv.cfg`; both returns precede the preview-warning check at line 474. Pruned centralized-cache targets take a different branch.
-- `crates/uv-project-commands/src/sync.rs:214` and `crates/uv-project-commands/src/run.rs:659` both call `ProjectEnvironment::get_or_init`. The shared resolver is not Windows-specific. These findings are based on source and test inspection, not a new runtime reproduction.
-- `crates/uv/tests/sync/centralized_project_envs.rs:677` covers a valid redirect with no preview flags and expects the warning. The missing-target case at line 791 asserts the `pyvenv.cfg` error with preview enabled; it does not test that case without preview. A regular file at the project environment path still blocks creating a directory there, even if it is not reported as an invalid redirect.
+- `crates/uv-project-commands/src/sync.rs:214` and `crates/uv-project-commands/src/run.rs:659` both call `ProjectEnvironment::get_or_init`, consistent with the shared diagnostic observed on Linux.
 
 ## Search scope
 

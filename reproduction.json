@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed with uv 0.13.9 on Ubuntu 24.04.5 LTS (x86_64) and CPython 3.12.3. In a temporary directory, create a dependency-free pyproject.toml with project name demo and version 0.1.0. With no preview flags or settings, run `: > .venv`, then `uv sync` and `uv run python --version`: both exit 2 with `Virtual environment redirect file at .venv is empty`. Replace the file with `printf 'missing\\n' > .venv`, leaving the target absent, and repeat: both exit 2 because no `pyvenv.cfg` was found. Neither failure emits a preview warning. Without the file, sync succeeds; a valid redirect also succeeds and emits the experimental warning. On uv 0.13.8, sync rejects both files with `expected directory but found a file`, so the regression is in redirect interpretation and diagnostics, not in whether a regular file blocks sync."
+}
