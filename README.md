@@ -21,6 +21,12 @@ The released 0.9.2 source and the pre-fix uv parser both check the final punctua
 - astral-sh/uv#13102 (closed) — `uv pip install` panicked with `InvalidNameError("wheel-")` when PowerShell passed `wheel-*.whl` literally. The shell and suffix differ, but the parser reached the same invalid name token followed by more input. The maintainer linked the parser fix.
 - astral-sh/uv#13105 (merged) — Fixes astral-sh/uv#13102 by validating the last character of the name token regardless of what follows, before constructing `PackageName`. The regression test expects a parse error for `wheel-*.whl`, and the same check covers the reported suffixes.
 
+## Downstream impact
+
+- The reporter found malformed entries in public `requirements.txt` files, `tensorflow-==2.15.0` and `djangorestframework-==.14.0`. Both reportedly trigger `InvalidNameError` panics in `pep508_rs` 0.9.2, so the trigger is not limited to synthetic or fuzzed inputs.
+- The reporter also observed `maturin build` aborting with Maturin 1.10.2 when `pyproject.toml` contained `dependencies = ["tensorflow-==2.15.0"]`. The `PyO3/maturin` `v1.10.2` `Cargo.lock` confirms that release resolves `pep508_rs` to 0.9.2; the build failure was not independently reproduced.
+- The reporter observed a normal parse error with uv 0.13.7. That is consistent with the existing uv fix and does not indicate a regression in uv.
+
 ## Supporting evidence
 
 - The published `pep508_rs` 0.9.2 source (`src/lib.rs`, `parse_name`) rejects `-` as the last character only when `cursor.peek().is_none()`. With `D-==1`, the `=` ends the name token without triggering that check. `PackageName::new` rejects `D-`, and the subsequent `expect` panics. The same check does run for bare `D-`.
