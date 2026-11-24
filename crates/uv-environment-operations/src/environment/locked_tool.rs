@@ -13,10 +13,11 @@ use uv_settings::ResolverInstallerSettings;
 use uv_types::HashStrategy;
 
 use crate::EnvironmentError;
-use crate::environment::CachedEnvironment;
+use crate::environment::{CachedEnvironment, LockedInputs};
 use crate::install_target::InstallTarget;
 use crate::malware::MalwareCheckContext;
-use crate::sync::store_credentials_from_target;
+use crate::sync::{lower_build_dependencies, store_credentials_from_target};
+use uv_workspace::WorkspaceCache;
 
 /// A tool declared in a lockfile, whose version and dependencies depend on the interpreter.
 pub struct LockedTool<'lock> {
@@ -124,9 +125,21 @@ impl LockedToolInstaller<'_> {
         .await?;
         let hash_strategy =
             HashStrategy::from_resolution(&tool.resolution, HashCheckingMode::Verify)?;
+        let build_requires = lower_build_dependencies(
+            tool.target,
+            &self.settings.into(),
+            self.cache,
+            &WorkspaceCache::default(),
+            self.client_builder,
+        )
+        .await?
+        .match_runtime(&tool.resolution)?;
         let environment = CachedEnvironment::from_resolution(
             &tool.resolution,
-            hash_strategy,
+            Some(LockedInputs {
+                hashes: hash_strategy,
+                build_requires,
+            }),
             tool.target.build_constraints(),
             &tool.interpreter,
             self.settings,

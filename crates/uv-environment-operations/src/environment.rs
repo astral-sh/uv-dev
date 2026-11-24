@@ -10,7 +10,10 @@ use crate::{
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
+use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution_types::{ExtraBuildRequires, Name};
 use uv_install_operations::loggers::InstallLogger;
+use uv_installer::BuildSettings;
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::ResolverInstallerSettings;
 use uv_virtualenv::UpgradePolicy;
@@ -42,6 +45,12 @@ struct CachedEnvironmentDist {
     dist: ResolvedDist,
     hashes: uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
+}
+
+/// Inputs derived from a lock target and its resolved subgraph.
+struct LockedInputs {
+    hashes: HashStrategy,
+    build_requires: ExtraBuildRequires,
 }
 
 fn cached_environment_resolution_hash(
@@ -104,7 +113,7 @@ impl CachedEnvironment {
 
         Self::from_resolution(
             &resolution,
-            HashStrategy::default(),
+            None,
             build_constraints,
             &interpreter,
             settings,
@@ -122,7 +131,7 @@ impl CachedEnvironment {
 
     async fn from_resolution(
         resolution: &Resolution,
-        hash_strategy: HashStrategy,
+        locked: Option<LockedInputs>,
         build_constraints: Constraints,
         interpreter: &Interpreter,
         settings: &ResolverInstallerSettings,
@@ -157,7 +166,33 @@ impl CachedEnvironment {
                     .distribution_id()
                     .cmp(&right.dist.distribution_id())
             });
-            cached_environment_resolution_hash(hash_digest(&distributions), &hash_strategy)
+            let mut hash = hash_digest(&distributions);
+            if let Some(locked) = &locked {
+                // A locked sdist identifies the build input. Its installed wheel also
+                // depends on the workspace's build settings.
+                let builds = BuildSettings {
+                    config_settings: &settings.resolver.config_setting,
+                    config_settings_package: &settings.resolver.config_settings_package,
+                    extra_build_requires: &locked.build_requires,
+                    extra_build_variables: &settings.resolver.extra_build_variables,
+                };
+                let inputs: Vec<_> = distributions
+                    .iter()
+                    .filter_map(|item| {
+                        let ResolvedDist::Installable { dist, .. } = &item.dist else {
+                            return None;
+                        };
+                        matches!(dist.as_ref(), Dist::Source(_))
+                            .then(|| builds.build_info(dist.name()))
+                    })
+                    .collect();
+                if !inputs.is_empty() {
+                    hash = hash_digest(&(hash, inputs));
+                }
+                cached_environment_resolution_hash(hash, &locked.hashes)
+            } else {
+                hash
+            }
         };
 
         // Construct a hash for the environment.
@@ -183,7 +218,14 @@ impl CachedEnvironment {
             interpreter_hash,
             &resolution_hash,
         );
+        let needs_refresh = locked.is_some()
+            && resolution
+                .distributions()
+                .any(|dist| cache.must_revalidate_package(dist.name()));
         let cached_environment = || {
+            if needs_refresh && !cache.freshness(&cache_entry, None, None).ok()?.is_fresh() {
+                return None;
+            }
             let root = cache.resolve_link(cache_entry.path()).ok()?;
             PythonEnvironment::from_root(root, cache).ok()
         };
@@ -213,11 +255,21 @@ impl CachedEnvironment {
             UpgradePolicy::Fixed,
         )?;
 
+        let (hash_strategy, build_requires) = if let Some(inputs) = locked {
+            (inputs.hashes, inputs.build_requires)
+        } else {
+            let build_requires = LoweredExtraBuildDependencies::from_non_lowered(
+                settings.resolver.extra_build_dependencies.clone(),
+            )
+            .into_inner();
+            (HashStrategy::default(), build_requires)
+        };
         sync_environment(
             venv,
             resolution,
             hash_strategy,
             Modifications::Exact,
+            &build_requires,
             build_constraints,
             settings.into(),
             client_builder,

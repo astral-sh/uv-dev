@@ -433,6 +433,10 @@ async fn upgrade_tool(
                 &resolution,
                 hash_strategy,
                 Modifications::Exact,
+                &LoweredExtraBuildDependencies::from_non_lowered(
+                    settings.resolver.extra_build_dependencies.clone(),
+                )
+                .into_inner(),
                 build_constraints,
                 (&settings).into(),
                 client_builder,
@@ -506,6 +510,7 @@ async fn upgrade_tool(
                     &resolution,
                     hash_strategy,
                     Modifications::Exact,
+                    &extra_build_requires,
                     build_constraints,
                     (&settings).into(),
                     client_builder,
@@ -546,6 +551,10 @@ async fn upgrade_tool(
             &resolution.into(),
             HashStrategy::default(),
             Modifications::Exact,
+            &LoweredExtraBuildDependencies::from_non_lowered(
+                settings.resolver.extra_build_dependencies.clone(),
+            )
+            .into_inner(),
             build_constraints,
             (&settings).into(),
             client_builder,
