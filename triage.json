@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 23058,
+        "title": "Bash prompt values can change meaning under older compatibility modes (POSIX)",
+        "url": "https://github.com/astral-sh/uv/issues/23058",
+        "state": "open",
+        "reason": "Canonical Bash issue. Its body describes the same explicit `--prompt` value being evaluated when the generated activator is sourced. Linked work also addresses Bash prompt redraw and POSIX mode."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3068,
+        "title": "Preserve literal Bash virtual environment prompts",
+        "url": "https://github.com/astral-sh/uv-dev/pull/3068",
+        "state": "open",
+        "reason": "Proposes a fix for astral-sh/uv#23058 at both sourcing and prompt rendering, including POSIX mode with `promptvars` disabled. Coverage for changes after activation and inherited `PS1` still needs verification."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3065,
+        "title": "Reproduce Bash substitutions in virtual environment prompts",
+        "url": "https://github.com/astral-sh/uv-dev/pull/3065",
+        "state": "open",
+        "reason": "Draft test PR linked to astral-sh/uv#23058 and astral-sh/uv-dev#3068. It distinguishes evaluation while sourcing from evaluation during prompt redraw and investigates `promptvars` and POSIX mode."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23155,
+        "title": "fix(virtualenv): keep activation prompts literal",
+        "url": "https://github.com/astral-sh/uv/pull/23155",
+        "state": "open",
+        "reason": "Public PR for astral-sh/uv#23058 that quotes explicit prompts in generated scripts and tests source-time evaluation. It does not change `PS1` handling."
+      },
+      {
+        "kind": "issue",
+        "number": 23059,
+        "title": "virtualenv activate runs commands from the environment name in zsh with PROMPT_SUBST",
+        "url": "https://github.com/astral-sh/uv/issues/23059",
+        "state": "open",
+        "reason": "Shares the activator's source-time quoting gap and links to astral-sh/uv#23058, but covers zsh's `PROMPT_SUBST` rather than Bash's `promptvars` or POSIX mode."
+      }
+    ],
+    "search_scope": "Used authenticated GitHub CLI searches across open and closed issues and open, closed, and merged PRs in astral-sh/uv. Searched for `promptvars`, `PS1`, `--prompt`, `VIRTUAL_ENV_PROMPT`, GHSA-cx6f-vjhg-g3cc, and CVE-2026-115586. Separately searched for prompt expansion and child-shell inheritance, then for command substitution and activation-script quoting and escaping. Followed comments and timeline references into astral-sh/uv-dev and checked the uv 0.13.7 source for evidence of a shipped fix. Ruled out astral-sh/uv#23246 as a Bash fix because it only covers zsh, and astral-sh/uv#23117 as a shipped fix because it closed unmerged. Astral-sh/uv#2668 and astral-sh/uv#13456 concern prompt display or formatting; astral-sh/uv#12662 concerns an unrelated activation variable leak."
+  },
+  "type": "duplicate",
+  "type_reason": "The uv 0.13.7 source confirms the same problem tracked by astral-sh/uv#23058: the generated Bash activator can evaluate an explicit prompt while being sourced, regardless of `promptvars`. It also inserts the resulting text into exported `PS1`, but the reported reproduction does not isolate later evaluation from the already-tracked source-time behavior. The relevant code paths remain in the checkout, and no merged uv fix was found. The regression documented by the upstream virtualenv advisory is not an established uv regression.",
+  "summary": "Astral-sh/uv#23058 already tracks Bash activation prompts being interpreted as shell syntax. Astral-sh/uv-dev#3068 proposes a fix for both sourcing and prompt rendering. The new report adds cases worth checking in that work: prompt expansion enabled after activation and an inherited prompt.",
+  "draft_response": "Thanks for reporting this. I'm marking this as a duplicate of astral-sh/uv#23058, where we're tracking Bash activation prompts being interpreted as shell syntax. In uv 0.13.7, the explicit prompt can be evaluated as soon as `bin/activate` is sourced, even with `promptvars` off, so the reported result doesn't show that evaluation waited for the setting to change. The activator also puts the prompt text directly into `PS1` and exports it. Let's track changes to prompt expansion after activation and inherited prompts in astral-sh/uv#23058 so the fix can be checked at both stages."
+}
