@@ -68,9 +68,11 @@ pub mod environment;
 mod error;
 pub use error::EnvironmentError;
 pub mod install_target;
+mod locked_tool;
 pub mod malware;
 mod sync;
-pub use sync::{store_credentials_from_target, sync_from_lock};
+pub use locked_tool::LockedTool;
+pub use sync::sync_from_lock;
 
 #[derive(Debug)]
 pub struct ConflictError {

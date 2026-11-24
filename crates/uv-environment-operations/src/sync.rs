@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -15,11 +14,10 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
-use uv_pep508::{MarkerTree, VersionOrUrl};
+use uv_pep508::VersionOrUrl;
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::InstallerSettingsRef;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -149,17 +147,7 @@ pub async fn sync_from_lock(
     // primary builder into the registry client below.
     let malware_check_client_builder = client_builder.clone();
 
-    // Validate that the Python version is supported by the lockfile.
-    if !target
-        .lock()
-        .requires_python()
-        .contains(venv.interpreter().python_version())
-    {
-        return Err(EnvironmentError::LockedPythonIncompatibility(
-            venv.interpreter().python_version().clone(),
-            target.lock().requires_python().clone(),
-        ));
-    }
+    let installation = target.for_environment(venv.interpreter(), python_platform)?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
@@ -168,46 +156,7 @@ pub async fn sync_from_lock(
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
 
-    // Determine the markers to use for resolution.
-    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
-
-    // Validate that the platform is supported by the lockfile.
-    let environments = target.lock().supported_environments();
-    if !environments.is_empty() {
-        if !environments
-            .iter()
-            .any(|env| env.evaluate(&marker_env, &[]))
-        {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
-                // For error reporting, we use the "simplified"
-                // supported environments, because these correspond to
-                // what the end user actually wrote. The non-simplified
-                // environments, by contrast, are explicitly
-                // constrained by `requires-python`.
-                target
-                    .lock()
-                    .simplified_supported_environments()
-                    .into_iter()
-                    .filter_map(MarkerTree::contents)
-                    .map(|env| format!("`{env}`"))
-                    .join(", "),
-            ));
-        }
-    }
-
-    // Determine the tags to use for the resolution.
-    let tags = resolution_tags(None, python_platform, venv.interpreter())
-        .map_err(EnvironmentError::from)?;
-
-    // Read the lockfile.
-    let resolution = target.to_resolution(
-        &marker_env,
-        &tags,
-        extras,
-        groups,
-        build_options,
-        &install_options,
-    )?;
+    let resolution = installation.to_resolution(extras, groups, build_options, &install_options)?;
 
     // Always skip virtual projects, which shouldn't be built or installed.
     let resolution = apply_no_virtual_project(resolution);
@@ -240,7 +189,7 @@ pub async fn sync_from_lock(
         extra_build_variables,
         cache,
         venv,
-        &tags,
+        installation.tags(),
     )?;
 
     // Avoid constructing an HTTP client and build dispatch when planning shows that there is no
@@ -349,7 +298,7 @@ pub async fn sync_from_lock(
             link_mode,
             bytecode_compilation,
             &hasher,
-            &tags,
+            installation.tags(),
             &client,
             state.in_flight(),
             concurrency,
@@ -392,7 +341,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 ///
 /// These credentials can come from any of `tool.uv.sources`, `tool.uv.dev-dependencies`,
 /// `project.dependencies`, and `project.optional-dependencies`.
-pub fn store_credentials_from_target(
+pub(crate) fn store_credentials_from_target(
     target: InstallTarget<'_>,
     client_builder: &BaseClientBuilder,
 ) -> Result<(), EnvironmentError> {

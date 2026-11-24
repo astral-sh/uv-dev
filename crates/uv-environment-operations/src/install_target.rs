@@ -3,16 +3,18 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::str::FromStr;
 
-use itertools::Either;
+use itertools::{Either, Itertools};
 use rustc_hash::FxHashSet;
 
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
+    TargetTriple,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
+use uv_lock::{DependencySelection, Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
@@ -20,6 +22,8 @@ use uv_pypi_types::{
 };
 use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
+use uv_python_interpreter::Interpreter;
+use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_scripts::Pep723Script;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
 use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProject, Workspace};
@@ -64,6 +68,74 @@ pub enum InstallTarget<'lock> {
         script: &'lock Pep723Script,
         lock: &'lock Lock,
     },
+}
+
+/// An installation target paired with a Python version and platform supported by its lockfile.
+pub struct LockInstallation<'lock, 'env> {
+    target: InstallTarget<'lock>,
+    markers: ResolverMarkerEnvironment,
+    tags: Cow<'env, Tags>,
+}
+
+impl<'lock> LockInstallation<'lock, '_> {
+    pub(crate) fn tags(&self) -> &Tags {
+        &self.tags
+    }
+
+    /// Select direct dependencies that apply to this installation.
+    pub fn dependency_selection(
+        &self,
+        project_name: Option<&PackageName>,
+        dependency_name: &PackageName,
+    ) -> Result<DependencySelection<'lock>, EnvironmentError> {
+        Ok(self
+            .target
+            .lock()
+            .dependency_selection(project_name, dependency_name, self.markers.markers())
+            .map_err(anyhow::Error::msg)?)
+    }
+
+    /// Select a tool and materialize its subgraph for the same environment.
+    pub(crate) fn resolve_tool(
+        &self,
+        project_name: Option<&PackageName>,
+        name: &PackageName,
+        group: &GroupName,
+        build_options: &BuildOptions,
+    ) -> Result<Option<Resolution>, EnvironmentError> {
+        let selection = self.dependency_selection(project_name, name)?;
+        let Some(dependency) = selection.group(group).or_else(|| selection.production()) else {
+            return Ok(None);
+        };
+        let resolution = self.target.lock().to_resolution_from_dependency(
+            self.target.install_path(),
+            dependency,
+            project_name,
+            &self.markers,
+            &self.tags,
+            build_options,
+            &InstallOptions::default(),
+        )?;
+        Ok(Some(resolution))
+    }
+
+    /// Materialize the requested packages, extras, and dependency groups.
+    pub(crate) fn to_resolution(
+        &self,
+        extras: &ExtrasSpecificationWithDefaults,
+        groups: &DependencyGroupsWithDefaults,
+        build_options: &BuildOptions,
+        install_options: &InstallOptions,
+    ) -> Result<Resolution, LockError> {
+        self.target.to_resolution(
+            &self.markers,
+            &self.tags,
+            extras,
+            groups,
+            build_options,
+            install_options,
+        )
+    }
 }
 
 /// The workspace packages selected by an installation target.
@@ -406,7 +478,45 @@ impl<'lock> InstallTarget<'lock> {
         }
     }
 
-    /// Convert the target's locked packages to a [`Resolution`].
+    /// Prepare to install from the lockfile for an interpreter and optional platform override.
+    pub fn for_environment<'env>(
+        self,
+        interpreter: &'env Interpreter,
+        python_platform: Option<&TargetTriple>,
+    ) -> Result<LockInstallation<'lock, 'env>, EnvironmentError> {
+        let lock = self.lock();
+        if !lock
+            .requires_python()
+            .contains(interpreter.python_version())
+        {
+            return Err(EnvironmentError::LockedPythonIncompatibility(
+                interpreter.python_version().clone(),
+                lock.requires_python().clone(),
+            ));
+        }
+        let markers = resolution_markers(None, python_platform, interpreter);
+        let environments = lock.supported_environments();
+        if !environments.is_empty() && !environments.iter().any(|env| env.evaluate(&markers, &[])) {
+            // The simplified markers reflect what the user wrote, without implicit Python bounds.
+            return Err(EnvironmentError::LockedPlatformIncompatibility(
+                lock.simplified_supported_environments()
+                    .into_iter()
+                    .filter_map(MarkerTree::contents)
+                    .map(|env| format!("`{env}`"))
+                    .join(", "),
+            ));
+        }
+
+        let tags = resolution_tags(None, python_platform, interpreter)?;
+        Ok(LockInstallation {
+            target: self,
+            markers,
+            tags,
+        })
+    }
+
+    /// Project the lockfile onto an arbitrary environment, e.g., to identify installed packages.
+    /// For installation, use [`Self::for_environment`].
     pub fn to_resolution(
         self,
         marker_env: &ResolverMarkerEnvironment,

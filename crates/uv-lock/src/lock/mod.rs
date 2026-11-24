@@ -3305,6 +3305,47 @@ impl Lock {
         &self.manifest.dependency_groups
     }
 
+    /// Whether a target declares a dependency in production or the given group, before
+    /// selecting a marker environment. A non-project workspace only contributes the group.
+    pub fn declares_dependency(
+        &self,
+        project_name: Option<&PackageName>,
+        dependency_name: &PackageName,
+        group: &GroupName,
+    ) -> Result<bool, String> {
+        let declares = |requirement: &Requirement| {
+            &requirement.name == dependency_name
+                && requirement.marker.evaluate_optional_environment(None, &[])
+        };
+        let Some(project_name) = project_name else {
+            return Ok(self
+                .dependency_groups()
+                .get(group)
+                .into_iter()
+                .flatten()
+                .any(declares));
+        };
+        let Some(project) = self.find_by_name(project_name)? else {
+            return Ok(false);
+        };
+        // A requirement outside the supported environments can be present only in metadata.
+        let mut requirements = project.metadata.requires_dist.iter().chain(
+            project
+                .metadata
+                .dependency_groups
+                .get(group)
+                .into_iter()
+                .flatten(),
+        );
+        // Locks without declaration metadata can still supply a resolved dependency.
+        let mut dependencies = project
+            .dependencies
+            .iter()
+            .chain(project.dependency_groups.get(group).into_iter().flatten());
+        Ok(requirements.any(declares)
+            || dependencies.any(|dependency| dependency.package_name() == dependency_name))
+    }
+
     /// Returns the environment-specific direct dependency selections for a lock target.
     ///
     /// If `project_name` is provided, dependencies attached to that package are used. Otherwise,

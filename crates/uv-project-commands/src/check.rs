@@ -12,12 +12,11 @@ use uv_configuration::{
     DryRun, ExtrasSpecification, InstallOptions, Modifications,
 };
 use uv_dispatch::UniversalState;
-use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
-    LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
+    LinkErrorReporting, LockedTool, ProjectEnvironment, ProjectEnvironmentPolicy,
+    ProjectEnvironmentTarget, ProjectInterpreter, ScriptEnvironment, sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -41,8 +40,6 @@ use uv_settings::{
 use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
-
-use crate::toolchain;
 
 mod ty;
 
@@ -358,6 +355,7 @@ pub async fn check(
     };
 
     // Select an environment and, if we found a project, sync it before running checks.
+    let ty_name = PackageName::from_str("ty")?;
     let mut locked_ty_path = None;
     let venv = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
@@ -424,17 +422,15 @@ pub async fn check(
             Err(err) => return Err(UvError::from(err).into()),
         };
 
-        let marker_environment = venv.interpreter().to_resolver_marker_environment();
+        let target = InstallTarget::Script {
+            script,
+            lock: result.lock(),
+        };
         if ty_path.is_none()
             && ty_version.is_none()
-            && result
-                .lock()
-                .dependency_selection(
-                    None,
-                    &PackageName::from_str("ty")?,
-                    marker_environment.markers(),
-                )
-                .map_err(anyhow::Error::msg)?
+            && target
+                .for_environment(venv.interpreter(), None)?
+                .dependency_selection(None, &ty_name)?
                 .root()
                 .is_some()
         {
@@ -444,10 +440,6 @@ pub async fn check(
             );
         }
 
-        let target = InstallTarget::Script {
-            script,
-            lock: result.lock(),
-        };
         match sync_from_lock(
             target,
             &venv,
@@ -614,45 +606,17 @@ pub async fn check(
 
         if ty_path.is_none()
             && ty_version.is_none()
-            && let Some(tool) = toolchain::find_locked_tool(
-                project,
-                result.lock(),
-                lock_interpreter,
-                &PackageName::from_str("ty")?,
-                &DEV_DEPENDENCIES,
-                &groups,
-            )?
+            && let Some(tool) =
+                LockedTool::find(target, project.project_name(), &ty_name, &DEV_DEPENDENCIES)?
         {
-            locked_ty_path = Some(if !tool.requires_separate_environment() && !no_sync {
-                // Synchronization will install the locked tool into the selected project or
-                // isolated environment.
-                venv.scripts()
-                    .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
-            } else {
-                // Do not modify the selected environment when synchronization is disabled or the
-                // locked tool is excluded from it. Install only the locked `ty` subgraph.
-                let base_interpreter =
-                    CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
-                let resolution = toolchain::resolution_from_lock(
-                    project,
-                    result.lock(),
-                    &tool,
-                    &base_interpreter,
-                    &settings.resolver.build_options,
-                )?;
-                store_credentials_from_target(target, &client_builder)?;
-                let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
-                    &resolution,
-                    result
-                        .lock()
-                        .build_constraints(project.workspace().install_path()),
-                    &base_interpreter,
+            let environment = tool
+                .environment(
+                    (!no_sync).then_some((&venv, &groups)),
+                    lock_interpreter,
                     &settings,
-                    &malware_settings,
+                    &mut malware_context,
                     &client_builder,
-                    &ty_state,
-                    Box::new(SummaryInstallLogger),
+                    &state,
                     installer_metadata,
                     &concurrency,
                     cache,
@@ -660,12 +624,9 @@ pub async fn check(
                     preview,
                 )
                 .await
-                {
-                    Ok(environment) => environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
-                malware_context.record_resolution(&resolution);
-                PythonEnvironment::from(environment)
+                .map_err(UvError::from)?;
+            locked_ty_path = environment.map(|environment| {
+                environment
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
             });
