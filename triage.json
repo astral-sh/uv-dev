@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 408,
+        "title": "Accept more invalid version specifiers",
+        "url": "https://github.com/astral-sh/uv/issues/408",
+        "state": "closed",
+        "reason": "Motivated accepting missing-dot wildcards such as `!=3.0*` in PyPI metadata. It tracked a parse failure on short inputs, not a successful repair that silently changes the release prefix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 416,
+        "title": "Add missing-dot fix to lenient requirements",
+        "url": "https://github.com/astral-sh/uv/pull/416",
+        "state": "merged",
+        "reason": "Introduced the repeated capture and replacement still used in uv 0.13.10. Its test covers short exclusions such as `!=3.0*`, which do not expose the loss of digits from a multi-digit release prefix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 775,
+        "title": "Filter out files with invalid requires python specifiers",
+        "url": "https://github.com/astral-sh/uv/pull/775",
+        "state": "merged",
+        "reason": "Moved shared fixup diagnostics from a user-facing warning to `tracing::warn!`, explaining why the rewrite is visible with `-v` but not by default. It did not change the missing-dot regex."
+      }
+    ],
+    "search_scope": "Used authenticated `gh` to search open and closed issues and open, closed, and merged PRs. Literal queries covered the input and output versions, parser identifiers, and the warning text. Conceptual queries covered wrong-version selection, wildcard prefix matching, malformed metadata, the affected project commands, and verbose-only warnings. Fix-oriented checks followed issue timelines and PR links, inspected merged diffs and parser history, and scanned open and recent PR listings. Ruled out astral-sh/uv#21011 and astral-sh/uv#21012 because they handle whitespace before versions with an existing `.*` under ordered comparators, using a different rule. Astral-sh/uv#1477 and astral-sh/uv#2546 concern ordered-comparator metadata that failed to parse, and astral-sh/uv#8326 concerns rejection of a bare `==*`."
+  },
+  "type": "bug",
+  "type_reason": "The source confirms that the missing-dot repair accepts malformed input but changes its release prefix instead of preserving it or rejecting the input. The same capture and replacement date back to astral-sh/uv#416. No prior fix or existing tracker for this truncation was found, so this is neither a known regression of the rewrite nor a duplicate.",
+  "summary": "In uv 0.13.10, the missing-dot repair turns `requests==2.32.3*` into `requests==2.3.*` before resolution. The closest history explains why the repair exists and why its warning is hidden at default verbosity; none of those items addressed the digit loss.",
+  "draft_response": "You've identified a bug in uv 0.13.10: the missing-dot repair drops digits from `requests==2.32.3*` and passes `requests==2.3.*` to the resolver. The warning is emitted through tracing, so it isn't shown by default. For now, use `requests==2.32.3.*` for a prefix match or `requests==2.32.3` for an exact pin. The repair should retain the full prefix, with a regression test for multi-digit version segments."
+}
