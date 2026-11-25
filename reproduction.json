@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "astral-sh/uv#23402 contains only a Google Chrome Help link and describes no uv command, error, or expected versus actual behavior. No uv command or test was run because there was no reported behavior to reproduce. To investigate a uv issue, provide the exact command, OS, uv and Python versions, and expected and actual output with secrets removed. If TLS is involved, include the affected hostname and relevant proxy or certificate settings without credentials."
+}
