@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18127,
+        "title": "platform_machine markers evaluate against host kernel, not target interpreter, on cross-arch setups",
+        "url": "https://github.com/astral-sh/uv/issues/18127",
+        "state": "open",
+        "reason": "A 32-bit ARM interpreter on an AArch64 kernel reported aarch64, affecting piwheels marker selection. A maintainer noted that --python-platform lacks a 32-bit ARM target, but the issue tracks markers reported by a running interpreter, not adding an explicit target."
+      },
+      {
+        "kind": "issue",
+        "number": 21299,
+        "title": "Request to add s390x and ppc64le as `--python-platform` targets",
+        "url": "https://github.com/astral-sh/uv/issues/21299",
+        "state": "closed",
+        "reason": "Reported the same gap between internal wheel-tag support and accepted --python-platform values, but for s390x and ppc64le rather than ARMv7."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21313,
+        "title": "Add s390x, ppc64le, and loongarch64 Python platforms",
+        "url": "https://github.com/astral-sh/uv/pull/21313",
+        "state": "merged",
+        "reason": "Closed astral-sh/uv#21299 by adding GNU Linux and manylinux targets with wheel compatibility and marker mappings. It is an implementation precedent, but did not add ARMv7."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14320,
+        "title": "Add `--python-platform` to `uv sync`",
+        "url": "https://github.com/astral-sh/uv/pull/14320",
+        "state": "merged",
+        "reason": "Added the explicit target override to project sync for astral-sh/uv#14273. It provides the mechanism the reporter wants to use, but did not add an ARMv7 target."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17384,
+        "title": "Recognize armv8l as an alias for armv7l in platform tag parsing",
+        "url": "https://github.com/astral-sh/uv/pull/17384",
+        "state": "merged",
+        "reason": "Fixed native wheel compatibility in astral-sh/uv#17375 by accepting armv8l as an alias for armv7l in wheel tags. It did not add an explicit ARMv7 target or change target marker selection."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged pull requests in astral-sh/uv. Literal searches covered --python-platform, armv7-unknown-linux-gnueabihf, armv7l-manylinux, linux_armv7l, piwheels, platform_machine, and frozen sync/404/refresh terms. Conceptual searches separately covered additional Linux targets and cross-install/cross-resolve, marker and wheel-tag compatibility, and stale artifact URLs versus lockfile validation. Checked merged work through commit search, scanned pull request titles across states, and followed candidate comments and issue/PR links. Ruled out astral-sh/uv#6503 (constraining lock resolution), astral-sh/uv#18166 (interpreter cache invalidation), astral-sh/uv#7957 (broader cross-platform environment construction), and astral-sh/uv#21430 (per-file yanking rather than a relocated URL). No earlier item tracks adding the ARMv7 flag values themselves."
+  },
+  "type": "enhancement",
+  "type_reason": "The checkout confirms that ARMv7 is supported in wheel-tag handling but is not an accepted --python-platform target. The report requests a new target; it does not show a regression or incorrect behavior for an existing target. The 404 illustrates why a download check is useful, but uv lock --check verifies consistency with project metadata, not artifact availability. The closest open issue, astral-sh/uv#18127, tracks interpreter-derived markers rather than the explicit target.",
+  "summary": "The closest open issue, astral-sh/uv#18127, notes the missing ARMv7 target but concerns markers reported by a running interpreter. Astral-sh/uv#21313 added explicit targets for other Linux architectures, and astral-sh/uv#17384 fixed native ARM wheel-tag compatibility. Neither added ARMv7 to --python-platform.",
+  "draft_response": "`--python-platform` doesn't currently accept a 32-bit ARM Linux target, even though uv supports ARMv7 binaries and managed Python downloads. For your CI workflow, the target would need to set `platform_machine` to `armv7l` and accept `linux_armv7l` wheels so that frozen sync selects the piwheels artifacts in your lockfile. In the meantime, run the frozen sync in a fresh ARMv7 environment with an empty cache to check that the wheels can still be downloaded. `uv lock --check` checks the lockfile against the project metadata; it doesn't verify artifact URLs."
+}
