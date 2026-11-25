@@ -5010,6 +5010,8 @@ fn no_deps() {
 
 /// Ignore unsatisfied dependencies when checking an installed package with `--no-deps`, while
 /// retaining diagnostics in strict mode.
+///
+/// Repairing the installed metadata's wildcard must keep `2.3.0` outside the required `2.32.3` prefix.
 #[test]
 fn no_deps_installed() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -5027,7 +5029,7 @@ fn no_deps_installed() -> Result<()> {
             Metadata-Version: 2.1
             Name: parent
             Version: 1.0.0
-            Requires-Dist: child>=2
+            Requires-Dist: child==2.32.3*
         "},
     )?;
 
@@ -5050,7 +5052,7 @@ fn no_deps_installed() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
-    warning: The package `parent` requires `child>=2`, but it's not installed
+    warning: The package `parent` requires `child==2.32.3.*`, but it's not installed
     ");
 
     // Without `--no-deps`, the missing dependency must still trigger resolution.
@@ -5060,13 +5062,13 @@ fn no_deps_installed() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because child was not found in the provided package locations and parent==1.0.0 depends on child>=2, we can conclude that parent==1.0.0 cannot be used.
+      cause: Because child was not found in the provided package locations and parent==1.0.0 depends on child==2.32.3.*, we can conclude that parent==1.0.0 cannot be used.
              And because parent was not found in the provided package locations and you require parent, we can conclude that your requirements are unsatisfiable.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
-    let child = context.site_packages().join("child-1.0.0.dist-info");
+    let child = context.site_packages().join("child-2.3.0.dist-info");
     fs::create_dir_all(&child)?;
     fs::write(child.join("WHEEL"), wheel)?;
     fs::write(
@@ -5074,7 +5076,7 @@ fn no_deps_installed() -> Result<()> {
         indoc! {"
             Metadata-Version: 2.1
             Name: child
-            Version: 1.0.0
+            Version: 2.3.0
         "},
     )?;
 
@@ -5087,7 +5089,7 @@ fn no_deps_installed() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
-    warning: The package `parent` requires `child>=2`, but `1.0.0` is installed
+    warning: The package `parent` requires `child==2.32.3.*`, but `2.3.0` is installed
     ");
 
     // Constraints on direct requirements must still be checked with dependencies disabled.

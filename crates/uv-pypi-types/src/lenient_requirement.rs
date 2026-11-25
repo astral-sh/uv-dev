@@ -31,7 +31,7 @@ static FIXUPS: &[(FixUp, &str)] = &[
     ),
     // Given `!=3.0*`, rewrite to `!=3.0.*`.
     (
-        |input| regex!(r"(\d\.\d)+\*").replace_all(input, r"${1}.*"),
+        |input| regex!(r"((?:\d\.\d)+)\*").replace_all(input, r"${1}.*"),
         "inserting missing dot",
     ),
     // Given `>=3.6,`, rewrite to `>=3.6`
