@@ -6,13 +6,15 @@ Classification: question
 
 ## Summary
 
-On Windows with uv 0.13.9, the reporter installed `keyring` with `artifacts-keyring` as a uv tool, configured a named private Azure Artifacts index and default PyPI in `uv.toml`, and set `UV_INDEX_COMPANY_PYTHON_FEED_USERNAME=VssSessionToken` and `UV_KEYRING_PROVIDER=subprocess`. They expected `uv pip install --dry-run package-name -vv` to use the same backend that reportedly succeeds after browser sign-in through `uv tool run keyring get`. Instead, the installer traces an index-root lookup and host fallback, then reports `401 Unauthorized`. The report does not give the Python, `keyring`, or `artifacts-keyring` versions or identify the bare `keyring` executable visible to the failing shell.
+On Windows with uv 0.13.9, the reporter installed `keyring` with `artifacts-keyring` as a uv tool, configured a named private Azure Artifacts index and default PyPI in `uv.toml`, and set `UV_INDEX_COMPANY_PYTHON_FEED_USERNAME=VssSessionToken` and `UV_KEYRING_PROVIDER=subprocess`. They expected `uv pip install --dry-run package-name -vv` to use the same backend that reportedly succeeds after browser sign-in through `uv tool run keyring get`. Instead, the installer traces an index-root lookup and host fallback, then reports `401 Unauthorized`.
+
+**Executable lookup:** The reporter's `where keyring` output lists two executables. The first is in a separate Python installation's `Scripts` directory; the second is in the directory reported by `uv tool dir --bin`. That ordering supports the `PATH` shadowing explanation. The reporter has not shown which backends the first executable loads or whether using the uv-installed executable resolves the 401.
 
 **Reported workaround:** Supplying an Azure access token explicitly via `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD`, while keeping the index username and subprocess provider configured, let the dry run resolve 26 packages and show an install plan. This is consistent with uv's documented direct authentication path. It does not show that subprocess keyring supplied the credential or explain why that lookup failed.
 
 ## Classification
 
-Authentication troubleshooting, not a confirmed uv bug or regression. The controlled reproduction shows that `PATH` shadowing is sufficient to produce the reported discrepancy, but does not establish that it occurred on the reporter's machine. No before/after uv version comparison is reported.
+Authentication troubleshooting, not a confirmed uv bug or regression. The controlled reproduction shows that a plugin-less `keyring` earlier on `PATH` can cause this discrepancy, and the reporter's executable ordering is consistent with that mechanism. Whether the first executable lacks the plugin and whether changing the order resolves the failure remain unverified. No before/after uv version comparison is reported.
 
 ## Reproduction
 
@@ -37,12 +39,12 @@ Existing tests cover the underlying auth paths, not the Windows/Azure report. `c
 
 ## Suggested follow-up
 
-In the same Windows Command Prompt where installation fails, compare `where.exe keyring` with `uv tool dir --bin` and run bare `keyring --list-backends`. If an executable without `ArtifactsKeyringBackend` takes precedence, put the plugin-enabled tool directory first on `PATH` and retry. Leave `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD` unset for the retry so that it tests keyring rather than the workaround. If bare keyring lists the backend and the 401 persists, ask for the Python and package versions, the redacted executable paths, and any redacted subprocess warnings. Confirm that the direct check uses the exact index root from the installer trace. Do not request the output of `keyring get` or any credentials.
+In the same Windows Command Prompt where installation fails, put the directory reported by `uv tool dir --bin` first on `PATH`. Verify that `where.exe keyring` lists its executable first and that bare `keyring --list-backends` includes `ArtifactsKeyringBackend`. Retry the same dry run with `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD` unset so it tests keyring rather than the workaround. If the 401 persists, ask for the Python and package versions and any redacted subprocess warnings. Confirm that the direct check uses the exact index root from the installer trace. Do not request the output of `keyring get` or any credentials.
 
 ## Related
 
-- astral-sh/uv#11130 — Closest precedent: Windows, `artifacts-keyring`, index lookup, host fallback, and a 401. The reporter confirmed that Anaconda's `keyring` lacked the plugin and correcting `PATH` resolved it. The current report has not identified which bare `keyring` is visible in the failing shell.
-- astral-sh/uv#12042 — Commenters observed an active virtual environment's plugin-less `keyring` shadowing the uv-installed tool. The current report does not identify an active virtual environment or show that one shadows the tool.
+- astral-sh/uv#11130 — Closest precedent: Windows, `artifacts-keyring`, index lookup, host fallback, and a 401. The reporter confirmed that Anaconda's `keyring` lacked the plugin and correcting `PATH` resolved it. The current report also shows another executable ahead of the uv-installed tool, but does not yet establish that correcting `PATH` resolves the failure.
+- astral-sh/uv#12042 — Commenters observed an active virtual environment's plugin-less `keyring` shadowing the uv-installed tool. The current report shows a separate Python installation's executable taking precedence in the shell lookup, not a confirmed active virtual environment.
 - astral-sh/uv#17357 — Another Azure cloud feed 401, but that report describes a configured URL versus a UUID-form URL and success with `--extra-index-url`. The current trace shows lookup of the configured index URL, and the successful comparison is a direct tool invocation, not another index option.
 - astral-sh/uv#12651 (merged) — Shipped in 0.7.0 and fixed package-URL lookups for backends that require the index root, closing astral-sh/uv#4583, astral-sh/uv#11236, astral-sh/uv#11391, and astral-sh/uv#11507. The new trace already shows the index-root lookup, so it does not show a recurrence of that bug.
 
