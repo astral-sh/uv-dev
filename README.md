@@ -30,6 +30,12 @@ Both reports concern the same generated Bash activator treating a value passed t
 - `crates/uv-virtualenv/src/activator/activate:106` places the explicit value in double-quoted shell source, where it can be evaluated while sourcing, independently of Bash prompt settings. `crates/uv-virtualenv/src/activator/activate:119` separately inserts the resulting value into `PS1` and exports it without a `promptvars` or POSIX-mode check. The 0.13.7 activator is byte-identical to the checkout's copy.
 - These checks establish the two code paths, but do not independently confirm which Bash prompt-state transitions reproduce later evaluation. No reported commands were run.
 
+## Proposed Fix Scope
+
+A contributor proposes escaping the Bash prompt prefix when assigning `PS1`, taking the upstream virtualenv fix for GHSA-cx6f-vjhg-g3cc as a reference. They plan regression coverage for re-enabling `promptvars` after activation and for an interactive child Bash inheriting `PS1`. The comment provides no patch or test results and does not record a maintainer decision.
+
+Review this proposal alongside astral-sh/uv-dev#3068 under astral-sh/uv#23058. Changing only `PS1` would leave the earlier source-time evaluation of explicit prompts untouched. Regression coverage should distinguish literal handling while sourcing `bin/activate` from literal rendering after prompt expansion changes or in a child shell.
+
 ## Search Scope
 
 Used authenticated GitHub CLI searches across open and closed issues and open, closed, and merged PRs in astral-sh/uv. Literal searches covered `promptvars`, `PS1`, `--prompt`, `VIRTUAL_ENV_PROMPT`, the advisory ID, and the CVE. Separate symptom and cause searches covered Bash prompt expansion, child-shell inheritance, command substitution, `PROMPT_SUBST`, and activation-script escaping and quoting. Followed candidate comments and timeline references into astral-sh/uv-dev and checked merged and closed PRs for a released fix. Ruled out astral-sh/uv#23246 as a Bash fix (zsh only), astral-sh/uv#23117 as a shipped fix (closed unmerged), astral-sh/uv#2668 and astral-sh/uv#13456 as prompt-display or formatting reports, and astral-sh/uv#12662 as an unrelated activation variable leak.
