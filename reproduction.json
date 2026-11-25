@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced astral-sh/uv#23406 on Linux x86_64 with uv 0.13.10 and CPython 3.14.10. In a fresh project with `requires-python = \">=3.11\"` and `dependencies = [\"requests==2.32.3*\"]`, `uv pip compile pyproject.toml` pinned `requests==2.3.0` without a warning. Adding `-v` showed the rewrite to `requests==2.3.*`. `uv lock` recorded the rewritten specifier and pinned 2.3.0, and `uv sync` installed 2.3.0 in a separate project with no lockfile. The valid `requests==2.32.3.*` control resolved to 2.32.3. The installed uv 0.13.9 also reproduced the compile behavior with CPython 3.12.3. Updated the issue-context README; no checkout or GitHub changes were made."
+}
