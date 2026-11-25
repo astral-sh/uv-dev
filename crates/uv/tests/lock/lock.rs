@@ -39055,7 +39055,6 @@ fn lock_dependency_missing_wildcard_dot() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // The missing-dot fixup records a different release series in the lockfile (astral-sh/uv#23406).
     let lock = context.read("uv.lock");
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
@@ -39075,14 +39074,14 @@ fn lock_dependency_missing_wildcard_dot() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "requests", specifier = "==2.3.*" }]
+        requires-dist = [{ name = "requests", specifier = "==2.32.3.*" }]
 
         [[package]]
         name = "requests"
-        version = "2.3.0"
+        version = "2.32.3"
         source = { registry = "wheels" }
         wheels = [
-            { path = "requests-2.3.0-py3-none-any.whl" },
+            { path = "requests-2.32.3-py3-none-any.whl" },
         ]
         "#);
     });
@@ -39092,7 +39091,7 @@ fn lock_dependency_missing_wildcard_dot() -> Result<()> {
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + requests==2.3.0
+     + requests==2.32.3
     ");
 
     Ok(())
