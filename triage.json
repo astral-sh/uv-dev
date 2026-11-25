@@ -1,0 +1,10 @@
+{
+  "related": {
+    "items": [],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests in astral-sh/uv for the exact title, Google Chrome Help, article ID 95617, browser connection-security indicators, and Chrome's privacy-warning text. Separately searched for uv certificate diagnostics, system trust, and TLS fixes, and checked candidate comments and linked changes. Ruled out astral-sh/uv#19903, which reports a specific uv handshake failure despite browser success; astral-sh/uv#9629, which concerns uv's UnknownIssuer diagnostic; and astral-sh/uv#18550, a merged change to uv's HTTP client and certificate verifier. The report does not describe any of those uv behaviors."
+  },
+  "type": "question",
+  "type_reason": "The issue only links to a Chrome Help article. It identifies no uv command, error, incorrect behavior, or feature request, so the connection to uv needs clarification.",
+  "summary": "No meaningfully related uv issues or pull requests were found. The closest results concern certificate verification in uv, not Chrome's site-security indicators.",
+  "draft_response": "The linked article explains how to check a site's security status in Chrome. If you're reporting a problem with uv, please share your uv version, the command you ran, and what you expected to happen versus what happened. Include any error output with secrets removed. If the issue only occurs in Chrome, please use Chrome's support channels."
+}
