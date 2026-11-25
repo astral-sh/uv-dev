@@ -39027,6 +39027,79 @@ fn lock_no_build_invalid_dependency_virtual_project() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
+fn lock_dependency_missing_wildcard_dot() -> Result<()> {
+    let context = uv_test::test_context!("3.14");
+    let wheels = context.temp_dir.child("wheels");
+    let name = "requests".parse()?;
+    let (filename, wheel) = WheelBuilder::new(&name, &"2.3.0".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&name, &"2.32.3".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = ["requests==2.32.3*"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // The missing-dot fixup records a different release series in the lockfile (astral-sh/uv#23406).
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.11"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "requests" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "requests", specifier = "==2.3.*" }]
+
+        [[package]]
+        name = "requests"
+        version = "2.3.0"
+        source = { registry = "wheels" }
+        wheels = [
+            { path = "requests-2.3.0-py3-none-any.whl" },
+        ]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + requests==2.3.0
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
 fn lock_no_build_static_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
