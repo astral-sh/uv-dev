@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "The missing-dot repair now preserves the full release prefix, rewriting `requests==2.32.3*` to `requests==2.32.3.*` instead of `requests==2.3.*`. The updated regressions verify that compile, lock, and frozen sync select `2.32.3`, that link metadata no longer excludes a compatible wheel, and that strict checks still flag incompatible installed dependencies.",
+  "validation": [
+    "Passed both parent pip compile regressions: project dependencies and HTML link Requires-Python metadata.",
+    "Passed the parent lock-to-frozen-sync round trip.",
+    "Passed the installed-metadata `no_deps_installed` regression and two neighboring invalid-input integration tests.",
+    "Passed both existing `missing_dot` unit tests.",
+    "Passed `cargo fmt --all --check` and `git diff --check`."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3174"
+}
