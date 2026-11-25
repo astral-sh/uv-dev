@@ -8,13 +8,13 @@ Classification: question
 
 On Windows with uv 0.13.9, the reporter installed `keyring` with `artifacts-keyring` as a uv tool, configured a named private Azure Artifacts index and default PyPI in `uv.toml`, and set `UV_INDEX_COMPANY_PYTHON_FEED_USERNAME=VssSessionToken` and `UV_KEYRING_PROVIDER=subprocess`. They expected `uv pip install --dry-run package-name -vv` to use the same backend that reportedly succeeds after browser sign-in through `uv tool run keyring get`. Instead, the installer traces an index-root lookup and host fallback, then reports `401 Unauthorized`.
 
-**Executable lookup:** The reporter's `where keyring` output lists two executables. The first is in a separate Python installation's `Scripts` directory; the second is in the directory reported by `uv tool dir --bin`. That ordering supports the `PATH` shadowing explanation. The reporter has not shown which backends the first executable loads or whether using the uv-installed executable resolves the 401.
+**Reported resolution:** Before the fix, `where keyring` listed the Python 3.8 `Scripts` executable ahead of the uv-installed executable. After the reporter removed that `Scripts` directory from `PATH`, `where keyring` listed only the uv-installed executable. They cleared `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD`, kept the index username and subprocess provider configured, and uninstalled the previously installed package. The subsequent `uv pip install package-name==3.0.0rc2 --no-cache -v` logged `Found credentials in keyring` during the configured index lookup and installed the package successfully.
 
 **Reported workaround:** Supplying an Azure access token explicitly via `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD`, while keeping the index username and subprocess provider configured, let the dry run resolve 26 packages and show an install plan. This is consistent with uv's documented direct authentication path. It does not show that subprocess keyring supplied the credential or explain why that lookup failed.
 
 ## Classification
 
-Authentication troubleshooting, not a confirmed uv bug or regression. The controlled reproduction shows that a plugin-less `keyring` earlier on `PATH` can cause this discrepancy, and the reporter's executable ordering is consistent with that mechanism. Whether the first executable lacks the plugin and whether changing the order resolves the failure remain unverified. No before/after uv version comparison is reported.
+Resolved as an executable selection issue, not a confirmed uv bug or regression. The reporter's before/after lookup and install logs support `PATH` shadowing as the cause of the 401 on Windows. The controlled fixture independently shows how a plugin-less executable earlier on `PATH` can produce the same symptom; the backends loaded by the reporter's Python 3.8 executable were not verified.
 
 ## Reproduction
 
@@ -39,11 +39,11 @@ Existing tests cover the underlying auth paths, not the Windows/Azure report. `c
 
 ## Suggested follow-up
 
-In the same Windows Command Prompt where installation fails, put the directory reported by `uv tool dir --bin` first on `PATH`. Verify that `where.exe keyring` lists its executable first and that bare `keyring --list-backends` includes `ArtifactsKeyringBackend`. Retry the same dry run with `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD` unset so it tests keyring rather than the workaround. If the 401 persists, ask for the Python and package versions and any redacted subprocess warnings. Confirm that the direct check uses the exact index root from the installer trace. Do not request the output of `keyring get` or any credentials.
+No further authentication diagnostics are needed for the reported setup. If the failure recurs, check in the failing shell that `where.exe keyring` lists the executable from `uv tool dir --bin` first and that bare `keyring --list-backends` includes `ArtifactsKeyringBackend`. Leave `UV_INDEX_COMPANY_PYTHON_FEED_PASSWORD` unset when testing subprocess keyring. Do not request the output of `keyring get` or any credentials.
 
 ## Related
 
-- astral-sh/uv#11130 — Closest precedent: Windows, `artifacts-keyring`, index lookup, host fallback, and a 401. The reporter confirmed that Anaconda's `keyring` lacked the plugin and correcting `PATH` resolved it. The current report also shows another executable ahead of the uv-installed tool, but does not yet establish that correcting `PATH` resolves the failure.
+- astral-sh/uv#11130 — Closest precedent: Windows, `artifacts-keyring`, index lookup, host fallback, and a 401. Both reports resolved the failure by correcting which `keyring` was on `PATH`; the earlier report involved Anaconda and this one involved a Python 3.8 installation.
 - astral-sh/uv#12042 — Commenters observed an active virtual environment's plugin-less `keyring` shadowing the uv-installed tool. The current report shows a separate Python installation's executable taking precedence in the shell lookup, not a confirmed active virtual environment.
 - astral-sh/uv#17357 — Another Azure cloud feed 401, but that report describes a configured URL versus a UUID-form URL and success with `--extra-index-url`. The current trace shows lookup of the configured index URL, and the successful comparison is a direct tool invocation, not another index option.
 - astral-sh/uv#12651 (merged) — Shipped in 0.7.0 and fixed package-URL lookups for backends that require the index root, closing astral-sh/uv#4583, astral-sh/uv#11236, astral-sh/uv#11391, and astral-sh/uv#11507. The new trace already shows the index-root lookup, so it does not show a recurrence of that bug.
