@@ -48,6 +48,11 @@ defaults with the repository's instructions and concrete constraints:
    shortcuts as well as normal paths. For concurrency changes, reason about resource lifetimes,
    interprocess behavior, and consistency across related data; passing race tests do not establish
    those guarantees.
+
+   Do not flag reuse of a cached result solely because a new check would reject the original input.
+   Identify the regression caused by reuse or the guarantee that the cache hit violates. Check for
+   paths that skip required validation when producing new results.
+
 6. **Keep tests direct and focused.** Read neighboring tests and check existing coverage before
    recommending more cases. Follow the repository's test style throughout setup, commands, and
    assertions, and use the relevant existing test module. Integration scenarios should use explicit
