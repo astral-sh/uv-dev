@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20790,
+        "title": "Support proxy indexes through reversible artifact URLs",
+        "url": "https://github.com/astral-sh/uv/pull/20790",
+        "state": "merged",
+        "reason": "Introduced the proxy-index preview in uv 0.13.10. Fresh resolution and downloads both use the proxy, while the lockfile retains upstream URLs. Frozen installs can redirect locked artifact downloads without querying the proxy's Simple API."
+      },
+      {
+        "kind": "issue",
+        "number": 23275,
+        "title": "proxy-index: path-independent artifact mapping (Artifactory layout), follow-up to astral-sh/uv#20790",
+        "url": "https://github.com/astral-sh/uv/issues/23275",
+        "state": "open",
+        "reason": "Tracks artifact lookup and canonical lock URLs for proxies whose artifact paths do not match the upstream layout. It does not track selecting candidates using upstream metadata instead of proxy metadata."
+      },
+      {
+        "kind": "issue",
+        "number": 6349,
+        "title": "Request for `uv.lock` to support different index urls across different developer machines and CI environments",
+        "url": "https://github.com/astral-sh/uv/issues/6349",
+        "state": "closed",
+        "reason": "The canonical portable-lockfile discussion closed after the proxy preview landed. An earlier design considered upstream validation of candidates selected through the proxy, not upstream-driven resolution with proxy downloads."
+      },
+      {
+        "kind": "issue",
+        "number": 22231,
+        "title": "Allow index override when using uv sync --frozen",
+        "url": "https://github.com/astral-sh/uv/issues/22231",
+        "state": "closed",
+        "reason": "Requested alternate downloads from an existing lockfile. Maintainers pointed to astral-sh/uv#6349 and astral-sh/uv#23275. The request does not cover fresh resolution."
+      },
+      {
+        "kind": "issue",
+        "number": 21449,
+        "title": "`exclude-newer` behavior with pull-through PyPI caches missing upload timestamps & locking build backends",
+        "url": "https://github.com/astral-sh/uv/issues/21449",
+        "state": "open",
+        "reason": "Maintainer comments confirm that files without upload timestamps are rejected when the cutoff applies. This report concerns isolated build-dependency resolution in frozen CI, not separate routing for index metadata and artifacts."
+      }
+    ],
+    "search_scope": "Searched open and closed uv issues and open, closed, and merged PRs for proxy indexes, proxy-for, artifact-base-url, resolve = true, and variants of resolving from one index and downloading from another. Separately searched upstream metadata, mirror and frozen-lock downloads, artifact-path mapping, missing upload-time under exclude-newer, and slow registry resolution. Cross-checked PR searches against repository pull listings, linked changes, and release notes. The timestamp-only proposal in astral-sh/uv#12449 would permit missing dates rather than preserve the cutoff. The similarly titled astral-sh/uv#23116 addresses proxy refactoring and prefetch errors, and the slowdown in astral-sh/uv#16111 has a registry-specific mechanism not established here."
+  },
+  "type": "enhancement",
+  "type_reason": "The request is for a new routing mode: use upstream PyPI for resolution while sending artifact downloads to an internal registry. The preview intentionally routes both through the proxy during fresh resolution. The existing discussions cover portable locks, frozen installs, artifact path mapping, or missing timestamps, but none tracks this split. No uv regression or correctness defect is established.",
+  "summary": "The proxy-index preview can redirect downloads from an existing PyPI lockfile, but it does not split upstream resolution from proxy downloads during fresh resolution. The closest prior work covers portable lockfiles and artifact URL mapping; the missing-timestamp reports explain the motivation.",
+  "draft_response": "The proxy-index preview introduced in uv 0.13.10 uses the proxy for both package lookups and downloads. It records upstream URLs in the lockfile, but it doesn't use PyPI's upload timestamps when resolving through the proxy. Resolving against PyPI while routing downloads through your registry would be a new mode.\n\nIf your policy allows a separate `uv lock` against PyPI without the proxy, you can then configure the proxy for `uv sync --frozen`. That routes locked artifacts through the proxy if their paths match after the configured prefixes; it doesn't cover resolution of isolated build requirements. Would that two-step workflow fit, or do you need both routes in a command that resolves and installs together?"
+}
