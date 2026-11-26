@@ -17135,6 +17135,85 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
     Ok(())
 }
 
+/// A project version bump forces a lock-guided resolution without changing the Python forks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_upgrade_restores_unreachable_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+
+    let (filename, wheel) = WheelBuilder::new(&"alpha".parse()?, &"1.0".parse()?)
+        .requires(&["beta; python_full_version < '3.10.2'".parse()?])
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"beta".parse()?, &"1.0".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"beta".parse()?, &"2.0".parse()?)
+        .requires_python(Some(&">=3.11".parse()?))
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"gamma".parse()?, &"1.0".parse()?)
+        .requires(&["beta>=2; python_version >= '3.11'".parse()?])
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "demo"
+        version = "1.0.0"
+        requires-python = ">=3.10"
+        dependencies = ["alpha", "gamma"]
+
+        [tool.uv]
+        find-links = ["wheels"]
+        no-index = true
+    "#};
+    pyproject_toml.write_str(project)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let fresh_lock = context.read("uv.lock");
+
+    pyproject_toml.write_str(&project.replace("1.0.0", "1.0.1"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    Updated demo v1.0.0 -> v1.0.1
+    ");
+    let guided_lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let upgraded_lock = context.read("uv.lock");
+
+    // The impossible edge in the Python >=3.11 fork causes lockfile churn without changing the
+    // selected packages or forks (astral-sh/uv#23410).
+    let diff = diff_snapshot(&guided_lock, &upgraded_lock, 3);
+    assert_snapshot!(diff, @r#"
+    --- old
+    +++ new
+    @@ -15,6 +15,7 @@
+     source = { registry = "wheels" }
+     dependencies = [
+         { name = "beta", version = "1.0", source = { registry = "wheels" }, marker = "python_full_version < '3.10.2'" },
+    +    { name = "beta", version = "2.0", source = { registry = "wheels" }, marker = "python_version < '0'" },
+     ]
+     wheels = [
+         { path = "alpha-1.0-py3-none-any.whl" },
+    "#);
+    assert_eq!(upgraded_lock, fresh_lock.replace("1.0.0", "1.0.1"));
+
+    Ok(())
+}
+
 /// Warn when there are missing bounds on transitive dependencies with `--resolution lowest`.
 #[cfg(feature = "test-universal")]
 #[test]
