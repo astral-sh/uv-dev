@@ -294,10 +294,13 @@ fn check_uv_toml_required_version(path: &Path, content: &str, source: Error) -> 
 
 /// Validate that an [`Options`] schema is compatible with `uv.toml`.
 fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
-    // A `required-version` mismatch takes precedence over a schema error.
-    if let Some(err) = required_version_mismatch(options.globals.required_version.clone()) {
-        return Err(err);
-    }
+    // Enforce the version after resolving global settings, unless a schema error prevents it.
+    validate_uv_toml_fields(path, options).map_err(|err| {
+        required_version_mismatch(options.globals.required_version.clone()).unwrap_or(err)
+    })
+}
+
+fn validate_uv_toml_fields(path: &Path, options: &Options) -> Result<(), Error> {
     let Options {
         globals: _,
         top_level: _,

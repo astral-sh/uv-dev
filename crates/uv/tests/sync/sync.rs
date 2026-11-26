@@ -1,6 +1,10 @@
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
+#[cfg(unix)]
+use async_zip::base::write::ZipFileWriter;
+#[cfg(unix)]
+use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
@@ -14,6 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::CacheBucket;
 use uv_fs::Simplified;
+use uv_platform::Platform;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
@@ -19953,5 +19958,156 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
     package
         .child("backend-executed")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn sync_required_version_matches() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        required-version = "{}"
+        preview-features = ["install-required-version"]
+    "#, uv_version::version()})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn sync_required_version_mismatch() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        required-version = "<0.1"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Required uv version `<0.1` does not match the running version `[UV_VERSION]`. To run a compatible version automatically, use `--preview-features install-required-version`.
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_required_version_no_matching_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filter((uv_version::version(), "[UV_VERSION]"))
+        .with_filter((Platform::from_env()?.as_cargo_dist_triple(), "[PLATFORM]"));
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        required-version = "<0.1"
+    "#})?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/github/versions/main/v1/uv.ndjson"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "install-required-version"])
+        .env("UV_ASTRAL_MIRROR_URL", server.uri()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Current uv version `[UV_VERSION]` does not match required version `<0.1`. Looking for a compatible version.
+    error: Required uv version `<0.1` does not match the running version `[UV_VERSION]`
+      cause: No version of uv found matching `<0.1` for platform `[PLATFORM]`
+    ");
+    Ok(())
+}
+
+/// The child must resolve a relative `--directory` from the original working directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_install_required_version() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    let project = context.temp_dir.child("my project");
+    project.create_dir_all()?;
+    project.child("uv.toml").write_str(indoc! {r#"
+        required-version = ">=0.8,<0.9"
+        preview-features = ["install-required-version"]
+    "#})?;
+
+    let server = MockServer::start().await;
+    let release = json!({
+        "version": "0.8.3",
+        "date": "2025-07-28T00:00:00Z",
+        "artifacts": [{
+            "platform": Platform::from_env()?.as_cargo_dist_triple(),
+            "archive_format": "zip",
+            "url": format!("{}/uv.zip", server.uri()),
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/github/versions/main/v1/uv.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(release.to_string()))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let mut archive = ZipFileWriter::new(Vec::new());
+    let entry = ZipEntryBuilder::new("uv".into(), Compression::Stored).unix_permissions(0o755);
+    let script = indoc! {r#"
+        #!/bin/sh
+        printf '%s\n' "$@"
+        test -f 'my project/uv.toml' || exit 1
+        exit 42
+    "#};
+    archive.write_entry_whole(entry, script.as_bytes()).await?;
+    Mock::given(method("GET"))
+        .and(path("/uv.zip"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive.close().await?))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--directory", "my project"])
+        .env("UV_ASTRAL_MIRROR_URL", server.uri()), @"
+    exit_code: 42 (failure)
+    ----- stdout -----
+    sync
+    --cache-dir
+    [CACHE_DIR]/
+    --directory
+    my project
+
+    ----- stderr -----
+    Current uv version `[UV_VERSION]` does not match required version `>=0.8, <0.9`. Looking for a compatible version.
+    Running uv v0.8.3
+    ");
+
+    // Resolve against the manifest again, but reuse the cached executable.
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--directory", "my project", "--locked"])
+        .env("UV_ASTRAL_MIRROR_URL", server.uri()), @"
+    exit_code: 42 (failure)
+    ----- stdout -----
+    sync
+    --cache-dir
+    [CACHE_DIR]/
+    --directory
+    my project
+    --locked
+
+    ----- stderr -----
+    Current uv version `[UV_VERSION]` does not match required version `>=0.8, <0.9`. Looking for a compatible version.
+    Running uv v0.8.3
+    ");
     Ok(())
 }

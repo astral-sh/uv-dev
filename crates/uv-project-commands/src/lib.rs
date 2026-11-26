@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use uv_scripts::Pep723Script;
 
 pub use error::ProjectError;
+pub use reporters::BinaryDownloadReporter;
 
 pub mod add;
 pub mod audit;

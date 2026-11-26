@@ -704,6 +704,11 @@ impl EnvVars {
     #[attr_added_in("0.2.0")]
     pub const UV_INTERNAL__PARENT_INTERPRETER: &'static str = "UV_INTERNAL__PARENT_INTERPRETER";
 
+    /// The version requirement that prompted the parent to run another uv release.
+    #[attr_hidden]
+    #[attr_added_in("0.13.10")]
+    pub const UV_INTERNAL__REQUIRED_VERSION: &'static str = "UV_INTERNAL__REQUIRED_VERSION";
+
     /// Used to identify the source tree when invoking PEP 517 build hooks.
     #[attr_hidden]
     #[attr_added_in("0.11.22")]

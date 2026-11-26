@@ -6,13 +6,13 @@ use uv_command_support::{
 };
 use uv_pep440::Version;
 
-pub(crate) struct BinaryDownloadReporter {
+pub struct BinaryDownloadReporter {
     reporter: ProgressReporter,
 }
 
 impl BinaryDownloadReporter {
     /// Initialize a [`BinaryDownloadReporter`] for a single binary download.
-    pub(crate) fn single(printer: Printer) -> Self {
+    pub fn single(printer: Printer) -> Self {
         let multi_progress = MultiProgress::with_draw_target(printer.target());
         let root = multi_progress.add(ProgressBar::with_draw_target(None, printer.target()));
         let reporter = ProgressReporter::new(root, multi_progress, printer);
