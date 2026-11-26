@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3547,
+        "title": "Installing wheel with link-mode=clone fails on windows",
+        "url": "https://github.com/astral-sh/uv/issues/3547",
+        "state": "closed",
+        "reason": "The same command failed on a Windows Dev Drive in uv 0.1.42, but that failure was an attempt to clone a directory and returned Win32 error 5. The new report fails on a regular file with ERROR_MORE_DATA."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3551,
+        "title": "Clone individual files on windows ReFS",
+        "url": "https://github.com/astral-sh/uv/pull/3551",
+        "state": "merged",
+        "reason": "Closed astral-sh/uv#3547 by cloning files individually rather than cloning directories. The current Windows linker still uses that approach; the reported failure occurs within the per-file path."
+      },
+      {
+        "kind": "issue",
+        "number": 16153,
+        "title": "Should we use Copy-on-Write for Windows Dev Drives and other ReFS drive?",
+        "url": "https://github.com/astral-sh/uv/issues/16153",
+        "state": "open",
+        "reason": "Discusses detecting ReFS support and whether uv should select copy-on-write on supported Windows drives. It does not track an installation failure when clone mode is explicitly selected."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests in astral-sh/uv. Literal queries covered ERROR_MORE_DATA, 0x800700EA, the signed error code, clone error text, the package, ReFS, and Dev Drive. Conceptual queries covered wheel linking, reflinks, copy-on-write, and fallback without relying on the package or platform. Separate cause-oriented queries covered block cloning, extent layout, and Windows API identifiers. Checked candidate comments and closing links, pull request listings, linker and dependency history, and the 0.13.9–0.13.10 release comparison. Exact error searches surfaced only the new report. Ruled out astral-sh/uv#17544 (Dev Drive placement guidance), astral-sh/uv#15084 (APFS fallback and incomplete installs), astral-sh/uv#1444 and astral-sh/uv#1773 (cross-volume copy fallback), astral-sh/uv#7620 (Linux directory-clone fallback), and astral-sh/uv#23029 (an opt-in cross-device fallback mode)."
+  },
+  "type": "bug",
+  "type_reason": "An explicit clone install aborts on an individual file with the cache and environment on the same ReFS volume, while copy mode installs the same cached wheel. No matching issue or fix was found. The earlier whole-directory failure was distinct, and its fix is still present, so this report does not establish a regression of that bug. The cause of the Windows error remains unconfirmed.",
+  "summary": "uv 0.13.9 aborts a same-volume ReFS install with ERROR_MORE_DATA while cloning a wheel file; copy mode succeeds. The closest historical report and fix, astral-sh/uv#3547 and astral-sh/uv#3551, addressed directory cloning. The open discussion in astral-sh/uv#16153 concerns when to select copy-on-write, not this per-file error.",
+  "draft_response": "Thanks for the repro. On Windows, uv already clones wheel files individually, so this is different from the directory-cloning failure fixed in astral-sh/uv#3551. `--link-mode=copy` is a workaround. The next step is to try cloning that same cached file directly through the Windows reflink backend and identify which operation returns `ERROR_MORE_DATA`. The Robocopy test shows block cloning can work on the volume, but the cause of this failure is still unknown."
+}
