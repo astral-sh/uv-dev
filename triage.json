@@ -1,0 +1,67 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8676,
+        "title": "`uv pip compile --universal` outputs requirements with `python_version < '0'` marker",
+        "url": "https://github.com/astral-sh/uv/issues/8676",
+        "state": "closed",
+        "reason": "Reported the same false-marker sentinel in generated requirements, not a dependency edge that appears or disappears depending on how uv.lock is generated."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8759,
+        "title": "fix bug where `python_version < '0'` could appear in a final resolution",
+        "url": "https://github.com/astral-sh/uv/pull/8759",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#8676 by skipping forks whose combined markers were disjoint from the Python requirement. Here both forks and both beta versions are needed; only the edge from alpha to beta 2.0 is impossible."
+      },
+      {
+        "kind": "issue",
+        "number": 20368,
+        "title": "`uv lock` is not idempotent for impossible cross-variable markers",
+        "url": "https://github.com/astral-sh/uv/issues/20368",
+        "state": "closed",
+        "reason": "Repeated plain locks alternated between two impossible top-level platform dependencies, changing the selected packages and failing `--check`. The new report keeps the same packages and changes only an edge across resolution modes."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20369,
+        "title": "Make locking idempotent for impossible platform markers",
+        "url": "https://github.com/astral-sh/uv/pull/20369",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#20368 by preventing unchecked marker conjunctions from polluting the regular marker cache. In the new report the marker correctly evaluates to false; the bug is that the edge is still written."
+      },
+      {
+        "kind": "issue",
+        "number": 6176,
+        "title": "Apply fork markers at fork time",
+        "url": "https://github.com/astral-sh/uv/issues/6176",
+        "state": "open",
+        "reason": "Maintainers discuss how discovered and pre-seeded forks can handle disjoint dependencies differently. That issue's example discards the unreachable output and does not track a false edge persisting in the lockfile."
+      },
+      {
+        "kind": "issue",
+        "number": 22040,
+        "title": "Varying order of resolution-markers from the same `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/22040",
+        "state": "open",
+        "reason": "Tracks lockfile churn when forks are reused, primarily reordered `resolution-markers`. A follow-up shows equivalent marker rewrites, but neither example adds an always-false dependency edge."
+      },
+      {
+        "kind": "pull_request",
+        "number": 23403,
+        "title": "Preserve `resolution-markers` order when reusing forks from an existing lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/23403",
+        "state": "closed",
+        "reason": "This unmerged attempt to fix astral-sh/uv#22040 explicitly addressed fork ordering, not dependency-edge filtering."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests with authenticated gh. Literal searches covered the false-marker sentinel, dead edges, lock and upgrade commands, dry-run output, and the example package and Python bounds. Symptom searches covered lock idempotence, lockfile churn, and fresh versus guided resolution; fix-oriented searches covered disjoint markers, reachability, fork preferences, and marker ordering. Reviewed candidate comments, linked fixes, and recent PR titles by state. Ruled out astral-sh/uv#15810 and astral-sh/uv#15817 (Git SHA reporting), astral-sh/uv#23394 (impossible input pins affecting yanked-version selection in pip compile), and astral-sh/uv#23142 (a repeat targeted upgrade fails resolution rather than writing an equivalent graph)."
+  },
+  "type": "bug",
+  "type_reason": "Confirmed on uv 0.13.0 and 0.13.10: a fresh or full-upgrade resolution writes an unreachable dependency edge that lock-guided re-resolution omits, without changing the selected packages. The earlier fixes covered impossible forks and cross-variable marker normalization, not an impossible edge between reachable packages. No existing issue or pull request was found that tracks this behavior, and there is no evidence that either earlier fix regressed.",
+  "summary": "The closest precedents are fixed bugs in false-marker output and impossible-marker lock oscillation, but neither covers this dependency edge. The open fork-pruning and marker-order discussions are related, not duplicates.",
+  "draft_response": "Your four-wheel example reproduces on uv 0.13.0 and 0.13.10. The only difference after the version bump is that `uv lock --upgrade` puts back an `alpha` → `beta 2.0` edge that can never apply. Plain `uv lock --dry-run` accepts either already-valid lock, but `uv lock --upgrade --dry-run` against the lock without the edge does report `Lockfile changes detected`. The next step is a regression test that checks that fresh, full-upgrade, and lock-guided resolutions all omit the impossible edge."
+}
