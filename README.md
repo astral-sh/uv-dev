@@ -6,15 +6,11 @@ Classification: bug
 
 ## Summary
 
-A fresh `uv lock` and `uv lock --upgrade` write an unreachable dependency edge in a project whose resolution forks by Python version. After a project version bump forces a lock-guided re-resolution, plain `uv lock` omits that edge. For the same final project inputs and selected packages, the two paths produce lockfiles that differ by one dependency entry. The closest precedents are fixed bugs in false-marker output and impossible-marker lock oscillation, but neither covers this edge. The open fork-pruning and marker-order discussions are adjacent, not duplicates.
-
-## Draft response
-
-Your four-wheel example reproduces on uv 0.13.0 and 0.13.10. The only difference after the version bump is that `uv lock --upgrade` puts back an `alpha` → `beta 2.0` edge that can never apply. Plain `uv lock --dry-run` accepts either already-valid lock, but `uv lock --upgrade --dry-run` against the lock without the edge does report `Lockfile changes detected`. The next step is a regression test that checks that fresh, full-upgrade, and lock-guided resolutions all omit the impossible edge.
+A fresh `uv lock` and `uv lock --upgrade` write an unreachable dependency edge in a project whose resolution forks by Python version. After a project version bump forces a lock-guided re-resolution, plain `uv lock` omits that edge. Given the same final project inputs and selected packages, the two paths produce lockfiles that differ by one dependency entry. Alternating commands alone on an unchanged project does not flip the file: plain locking leaves the valid upgraded lock intact. Upgrade dry-run does detect the edge-only diff when starting from the guided lock.
 
 ## Classification
 
-This is a correctness bug: equivalent resolutions should not differ by an unreachable dependency entry. The earlier fixes covered impossible forks and cross-variable marker normalization, not an impossible edge between reachable packages. No existing issue or pull request was found that tracks this specific behavior, and the evidence does not establish a regression of either earlier fix.
+This is a lockfile stability bug: equivalent resolutions differ by an unreachable dependency entry. The reproduction does not show an incorrect package selection or a missed diff in upgrade dry-run. The earlier fixes covered impossible forks and cross-variable marker normalization, not an impossible edge between reachable packages. No existing issue or pull request was found that tracks this specific behavior, and the evidence does not establish when it was introduced or that it is a regression of an earlier fix.
 
 ## Related
 
@@ -26,21 +22,32 @@ This is a correctness bug: equivalent resolutions should not differ by an unreac
 - astral-sh/uv#22040 (open) — Tracks forked-lock churn when existing forks are reused, usually a reordering of `resolution-markers`. A follow-up also shows equivalent marker rewrites, but neither report shows an always-false dependency edge being added.
 - astral-sh/uv#23403 (closed, unmerged) — Attempted to fix astral-sh/uv#22040 by preserving the order of reused forks. It explicitly limited its scope to ordering and did not change dependency-edge filtering.
 
-## Verification
+## Reproduction
 
-Recreated the reported fixture offline with four generated wheels, using the official Linux x86_64 builds of uv 0.13.0 and 0.13.10 and CPython 3.12.3. The project supports Python 3.10 and later. `alpha` requires `beta` only below Python 3.10.2; `gamma` requires `beta>=2` on Python 3.11 and later; `beta 2.0` itself requires Python 3.11 or later.
+**Reproducible.** Independently generated four local `py3-none-any` wheels and reproduced the behavior on Linux x86_64 with CPython 3.12.3, using uv 0.13.9 from `PATH` and the official uv 0.13.0 and 0.13.10 binaries. The projects, wheelhouses, and caches were isolated in temporary directories; all lock commands ran offline.
 
-1. A fresh `uv lock` writes one always-false edge from `alpha` to `beta 2.0`.
-2. Bumping only the project version from `1.0.0` to `1.0.1` and running plain `uv lock` removes the edge.
-3. `uv lock --upgrade` restores it. On 0.13.10, the before/after diff is exactly that added edge. Plain locking without changing the project again leaves the upgraded lock intact.
+The project is a standalone `demo` (initially `1.0.0`) with `requires-python = ">=3.10"`, `dependencies = ["alpha", "gamma"]`, and `[tool.uv]` settings `find-links = ["wheels"]` and `no-index = true`. The wheels have the following metadata:
 
-On both releases, upgrade dry-run against the guided lock reports `Lockfile changes detected`. Plain dry-run reports no changes for either already-valid lock (both forms checked on 0.13.0). This verifies the lockfile churn, not a separate failure of dry-run to report the upgrade diff.
+| Wheel | Relevant metadata |
+| --- | --- |
+| `alpha 1.0` | `Requires-Dist: beta; python_full_version < '3.10.2'` |
+| `gamma 1.0` | `Requires-Dist: beta>=2; python_version >= '3.11'` |
+| `beta 1.0` | No dependencies or Python restriction |
+| `beta 2.0` | `Requires-Python: >=3.11`; no dependencies |
+
+1. Run `uv lock --offline` with no `uv.lock`. The lock forks at Python 3.11 and includes an `alpha` → `beta 2.0` dependency with `marker = "python_version < '0'"`.
+2. Change only the project version from `1.0.0` to `1.0.1` and run `uv lock --offline` again. The lock-guided re-resolution omits that edge.
+3. Run `uv lock --offline --upgrade`. The edge returns. On all three versions, the diff against step 2 is exactly one added dependency entry; the selected packages and fork markers are identical. On uv 0.13.10, bumping the version again to `1.0.2` and repeating the plain lock and upgrade produced the same one-line diff.
+
+`uv lock --offline --dry-run` reports `No lockfile changes detected` for either already-valid lock. In contrast, `uv lock --offline --upgrade --dry-run` reports `Lockfile changes detected` against the guided lock and leaves the file unchanged; once the edge is present, it reports no changes. A subsequent plain lock without a project edit leaves the upgraded file byte-for-byte unchanged.
+
+Nearby coverage in `crates/uv/tests/lock/lock.rs`: `lock_impossible_platform_markers` checks that contradictory top-level platform requirements are retained only in metadata, not as resolved edges, and that `--check` accepts the lock. `lock_dry_run_noop` checks both plain and upgrade dry-run against an unchanged Python-forked lock. Neither test compares edges between independently reachable packages across fresh and lock-guided re-resolutions.
 
 ## Source evidence
 
-- `crates/uv-lock-operations/src/validated_lock.rs:120` marks an existing lock unusable for a full upgrade. `crates/uv-lock-operations/src/lock.rs:860` returns a satisfying lock unchanged, while `crates/uv-lock-operations/src/lock.rs:888` reuses eligible pins and fork markers when a re-resolution is needed.
+- `crates/uv-lock-operations/src/validated_lock.rs:120` marks an existing lock unusable for a full upgrade. `crates/uv-lock-operations/src/lock.rs:860` returns a satisfying lock unchanged; re-resolution can reuse eligible pins and fork markers.
 - `crates/uv-resolver/src/resolution/output.rs:252` intersects each dependency marker with its fork marker and can add the resulting edge even if it is false. Final graph cleanup at `crates/uv-resolver/src/resolution/output.rs:193` prunes unreachable nodes, not false edges between independently reachable nodes.
-- `crates/uv-lock/src/lock/mod.rs:7094` passes graph edges to the lock dependency builder, which simplifies the marker and constructs the dependency at `crates/uv-lock/src/lock/mod.rs:1499`. False markers are rendered as `python_version < '0'` by `crates/uv-pep508/src/marker/tree.rs:1888`. These paths explain how a false edge can reach the lockfile without an unreachable package being selected.
+- `crates/uv-lock/src/lock/mod.rs:7094` passes graph edges to the lock dependency builder, which simplifies the marker and constructs the dependency at `crates/uv-lock/src/lock/mod.rs:1499`. False markers are rendered as `python_version < '0'` by `crates/uv-pep508/src/marker/tree.rs:1888`. These are candidate investigation points; the reproduction did not trace where the two resolution paths first diverge.
 - `crates/uv-project-commands/src/lock.rs:193` prints a generic change notice for a changed lock even if there are no version events to list, consistent with the upgrade dry-run result.
 
 ## Search scope

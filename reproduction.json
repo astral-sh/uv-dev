@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced astral-sh/uv#23410 on Linux x86_64 with CPython 3.12.3 and uv 0.13.0, 0.13.9, and 0.13.10. Using the four local wheels from the report, a fresh `uv lock --offline` wrote an `alpha` → `beta 2.0` edge marked `python_version < '0'`. Bumping only the project version from 1.0.0 to 1.0.1 and rerunning `uv lock --offline` removed it. `uv lock --offline --upgrade` restored it as the only changed line, with the selected packages and Python forks unchanged. Plain locking did not flip the file again without another project edit. Contrary to the report’s dry-run claim, `uv lock --offline --upgrade --dry-run` reported `Lockfile changes detected` against the guided lock. Updated the issue-context README with the fixture, results, and nearby test coverage."
+}
