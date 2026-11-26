@@ -16626,6 +16626,60 @@ fn prune_unreachable() -> Result<()> {
     Ok(())
 }
 
+/// An impossible edge in a Python fork neither explains a pin nor supplies its lower bound.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_omits_unreachable_dependency_edges() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+
+    let (filename, wheel) = WheelBuilder::new(&"alpha".parse()?, &"1.0".parse()?)
+        .requires(&["beta>=1; python_full_version < '3.13.2'".parse()?])
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"beta".parse()?, &"1.0".parse()?).build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"beta".parse()?, &"2.0".parse()?)
+        .requires_python(Some(&">=3.14".parse()?))
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"gamma".parse()?, &"1.0".parse()?)
+        .requires(&["beta!=1; python_version >= '3.14'".parse()?])
+        .build();
+    wheels.child(filename).write_binary(&wheel)?;
+
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("alpha>=1\ngamma>=1\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links").arg("wheels")
+        .arg("--universal")
+        .arg("--python-version").arg("3.12")
+        .arg("--resolution").arg("lowest")
+        .arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    alpha==1.0
+        # via -r requirements.in
+    beta==1.0 ; python_full_version < '3.13.2'
+        # via alpha
+    beta==2.0 ; python_full_version >= '3.14'
+        # via gamma
+    gamma==1.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    warning: The transitive dependency `beta` is unpinned. Consider setting a lower bound with a constraint when using `--resolution lowest` to avoid using outdated versions.
+    ");
+
+    Ok(())
+}
+
 /// Allow resolving a package that requires a Python version that is not available, as long as it
 /// includes static metadata.
 ///
