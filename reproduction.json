@@ -1,0 +1,4 @@
+{
+  "reproduction": "not_reproducible",
+  "reason": "The available runner could not exercise Windows ReFS block cloning. On x86-64 Linux with ext4, uv 0.13.9, and CPython 3.12.3, `uv pip install annotated-types==0.8.0 --link-mode=clone --no-deps` exited 0 with both a fresh and a warm cache. Reflinking `annotated_types/test_cases.py` returned Linux error 95 (Operation not supported), and inode checks confirmed that uv fell back to hardlinks. The offline `--link-mode=copy` control also succeeded. This does not rule out the reported ERROR_MORE_DATA; verification requires Windows 11 build 26300 with the cache and virtual environments on the same ReFS 3.14 Dev Drive. No integration test was found for that failure. The issue-context README records the commands, results, and related test coverage."
+}
