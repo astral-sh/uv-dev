@@ -17135,10 +17135,10 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
     Ok(())
 }
 
-/// A project version bump forces a lock-guided resolution without changing the Python forks.
+/// Fresh and lock-guided resolutions must agree even when a dependency is impossible in one fork.
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_upgrade_restores_unreachable_dependency() -> Result<()> {
+fn lock_upgrade_omits_unreachable_dependency() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
@@ -17194,22 +17194,16 @@ fn lock_upgrade_restores_unreachable_dependency() -> Result<()> {
     ");
     let upgraded_lock = context.read("uv.lock");
 
-    // The impossible edge in the Python >=3.11 fork causes lockfile churn without changing the
-    // selected packages or forks (astral-sh/uv#23410).
     let diff = diff_snapshot(&guided_lock, &upgraded_lock, 3);
-    assert_snapshot!(diff, @r#"
-    --- old
-    +++ new
-    @@ -15,6 +15,7 @@
-     source = { registry = "wheels" }
-     dependencies = [
-         { name = "beta", version = "1.0", source = { registry = "wheels" }, marker = "python_full_version < '3.10.2'" },
-    +    { name = "beta", version = "2.0", source = { registry = "wheels" }, marker = "python_version < '0'" },
-     ]
-     wheels = [
-         { path = "alpha-1.0-py3-none-any.whl" },
-    "#);
+    assert_snapshot!(diff, @"");
     assert_eq!(upgraded_lock, fresh_lock.replace("1.0.0", "1.0.1"));
+    assert!(!upgraded_lock.contains("python_version < '0'"));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--check"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
 
     Ok(())
 }

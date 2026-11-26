@@ -189,8 +189,9 @@ impl<'a> ResolutionGraphBuilder<'a> {
 
         simplify_conflict_markers(conflicts, &mut graph);
 
-        // Discard any unreachable nodes.
+        // Discard unreachable nodes and edges.
         graph.retain_nodes(|graph, node| !graph[node].marker().is_false());
+        graph.retain_edges(|graph, edge| !graph[edge].is_false());
 
         if matches!(resolution_strategy, ResolutionStrategy::Lowest) {
             report_missing_lower_bounds(&graph, &mut diagnostics, &constraints, &modifiers);
