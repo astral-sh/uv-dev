@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Python-forked resolutions retained always-false dependency edges when both packages were reachable through other paths. Pruning those edges after reachability makes fresh, lock-guided, and upgraded lockfiles agree without changing the selected packages. The updated lock regression checks that agreement, and the universal compile regression verifies that false edges no longer misattribute pins or suppress missing lower-bound warnings.",
+  "validation": [
+    "Passed 10 focused debug-profile integration tests across lock and pip compile.",
+    "Verified that a legacy lock remains readable, upgrading removes only the false edge, and upgrade dry-run then reports no changes.",
+    "Verified that universal requirements output recompiles to identical bytes with the corrected annotation and warning.",
+    "Passed Rust formatting and git diff whitespace checks."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/3176"
+}
