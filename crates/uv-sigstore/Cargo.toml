@@ -1,0 +1,43 @@
+[package]
+name = "uv-sigstore"
+version = "0.0.101"
+description = "This is an internal component crate of uv"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+doctest = false
+
+[dependencies]
+uv-macros = { workspace = true }
+
+aws-lc-rs = { workspace = true }
+base64 = { workspace = true }
+ct-merkle = { workspace = true }
+hex = { workspace = true }
+itertools = { workspace = true }
+jiff = { workspace = true }
+pem-rfc7468 = { workspace = true }
+rcgen = { workspace = true }
+reqwest = { workspace = true }
+reqwest-middleware = { workspace = true, features = ["json"] }
+rustls-pki-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+x509-parser = { workspace = true }
+
+[dev-dependencies]
+http = { workspace = true }
+insta = { workspace = true }
+rcgen = { workspace = true, features = ["x509-parser"] }
+tokio = { workspace = true }
+wiremock = { workspace = true }
+
+[lints]
+workspace = true
