@@ -1053,6 +1053,87 @@ async fn proxy_schemeless_url_in_uv_toml() {
     );
 }
 
+/// When DNS resolution fails while opening an HTTPS tunnel, the error names only the index,
+/// not the failing proxy host (astral-sh/uv#23284).
+/// An overlong DNS label makes glibc reject the proxy host without a DNS lookup.
+#[cfg(all(feature = "test-python", target_os = "linux", target_env = "gnu"))]
+#[test]
+fn proxy_https_tunnel_dns_error() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.14"]);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = ["iniconfig"]
+    "#})?;
+
+    let proxy_url = format!("http://{}.invalid.", "a".repeat(64));
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .arg("--default-index")
+        .arg("https://127.0.0.1:0/simple")
+        .env(EnvVars::HTTPS_PROXY, proxy_url)
+        .env(EnvVars::ALL_PROXY, "")
+        .env(EnvVars::NO_PROXY, "")
+        .env_remove("REQUEST_METHOD")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.14.[X] interpreter at: [PYTHON-3.14]
+    error: Failed to fetch: https://[LOCALHOST]/simple/iniconfig/
+      cause: error sending request for url (https://[LOCALHOST]/simple/iniconfig/)
+      cause: client error (Connect)
+      cause: tunnel error: failed to create underlying connection
+      cause: dns error
+      cause: error resolving DNS
+      cause: failed to lookup address information: Name or service not known
+    ");
+
+    Ok(())
+}
+
+/// HTTP forwarding does not use a tunnel, so the diagnostic gives no indication that DNS
+/// resolution failed for the proxy rather than the index (astral-sh/uv#23284).
+/// An overlong DNS label makes glibc reject the proxy host without a DNS lookup.
+#[cfg(all(feature = "test-python", target_os = "linux", target_env = "gnu"))]
+#[test]
+fn proxy_http_forward_dns_error() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.14"]);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = ["iniconfig"]
+    "#})?;
+
+    let proxy_url = format!("http://{}.invalid.", "a".repeat(64));
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .arg("--default-index")
+        .arg("http://127.0.0.1:0/simple")
+        .env(EnvVars::HTTP_PROXY, proxy_url)
+        .env(EnvVars::ALL_PROXY, "")
+        .env(EnvVars::NO_PROXY, "")
+        .env_remove("REQUEST_METHOD")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.14.[X] interpreter at: [PYTHON-3.14]
+    error: Failed to fetch: http://[LOCALHOST]/simple/iniconfig/
+      cause: error sending request for url (http://[LOCALHOST]/simple/iniconfig/)
+      cause: client error (Connect)
+      cause: dns error
+      cause: error resolving DNS
+      cause: failed to lookup address information: Name or service not known
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn connect_timeout_index() {
     let context = uv_test::test_context!("3.12");
