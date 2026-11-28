@@ -1,4 +1,4 @@
-# Analyze newly opened issues and persist their triage context.
+# Analyze newly opened issues and attach their triage context.
 name: "issue-triage"
 run-name: Issue context for ${{ github.event.issue.number || inputs.issue }}
 
@@ -18,20 +18,21 @@ env:
   UV_LOCKED: 1
 
 jobs:
-  initialize-context:
+  triage:
     if: github.repository == 'astral-sh/uv'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment:
       name: automations
       deployment: false
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write # for the cross-repository issue-context credential broker
       issues: read
     outputs:
-      issue-context: ${{ steps.issue.outputs.context }}
-      prompt-title: ${{ steps.issue.outputs.prompt-title }}
+      issue-number: ${{ steps.issue.outputs.number }}
+      context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
+      context-revision: ${{ steps.issue-context.outputs.revision }}
+      result: ${{ steps.triage.outputs.final-message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,103 +48,36 @@ jobs:
           gh issue view "$ISSUE" \
             --repo "$GITHUB_REPOSITORY" \
             --json number,title,body,author,url \
-            > "$RUNNER_TEMP/issue.json"
+            > .issue-triage-event.json
 
           jaq -er --arg repository "$GITHUB_REPOSITORY" '
             if .url | startswith("https://github.com/\($repository)/issues/") then
-              "context=\(tojson)", "prompt-title=\(.title | gsub("[\r\n]+"; " "))"
+              "number=\(.number)", "prompt-title=\(.title | gsub("[\r\n]+"; " "))"
             else error("The issue must belong to \($repository).")
             end
-          ' "$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
+          ' .issue-triage-event.json >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
 
-      - name: "Get issue context token"
-        id: token
-        uses: astral-sh/github-actions/simple-token-service@67dc9ee1ddc113eccd8116e7b949fb6cdcd89889 # 2026.11.16.0
+      - name: "Load issue context"
+        id: issue-context
+        uses: $/.github/actions/load-issue-context
         with:
-          exchange-url: ${{ secrets.STS_API_URL }}/exchange
-          audience: ${{ secrets.STS_API_URL }}
-          repositories: |
-            astral-sh/uv
-            astral-sh/uv-dev
-          # Linking an upstream issue to a fork branch requires both permissions on one token.
-          permissions: |
-            contents: write
-            issues: write
-
-      - name: "Initialize issue context"
-        run: |
-          branch="issue/$ISSUE_NUMBER"
-
-          git init --quiet "$RUNNER_TEMP/issue-context"
-          cd "$RUNNER_TEMP/issue-context"
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
-
-          gh issue develop "$ISSUE_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --branch-repo astral-sh/uv-dev \
-            --base issue/base \
-            --name "$branch" \
-            --checkout
-
-          if [ -f README.md ]; then
-            echo "The existing issue context has already been initialized."
-            exit 0
-          fi
-
-          cp "$GITHUB_WORKSPACE/agents/templates/issue-context-template.md" README.md
-          cp "$RUNNER_TEMP/issue.json" issue.json
-          git add issue.json README.md
-
-          git \
-            -c user.name="astral-automations-bot[bot]" \
-            -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
-            commit --message "Initialize issue context"
-          git push origin "HEAD:refs/heads/$branch"
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          ISSUE_NUMBER: ${{ fromJSON(steps.issue.outputs.context).number }}
-
-  triage:
-    needs: initialize-context
-    if: github.repository == 'astral-sh/uv'
-    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
-    environment:
-      name: automations
-      deployment: false
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      issues: read
-    outputs:
-      issue-context: ${{ needs.initialize-context.outputs.issue-context }}
-      result: ${{ steps.triage.outputs.final-message }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+          issue-number: ${{ steps.issue.outputs.number }}
+          path: ${{ runner.temp }}/issue-context
+          template: ${{ github.workspace }}/agents/templates/issue-context-template.md
+          issue-file: ${{ github.workspace }}/.issue-triage-event.json
 
       - name: "Prepare issue triage"
         run: |
-          printf '%s\n' "$ISSUE_CONTEXT" > .issue-triage-event.json
-
-          git init --quiet "$RUNNER_TEMP/issue-context"
-          git -C "$RUNNER_TEMP/issue-context" fetch --quiet --depth 1 \
-            https://github.com/astral-sh/uv-dev.git \
-            "refs/heads/issue/$ISSUE_NUMBER"
-          git -C "$RUNNER_TEMP/issue-context" checkout --quiet FETCH_HEAD
-
           {
             printf 'Issue triage for #%s: %s\n\n' "$ISSUE_NUMBER" "$PROMPT_TITLE"
             cat agents/prompts/triage-issue.md
           } > "$RUNNER_TEMP/triage-issue-prompt.md"
         env:
-          ISSUE_CONTEXT: ${{ needs.initialize-context.outputs.issue-context }}
-          ISSUE_NUMBER: ${{ fromJSON(needs.initialize-context.outputs.issue-context).number }}
-          PROMPT_TITLE: ${{ needs.initialize-context.outputs.prompt-title }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          PROMPT_TITLE: ${{ steps.issue.outputs.prompt-title }}
 
       - name: "Triage issue"
         id: triage
@@ -164,6 +98,7 @@ jobs:
           output-schema-file: "agents/schemas/issue-triage.json"
 
       - name: "Upload issue context"
+        id: upload-context
         if: steps.triage.outputs.final-message != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -176,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: codex-thread-issue-${{ fromJSON(needs.initialize-context.outputs.issue-context).number }}
+          name: codex-thread-issue-${{ steps.issue.outputs.number }}
           path: agents/codex/sessions
           if-no-files-found: warn
           overwrite: true
@@ -190,71 +125,40 @@ jobs:
       deployment: false
     timeout-minutes: 10
     concurrency:
-      group: issue-context-${{ fromJSON(needs.triage.outputs.issue-context).number }}
+      group: issue-context-${{ needs.triage.outputs.issue-number }}
       cancel-in-progress: false
     permissions:
-      id-token: write # for the uv-dev issue-context credential broker
+      issues: write
+    outputs:
+      current: ${{ steps.publish.outputs.current }}
     steps:
       - name: "Download issue context"
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: issue-triage-context-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.triage.outputs.context-artifact-id }}
           path: ${{ runner.temp }}/issue-context-update
 
       - name: "Prepare issue context"
         run: |
-          printf '%s\n' "$ISSUE_CONTEXT" > "$RUNNER_TEMP/issue.json"
           printf '%s\n' "$TRIAGE_RESULT" > "$RUNNER_TEMP/triage.json"
           printf '%s\n%s\n%s\n' '```json' "$TRIAGE_RESULT" '```' >> "$GITHUB_STEP_SUMMARY"
         env:
-          ISSUE_CONTEXT: ${{ needs.triage.outputs.issue-context }}
           TRIAGE_RESULT: ${{ toJSON(fromJSON(needs.triage.outputs.result)) }}
 
-      - name: "Get issue context token"
-        id: token
-        uses: astral-sh/github-actions/simple-token-service@67dc9ee1ddc113eccd8116e7b949fb6cdcd89889 # 2026.11.16.0
+      - name: "Publish issue context"
+        id: publish
+        uses: $/.github/actions/save-issue-context
         with:
-          exchange-url: ${{ secrets.STS_API_URL }}/exchange
-          audience: ${{ secrets.STS_API_URL }}
-          repository: astral-sh/uv-dev
-          permissions: |
-            contents: write
-
-      - name: "Persist issue context"
-        run: |
-          branch="issue/$ISSUE_NUMBER"
-
-          git init --quiet "$RUNNER_TEMP/issue-context"
-          cd "$RUNNER_TEMP/issue-context"
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
-          git fetch --quiet origin "refs/heads/$branch"
-          git checkout --quiet FETCH_HEAD
-
-          cp "$RUNNER_TEMP/issue.json" "$RUNNER_TEMP/triage.json" .
-          cp "$RUNNER_TEMP/issue-context-update/README.md" README.md
-          git add issue.json triage.json README.md
-
-          if git diff --cached --quiet; then
-            echo "The existing issue context is unchanged."
-            exit 0
-          fi
-
-          git \
-            -c user.name="astral-automations-bot[bot]" \
-            -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
-            commit --message "Update issue context"
-          git push origin "HEAD:refs/heads/$branch"
-
-          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/%s\n' "$branch" \
-            >> "$GITHUB_STEP_SUMMARY"
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          ISSUE_NUMBER: ${{ fromJSON(needs.triage.outputs.issue-context).number }}
+          issue-number: ${{ needs.triage.outputs.issue-number }}
+          expected-revision: ${{ needs.triage.outputs.context-revision }}
+          readme: ${{ runner.temp }}/issue-context-update/README.md
+          result-name: triage
+          result-file: ${{ runner.temp }}/triage.json
 
   reproduce-bug:
     needs: [triage, context]
     if: >-
+      needs.context.outputs.current == 'true' &&
       needs.triage.outputs.result != '' &&
       (
         fromJSON(needs.triage.outputs.result).type == 'bug' ||
@@ -263,7 +167,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      issues: read
+      issues: write
     uses: $/.github/workflows/reproduce-bug.yml
     with:
       issue: ${{ inputs.issue || github.event.issue.number }}
@@ -285,7 +189,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-      issues: read
+      issues: write
     uses: $/.github/workflows/fix-bug.yml
     with:
       issue: ${{ inputs.issue || github.event.issue.number }}
